@@ -1,0 +1,100 @@
+#!/bin/sh
+
+PACKAGE="AV_ImgData"
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/${PACKAGE}/var}"
+PID_FILE="${VAR_DIR}/${PACKAGE}.pid"
+LOG_FILE="${VAR_DIR}/server.log"
+UVICORN="${SYNOPKG_PKGDEST}/var/venv/bin/uvicorn"
+APP_MODULE="app.main:app"
+HOST="127.0.0.1"
+PORT="9771"
+
+is_running() {
+    [ -f "${PID_FILE}" ] || return 1
+    pid="$(cat "${PID_FILE}" 2>/dev/null)"
+    [ -n "${pid}" ] || return 1
+    kill -0 "${pid}" 2>/dev/null
+}
+
+start() {
+    mkdir -p "${VAR_DIR}"
+    cd "${SYNOPKG_PKGDEST}" || exit 1
+
+    if is_running; then
+        echo "${PACKAGE} already running (pid $(cat "${PID_FILE}"))."
+        return 0
+    fi
+
+    echo "Starting ${PACKAGE}..."
+    "${UVICORN}" "${APP_MODULE}" \
+        --host "${HOST}" \
+        --port "${PORT}" \
+        --proxy-headers \
+        --forwarded-allow-ips="*" \
+        >> "${LOG_FILE}" 2>&1 &
+    echo $! > "${PID_FILE}"
+    sleep 1
+
+    if is_running; then
+        echo "Started ${PACKAGE} (pid $(cat "${PID_FILE}"))."
+        return 0
+    fi
+
+    echo "Failed to start ${PACKAGE}. See ${LOG_FILE}."
+    return 1
+}
+
+stop() {
+    if ! is_running; then
+        echo "${PACKAGE} is not running."
+        rm -f "${PID_FILE}"
+        return 0
+    fi
+
+    pid="$(cat "${PID_FILE}")"
+    echo "Stopping ${PACKAGE} (pid ${pid})..."
+    kill "${pid}" 2>/dev/null
+
+    i=0
+    while kill -0 "${pid}" 2>/dev/null; do
+        i=$((i + 1))
+        if [ "${i}" -ge 10 ]; then
+            kill -9 "${pid}" 2>/dev/null
+            break
+        fi
+        sleep 1
+    done
+
+    rm -f "${PID_FILE}"
+    echo "Stopped ${PACKAGE}."
+    return 0
+}
+
+status() {
+    if is_running; then
+        echo "${PACKAGE} is running (pid $(cat "${PID_FILE}"))."
+        return 0
+    fi
+    echo "${PACKAGE} is stopped."
+    return 1
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        stop
+        start
+        ;;
+    status)
+        status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac

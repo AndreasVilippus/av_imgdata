@@ -1,0 +1,15 @@
+{
+  "files": {
+    "USE_EXIFTOOL": false,
+    "PATHEXIFTOOL": "/usr/bin/exiftool"
+  },
+  "metadata": {
+    "SCHEMAS": {
+      "ACD": true,
+      "PICASA": true
+    }
+  },
+  "photos": {
+    "MAX_PHOTOS_PERSONS": 5000
+  }
+}

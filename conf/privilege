@@ -1,0 +1,15 @@
+{
+  "defaults": {
+    "run-as": "package"
+  },
+  "app": {
+    "SYNO.SDS.App.AV_ImgData.Instance": {
+      "permission": [
+        {
+          "group": "users",
+          "permission": "allow"
+        }
+      ]
+    }
+  }
+}

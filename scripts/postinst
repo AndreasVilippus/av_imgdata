@@ -1,0 +1,62 @@
+#!/bin/sh
+set -u
+
+LOG="${SYNOPKG_PKGDEST}/var/av_imgdata_install.log"
+REQS="${SYNOPKG_PKGDEST}/src/requirements.txt"
+VENV_DIR="${SYNOPKG_PKGDEST}/var/venv"
+PKG_VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/AV_ImgData/var}"
+DEFAULT_CONFIG="${SYNOPKG_PKGDEST}/var/config.json"
+DEFAULT_CONFIG_TARGET="${SYNOPKG_PKGDEST}/target/var/config.json"
+RUNTIME_CONFIG="${PKG_VAR_DIR}/config.json"
+
+mkdir -p "${SYNOPKG_PKGDEST}/var" 2>/dev/null
+mkdir -p "${PKG_VAR_DIR}" 2>/dev/null
+
+log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
+
+log "postinst start"
+log "webservice handled by DSM resource acquisition"
+
+if [ ! -f "$RUNTIME_CONFIG" ] && [ -f "$DEFAULT_CONFIG" ]; then
+  if cp "$DEFAULT_CONFIG" "$RUNTIME_CONFIG" >>"$LOG" 2>&1; then
+    log "runtime config initialized at $RUNTIME_CONFIG"
+  else
+    log "runtime config initialization failed"
+  fi
+elif [ ! -f "$RUNTIME_CONFIG" ] && [ -f "$DEFAULT_CONFIG_TARGET" ]; then
+  if cp "$DEFAULT_CONFIG_TARGET" "$RUNTIME_CONFIG" >>"$LOG" 2>&1; then
+    log "runtime config initialized from target at $RUNTIME_CONFIG"
+  else
+    log "runtime config initialization from target failed"
+  fi
+elif [ -f "$RUNTIME_CONFIG" ]; then
+  log "runtime config already exists at $RUNTIME_CONFIG"
+else
+  log "default config not found at $DEFAULT_CONFIG or $DEFAULT_CONFIG_TARGET"
+fi
+
+if [ -x "/var/packages/Python3/target/bin/python3" ]; then
+  PYTHON_BIN="/var/packages/Python3/target/bin/python3"
+else
+  PYTHON_BIN="python3"
+fi
+
+if ! "$PYTHON_BIN" -m venv "$VENV_DIR" >>"$LOG" 2>&1; then
+  log "venv creation failed; continue without venv"
+  exit 0
+fi
+
+if ! "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel >>"$LOG" 2>&1; then
+  log "pip upgrade failed; continue"
+fi
+
+if [ -f "$REQS" ]; then
+  if ! "$VENV_DIR/bin/pip" install -r "$REQS" >>"$LOG" 2>&1; then
+    log "requirements install failed; continue"
+  fi
+else
+  log "requirements.txt not found"
+fi
+
+log "postinst completed"
+exit 0

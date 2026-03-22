@@ -1,0 +1,4 @@
+#!/bin/sh
+
+echo "Pre-install completed"
+exit 0

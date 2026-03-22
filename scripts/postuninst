@@ -1,0 +1,4 @@
+#!/bin/sh
+
+echo "Post-uninstall completed"
+exit 0

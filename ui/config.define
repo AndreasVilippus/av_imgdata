@@ -1,0 +1,8 @@
+{
+    "SYNO.SDS.App.AV_ImgData.Instance": {
+        "JSfiles": [
+            "dist/av-img-data.bundle.js"
+        ],
+        "params": "-s -c skip"
+    }
+}

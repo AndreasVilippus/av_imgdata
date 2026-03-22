@@ -1,0 +1,11 @@
+#!/bin/sh
+PACKAGE="AV_ImgData"
+TARGET="/var/packages/$PACKAGE/target"
+
+echo "Pre-uninstall: attempting to stop service"
+if [ -x "/var/packages/$PACKAGE/scripts/start-stop-status" ]; then
+	/var/packages/$PACKAGE/scripts/start-stop-status stop || true
+fi
+
+echo "Pre-uninstall completed (leaving data in $TARGET)"
+exit 0

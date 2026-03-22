@@ -1,0 +1,22 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "photo",
+        "permission": {
+          "ro": ["AV_ImgData"]
+        }
+      }
+    ]
+  },
+  "systemd-unit": {
+    "pkgctl-AV_ImgData": {
+      "type": "simple",
+      "user": "package",
+      "exec": "/var/packages/AV_ImgData/scripts/start-stop-status start",
+      "stop": "/var/packages/AV_ImgData/scripts/start-stop-status stop",
+      "restart": "on-failure",
+      "wanted_by": ["multi-user.target"]
+    }
+  }
+}

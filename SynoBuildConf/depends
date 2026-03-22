@@ -1,0 +1,8 @@
+[BuildDependent]
+# no dependent projects
+
+[ReferenceOnly]
+# no reference-only projects
+
+[default]
+all="7.3.0"
