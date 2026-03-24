@@ -210,6 +210,16 @@
 	justify-content: flex-end;
 }
 
+.sm-files-warning {
+	margin-top: 12px;
+	padding: 10px 12px;
+	border-radius: 8px;
+	background: #fff4d6;
+	color: #6d4c00;
+	font-size: 13px;
+	line-height: 20px;
+}
+
 @media (max-width: 900px) {
 	.sm-files-result-details {
 		grid-template-columns: 1fr;

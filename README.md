@@ -94,7 +94,8 @@ The currently supported configuration areas include:
 - `files.USE_EXIFTOOL`
 - `files.PATHEXIFTOOL`
 - `metadata.SCHEMAS.ACD`
-- `metadata.SCHEMAS.PICASA`
+- `metadata.SCHEMAS.MICROSOFT`
+- `metadata.SCHEMAS.MWG_REGIONS`
 - `photos.MAX_PHOTOS_PERSONS`
 
 Name mappings are stored separately in:

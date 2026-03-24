@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import struct
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -13,16 +14,24 @@ NS_ACD = {
     "acdsee-stArea": "http://ns.acdsee.com/sType/Area#",
 }
 
-NS_PICASA = {
+NS_MWG_REGIONS = {
     "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     "mwg-rs": "http://www.metadataworkinggroup.com/schemas/regions/",
     "stArea": "http://ns.adobe.com/xmp/sType/Area#",
+    "stDim": "http://ns.adobe.com/xap/1.0/sType/Dimensions#",
+    "tiff": "http://ns.adobe.com/tiff/1.0/",
+}
+
+NS_MICROSOFT = {
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "MP": "http://ns.microsoft.com/photo/1.2/",
+    "MPRI": "http://ns.microsoft.com/photo/1.2/t/RegionInfo#",
+    "MPReg": "http://ns.microsoft.com/photo/1.2/t/Region#",
 }
 
 
 class FileHandler:
-    """File-specific reads/processing independent from DSM Photos APIs."""
-
+    
     def __init__(self, config_service: Optional[ConfigService] = None):
         self._config = config_service or ConfigService()
 
@@ -55,7 +64,8 @@ class FileHandler:
         use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
         exiftool_path = str(files_config.get("PATHEXIFTOOL", "exiftool") or "exiftool")
         use_acd = bool(schema_config.get("ACD", True))
-        use_picasa = bool(schema_config.get("PICASA", True))
+        use_microsoft = bool(schema_config.get("MICROSOFT", True))
+        use_mwg_regions = bool(schema_config.get("MWG_REGIONS", True))
 
         xmp_path = self._findXmpForImage(image_path)
         xmp_content = self._loadXmpFromFile(xmp_path)
@@ -68,11 +78,43 @@ class FileHandler:
             xmp_source = "embedded_xmp_parsed" if xmp_content else ""
 
         faces: List[Dict[str, Any]] = []
+        mwg_context: Dict[str, Any] = {
+            "mwg_applied_to_dimensions_present": False,
+            "mwg_applied_to_dimensions": {},
+        }
         if xmp_content:
             if use_acd:
                 faces.extend(self._parseAcdFaces(xmp_content, source=xmp_source or "metadata"))
-            if use_picasa:
-                faces.extend(self._parsePicasaFaces(xmp_content, source=xmp_source or "metadata"))
+            if use_microsoft:
+                faces.extend(self._parseMicrosoftFaces(xmp_content, source=xmp_source or "metadata"))
+            if use_mwg_regions:
+                mwg_context = self._extractMwgRegionsContext(xmp_content)
+                faces.extend(self._parseMwgRegionsFaces(xmp_content, source=xmp_source or "metadata"))
+
+        image_dimensions = self._readImageDimensions(image_path)
+        image_orientation = self._readJpegExifOrientation(image_path)
+        xmp_orientation = self._extractXmpTiffOrientation(xmp_content) if xmp_content else None
+        if image_orientation is None:
+            image_orientation = xmp_orientation
+        applied_dimensions = mwg_context.get("mwg_applied_to_dimensions") if isinstance(mwg_context.get("mwg_applied_to_dimensions"), dict) else {}
+        applied_width = applied_dimensions.get("width")
+        applied_height = applied_dimensions.get("height")
+        applied_unit = str(applied_dimensions.get("unit") or "").strip().lower()
+        current_width = image_dimensions.get("width")
+        current_height = image_dimensions.get("height")
+        mwg_matches_current: Optional[bool] = None
+        if mwg_context.get("mwg_applied_to_dimensions_present") and applied_unit == "pixel" and applied_width and applied_height and current_width and current_height:
+            mwg_matches_current = applied_width == current_width and applied_height == current_height
+
+        mwg_orientation_transform_required = bool(
+            mwg_context.get("mwg_applied_to_dimensions_present")
+            and image_orientation not in (None, 1)
+        )
+
+        if image_orientation not in (None, 1):
+            for face in faces:
+                if str(face.get("source_format") or "") == "MWG_REGIONS":
+                    face["orientation"] = image_orientation
 
         return {
             "image_path": image_path,
@@ -81,6 +123,12 @@ class FileHandler:
             "xmp_source": xmp_source,
             "has_xmp": bool(xmp_content),
             "faces": faces,
+            "image_dimensions": image_dimensions,
+            "image_orientation": image_orientation,
+            "mwg_applied_to_dimensions_present": bool(mwg_context.get("mwg_applied_to_dimensions_present")),
+            "mwg_applied_to_dimensions": applied_dimensions,
+            "mwg_applied_to_dimensions_matches_current": mwg_matches_current,
+            "mwg_orientation_transform_required": mwg_orientation_transform_required,
         }
 
     def analyzeImageFaceMetadata(self, image_path: str) -> Dict[str, Any]:
@@ -92,6 +140,7 @@ class FileHandler:
         distinct_person_names = set()
         format_counts: Dict[str, int] = {}
         source_counts: Dict[str, int] = {}
+        focus_usage_counts: Dict[str, int] = {}
 
         for face in faces:
             name = str(face.get("name") or "").strip()
@@ -108,6 +157,10 @@ class FileHandler:
             if source_format:
                 format_counts[source_format] = format_counts.get(source_format, 0) + 1
 
+            focus_usage = str(face.get("focus_usage") or "").strip()
+            if focus_usage:
+                focus_usage_counts[focus_usage] = focus_usage_counts.get(focus_usage, 0) + 1
+
         metadata.update(
             {
                 "files_with_face_metadata": 1 if faces else 0,
@@ -117,6 +170,10 @@ class FileHandler:
                 "persons_distinct_by_name": len(distinct_person_names),
                 "sources": source_counts,
                 "formats": format_counts,
+                "focus_usages": focus_usage_counts,
+                "files_with_mwg_applied_to_dimensions": 1 if metadata.get("mwg_applied_to_dimensions_present") else 0,
+                "files_with_mwg_dimension_mismatch": 1 if metadata.get("mwg_applied_to_dimensions_matches_current") is False else 0,
+                "files_with_mwg_orientation_transform_risk": 1 if metadata.get("mwg_orientation_transform_required") else 0,
             }
         )
         return metadata
@@ -212,6 +269,147 @@ class FileHandler:
         return xmp_bytes.decode("utf-8", errors="ignore")
 
     @staticmethod
+    def _readImageDimensions(image_path: str) -> Dict[str, Any]:
+        suffix = Path(image_path).suffix.lower()
+        if suffix in {".jpg", ".jpeg"}:
+            return FileHandler._readJpegDimensions(image_path)
+        if suffix == ".png":
+            return FileHandler._readPngDimensions(image_path)
+        return {"width": None, "height": None, "unit": "pixel"}
+
+    @staticmethod
+    def _readPngDimensions(image_path: str) -> Dict[str, Any]:
+        try:
+            with open(image_path, "rb") as handle:
+                header = handle.read(24)
+        except Exception:
+            return {"width": None, "height": None, "unit": "pixel"}
+
+        if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n" or header[12:16] != b"IHDR":
+            return {"width": None, "height": None, "unit": "pixel"}
+
+        width = struct.unpack(">I", header[16:20])[0]
+        height = struct.unpack(">I", header[20:24])[0]
+        return {"width": width, "height": height, "unit": "pixel"}
+
+    @staticmethod
+    def _readJpegDimensions(image_path: str) -> Dict[str, Any]:
+        try:
+            with open(image_path, "rb") as handle:
+                data = handle.read()
+        except Exception:
+            return {"width": None, "height": None, "unit": "pixel"}
+
+        if len(data) < 4 or data[:2] != b"\xff\xd8":
+            return {"width": None, "height": None, "unit": "pixel"}
+
+        position = 2
+        sof_markers = {
+            0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+            0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+        }
+
+        while position + 9 < len(data):
+            if data[position] != 0xFF:
+                position += 1
+                continue
+
+            marker = data[position + 1]
+            if marker in {0xD8, 0xD9}:
+                position += 2
+                continue
+
+            if position + 4 > len(data):
+                break
+
+            segment_length = struct.unpack(">H", data[position + 2:position + 4])[0]
+            if segment_length < 2 or position + 2 + segment_length > len(data):
+                break
+
+            if marker in sof_markers and segment_length >= 7:
+                height = struct.unpack(">H", data[position + 5:position + 7])[0]
+                width = struct.unpack(">H", data[position + 7:position + 9])[0]
+                return {"width": width, "height": height, "unit": "pixel"}
+
+            position += 2 + segment_length
+
+        return {"width": None, "height": None, "unit": "pixel"}
+
+    @staticmethod
+    def _readJpegExifOrientation(image_path: str) -> Optional[int]:
+        try:
+            with open(image_path, "rb") as handle:
+                data = handle.read()
+        except Exception:
+            return None
+
+        if len(data) < 4 or data[:2] != b"\xff\xd8":
+            return None
+
+        position = 2
+        while position + 4 <= len(data):
+            if data[position] != 0xFF:
+                position += 1
+                continue
+
+            marker = data[position + 1]
+            if marker in {0xD8, 0xD9}:
+                position += 2
+                continue
+
+            if position + 4 > len(data):
+                break
+
+            segment_length = struct.unpack(">H", data[position + 2:position + 4])[0]
+            segment_start = position + 4
+            segment_end = position + 2 + segment_length
+            if segment_length < 2 or segment_end > len(data):
+                break
+
+            if marker == 0xE1 and data[segment_start:segment_start + 6] == b"Exif\x00\x00":
+                tiff_start = segment_start + 6
+                return FileHandler._readExifOrientationFromTiff(data, tiff_start, segment_end)
+
+            position = segment_end
+
+        return None
+
+    @staticmethod
+    def _readExifOrientationFromTiff(data: bytes, tiff_start: int, segment_end: int) -> Optional[int]:
+        if tiff_start + 8 > segment_end:
+            return None
+
+        byte_order = data[tiff_start:tiff_start + 2]
+        if byte_order == b"II":
+            endian = "<"
+        elif byte_order == b"MM":
+            endian = ">"
+        else:
+            return None
+
+        ifd0_offset = struct.unpack(endian + "I", data[tiff_start + 4:tiff_start + 8])[0]
+        ifd0_start = tiff_start + ifd0_offset
+        if ifd0_start + 2 > segment_end:
+            return None
+
+        entry_count = struct.unpack(endian + "H", data[ifd0_start:ifd0_start + 2])[0]
+        entry_start = ifd0_start + 2
+
+        for index in range(entry_count):
+            offset = entry_start + index * 12
+            if offset + 12 > segment_end:
+                return None
+
+            tag, value_type = struct.unpack(endian + "HH", data[offset:offset + 4])
+            count = struct.unpack(endian + "I", data[offset + 4:offset + 8])[0]
+            if tag != 0x0112 or value_type != 3 or count < 1:
+                continue
+
+            return struct.unpack(endian + "H", data[offset + 8:offset + 10])[0]
+
+        return None
+
+    @staticmethod
     def _parseAcdFaces(
         xmp_content: str,
         *,
@@ -261,38 +459,181 @@ class FileHandler:
         return persons
 
     @staticmethod
-    def _parsePicasaFaces(xmp_content: str, *, source: str) -> List[Dict[str, Any]]:
+    def _parseMwgRegionsFaces(xmp_content: str, *, source: str) -> List[Dict[str, Any]]:
         persons: List[Dict[str, Any]] = []
         try:
             root = ET.fromstring(xmp_content)
         except Exception:
             return persons
 
-        for description in root.findall(".//rdf:Description", NS_PICASA):
-            if description.get("{http://www.metadataworkinggroup.com/schemas/regions/}Type") != "Face":
+        for description in list(root.findall(".//rdf:Description", NS_MWG_REGIONS)) + list(root.findall(".//rdf:li", NS_MWG_REGIONS)):
+            face_type = description.get("{http://www.metadataworkinggroup.com/schemas/regions/}Type")
+            if not face_type:
+                type_node = description.find("mwg-rs:Type", NS_MWG_REGIONS)
+                face_type = type_node.text.strip() if type_node is not None and type_node.text else ""
+            if face_type != "Face":
                 continue
 
-            area = description.find("mwg-rs:Area", NS_PICASA)
+            area = description.find("mwg-rs:Area", NS_MWG_REGIONS)
             if area is None:
                 continue
 
             try:
-                x = float(area.get("{http://ns.adobe.com/xmp/sType/Area#}x"))
-                y = float(area.get("{http://ns.adobe.com/xmp/sType/Area#}y"))
-                width = float(area.get("{http://ns.adobe.com/xmp/sType/Area#}w"))
-                height = float(area.get("{http://ns.adobe.com/xmp/sType/Area#}h"))
+                x = FileHandler._readFloatAttributeOrChild(area, "x", NS_MWG_REGIONS["stArea"])
+                y = FileHandler._readFloatAttributeOrChild(area, "y", NS_MWG_REGIONS["stArea"])
+                width = FileHandler._readFloatAttributeOrChild(area, "w", NS_MWG_REGIONS["stArea"])
+                height = FileHandler._readFloatAttributeOrChild(area, "h", NS_MWG_REGIONS["stArea"])
             except (TypeError, ValueError):
                 continue
 
+            name = description.get("{http://www.metadataworkinggroup.com/schemas/regions/}Name")
+            if name is None:
+                name_node = description.find("mwg-rs:Name", NS_MWG_REGIONS)
+                name = name_node.text.strip() if name_node is not None and name_node.text else ""
+
+            focus_usage = description.get("{http://www.metadataworkinggroup.com/schemas/regions/}FocusUsage")
+            if focus_usage is None:
+                focus_usage_node = description.find("mwg-rs:FocusUsage", NS_MWG_REGIONS)
+                focus_usage = focus_usage_node.text.strip() if focus_usage_node is not None and focus_usage_node.text else ""
+
             persons.append(
                 {
-                    "name": description.get("{http://www.metadataworkinggroup.com/schemas/regions/}Name"),
+                    "name": name,
                     "x": x,
                     "y": y,
                     "w": width,
                     "h": height,
                     "source": source,
-                    "source_format": "PICASA",
+                    "source_format": "MWG_REGIONS",
+                    "focus_usage": focus_usage,
+                }
+            )
+        return persons
+
+    @staticmethod
+    def _extractMwgRegionsContext(xmp_content: str) -> Dict[str, Any]:
+        context: Dict[str, Any] = {
+            "mwg_applied_to_dimensions_present": False,
+            "mwg_applied_to_dimensions": {},
+        }
+        try:
+            root = ET.fromstring(xmp_content)
+        except Exception:
+            return context
+
+        applied = root.find(".//mwg-rs:AppliedToDimensions", NS_MWG_REGIONS)
+        if applied is None:
+            return context
+
+        width = FileHandler._readIntAttributeOrChild(applied, "w", NS_MWG_REGIONS["stDim"])
+        height = FileHandler._readIntAttributeOrChild(applied, "h", NS_MWG_REGIONS["stDim"])
+        unit = FileHandler._readTextAttributeOrChild(applied, "unit", NS_MWG_REGIONS["stDim"])
+        context["mwg_applied_to_dimensions_present"] = True
+        context["mwg_applied_to_dimensions"] = {
+            "width": width,
+            "height": height,
+            "unit": unit,
+        }
+        return context
+
+    @staticmethod
+    def _extractXmpTiffOrientation(xmp_content: str) -> Optional[int]:
+        try:
+            root = ET.fromstring(xmp_content)
+        except Exception:
+            return None
+
+        for description in root.findall(".//rdf:Description", NS_MWG_REGIONS):
+            value = description.get("{http://ns.adobe.com/tiff/1.0/}Orientation")
+            if value:
+                try:
+                    return int(value.strip())
+                except (TypeError, ValueError):
+                    pass
+
+            orientation_node = description.find("tiff:Orientation", NS_MWG_REGIONS)
+            if orientation_node is not None and orientation_node.text:
+                try:
+                    return int(orientation_node.text.strip())
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    @staticmethod
+    def _readTextAttributeOrChild(node: ET.Element, local_name: str, namespace: str) -> str:
+        value = node.get(f"{{{namespace}}}{local_name}")
+        if value:
+            return value.strip()
+        child = node.find(f"{{{namespace}}}{local_name}")
+        if child is not None and child.text:
+            return child.text.strip()
+        return ""
+
+    @staticmethod
+    def _readFloatAttributeOrChild(node: ET.Element, local_name: str, namespace: str) -> float:
+        value = FileHandler._readTextAttributeOrChild(node, local_name, namespace)
+        return float(value)
+
+    @staticmethod
+    def _readIntAttributeOrChild(node: ET.Element, local_name: str, namespace: str) -> Optional[int]:
+        value = FileHandler._readTextAttributeOrChild(node, local_name, namespace)
+        if not value:
+            return None
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parseMicrosoftFaces(xmp_content: str, *, source: str) -> List[Dict[str, Any]]:
+        persons: List[Dict[str, Any]] = []
+        try:
+            root = ET.fromstring(xmp_content)
+        except Exception:
+            return persons
+
+        for description in root.iter():
+            if description.tag not in {
+                "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}Description",
+                "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}li",
+            }:
+                continue
+
+            rectangle = ""
+            name = ""
+            for key, value in description.attrib.items():
+                local_name = key.split("}", 1)[-1]
+                if local_name == "Rectangle" and value:
+                    rectangle = value.strip()
+                elif local_name == "PersonDisplayName" and value:
+                    name = value.strip()
+
+            if not rectangle or not name:
+                for child in list(description):
+                    local_name = child.tag.split("}", 1)[-1]
+                    text = child.text.strip() if child.text else ""
+                    if local_name == "Rectangle" and text and not rectangle:
+                        rectangle = text
+                    elif local_name == "PersonDisplayName" and not name:
+                        name = text
+
+            if not rectangle:
+                continue
+
+            try:
+                x, y, width, height = [float(value.strip()) for value in rectangle.split(",")]
+            except (TypeError, ValueError):
+                continue
+
+            persons.append(
+                {
+                    "name": name,
+                    "x": x,
+                    "y": y,
+                    "w": width,
+                    "h": height,
+                    "source": source,
+                    "source_format": "MICROSOFT",
                 }
             )
         return persons

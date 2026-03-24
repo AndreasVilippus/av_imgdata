@@ -25,7 +25,8 @@
   "metadata": {
     "SCHEMAS": {
       "ACD": true,
-      "PICASA": true
+      "MICROSOFT": true,
+      "MWG_REGIONS": true
     }
   },
   "photos": {

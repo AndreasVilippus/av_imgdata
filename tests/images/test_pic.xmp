@@ -1,0 +1,154 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+    xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#">
+   <mwg-rs:RegionList>
+    <rdf:Bag>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.734375"
+        stArea:y="0.428730"
+        stArea:w="0.037187"
+        stArea:h="0.072553"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face" mwg-rs:Name="Great Person">
+       <mwg-rs:Area
+        stArea:x="0.635156"
+        stArea:y="0.456289"
+        stArea:w="0.033203"
+        stArea:h="0.064780"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.833984"
+        stArea:y="0.463151"
+        stArea:w="0.031211"
+        stArea:h="0.060893"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.955078"
+        stArea:y="0.461931"
+        stArea:w="0.032539"
+        stArea:h="0.063484"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.902734"
+        stArea:y="0.427931"
+        stArea:w="0.031211"
+        stArea:h="0.060893"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.794922"
+        stArea:y="0.431440"
+        stArea:w="0.021914"
+        stArea:h="0.042755"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.528516"
+        stArea:y="0.478321"
+        stArea:w="0.033867"
+        stArea:h="0.066075"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.267969"
+        stArea:y="0.509044"
+        stArea:w="0.030547"
+        stArea:h="0.059597"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.419141"
+        stArea:y="0.458119"
+        stArea:w="0.031211"
+        stArea:h="0.060893"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.280469"
+        stArea:y="0.459987"
+        stArea:w="0.030547"
+        stArea:h="0.059597"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.548047"
+        stArea:y="0.395264"
+        stArea:w="0.032539"
+        stArea:h="0.063484"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.071875"
+        stArea:y="0.454956"
+        stArea:w="0.030547"
+        stArea:h="0.059597"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description mwg-rs:Type="Face">
+       <mwg-rs:Name></mwg-rs:Name>
+       <mwg-rs:Area
+        stArea:x="0.199609"
+        stArea:y="0.461742"
+        stArea:w="0.025898"
+        stArea:h="0.050528"
+        stArea:unit="normalized"/>
+      </rdf:Description>
+     </rdf:li>
+    </rdf:Bag>
+   </mwg-rs:RegionList>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
