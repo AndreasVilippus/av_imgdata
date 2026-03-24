@@ -20,9 +20,12 @@ module.exports = async (env, argv) => {
 					use: {
 						loader: 'babel-loader',
 						options: {
-							rootMode: 'upward'
+							presets: ['@babel/preset-env']
 						}
 					}
+				}, {
+					test: /\.svg$/,
+					type: 'asset/resource'
 				}, {
 					test: /\.css$/,
 					use: [

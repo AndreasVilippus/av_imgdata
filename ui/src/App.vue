@@ -307,6 +307,90 @@
 								</div>
 							</section>
 						</template>
+						<section v-if="selectedOption === 'checks'" class="panel">
+							<div class="panel-head">
+								<h1>{{ $t('checks:title', 'Checks') }}</h1>
+								<p>{{ $t('checks:desc', 'Area for validation and review functions.') }}</p>
+							</div>
+							<div class="checks-actions">
+								<select v-model="selectedChecksAction" class="face-match-select" :disabled="checksLoading">
+									<option value="findings">{{ $t('checks:action_findings', 'Use mismatch findings') }}</option>
+									<option value="scan">{{ $t('checks:action_scan', 'Run mismatch scan') }}</option>
+								</select>
+								<div class="face-match-action-buttons">
+									<v-button @click="startChecksReview" :disabled="checksLoading" style="width: 160px;">
+										{{ checksLoading ? $t('checks:button_loading', 'Loading...') : $t('checks:button_start', 'Start') }}
+									</v-button>
+									<v-button @click="nextChecksReview" :disabled="checksLoading || !hasNextChecksItem" style="width: 160px;">
+										{{ $t('checks:button_next', 'Next') }}
+									</v-button>
+								</div>
+							</div>
+							<div class="face-match-status-card face-match-status-card-action">
+								<div class="face-match-status-head">
+									<div class="face-match-status-title">{{ $t('checks:status_title', 'Status') }}</div>
+								</div>
+								<div class="face-match-status-message">{{ checksStatusMessage }}</div>
+								<div v-if="currentChecksItem" class="face-match-status-stats">
+									<div><strong>{{ $t('checks:label_file', 'File:') }}</strong> {{ currentChecksItem.image_name }}</div>
+									<div><strong>{{ $t('checks:label_face_name', 'Face:') }}</strong> {{ currentChecksItem.face_name || $t('face_match:unknown_name', '(unnamed)') }}</div>
+									<div><strong>{{ $t('checks:label_index', 'Entry:') }}</strong> {{ checksCurrentIndex + 1 }} / {{ checksItems.length }}</div>
+								</div>
+							</div>
+							<div v-if="currentChecksItem" class="face-match-split checks-split">
+								<div class="face-match-col">
+									<h2>{{ $t('checks:preview_applied', 'With handling') }}</h2>
+									<div v-if="getChecksImageUrl(currentChecksItem)" class="face-match-thumbnail-wrap">
+										<div class="face-match-preview">
+											<img
+												:src="getChecksImageUrl(currentChecksItem)"
+												:alt="$t('checks:image_alt', 'Check preview')"
+												class="face-match-thumbnail"
+											/>
+											<div
+												v-for="(maskStyle, index) in getFaceMatchMaskStyles(currentChecksItem.applied_face)"
+												:key="`checks-applied-mask-${index}`"
+												class="face-match-mask"
+												:style="maskStyle"
+											></div>
+											<div
+												v-if="getFaceMatchBoxStyle(currentChecksItem.applied_face)"
+												class="face-match-bbox"
+												:style="getFaceMatchBoxStyle(currentChecksItem.applied_face)"
+											></div>
+										</div>
+									</div>
+									<div v-else class="face-match-empty">{{ $t('checks:empty_image', 'No preview available.') }}</div>
+								</div>
+								<div class="face-match-col">
+									<h2>{{ $t('checks:preview_ignored', 'Ignoring handling') }}</h2>
+									<div v-if="getChecksImageUrl(currentChecksItem)" class="face-match-thumbnail-wrap">
+										<div class="face-match-preview">
+											<img
+												:src="getChecksImageUrl(currentChecksItem)"
+												:alt="$t('checks:image_alt', 'Check preview')"
+												class="face-match-thumbnail"
+											/>
+											<div
+												v-for="(maskStyle, index) in getFaceMatchMaskStyles(currentChecksItem.raw_face)"
+												:key="`checks-raw-mask-${index}`"
+												class="face-match-mask"
+												:style="maskStyle"
+											></div>
+											<div
+												v-if="getFaceMatchBoxStyle(currentChecksItem.raw_face)"
+												class="face-match-bbox"
+												:style="getFaceMatchBoxStyle(currentChecksItem.raw_face)"
+											></div>
+										</div>
+									</div>
+									<div v-else class="face-match-empty">{{ $t('checks:empty_image', 'No preview available.') }}</div>
+								</div>
+							</div>
+							<div v-else class="config-placeholder">
+								<div class="config-placeholder-title">{{ $t('checks:placeholder_title', 'Checks will be added here.') }}</div>
+							</div>
+						</section>
 						<configuration-view v-if="selectedOption === 'configuration'" />
 					</main>
 				</div>
@@ -361,6 +445,11 @@ export default {
 			faceMatchSuggestTimer: null,
 			faceMatchSuggestRequestId: 0,
 			selectedFaceMatchingAction: 'search_photo_face_in_file',
+			selectedChecksAction: 'findings',
+			checksLoading: false,
+			checksItems: [],
+			checksCurrentIndex: 0,
+			checksStatusMessage: '',
 			persons: {
 				total: 0,
 				known: 0,
@@ -505,6 +594,12 @@ export default {
 			const mapping = this.faceMatchResult && this.faceMatchResult.name_mapping;
 			return !!(mapping && mapping.source_name && mapping.target_name);
 		},
+		currentChecksItem() {
+			return this.checksItems[this.checksCurrentIndex] || null;
+		},
+		hasNextChecksItem() {
+			return this.checksCurrentIndex + 1 < this.checksItems.length;
+		},
 	},
 	mounted() {
 		this.addIconUrl = this.resolveLocalIconUrl('add_icon.png');
@@ -572,6 +667,36 @@ export default {
 					'X-SYNO-TOKEN': synoToken,
 				},
 				body: JSON.stringify({
+					kk_message,
+					synoToken,
+					cookies,
+				}),
+			});
+			const data = await resp.json().catch(() => ({}));
+			if (!resp.ok || data.success === false) {
+				const backendError = data.error || `HTTP ${resp.status}`;
+				throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
+			}
+			return data;
+		},
+		async callChecksApi(apiPath, body = {}) {
+			await synocredential._instance.Resume();
+
+			const remote = synocredential._instance.GetRemoteKey();
+			const params = synocredential._instance.GetResumeParams({}, remote) || {};
+			const kk_message = params.kk_message || '';
+			const synoToken = this.getSynoToken();
+			const cookies = this.collectDsmCookies();
+
+			const resp = await fetch(apiPath, {
+				method: 'POST',
+				credentials: 'include',
+				headers: {
+					'Content-Type': 'application/json',
+					'X-SYNO-TOKEN': synoToken,
+				},
+				body: JSON.stringify({
+					...body,
 					kk_message,
 					synoToken,
 					cookies,
@@ -694,6 +819,13 @@ export default {
 			}
 			return current.message || this.$t('status:analyze_idle', 'No file analysis has been started yet.');
 		},
+		getChecksImageUrl(item) {
+			const imagePath = item && item.image_path ? String(item.image_path).trim() : '';
+			if (!imagePath) {
+				return '';
+			}
+			return `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${encodeURIComponent(imagePath)}`;
+		},
 		getFaceMatchSourceLabel(source) {
 			const normalized = String(source || '').trim().toLowerCase();
 			if (!normalized) {
@@ -732,6 +864,35 @@ export default {
 				return this.$t('face_match:format_mwg_regions', 'MWG face regions');
 			}
 			return String(format);
+		},
+		async startChecksReview() {
+			this.checksLoading = true;
+			this.checksStatusMessage = this.$t('checks:status_loading', 'Loading checks...');
+			try {
+				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_dimension_mismatch_start', {
+					source_mode: this.selectedChecksAction,
+				});
+				const items = data && data.data && Array.isArray(data.data.items) ? data.data.items : [];
+				this.checksItems = items;
+				this.checksCurrentIndex = 0;
+				this.checksStatusMessage = items.length
+					? this.$t('checks:status_loaded', '{count} entries loaded.', { count: items.length })
+					: this.$t('checks:status_empty', 'No matching entries found.');
+			} catch (err) {
+				this.checksStatusMessage = `Error: ${err.message}`;
+			} finally {
+				this.checksLoading = false;
+			}
+		},
+		nextChecksReview() {
+			if (!this.hasNextChecksItem) {
+				return;
+			}
+			this.checksCurrentIndex += 1;
+			this.checksStatusMessage = this.$t('checks:status_entry', 'Entry {current} of {total}.', {
+				current: this.checksCurrentIndex + 1,
+				total: this.checksItems.length,
+			});
 		},
 		extractPersonsFromPayload(payload) {
 			const root = payload && typeof payload === 'object' ? payload : {};

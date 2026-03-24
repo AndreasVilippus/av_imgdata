@@ -19,6 +19,14 @@
 		</button>
 		<button
 			class="sm-nav-item"
+			:class="{ active: selectedOption === 'checks' }"
+			@click="$emit('select', 'checks')"
+		>
+			<ChecksIcon class="sm-nav-icon" />
+			{{ $t('nav:checks', 'Checks') }}
+		</button>
+		<button
+			class="sm-nav-item"
 			:class="{ active: selectedOption === 'configuration' }"
 			@click="$emit('select', 'configuration')"
 		>
@@ -29,6 +37,7 @@
 </template>
 
 <script>
+import ChecksIcon from './icons/ChecksIcon.vue';
 import ConfigIcon from './icons/ConfigIcon.vue';
 import FaceMatchIcon from './icons/FaceMatchIcon.vue';
 import StatusIcon from './icons/StatusIcon.vue';
@@ -36,6 +45,7 @@ import StatusIcon from './icons/StatusIcon.vue';
 export default {
 	name: 'AppSidebarNav',
 	components: {
+		ChecksIcon,
 		ConfigIcon,
 		FaceMatchIcon,
 		StatusIcon,

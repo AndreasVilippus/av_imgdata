@@ -4,6 +4,7 @@ import os
 from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlsplit
 from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse
 from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
 from imgdata import ImgDataService
 
@@ -434,6 +435,74 @@ async def file_analysis_stop(request: Request):
         "success": True,
         "data": IMGDATA.requestStopFileAnalysis(),
     }
+
+
+@router.post("/checks_dimension_mismatch_start")
+async def checks_dimension_mismatch_start(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    source_mode = body.get("source_mode", "findings")
+
+    try:
+        result = IMGDATA.startDimensionMismatchCheck(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+            source_mode=source_mode,
+        )
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return _session_exception_response(exc, bootstrap_message="checks_dimension_mismatch_start_bootstrap_required")
+
+    return {
+        "success": True,
+        "data": result,
+    }
+
+
+@router.post("/checks_dimension_mismatch_findings")
+async def checks_dimension_mismatch_findings(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    return {
+        "success": True,
+        "data": IMGDATA.getFileAnalysisDimensionMismatchFindings(),
+    }
+
+
+@router.get("/file_image")
+async def file_image(request: Request, path: str = ""):
+    if not path:
+        return {"success": False, "error": {"code": 400, "message": "missing_path"}}
+
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    try:
+        shared_folder = IMGDATA.status_system(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+        ).get("shared_folder", "")
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return _session_exception_response(exc, bootstrap_message="file_image_bootstrap_required")
+
+    if not shared_folder:
+        return {"success": False, "error": {"code": 404, "message": "shared_folder_not_found"}}
+
+    requested = os.path.abspath(path)
+    shared_root = os.path.abspath(shared_folder)
+    if not requested.startswith(shared_root + os.sep) and requested != shared_root:
+        return {"success": False, "error": {"code": 403, "message": "path_outside_shared_folder"}}
+    if not os.path.isfile(requested):
+        return {"success": False, "error": {"code": 404, "message": "file_not_found"}}
+
+    return FileResponse(requested)
 
 
 @router.post("/config_get")

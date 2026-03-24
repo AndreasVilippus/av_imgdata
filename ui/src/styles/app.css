@@ -297,6 +297,18 @@
 	margin-bottom: var(--sm-space-4);
 }
 
+.checks-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--sm-space-2);
+	align-items: center;
+	margin-bottom: var(--sm-space-4);
+}
+
+.checks-split {
+	margin-top: 16px;
+}
+
 .config-message {
 	margin-bottom: var(--sm-space-3);
 	font-size: var(--sm-font-sm);

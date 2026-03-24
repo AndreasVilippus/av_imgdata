@@ -11,7 +11,7 @@ from handler.file_handler import FileHandler
 from handler.photos_handler import PhotosHandler
 from models.file_face import FileFace
 from models.photos_face import PhotosFace
-from services.bbox_normalizer import from_photos, from_xmp
+from services.bbox_normalizer import from_photos, from_xmp, normalize_xmp_face
 from services.config_service import ConfigService
 from services.face_matcher import FaceMatcher
 from services.file_analysis_service import FileAnalysisService
@@ -155,6 +155,10 @@ class ImgDataService:
             return {}
         return self._normalizeFileAnalysisProgress(latest)
 
+    def getFileAnalysisDimensionMismatchFindings(self) -> Dict[str, Any]:
+        findings = self.file_analysis.readDimensionMismatchFindings()
+        return findings if isinstance(findings, dict) else {}
+
     def requestStopFileAnalysis(self) -> Dict[str, Any]:
         self._setFileAnalysisProgress(stop_requested=True, message="Stopping file analysis...")
         return self.getFileAnalysisProgress()
@@ -190,6 +194,83 @@ class ImgDataService:
                 "paths": list(findings),
             }
         )
+
+    @staticmethod
+    def _pickReviewFace(faces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not isinstance(faces, list):
+            return None
+        mwg_faces = [face for face in faces if isinstance(face, dict) and str(face.get("source_format") or "") == "MWG_REGIONS"]
+        if not mwg_faces:
+            return None
+        named = [face for face in mwg_faces if str(face.get("name") or "").strip()]
+        return dict(named[0] if named else mwg_faces[0])
+
+    def _buildDimensionMismatchReviewItem(self, image_path: str) -> Optional[Dict[str, Any]]:
+        analysis = self.files.analyzeImageFaceMetadata(image_path)
+        if analysis.get("files_with_mwg_dimension_mismatch") != 1:
+            return None
+
+        review_face = self._pickReviewFace(analysis.get("faces") if isinstance(analysis.get("faces"), list) else [])
+        if not review_face:
+            return None
+
+        applied_face = normalize_xmp_face(review_face)
+        raw_face = dict(review_face)
+        raw_face.pop("orientation", None)
+
+        return {
+            "image_path": image_path,
+            "image_name": Path(image_path).name,
+            "raw_face": raw_face,
+            "applied_face": applied_face,
+            "face_name": str(review_face.get("name") or ""),
+            "image_dimensions": analysis.get("image_dimensions") if isinstance(analysis.get("image_dimensions"), dict) else {},
+            "applied_to_dimensions": analysis.get("mwg_applied_to_dimensions") if isinstance(analysis.get("mwg_applied_to_dimensions"), dict) else {},
+            "image_orientation": analysis.get("image_orientation"),
+            "mwg_applied_to_dimensions_matches_current": analysis.get("mwg_applied_to_dimensions_matches_current"),
+        }
+
+    def startDimensionMismatchCheck(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        source_mode: str,
+    ) -> Dict[str, Any]:
+        source_mode_normalized = str(source_mode or "findings").strip().lower()
+        if source_mode_normalized not in {"findings", "scan"}:
+            source_mode_normalized = "findings"
+
+        if source_mode_normalized == "findings":
+            findings_payload = self.getFileAnalysisDimensionMismatchFindings()
+            paths = findings_payload.get("paths") if isinstance(findings_payload.get("paths"), list) else []
+            mismatch_paths = [str(path) for path in paths if isinstance(path, str) and path]
+        else:
+            shared_folder = self.core.getSharedFolder(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                folder_name="photo",
+            )
+            mismatch_paths = []
+            if shared_folder:
+                for image_path in self.files.listImageFiles(shared_folder):
+                    analysis = self.files.analyzeImageFaceMetadata(image_path)
+                    if analysis.get("files_with_mwg_dimension_mismatch") == 1:
+                        mismatch_paths.append(image_path)
+
+        items = []
+        for image_path in mismatch_paths:
+            item = self._buildDimensionMismatchReviewItem(image_path)
+            if item:
+                items.append(item)
+
+        return {
+            "source_mode": source_mode_normalized,
+            "count": len(items),
+            "items": items,
+        }
 
     @staticmethod
     def _incrementCounter(counter: Dict[str, int], key: str, amount: int = 1) -> None:
@@ -452,6 +533,15 @@ class ImgDataService:
                             stop_requested=False,
                         )
                     )
+                    self.file_analysis.writeDimensionMismatchFindings(
+                        {
+                            "job_id": job_id,
+                            "status": "stopped",
+                            "shared_folder": shared_folder,
+                            "count": len(dimension_mismatch_paths),
+                            "paths": dimension_mismatch_paths,
+                        }
+                    )
                     self._file_analysis_thread = None
                     return
                 for filename in filenames:
@@ -593,6 +683,15 @@ class ImgDataService:
                             stopped=True,
                             stop_requested=False,
                         )
+                    )
+                    self.file_analysis.writeDimensionMismatchFindings(
+                        {
+                            "job_id": job_id,
+                            "status": "stopped",
+                            "shared_folder": shared_folder,
+                            "count": len(dimension_mismatch_paths),
+                            "paths": dimension_mismatch_paths,
+                        }
                     )
                     self._file_analysis_thread = None
                     return
@@ -745,7 +844,25 @@ class ImgDataService:
                     stop_requested=False,
                 )
             )
+            self.file_analysis.writeDimensionMismatchFindings(
+                {
+                    "job_id": job_id,
+                    "status": "finished",
+                    "shared_folder": shared_folder,
+                    "count": len(dimension_mismatch_paths),
+                    "paths": dimension_mismatch_paths,
+                }
+            )
         except Exception as exc:
+            self.file_analysis.writeDimensionMismatchFindings(
+                {
+                    "job_id": job_id,
+                    "status": "failed",
+                    "shared_folder": shared_folder,
+                    "count": len(dimension_mismatch_paths),
+                    "paths": dimension_mismatch_paths,
+                }
+            )
             failure_phase = "analysis" if files_matched_total else "discovery"
             self._writeFileAnalysisDimensionMismatchFindings(
                 job_id=job_id,
