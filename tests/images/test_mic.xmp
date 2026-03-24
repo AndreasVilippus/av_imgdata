@@ -1,0 +1,94 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:MP="https://ns.microsoft.com/photo/1.2/">
+   <MP:RegionInfo>
+    <rdf:Description
+      xmlns:MPRI="https://ns.microsoft.com/photo/1.2/t/RegionInfo#">
+     <MPRI:Regions>
+      <rdf:Bag>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.715782,0.392454,0.072553,0.037187</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.618555,0.423899,0.064780,0.033203</MPReg:Rectangle>
+         <MPReg:PersonDisplayName>Great Person</MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.818378,0.432705,0.060893,0.031211</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.938809,0.430189,0.063484,0.032539</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.887129,0.397484,0.060893,0.031211</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.783965,0.410063,0.042755,0.021914</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.511583,0.445283,0.066075,0.033867</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.252696,0.479246,0.059597,0.030547</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.403535,0.427673,0.060893,0.031211</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.265196,0.430189,0.059597,0.030547</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.531778,0.363522,0.063484,0.032539</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.056601,0.425157,0.059597,0.030547</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+       <rdf:li>
+        <rdf:Description xmlns:MPReg="https://ns.microsoft.com/photo/1.2/t/Region#">
+         <MPReg:Rectangle>0.186660,0.436478,0.050528,0.025898</MPReg:Rectangle>
+         <MPReg:PersonDisplayName></MPReg:PersonDisplayName>
+        </rdf:Description>
+       </rdf:li>
+      </rdf:Bag>
+     </MPRI:Regions>
+    </rdf:Description>
+   </MP:RegionInfo>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

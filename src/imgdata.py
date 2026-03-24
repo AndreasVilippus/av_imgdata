@@ -11,7 +11,7 @@ from handler.file_handler import FileHandler
 from handler.photos_handler import PhotosHandler
 from models.file_face import FileFace
 from models.photos_face import PhotosFace
-from services.bbox_normlaizer import from_photos, from_xmp
+from services.bbox_normalizer import from_photos, from_xmp
 from services.config_service import ConfigService
 from services.face_matcher import FaceMatcher
 from services.file_analysis_service import FileAnalysisService
@@ -168,6 +168,29 @@ class ImgDataService:
         self._setFileAnalysisProgress(**payload)
         return payload
 
+    def _writeFileAnalysisDimensionMismatchFindings(
+        self,
+        *,
+        job_id: str,
+        started_at: str,
+        shared_folder: str,
+        status: str,
+        finished: bool,
+        findings: List[str],
+    ) -> None:
+        self.file_analysis.writeDimensionMismatchFindings(
+            {
+                "job_id": job_id,
+                "started_at": started_at,
+                "finished_at": self._timestamp_now() if finished else "",
+                "last_updated_at": self._timestamp_now(),
+                "status": status,
+                "shared_folder": shared_folder,
+                "count": len(findings),
+                "paths": list(findings),
+            }
+        )
+
     @staticmethod
     def _incrementCounter(counter: Dict[str, int], key: str, amount: int = 1) -> None:
         normalized = str(key or "").strip()
@@ -196,10 +219,14 @@ class ImgDataService:
         files_with_sidecar: int,
         files_with_embedded_xmp: int,
         files_with_face_metadata: int,
+        files_with_mwg_applied_to_dimensions: int,
+        files_with_mwg_dimension_mismatch: int,
+        files_with_mwg_orientation_transform_risk: int,
         faces_total: int,
         faces_named: int,
         faces_unnamed: int,
         persons_distinct_names: set,
+        focus_usages: Dict[str, int],
         extensions: Dict[str, int],
         formats: Dict[str, int],
         sources: Dict[str, int],
@@ -227,11 +254,15 @@ class ImgDataService:
             "files_with_sidecar": files_with_sidecar,
             "files_with_embedded_xmp": files_with_embedded_xmp,
             "files_with_face_metadata": files_with_face_metadata,
+            "files_with_mwg_applied_to_dimensions": files_with_mwg_applied_to_dimensions,
+            "files_with_mwg_dimension_mismatch": files_with_mwg_dimension_mismatch,
+            "files_with_mwg_orientation_transform_risk": files_with_mwg_orientation_transform_risk,
             "analysis_progress": {"current": files_analyzed, "total": files_matched_total},
             "faces_total": faces_total,
             "faces_named": faces_named,
             "faces_unnamed": faces_unnamed,
             "persons_distinct_by_name": len(persons_distinct_names),
+            "focus_usages": self._nonZeroCounters(focus_usages),
             "running": running,
             "finished": finished,
             "stopped": stopped,
@@ -264,6 +295,7 @@ class ImgDataService:
         extension_counts: Dict[str, int] = {ext: 0 for ext in configured_extensions}
         source_counts: Dict[str, int] = {}
         format_counts: Dict[str, int] = {}
+        focus_usage_counts: Dict[str, int] = {}
         matching_files: List[str] = []
         distinct_person_names = set()
         files_seen_total = 0
@@ -272,12 +304,24 @@ class ImgDataService:
         files_with_sidecar = 0
         files_with_embedded_xmp = 0
         files_with_face_metadata = 0
+        files_with_mwg_applied_to_dimensions = 0
+        files_with_mwg_dimension_mismatch = 0
+        files_with_mwg_orientation_transform_risk = 0
         faces_total = 0
         faces_named = 0
         faces_unnamed = 0
         directories_read = 0
+        dimension_mismatch_paths: List[str] = []
 
         if not shared_folder:
+            self._writeFileAnalysisDimensionMismatchFindings(
+                job_id=job_id,
+                started_at=started_at,
+                shared_folder="",
+                status="failed",
+                finished=True,
+                findings=[],
+            )
             self._persistFileAnalysisResult(
                 self._buildFileAnalysisPayload(
                     job_id=job_id,
@@ -294,10 +338,14 @@ class ImgDataService:
                     files_with_sidecar=0,
                     files_with_embedded_xmp=0,
                     files_with_face_metadata=0,
+                    files_with_mwg_applied_to_dimensions=0,
+                    files_with_mwg_dimension_mismatch=0,
+                    files_with_mwg_orientation_transform_risk=0,
                     faces_total=0,
                     faces_named=0,
                     faces_unnamed=0,
                     persons_distinct_names=set(),
+                    focus_usages={},
                     extensions={},
                     formats={},
                     sources={},
@@ -330,6 +378,9 @@ class ImgDataService:
             files_with_sidecar=0,
             files_with_embedded_xmp=0,
             files_with_face_metadata=0,
+            files_with_mwg_applied_to_dimensions=0,
+            files_with_mwg_dimension_mismatch=0,
+            files_with_mwg_orientation_transform_risk=0,
             analysis_progress={"current": 0, "total": 0},
             faces_total=0,
             faces_named=0,
@@ -337,8 +388,17 @@ class ImgDataService:
             persons_distinct_by_name=0,
             current_path="",
             extensions={},
+            focus_usages={},
             formats={},
             sources={},
+        )
+        self._writeFileAnalysisDimensionMismatchFindings(
+            job_id=job_id,
+            started_at=started_at,
+            shared_folder=shared_folder,
+            status="running",
+            finished=False,
+            findings=[],
         )
 
         try:
@@ -350,6 +410,14 @@ class ImgDataService:
                     last_updated_at=self._timestamp_now(),
                 )
                 if self._shouldStopFileAnalysis():
+                    self._writeFileAnalysisDimensionMismatchFindings(
+                        job_id=job_id,
+                        started_at=started_at,
+                        shared_folder=shared_folder,
+                        status="stopped",
+                        finished=True,
+                        findings=dimension_mismatch_paths,
+                    )
                     self._persistFileAnalysisResult(
                         self._buildFileAnalysisPayload(
                             job_id=job_id,
@@ -366,10 +434,14 @@ class ImgDataService:
                             files_with_sidecar=0,
                             files_with_embedded_xmp=0,
                             files_with_face_metadata=0,
+                            files_with_mwg_applied_to_dimensions=0,
+                            files_with_mwg_dimension_mismatch=0,
+                            files_with_mwg_orientation_transform_risk=0,
                             faces_total=0,
                             faces_named=0,
                             faces_unnamed=0,
                             persons_distinct_names=set(),
+                            focus_usages={},
                             extensions=extension_counts,
                             formats={},
                             sources={},
@@ -398,6 +470,14 @@ class ImgDataService:
                         extensions=self._nonZeroCounters(extension_counts),
                     )
                     if self._shouldStopFileAnalysis():
+                        self._writeFileAnalysisDimensionMismatchFindings(
+                            job_id=job_id,
+                            started_at=started_at,
+                            shared_folder=shared_folder,
+                            status="stopped",
+                            finished=True,
+                            findings=dimension_mismatch_paths,
+                        )
                         self._persistFileAnalysisResult(
                             self._buildFileAnalysisPayload(
                                 job_id=job_id,
@@ -414,10 +494,14 @@ class ImgDataService:
                                 files_with_sidecar=0,
                                 files_with_embedded_xmp=0,
                                 files_with_face_metadata=0,
+                                files_with_mwg_applied_to_dimensions=0,
+                                files_with_mwg_dimension_mismatch=0,
+                                files_with_mwg_orientation_transform_risk=0,
                                 faces_total=0,
                                 faces_named=0,
                                 faces_unnamed=0,
                                 persons_distinct_names=set(),
+                                focus_usages={},
                                 extensions=extension_counts,
                                 formats={},
                                 sources={},
@@ -447,10 +531,14 @@ class ImgDataService:
                     files_with_sidecar=0,
                     files_with_embedded_xmp=0,
                     files_with_face_metadata=0,
+                    files_with_mwg_applied_to_dimensions=0,
+                    files_with_mwg_dimension_mismatch=0,
+                    files_with_mwg_orientation_transform_risk=0,
                     faces_total=0,
                     faces_named=0,
                     faces_unnamed=0,
                     persons_distinct_names=set(),
+                    focus_usages={},
                     extensions=extension_counts,
                     formats={},
                     sources={},
@@ -464,6 +552,14 @@ class ImgDataService:
 
             for image_path in matching_files:
                 if self._shouldStopFileAnalysis():
+                    self._writeFileAnalysisDimensionMismatchFindings(
+                        job_id=job_id,
+                        started_at=started_at,
+                        shared_folder=shared_folder,
+                        status="stopped",
+                        finished=True,
+                        findings=dimension_mismatch_paths,
+                    )
                     self._persistFileAnalysisResult(
                         self._buildFileAnalysisPayload(
                             job_id=job_id,
@@ -480,10 +576,14 @@ class ImgDataService:
                             files_with_sidecar=files_with_sidecar,
                             files_with_embedded_xmp=files_with_embedded_xmp,
                             files_with_face_metadata=files_with_face_metadata,
+                            files_with_mwg_applied_to_dimensions=files_with_mwg_applied_to_dimensions,
+                            files_with_mwg_dimension_mismatch=files_with_mwg_dimension_mismatch,
+                            files_with_mwg_orientation_transform_risk=files_with_mwg_orientation_transform_risk,
                             faces_total=faces_total,
                             faces_named=faces_named,
                             faces_unnamed=faces_unnamed,
                             persons_distinct_names=distinct_person_names,
+                            focus_usages=focus_usage_counts,
                             extensions=extension_counts,
                             formats=format_counts,
                             sources=source_counts,
@@ -505,10 +605,25 @@ class ImgDataService:
                     files_with_embedded_xmp += 1
                 if analysis.get("files_with_face_metadata"):
                     files_with_face_metadata += 1
+                files_with_mwg_applied_to_dimensions += int(analysis.get("files_with_mwg_applied_to_dimensions") or 0)
+                files_with_mwg_dimension_mismatch += int(analysis.get("files_with_mwg_dimension_mismatch") or 0)
+                files_with_mwg_orientation_transform_risk += int(analysis.get("files_with_mwg_orientation_transform_risk") or 0)
+                if analysis.get("files_with_mwg_dimension_mismatch"):
+                    dimension_mismatch_paths.append(image_path)
+                    self._writeFileAnalysisDimensionMismatchFindings(
+                        job_id=job_id,
+                        started_at=started_at,
+                        shared_folder=shared_folder,
+                        status="running",
+                        finished=False,
+                        findings=dimension_mismatch_paths,
+                    )
 
                 faces_total += int(analysis.get("faces_total") or 0)
                 faces_named += int(analysis.get("faces_named") or 0)
                 faces_unnamed += int(analysis.get("faces_unnamed") or 0)
+                for key, value in (analysis.get("focus_usages") or {}).items():
+                    self._incrementCounter(focus_usage_counts, str(key), int(value))
 
                 faces = analysis.get("faces") if isinstance(analysis.get("faces"), list) else []
                 for face in faces:
@@ -531,16 +646,28 @@ class ImgDataService:
                     files_with_sidecar=files_with_sidecar,
                     files_with_embedded_xmp=files_with_embedded_xmp,
                     files_with_face_metadata=files_with_face_metadata,
+                    files_with_mwg_applied_to_dimensions=files_with_mwg_applied_to_dimensions,
+                    files_with_mwg_dimension_mismatch=files_with_mwg_dimension_mismatch,
+                    files_with_mwg_orientation_transform_risk=files_with_mwg_orientation_transform_risk,
                     analysis_progress={"current": files_analyzed, "total": files_matched_total},
                     faces_total=faces_total,
                     faces_named=faces_named,
                     faces_unnamed=faces_unnamed,
                     persons_distinct_by_name=len(distinct_person_names),
+                    focus_usages=self._nonZeroCounters(focus_usage_counts),
                     formats=self._nonZeroCounters(format_counts),
                     sources=self._nonZeroCounters(source_counts),
                 )
 
                 if files_analyzed % 25 == 0:
+                    self._writeFileAnalysisDimensionMismatchFindings(
+                        job_id=job_id,
+                        started_at=started_at,
+                        shared_folder=shared_folder,
+                        status="running",
+                        finished=False,
+                        findings=dimension_mismatch_paths,
+                    )
                     self.file_analysis.writeLatestResult(
                         self._buildFileAnalysisPayload(
                             job_id=job_id,
@@ -557,10 +684,14 @@ class ImgDataService:
                             files_with_sidecar=files_with_sidecar,
                             files_with_embedded_xmp=files_with_embedded_xmp,
                             files_with_face_metadata=files_with_face_metadata,
+                            files_with_mwg_applied_to_dimensions=files_with_mwg_applied_to_dimensions,
+                            files_with_mwg_dimension_mismatch=files_with_mwg_dimension_mismatch,
+                            files_with_mwg_orientation_transform_risk=files_with_mwg_orientation_transform_risk,
                             faces_total=faces_total,
                             faces_named=faces_named,
                             faces_unnamed=faces_unnamed,
                             persons_distinct_names=distinct_person_names,
+                            focus_usages=focus_usage_counts,
                             extensions=extension_counts,
                             formats=format_counts,
                             sources=source_counts,
@@ -572,6 +703,14 @@ class ImgDataService:
                         )
                     )
 
+            self._writeFileAnalysisDimensionMismatchFindings(
+                job_id=job_id,
+                started_at=started_at,
+                shared_folder=shared_folder,
+                status="finished",
+                finished=True,
+                findings=dimension_mismatch_paths,
+            )
             self._persistFileAnalysisResult(
                 self._buildFileAnalysisPayload(
                     job_id=job_id,
@@ -588,10 +727,14 @@ class ImgDataService:
                     files_with_sidecar=files_with_sidecar,
                     files_with_embedded_xmp=files_with_embedded_xmp,
                     files_with_face_metadata=files_with_face_metadata,
+                    files_with_mwg_applied_to_dimensions=files_with_mwg_applied_to_dimensions,
+                    files_with_mwg_dimension_mismatch=files_with_mwg_dimension_mismatch,
+                    files_with_mwg_orientation_transform_risk=files_with_mwg_orientation_transform_risk,
                     faces_total=faces_total,
                     faces_named=faces_named,
                     faces_unnamed=faces_unnamed,
                     persons_distinct_names=distinct_person_names,
+                    focus_usages=focus_usage_counts,
                     extensions=extension_counts,
                     formats=format_counts,
                     sources=source_counts,
@@ -604,6 +747,14 @@ class ImgDataService:
             )
         except Exception as exc:
             failure_phase = "analysis" if files_matched_total else "discovery"
+            self._writeFileAnalysisDimensionMismatchFindings(
+                job_id=job_id,
+                started_at=started_at,
+                shared_folder=shared_folder,
+                status="failed",
+                finished=True,
+                findings=dimension_mismatch_paths,
+            )
             self._persistFileAnalysisResult(
                 self._buildFileAnalysisPayload(
                     job_id=job_id,
@@ -620,10 +771,14 @@ class ImgDataService:
                     files_with_sidecar=files_with_sidecar,
                     files_with_embedded_xmp=files_with_embedded_xmp,
                     files_with_face_metadata=files_with_face_metadata,
+                    files_with_mwg_applied_to_dimensions=files_with_mwg_applied_to_dimensions,
+                    files_with_mwg_dimension_mismatch=files_with_mwg_dimension_mismatch,
+                    files_with_mwg_orientation_transform_risk=files_with_mwg_orientation_transform_risk,
                     faces_total=faces_total,
                     faces_named=faces_named,
                     faces_unnamed=faces_unnamed,
                     persons_distinct_names=distinct_person_names,
+                    focus_usages=focus_usage_counts,
                     extensions=extension_counts,
                     formats=format_counts,
                     sources=source_counts,
@@ -672,11 +827,15 @@ class ImgDataService:
             files_with_sidecar=0,
             files_with_embedded_xmp=0,
             files_with_face_metadata=0,
+            files_with_mwg_applied_to_dimensions=0,
+            files_with_mwg_dimension_mismatch=0,
+            files_with_mwg_orientation_transform_risk=0,
             analysis_progress={"current": 0, "total": 0},
             faces_total=0,
             faces_named=0,
             faces_unnamed=0,
             persons_distinct_by_name=0,
+            focus_usages={},
             current_path="",
             extensions={},
             formats={},

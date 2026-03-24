@@ -29,7 +29,8 @@ class ConfigService:
             "metadata": {
                 "SCHEMAS": {
                     "ACD": True,
-                    "PICASA": True,
+                    "MICROSOFT": True,
+                    "MWG_REGIONS": True,
                 },
             },
         }

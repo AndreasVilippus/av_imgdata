@@ -54,12 +54,19 @@
 									<div><strong>{{ $t('status:files_with_sidecar', 'With sidecar') }}:</strong> {{ Number(fileAnalysisProgress.files_with_sidecar) || 0 }}</div>
 									<div><strong>{{ $t('status:files_with_embedded_xmp', 'With embedded XMP') }}:</strong> {{ Number(fileAnalysisProgress.files_with_embedded_xmp) || 0 }}</div>
 									<div><strong>{{ $t('status:files_with_face_metadata', 'With face metadata') }}:</strong> {{ Number(fileAnalysisProgress.files_with_face_metadata) || 0 }}</div>
+									<div><strong>{{ $t('status:files_with_mwg_applied_to_dimensions', 'MWG with AppliedToDimensions') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_applied_to_dimensions) || 0 }}</div>
+									<div><strong>{{ $t('status:files_with_mwg_dimension_mismatch', 'MWG dimension mismatch') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_dimension_mismatch) || 0 }}</div>
+									<div><strong>{{ $t('status:files_with_mwg_orientation_transform_risk', 'MWG orientation risk') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_orientation_transform_risk) || 0 }}</div>
 									<div><strong>{{ $t('status:faces_total', 'Faces') }}:</strong> {{ Number(fileAnalysisProgress.faces_total) || 0 }}</div>
 									<div><strong>{{ $t('status:faces_named', 'Named') }}:</strong> {{ Number(fileAnalysisProgress.faces_named) || 0 }}</div>
 									<div><strong>{{ $t('status:faces_unnamed', 'Unnamed') }}:</strong> {{ Number(fileAnalysisProgress.faces_unnamed) || 0 }}</div>
 									<div><strong>{{ $t('status:persons_distinct', 'Distinct persons') }}:</strong> {{ Number(fileAnalysisProgress.persons_distinct_by_name) || 0 }}</div>
+									<div><strong>{{ $t('status:focus_usages', 'Focus usage') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.focus_usages, 'raw') }}</div>
 									<div><strong>{{ $t('status:formats', 'Formats') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.formats, 'format') }}</div>
 									<div><strong>{{ $t('status:sources', 'Sources') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.sources, 'source') }}</div>
+								</div>
+								<div v-if="Number(fileAnalysisProgress.files_with_mwg_dimension_mismatch) > 0" class="sm-files-warning">
+									{{ $t('status:warning_mwg_dimension_mismatch', 'Warning: MWG region dimensions do not match the current image for some files. Face positions may be unreliable.') }}
 								</div>
 								<div class="sm-files-action-row">
 									<v-button @click="handleFilesAnalyze" style="width: 160px;">{{ isFileAnalysisRunning ? $t('status:button_stop_analysis', 'Stop') : $t('status:button_analyze', 'Analyze') }}</v-button>
@@ -626,7 +633,7 @@ export default {
 			return entries.map(([key, value]) => {
 				const label = kind === 'source'
 					? this.getFaceMatchSourceLabel(key)
-					: this.getFaceMatchFormatLabel(key);
+					: (kind === 'format' ? this.getFaceMatchFormatLabel(key) : String(key));
 				return `${label}: ${value}`;
 			}).join(', ');
 		},
@@ -718,8 +725,11 @@ export default {
 			if (normalized === 'ACD' || normalized === 'ACDSEE') {
 				return this.$t('face_match:format_acdsee', 'ACDSee');
 			}
-			if (normalized === 'PICASA') {
-				return this.$t('face_match:format_google_photos', 'Google Photos');
+			if (normalized === 'MICROSOFT') {
+				return this.$t('face_match:format_microsoft', 'Microsoft People Tagging');
+			}
+			if (normalized === 'MWG_REGIONS') {
+				return this.$t('face_match:format_mwg_regions', 'MWG face regions');
 			}
 			return String(format);
 		},

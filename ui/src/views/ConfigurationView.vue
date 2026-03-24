@@ -52,8 +52,13 @@
 					</label>
 
 					<label class="config-checkbox">
-						<input v-model="configModel.metadata.SCHEMAS.PICASA" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_schema_picasa', 'Read MWG/Picasa face metadata') }}</span>
+						<input v-model="configModel.metadata.SCHEMAS.MICROSOFT" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_schema_microsoft', 'Read Microsoft face metadata') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input v-model="configModel.metadata.SCHEMAS.MWG_REGIONS" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_schema_mwg_regions', 'Read MWG face regions metadata') }}</span>
 					</label>
 
 					<label class="config-field">
@@ -111,7 +116,8 @@ export default {
 				metadata: {
 					SCHEMAS: {
 						ACD: true,
-						PICASA: true,
+						MICROSOFT: true,
+						MWG_REGIONS: true,
 					},
 				},
 				photos: {
@@ -166,7 +172,8 @@ export default {
 					SCHEMAS: {
 						...schemas,
 						ACD: Boolean(schemas.ACD ?? defaults.metadata.SCHEMAS.ACD),
-						PICASA: Boolean(schemas.PICASA ?? defaults.metadata.SCHEMAS.PICASA),
+						MICROSOFT: Boolean(schemas.MICROSOFT ?? defaults.metadata.SCHEMAS.MICROSOFT),
+						MWG_REGIONS: Boolean(schemas.MWG_REGIONS ?? defaults.metadata.SCHEMAS.MWG_REGIONS),
 					},
 				},
 				photos: {
