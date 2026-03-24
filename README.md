@@ -1,4 +1,4 @@
-# AV_ImgData
+# ImgData
 
 `AV_ImgData` is a Synology DSM package intended to support the transfer of metadata stored in image files. Its current focus is on person-related metadata, especially workflows where face names embedded in images are reviewed, matched against Synology Photos people, mapped to known names, and assigned into Synology Photos.
 
