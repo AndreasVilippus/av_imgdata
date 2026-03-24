@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import os
 from pathlib import Path
-from threading import Lock
+from datetime import datetime, timezone
+from threading import Lock, Thread
 from typing import Any, Dict, List, Optional
 
 from api.session_manager import SessionManager
@@ -12,6 +14,7 @@ from models.photos_face import PhotosFace
 from services.bbox_normlaizer import from_photos, from_xmp
 from services.config_service import ConfigService
 from services.face_matcher import FaceMatcher
+from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
 
 
@@ -20,14 +23,18 @@ class ImgDataService:
 
     def __init__(self, session_manager: SessionManager):
         self.session_manager = session_manager
-        self.core = CoreHandler(session_manager)
-        self.photos = PhotosHandler(session_manager)
         self.config = ConfigService()
+        self.core = CoreHandler(session_manager)
+        self.photos = PhotosHandler(session_manager, self.config)
         self.files = FileHandler(self.config)
         self.name_mappings = NameMappingService()
         self.face_matcher = FaceMatcher()
+        self.file_analysis = FileAnalysisService()
         self._face_matching_progress: Dict[str, Dict[str, Any]] = {}
         self._face_matching_progress_lock = Lock()
+        self._file_analysis_progress: Dict[str, Any] = {}
+        self._file_analysis_progress_lock = Lock()
+        self._file_analysis_thread: Optional[Thread] = None
 
     def update_session_context(
         self,
@@ -56,6 +63,21 @@ class ImgDataService:
         status = self.photos.person_status(user_key=user_key, cookies=cookies, base_url=base_url)
         status["mappings"] = len(self.name_mappings.readNameMappings())
         return status
+
+    def status_system(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+    ) -> Dict[str, str]:
+        shared_folder = self.core.getSharedFolder(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            folder_name="photo",
+        )
+        return {"shared_folder": shared_folder or ""}
 
     def _setFaceMatchingProgress(self, user_key: str, **updates: Any) -> None:
         with self._face_matching_progress_lock:
@@ -96,6 +118,583 @@ class ImgDataService:
     def _shouldStopFaceMatching(self, user_key: str) -> bool:
         progress = self.getFaceMatchingProgress(user_key)
         return bool(progress.get("stop_requested"))
+
+    @staticmethod
+    def _timestamp_now() -> str:
+        return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+    def _setFileAnalysisProgress(self, **updates: Any) -> None:
+        with self._file_analysis_progress_lock:
+            current = dict(self._file_analysis_progress)
+            current.update(updates)
+            self._file_analysis_progress = current
+
+    def _normalizeFileAnalysisProgress(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        current = dict(payload) if isinstance(payload, dict) else {}
+        worker_alive = bool(self._file_analysis_thread and self._file_analysis_thread.is_alive())
+        if current.get("running") and not worker_alive:
+            current["running"] = False
+            current["finished"] = True
+            current["stopped"] = bool(current.get("stopped")) or current.get("status") != "finished"
+            current["stop_requested"] = False
+            if current.get("status") == "running":
+                current["status"] = "stopped"
+            if not current.get("finished_at"):
+                current["finished_at"] = current.get("last_updated_at") or self._timestamp_now()
+            if not current.get("message"):
+                current["message"] = "Last file analysis is no longer running."
+        return current
+
+    def getFileAnalysisProgress(self) -> Dict[str, Any]:
+        with self._file_analysis_progress_lock:
+            current = dict(self._file_analysis_progress)
+        if current:
+            return self._normalizeFileAnalysisProgress(current)
+        latest = self.file_analysis.readLatestResult()
+        if not isinstance(latest, dict):
+            return {}
+        return self._normalizeFileAnalysisProgress(latest)
+
+    def requestStopFileAnalysis(self) -> Dict[str, Any]:
+        self._setFileAnalysisProgress(stop_requested=True, message="Stopping file analysis...")
+        return self.getFileAnalysisProgress()
+
+    def _shouldStopFileAnalysis(self) -> bool:
+        progress = self.getFileAnalysisProgress()
+        return bool(progress.get("stop_requested"))
+
+    def _persistFileAnalysisResult(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.file_analysis.writeLatestResult(payload)
+        self._setFileAnalysisProgress(**payload)
+        return payload
+
+    @staticmethod
+    def _incrementCounter(counter: Dict[str, int], key: str, amount: int = 1) -> None:
+        normalized = str(key or "").strip()
+        if not normalized:
+            return
+        counter[normalized] = counter.get(normalized, 0) + amount
+
+    @staticmethod
+    def _nonZeroCounters(counter: Dict[str, int]) -> Dict[str, int]:
+        return {key: value for key, value in counter.items() if value > 0}
+
+    def _buildFileAnalysisPayload(
+        self,
+        *,
+        job_id: str,
+        started_at: str,
+        shared_folder: str,
+        configured_extensions: List[str],
+        status: str,
+        phase: str,
+        message: str,
+        directories_read: int,
+        files_seen_total: int,
+        files_matched_total: int,
+        files_analyzed: int,
+        files_with_sidecar: int,
+        files_with_embedded_xmp: int,
+        files_with_face_metadata: int,
+        faces_total: int,
+        faces_named: int,
+        faces_unnamed: int,
+        persons_distinct_names: set,
+        extensions: Dict[str, int],
+        formats: Dict[str, int],
+        sources: Dict[str, int],
+        current_path: str,
+        running: bool,
+        finished: bool,
+        stopped: bool,
+        stop_requested: bool,
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "job_id": job_id,
+            "started_at": started_at,
+            "finished_at": self._timestamp_now() if finished else "",
+            "last_updated_at": self._timestamp_now(),
+            "status": status,
+            "phase": phase,
+            "message": message,
+            "shared_folder": shared_folder,
+            "configured_extensions": configured_extensions,
+            "directories_read": directories_read,
+            "files_seen_total": files_seen_total,
+            "files_matched_total": files_matched_total,
+            "files_analyzed": files_analyzed,
+            "files_with_sidecar": files_with_sidecar,
+            "files_with_embedded_xmp": files_with_embedded_xmp,
+            "files_with_face_metadata": files_with_face_metadata,
+            "analysis_progress": {"current": files_analyzed, "total": files_matched_total},
+            "faces_total": faces_total,
+            "faces_named": faces_named,
+            "faces_unnamed": faces_unnamed,
+            "persons_distinct_by_name": len(persons_distinct_names),
+            "running": running,
+            "finished": finished,
+            "stopped": stopped,
+            "stop_requested": stop_requested,
+            "current_path": current_path,
+            "extensions": self._nonZeroCounters(extensions),
+            "formats": self._nonZeroCounters(formats),
+            "sources": self._nonZeroCounters(sources),
+        }
+        if error:
+            payload["error"] = error
+        return payload
+
+    def _runFileAnalysis(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        job_id: str,
+    ) -> None:
+        started_at = self._timestamp_now()
+        shared_folder = self.core.getSharedFolder(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            folder_name="photo",
+        )
+        configured_extensions = self.files.configuredImageExtensions()
+        extension_counts: Dict[str, int] = {ext: 0 for ext in configured_extensions}
+        source_counts: Dict[str, int] = {}
+        format_counts: Dict[str, int] = {}
+        matching_files: List[str] = []
+        distinct_person_names = set()
+        files_seen_total = 0
+        files_matched_total = 0
+        files_analyzed = 0
+        files_with_sidecar = 0
+        files_with_embedded_xmp = 0
+        files_with_face_metadata = 0
+        faces_total = 0
+        faces_named = 0
+        faces_unnamed = 0
+        directories_read = 0
+
+        if not shared_folder:
+            self._persistFileAnalysisResult(
+                self._buildFileAnalysisPayload(
+                    job_id=job_id,
+                    started_at=started_at,
+                    shared_folder="",
+                    configured_extensions=configured_extensions,
+                    status="failed",
+                    phase="discovery",
+                    message="Shared folder not found.",
+                    directories_read=0,
+                    files_seen_total=0,
+                    files_matched_total=0,
+                    files_analyzed=0,
+                    files_with_sidecar=0,
+                    files_with_embedded_xmp=0,
+                    files_with_face_metadata=0,
+                    faces_total=0,
+                    faces_named=0,
+                    faces_unnamed=0,
+                    persons_distinct_names=set(),
+                    extensions={},
+                    formats={},
+                    sources={},
+                    current_path="",
+                    running=False,
+                    finished=True,
+                    stopped=False,
+                    stop_requested=False,
+                )
+            )
+            self._file_analysis_thread = None
+            return
+
+        self._setFileAnalysisProgress(
+            running=True,
+            finished=False,
+            stopped=False,
+            status="running",
+            phase="discovery",
+            message="Scanning files...",
+            job_id=job_id,
+            started_at=started_at,
+            last_updated_at=started_at,
+            shared_folder=shared_folder,
+            configured_extensions=configured_extensions,
+            directories_read=0,
+            files_seen_total=0,
+            files_matched_total=0,
+            files_analyzed=0,
+            files_with_sidecar=0,
+            files_with_embedded_xmp=0,
+            files_with_face_metadata=0,
+            analysis_progress={"current": 0, "total": 0},
+            faces_total=0,
+            faces_named=0,
+            faces_unnamed=0,
+            persons_distinct_by_name=0,
+            current_path="",
+            extensions={},
+            formats={},
+            sources={},
+        )
+
+        try:
+            for dirpath, _, filenames in os.walk(shared_folder):
+                directories_read += 1
+                self._setFileAnalysisProgress(
+                    directories_read=directories_read,
+                    current_path=str(dirpath),
+                    last_updated_at=self._timestamp_now(),
+                )
+                if self._shouldStopFileAnalysis():
+                    self._persistFileAnalysisResult(
+                        self._buildFileAnalysisPayload(
+                            job_id=job_id,
+                            started_at=started_at,
+                            shared_folder=shared_folder,
+                            configured_extensions=configured_extensions,
+                            status="stopped",
+                            phase="discovery",
+                            message=f"Discovery stopped. 0 of {files_matched_total} files analyzed.",
+                            directories_read=directories_read,
+                            files_seen_total=files_seen_total,
+                            files_matched_total=files_matched_total,
+                            files_analyzed=0,
+                            files_with_sidecar=0,
+                            files_with_embedded_xmp=0,
+                            files_with_face_metadata=0,
+                            faces_total=0,
+                            faces_named=0,
+                            faces_unnamed=0,
+                            persons_distinct_names=set(),
+                            extensions=extension_counts,
+                            formats={},
+                            sources={},
+                            current_path=str(dirpath),
+                            running=False,
+                            finished=True,
+                            stopped=True,
+                            stop_requested=False,
+                        )
+                    )
+                    self._file_analysis_thread = None
+                    return
+                for filename in filenames:
+                    current_path = str(Path(dirpath) / filename)
+                    files_seen_total += 1
+                    extension = Path(filename).suffix.lower().lstrip(".")
+                    if extension in extension_counts:
+                        files_matched_total += 1
+                        extension_counts[extension] += 1
+                        matching_files.append(current_path)
+                    self._setFileAnalysisProgress(
+                        files_seen_total=files_seen_total,
+                        files_matched_total=files_matched_total,
+                        current_path=current_path,
+                        last_updated_at=self._timestamp_now(),
+                        extensions=self._nonZeroCounters(extension_counts),
+                    )
+                    if self._shouldStopFileAnalysis():
+                        self._persistFileAnalysisResult(
+                            self._buildFileAnalysisPayload(
+                                job_id=job_id,
+                                started_at=started_at,
+                                shared_folder=shared_folder,
+                                configured_extensions=configured_extensions,
+                                status="stopped",
+                                phase="discovery",
+                                message=f"Discovery stopped. 0 of {files_matched_total} files analyzed.",
+                                directories_read=directories_read,
+                                files_seen_total=files_seen_total,
+                                files_matched_total=files_matched_total,
+                                files_analyzed=0,
+                                files_with_sidecar=0,
+                                files_with_embedded_xmp=0,
+                                files_with_face_metadata=0,
+                                faces_total=0,
+                                faces_named=0,
+                                faces_unnamed=0,
+                                persons_distinct_names=set(),
+                                extensions=extension_counts,
+                                formats={},
+                                sources={},
+                                current_path=current_path,
+                                running=False,
+                                finished=True,
+                                stopped=True,
+                                stop_requested=False,
+                            )
+                        )
+                        self._file_analysis_thread = None
+                        return
+
+            self._persistFileAnalysisResult(
+                self._buildFileAnalysisPayload(
+                    job_id=job_id,
+                    started_at=started_at,
+                    shared_folder=shared_folder,
+                    configured_extensions=configured_extensions,
+                    status="running",
+                    phase="analysis",
+                    message=f"Analyzing face metadata in {files_matched_total} matching files...",
+                    directories_read=directories_read,
+                    files_seen_total=files_seen_total,
+                    files_matched_total=files_matched_total,
+                    files_analyzed=0,
+                    files_with_sidecar=0,
+                    files_with_embedded_xmp=0,
+                    files_with_face_metadata=0,
+                    faces_total=0,
+                    faces_named=0,
+                    faces_unnamed=0,
+                    persons_distinct_names=set(),
+                    extensions=extension_counts,
+                    formats={},
+                    sources={},
+                    current_path="",
+                    running=True,
+                    finished=False,
+                    stopped=False,
+                    stop_requested=self._shouldStopFileAnalysis(),
+                )
+            )
+
+            for image_path in matching_files:
+                if self._shouldStopFileAnalysis():
+                    self._persistFileAnalysisResult(
+                        self._buildFileAnalysisPayload(
+                            job_id=job_id,
+                            started_at=started_at,
+                            shared_folder=shared_folder,
+                            configured_extensions=configured_extensions,
+                            status="stopped",
+                            phase="analysis",
+                            message=f"Analysis stopped. {files_analyzed} of {files_matched_total} files analyzed.",
+                            directories_read=directories_read,
+                            files_seen_total=files_seen_total,
+                            files_matched_total=files_matched_total,
+                            files_analyzed=files_analyzed,
+                            files_with_sidecar=files_with_sidecar,
+                            files_with_embedded_xmp=files_with_embedded_xmp,
+                            files_with_face_metadata=files_with_face_metadata,
+                            faces_total=faces_total,
+                            faces_named=faces_named,
+                            faces_unnamed=faces_unnamed,
+                            persons_distinct_names=distinct_person_names,
+                            extensions=extension_counts,
+                            formats=format_counts,
+                            sources=source_counts,
+                            current_path=image_path,
+                            running=False,
+                            finished=True,
+                            stopped=True,
+                            stop_requested=False,
+                        )
+                    )
+                    self._file_analysis_thread = None
+                    return
+
+                analysis = self.files.analyzeImageFaceMetadata(image_path)
+                files_analyzed += 1
+                if analysis.get("has_sidecar"):
+                    files_with_sidecar += 1
+                if str(analysis.get("xmp_source") or "").startswith("embedded_xmp_"):
+                    files_with_embedded_xmp += 1
+                if analysis.get("files_with_face_metadata"):
+                    files_with_face_metadata += 1
+
+                faces_total += int(analysis.get("faces_total") or 0)
+                faces_named += int(analysis.get("faces_named") or 0)
+                faces_unnamed += int(analysis.get("faces_unnamed") or 0)
+
+                faces = analysis.get("faces") if isinstance(analysis.get("faces"), list) else []
+                for face in faces:
+                    name = str(face.get("name") or "").strip()
+                    if name:
+                        distinct_person_names.add(name.casefold())
+                    self._incrementCounter(source_counts, str(face.get("source") or analysis.get("xmp_source") or "metadata"))
+                    self._incrementCounter(format_counts, str(face.get("source_format") or face.get("format") or ""))
+
+                self._setFileAnalysisProgress(
+                    running=True,
+                    finished=False,
+                    stopped=False,
+                    status="running",
+                    phase="analysis",
+                    message=f"Analyzing face metadata... {files_analyzed} of {files_matched_total} files analyzed.",
+                    current_path=image_path,
+                    last_updated_at=self._timestamp_now(),
+                    files_analyzed=files_analyzed,
+                    files_with_sidecar=files_with_sidecar,
+                    files_with_embedded_xmp=files_with_embedded_xmp,
+                    files_with_face_metadata=files_with_face_metadata,
+                    analysis_progress={"current": files_analyzed, "total": files_matched_total},
+                    faces_total=faces_total,
+                    faces_named=faces_named,
+                    faces_unnamed=faces_unnamed,
+                    persons_distinct_by_name=len(distinct_person_names),
+                    formats=self._nonZeroCounters(format_counts),
+                    sources=self._nonZeroCounters(source_counts),
+                )
+
+                if files_analyzed % 25 == 0:
+                    self.file_analysis.writeLatestResult(
+                        self._buildFileAnalysisPayload(
+                            job_id=job_id,
+                            started_at=started_at,
+                            shared_folder=shared_folder,
+                            configured_extensions=configured_extensions,
+                            status="running",
+                            phase="analysis",
+                            message=f"Analyzing face metadata... {files_analyzed} of {files_matched_total} files analyzed.",
+                            directories_read=directories_read,
+                            files_seen_total=files_seen_total,
+                            files_matched_total=files_matched_total,
+                            files_analyzed=files_analyzed,
+                            files_with_sidecar=files_with_sidecar,
+                            files_with_embedded_xmp=files_with_embedded_xmp,
+                            files_with_face_metadata=files_with_face_metadata,
+                            faces_total=faces_total,
+                            faces_named=faces_named,
+                            faces_unnamed=faces_unnamed,
+                            persons_distinct_names=distinct_person_names,
+                            extensions=extension_counts,
+                            formats=format_counts,
+                            sources=source_counts,
+                            current_path=image_path,
+                            running=True,
+                            finished=False,
+                            stopped=False,
+                            stop_requested=self._shouldStopFileAnalysis(),
+                        )
+                    )
+
+            self._persistFileAnalysisResult(
+                self._buildFileAnalysisPayload(
+                    job_id=job_id,
+                    started_at=started_at,
+                    shared_folder=shared_folder,
+                    configured_extensions=configured_extensions,
+                    status="finished",
+                    phase="analysis",
+                    message=f"Analysis finished. {files_analyzed} of {files_matched_total} files analyzed.",
+                    directories_read=directories_read,
+                    files_seen_total=files_seen_total,
+                    files_matched_total=files_matched_total,
+                    files_analyzed=files_analyzed,
+                    files_with_sidecar=files_with_sidecar,
+                    files_with_embedded_xmp=files_with_embedded_xmp,
+                    files_with_face_metadata=files_with_face_metadata,
+                    faces_total=faces_total,
+                    faces_named=faces_named,
+                    faces_unnamed=faces_unnamed,
+                    persons_distinct_names=distinct_person_names,
+                    extensions=extension_counts,
+                    formats=format_counts,
+                    sources=source_counts,
+                    current_path="",
+                    running=False,
+                    finished=True,
+                    stopped=False,
+                    stop_requested=False,
+                )
+            )
+        except Exception as exc:
+            failure_phase = "analysis" if files_matched_total else "discovery"
+            self._persistFileAnalysisResult(
+                self._buildFileAnalysisPayload(
+                    job_id=job_id,
+                    started_at=started_at,
+                    shared_folder=shared_folder,
+                    configured_extensions=configured_extensions,
+                    status="failed",
+                    phase=failure_phase,
+                    message="File analysis failed.",
+                    directories_read=directories_read,
+                    files_seen_total=files_seen_total,
+                    files_matched_total=files_matched_total,
+                    files_analyzed=files_analyzed,
+                    files_with_sidecar=files_with_sidecar,
+                    files_with_embedded_xmp=files_with_embedded_xmp,
+                    files_with_face_metadata=files_with_face_metadata,
+                    faces_total=faces_total,
+                    faces_named=faces_named,
+                    faces_unnamed=faces_unnamed,
+                    persons_distinct_names=distinct_person_names,
+                    extensions=extension_counts,
+                    formats=format_counts,
+                    sources=source_counts,
+                    current_path="",
+                    running=False,
+                    finished=True,
+                    stopped=False,
+                    stop_requested=False,
+                    error=str(exc),
+                )
+            )
+        finally:
+            self._file_analysis_thread = None
+
+    def startFileAnalysisDiscovery(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+    ) -> Dict[str, Any]:
+        current = self.getFileAnalysisProgress()
+        if current.get("running"):
+            return current
+
+        job_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        started_at = self._timestamp_now()
+        self._setFileAnalysisProgress(
+            running=True,
+            finished=False,
+            stopped=False,
+            stop_requested=False,
+            status="running",
+            phase="discovery",
+            message="Starting file analysis...",
+            job_id=job_id,
+            started_at=started_at,
+            finished_at="",
+            last_updated_at=started_at,
+            shared_folder="",
+            configured_extensions=[],
+            directories_read=0,
+            files_seen_total=0,
+            files_matched_total=0,
+            files_analyzed=0,
+            files_with_sidecar=0,
+            files_with_embedded_xmp=0,
+            files_with_face_metadata=0,
+            analysis_progress={"current": 0, "total": 0},
+            faces_total=0,
+            faces_named=0,
+            faces_unnamed=0,
+            persons_distinct_by_name=0,
+            current_path="",
+            extensions={},
+            formats={},
+            sources={},
+        )
+        worker = Thread(
+            target=self._runFileAnalysis,
+            kwargs={
+                "user_key": user_key,
+                "cookies": cookies,
+                "base_url": base_url,
+                "job_id": job_id,
+            },
+            daemon=True,
+        )
+        self._file_analysis_thread = worker
+        worker.start()
+        return self.getFileAnalysisProgress()
 
     @staticmethod
     def _buildPhotoImagePath(shared_folder: str, folder_name: str, filename: str) -> str:
@@ -477,7 +1076,10 @@ class ImgDataService:
             )
 
     def list_files(self, *, base_path: str, pattern: str = "*") -> Dict[str, object]:
-        files = self.files.list_files(base_path=base_path, pattern=pattern)
+        if pattern == "__configured_images__":
+            files = self.files.listImageFiles(base_path=base_path)
+        else:
+            files = self.files.list_files(base_path=base_path, pattern=pattern)
         return {"count": len(files), "files": files}
 
     def read_file_text(self, *, path: str, max_bytes: int = 1024 * 1024) -> Dict[str, object]:

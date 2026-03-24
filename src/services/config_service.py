@@ -18,9 +18,13 @@ class ConfigService:
     @staticmethod
     def defaultConfig() -> Dict[str, Any]:
         return {
+            "photos": {
+                "MAX_PHOTOS_PERSONS": 5000,
+            },
             "files": {
                 "USE_EXIFTOOL": False,
                 "PATHEXIFTOOL": "exiftool",
+                "IMAGE_EXTENSIONS": ["jpg", "jpeg", "tif", "tiff", "png", "heic", "heif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "rw2", "raf", "pef"],
             },
             "metadata": {
                 "SCHEMAS": {

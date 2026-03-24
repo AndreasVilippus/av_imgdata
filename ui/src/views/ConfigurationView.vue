@@ -53,7 +53,18 @@
 
 					<label class="config-checkbox">
 						<input v-model="configModel.metadata.SCHEMAS.PICASA" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_schema_picasa', 'Read Google Photos metadata') }}</span>
+						<span>{{ $t('config:label_schema_picasa', 'Read MWG/Picasa face metadata') }}</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $t('config:label_image_extensions', 'Image file extensions for metadata scan') }}</span>
+						<input
+							v-model="imageExtensionsInput"
+							type="text"
+							class="config-text-input"
+							:disabled="saving"
+							:placeholder="$t('config:placeholder_image_extensions', 'jpg,jpeg,tif,tiff,png,heic')"
+						/>
 					</label>
 
 					<label class="config-field">
@@ -83,6 +94,7 @@ export default {
 			message: '',
 			configPath: '',
 			configModel: this.createDefaultConfig(),
+			imageExtensionsInput: '',
 		};
 	},
 	mounted() {
@@ -94,6 +106,7 @@ export default {
 				files: {
 					USE_EXIFTOOL: false,
 					PATHEXIFTOOL: 'exiftool',
+					IMAGE_EXTENSIONS: ['jpg', 'jpeg', 'tif', 'tiff', 'png', 'heic', 'heif', 'dng', 'cr2', 'cr3', 'nef', 'nrw', 'arw', 'orf', 'rw2', 'raf', 'pef'],
 				},
 				metadata: {
 					SCHEMAS: {
@@ -113,6 +126,16 @@ export default {
 			const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\\/+^]/g, '\\$&') + '=([^;]*)'));
 			return match ? decodeURIComponent(match[1]) : '';
 		},
+		normalizeImageExtensions(value, fallback = []) {
+			const source = Array.isArray(value) ? value : String(value || '').split(',');
+			const normalized = source
+				.map((entry) => String(entry || '').trim().toLowerCase().replace(/^\./, ''))
+				.filter((entry, index, arr) => entry && arr.indexOf(entry) === index);
+			return normalized.length ? normalized : [...fallback];
+		},
+		formatImageExtensions(value) {
+			return this.normalizeImageExtensions(value).join(', ');
+		},
 		collectDsmCookies() {
 			return {
 				_SSID: this.readCookie('_SSID'),
@@ -128,12 +151,15 @@ export default {
 			const schemas = (metadata.SCHEMAS && typeof metadata.SCHEMAS === 'object' && !Array.isArray(metadata.SCHEMAS)) ? metadata.SCHEMAS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 
+			const imageExtensions = this.normalizeImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
+
 			return {
 				...root,
 				files: {
 					...files,
 					USE_EXIFTOOL: Boolean(files.USE_EXIFTOOL ?? defaults.files.USE_EXIFTOOL),
 					PATHEXIFTOOL: String(files.PATHEXIFTOOL || defaults.files.PATHEXIFTOOL),
+					IMAGE_EXTENSIONS: imageExtensions,
 				},
 				metadata: {
 					...metadata,
@@ -151,6 +177,7 @@ export default {
 		},
 		applyDefaults() {
 			this.configModel = this.createDefaultConfig();
+			this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
 			this.message = this.$t('config:output_defaults_applied', 'Default values loaded into the editor.');
 		},
 		async loadConfig() {
@@ -176,6 +203,7 @@ export default {
 				}
 				this.configPath = (data && data.data && data.data.config_path) || '';
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
+				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
 				this.message = this.$t('config:message_loaded', 'Configuration loaded.');
 			} catch (err) {
 				this.message = `Error: ${err.message}`;
@@ -187,7 +215,17 @@ export default {
 			this.saving = true;
 			this.message = '';
 			try {
-				const normalized = this.normalizeConfig(this.configModel);
+				const payloadConfig = {
+				...this.configModel,
+				files: {
+					...this.configModel.files,
+					IMAGE_EXTENSIONS: this.normalizeImageExtensions(
+						this.imageExtensionsInput,
+						this.createDefaultConfig().files.IMAGE_EXTENSIONS
+					),
+				},
+			};
+			const normalized = this.normalizeConfig(payloadConfig);
 				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/config_save', {
 					method: 'POST',
 					credentials: 'include',
@@ -208,6 +246,7 @@ export default {
 				}
 				this.configPath = (data && data.data && data.data.config_path) || this.configPath;
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
+				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
 				this.message = this.$t('config:message_saved', 'Configuration saved.');
 			} catch (err) {
 				this.message = `Error: ${err.message}`;

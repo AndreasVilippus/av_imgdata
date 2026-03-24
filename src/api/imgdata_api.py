@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
 import os
-import shutil
 from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlsplit
 from fastapi import APIRouter, Request
@@ -127,13 +126,19 @@ async def status(request: Request):
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
         )
+        system_status = IMGDATA.status_system(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+        )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="status_bootstrap_required")
 
     return {
         "success": True,
         "data": {
-            "persons": persons_status
+            "persons": persons_status,
+            "system": system_status,
         },
     }
 
@@ -386,6 +391,51 @@ async def face_person_suggest(request: Request):
     }
 
 
+@router.post("/file_analysis_start")
+async def file_analysis_start(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    try:
+        result = IMGDATA.startFileAnalysisDiscovery(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+        )
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return _session_exception_response(exc, bootstrap_message="file_analysis_start_bootstrap_required")
+
+    return {
+        "success": True,
+        "data": result,
+    }
+
+
+@router.post("/file_analysis_progress")
+async def file_analysis_progress(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    return {
+        "success": True,
+        "data": IMGDATA.getFileAnalysisProgress(),
+    }
+
+
+@router.post("/file_analysis_stop")
+async def file_analysis_stop(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    return {
+        "success": True,
+        "data": IMGDATA.requestStopFileAnalysis(),
+    }
+
+
 @router.post("/config_get")
 async def config_get(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
@@ -434,43 +484,5 @@ async def config_save(request: Request):
             "config": IMGDATA.getRuntimeConfig(),
             "config_path": str(IMGDATA.config._config_path),
             "saved": True,
-        },
-    }
-
-
-# KEEP IT FOR DEV
-@router.post("/test_request")
-async def test_request(request: Request):
-    session_ctx, error_response = await _prepare_session_request(request)
-    if error_response:
-        return error_response
-
-    file_config = IMGDATA.config.readConfig()
-    runtime_config_path = str(IMGDATA.config._config_path)
-    runtime_mapping_path = str(IMGDATA.name_mappings._mapping_path)
-    mapping_debug = IMGDATA.name_mappings.getDebugInfo()
-    exiftool_path = str(
-        ((file_config.get("files") if isinstance(file_config.get("files"), dict) else {}) or {}).get("PATHEXIFTOOL")
-        or "exiftool"
-    )
-
-    return {
-        "success": True,
-        "data": {
-            "action": "test_request",
-            "debug": {
-                "config": file_config,
-                "runtime_config_path": runtime_config_path,
-                "runtime_mapping_path": runtime_mapping_path,
-                "runtime_config_exists": os.path.isfile(runtime_config_path),
-                "runtime_mapping_exists": os.path.isfile(runtime_mapping_path),
-                "runtime_mapping_readable": bool(mapping_debug.get("readable")),
-                "runtime_mapping_count": int(mapping_debug.get("count") or 0),
-                "runtime_mapping_read_error": str(mapping_debug.get("last_read_error") or ""),
-                "package_dest": os.getenv("SYNOPKG_PKGDEST"),
-                "configured_exiftool_path": exiftool_path,
-                "configured_exiftool_exists": os.path.isfile(exiftool_path),
-                "exiftool_in_path": shutil.which("exiftool"),
-            },
         },
     }

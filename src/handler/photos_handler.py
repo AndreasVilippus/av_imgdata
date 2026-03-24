@@ -2,14 +2,24 @@
 import json
 from typing import Any, Dict, List, Optional
 from api.session_manager import SessionManager
+from services.config_service import ConfigService
 
-MAX_PHOTOS_PERSONS = 5000;
+DEFAULT_MAX_PHOTOS_PERSONS = ConfigService.defaultConfig()["photos"]["MAX_PHOTOS_PERSONS"]
 
 class PhotosHandler:
     """Photos/FotoTeam-specific DSM API access."""
 
-    def __init__(self, session_manager: SessionManager):
+    def __init__(self, session_manager: SessionManager, config_service: ConfigService):
         self._session_manager = session_manager
+        self._config_service = config_service
+
+    def _max_photos_persons(self) -> int:
+        config = self._config_service.readMergedConfig()
+        photos = config.get("photos", {})
+        try:
+            return max(1, int(photos.get("MAX_PHOTOS_PERSONS", DEFAULT_MAX_PHOTOS_PERSONS)))
+        except (TypeError, ValueError):
+            return DEFAULT_MAX_PHOTOS_PERSONS
 
     @staticmethod
     def _filter_persons_by_name(persons: List[Dict[str, Any]], person_filter: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -43,13 +53,15 @@ class PhotosHandler:
         cookies: Dict[str, str],
         base_url: str,
         offset: int = 0,
-        limit: int = MAX_PHOTOS_PERSONS,
+        limit: int = DEFAULT_MAX_PHOTOS_PERSONS,
         show_more: bool = True,
         show_hidden: bool = False,
         additional: Optional[List[str]] = None,
         person_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        if limit > MAX_PHOTOS_PERSONS: limit = MAX_PHOTOS_PERSONS
+        max_persons = self._max_photos_persons()
+        if limit > max_persons:
+            limit = max_persons
         payload = self._session_manager.call_api(
             user_key=user_key,
             cookies=cookies,
@@ -81,7 +93,7 @@ class PhotosHandler:
         cookies: Dict[str, str],
         base_url: str,
         offset: int = 0,
-        limit: int = MAX_PHOTOS_PERSONS,
+        limit: int = DEFAULT_MAX_PHOTOS_PERSONS,
         show_more: bool = True,
         show_hidden: bool = False,
         additional: Optional[List[str]] = None,
@@ -105,7 +117,7 @@ class PhotosHandler:
         cookies: Dict[str, str],
         base_url: str,
         offset: int = 0,
-        limit: int = MAX_PHOTOS_PERSONS,
+        limit: int = DEFAULT_MAX_PHOTOS_PERSONS,
         show_more: bool = True,
         show_hidden: bool = False,
         additional: Optional[List[str]] = None,

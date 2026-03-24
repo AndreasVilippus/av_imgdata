@@ -1,6 +1,5 @@
 /.vscode
 /dev/
-/build/
 /ui/node_modules/
 __pycache__/
 *.pyc

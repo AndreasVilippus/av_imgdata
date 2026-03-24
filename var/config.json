@@ -1,7 +1,26 @@
 {
   "files": {
     "USE_EXIFTOOL": false,
-    "PATHEXIFTOOL": "/usr/bin/exiftool"
+    "PATHEXIFTOOL": "/usr/bin/exiftool",
+    "IMAGE_EXTENSIONS": [
+      "jpg",
+      "jpeg",
+      "tif",
+      "tiff",
+      "png",
+      "heic",
+      "heif",
+      "dng",
+      "cr2",
+      "cr3",
+      "nef",
+      "nrw",
+      "arw",
+      "orf",
+      "rw2",
+      "raf",
+      "pef"
+    ]
   },
   "metadata": {
     "SCHEMAS": {

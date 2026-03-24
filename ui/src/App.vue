@@ -8,7 +8,7 @@
 					<main class="sm-content">
 						<template v-if="selectedOption === 'status'">
 							<section class="panel">
-								<div class="sm-overview-person-title">{{ $t('status:overview_title', 'Person Naming') }}</div>
+								<div class="sm-overview-person-title">{{ $t('status:overview_title', 'Person detection in Photos') }}</div>
 								<div v-if="statusLoading" class="sm-overview-person-loading">
 									<span class="sm-loader"></span>
 									{{ $t('status:loading', 'Loading data...') }}
@@ -39,15 +39,44 @@
 								</div>
 							</section>
 							<section class="panel">
-							<div class="panel-head">
-								<h1>{{ $t('status:panel_title', 'Status') }}</h1>
-								<p>{{ $t('status:panel_desc', 'Load status data from DSM.') }}</p>
-							</div>
-							<div class="action-row">
-								<v-button @click="getStatus" style="width: 190px;">{{ $t('status:button_status', 'Status') }}</v-button>
-								<v-button @click="makeTestRequest" style="width: 190px;">{{ $t('status:button_test_api', 'Test API') }}</v-button>
-							</div>
-							<textarea v-model="output" rows="12" readonly class="output-box"></textarea>
+								<div class="sm-system-title">{{ $t('status:files_title', 'Files') }}</div>
+								<div class="sm-system-card">
+									<div class="sm-system-row">
+										<div class="sm-system-label">{{ $t('status:files_desc', 'Analyze image files and sidecars for face metadata formats.') }}</div>
+										<div class="sm-system-value">{{ getFileAnalysisStatusMessage(fileAnalysisProgress) }}</div>
+									</div>
+								</div>
+								<div class="sm-files-result-details">
+									<div><strong>{{ $t('status:last_run', 'Last run') }}:</strong> {{ formatAnalysisTimestamp(fileAnalysisProgress.finished_at || fileAnalysisProgress.started_at) }}</div>
+									<div><strong>{{ $t('status:files_seen', 'Files seen') }}:</strong> {{ Number(fileAnalysisProgress.files_seen_total) || 0 }}</div>
+									<div><strong>{{ $t('status:files_matched', 'Matching files') }}:</strong> {{ Number(fileAnalysisProgress.files_matched_total) || 0 }}</div>
+									<div><strong>{{ $t('status:files_analyzed', 'Analyzed') }}:</strong> {{ Number(fileAnalysisProgress.files_analyzed) || 0 }}</div>
+									<div><strong>{{ $t('status:files_with_sidecar', 'With sidecar') }}:</strong> {{ Number(fileAnalysisProgress.files_with_sidecar) || 0 }}</div>
+									<div><strong>{{ $t('status:files_with_embedded_xmp', 'With embedded XMP') }}:</strong> {{ Number(fileAnalysisProgress.files_with_embedded_xmp) || 0 }}</div>
+									<div><strong>{{ $t('status:files_with_face_metadata', 'With face metadata') }}:</strong> {{ Number(fileAnalysisProgress.files_with_face_metadata) || 0 }}</div>
+									<div><strong>{{ $t('status:faces_total', 'Faces') }}:</strong> {{ Number(fileAnalysisProgress.faces_total) || 0 }}</div>
+									<div><strong>{{ $t('status:faces_named', 'Named') }}:</strong> {{ Number(fileAnalysisProgress.faces_named) || 0 }}</div>
+									<div><strong>{{ $t('status:faces_unnamed', 'Unnamed') }}:</strong> {{ Number(fileAnalysisProgress.faces_unnamed) || 0 }}</div>
+									<div><strong>{{ $t('status:persons_distinct', 'Distinct persons') }}:</strong> {{ Number(fileAnalysisProgress.persons_distinct_by_name) || 0 }}</div>
+									<div><strong>{{ $t('status:formats', 'Formats') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.formats, 'format') }}</div>
+									<div><strong>{{ $t('status:sources', 'Sources') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.sources, 'source') }}</div>
+								</div>
+								<div class="sm-files-action-row">
+									<v-button @click="handleFilesAnalyze" style="width: 160px;">{{ isFileAnalysisRunning ? $t('status:button_stop_analysis', 'Stop') : $t('status:button_analyze', 'Analyze') }}</v-button>
+								</div>
+							</section>
+							<section class="panel">
+								<div class="sm-system-title">{{ $t('status:system_title', 'System') }}</div>
+								<div v-if="statusLoading" class="sm-overview-person-loading">
+									<span class="sm-loader"></span>
+									{{ $t('status:loading', 'Loading data...') }}
+								</div>
+								<div v-else class="sm-system-card">
+									<div class="sm-system-row">
+										<div class="sm-system-label">{{ $t('status:shared_folder', 'Photos shared folder') }}</div>
+										<div class="sm-system-value">{{ system.sharedFolder || $t('status:not_available', 'Not available') }}</div>
+									</div>
+								</div>
 							</section>
 						</template>
 
@@ -304,6 +333,8 @@ export default {
 			output: '',
 			statusLoading: false,
 			statusLoaded: false,
+			fileAnalysisProgress: {},
+			fileAnalysisProgressTimer: null,
 			faceMatchLoading: false,
 			faceMatchProgress: {},
 			faceMatchProgressBase: {},
@@ -329,6 +360,9 @@ export default {
 				unknown: 0,
 				mappings: 0,
 			},
+			system: {
+				sharedFolder: "",
+			},
 			personsIconUrl: '/webman/3rdparty/AV_ImgData/images/persons_known_unknown.png',
 			addIconUrl: '',
 			personDataToLeftIconUrl: '',
@@ -340,6 +374,10 @@ export default {
 		};
 	},
 	computed: {
+		isFileAnalysisRunning() {
+			const progress = this.fileAnalysisProgress && typeof this.fileAnalysisProgress === 'object' ? this.fileAnalysisProgress : {};
+			return Boolean(progress.running) && !Boolean(progress.finished);
+		},
 		knownRatioPercent() {
 			if (!this.persons.total) {
 				return 0;
@@ -465,6 +503,7 @@ export default {
 		this.addIconUrl = this.resolveLocalIconUrl('add_icon.png');
 		this.personDataToLeftIconUrl = this.resolveLocalIconUrl('person_data_to_left.png');
 		this.getStatus({ auto: true });
+		this.fetchFileAnalysisProgress();
 	},
 	beforeDestroy() {
 		if (this.faceMatchSuggestTimer) {
@@ -477,6 +516,7 @@ export default {
 		}
 		this.resolveNameMappingConfirm(false);
 		this.stopFaceMatchProgressPolling();
+		this.stopFileAnalysisProgressPolling();
 	},
 	methods: {
 		close() {
@@ -493,6 +533,9 @@ export default {
 			if (option === 'status' && !this.statusLoaded && !this.statusLoading) {
 				this.getStatus({ auto: true });
 			}
+			if (option === 'status') {
+				this.fetchFileAnalysisProgress();
+			}
 		},
 		readCookie(name) {
 			const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\\/+^]/g, '\\$&') + '=([^;]*)'));
@@ -504,6 +547,145 @@ export default {
 				id: this.readCookie('id'),
 				did: this.readCookie('did'),
 			};
+		},
+		async callFileAnalysisApi(apiPath) {
+			await synocredential._instance.Resume();
+
+			const remote = synocredential._instance.GetRemoteKey();
+			const params = synocredential._instance.GetResumeParams({}, remote) || {};
+			const kk_message = params.kk_message || '';
+			const synoToken = this.getSynoToken();
+			const cookies = this.collectDsmCookies();
+
+			const resp = await fetch(apiPath, {
+				method: 'POST',
+				credentials: 'include',
+				headers: {
+					'Content-Type': 'application/json',
+					'X-SYNO-TOKEN': synoToken,
+				},
+				body: JSON.stringify({
+					kk_message,
+					synoToken,
+					cookies,
+				}),
+			});
+			const data = await resp.json().catch(() => ({}));
+			if (!resp.ok || data.success === false) {
+				const backendError = data.error || `HTTP ${resp.status}`;
+				throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
+			}
+			return data;
+		},
+		async fetchFileAnalysisProgress() {
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_progress');
+				this.fileAnalysisProgress = (data && data.data && typeof data.data === 'object') ? data.data : {};
+				if (!this.isFileAnalysisRunning) {
+					this.stopFileAnalysisProgressPolling();
+				}
+			} catch (err) {
+				return;
+			}
+		},
+		startFileAnalysisProgressPolling() {
+			this.stopFileAnalysisProgressPolling();
+			this.fetchFileAnalysisProgress();
+			this.fileAnalysisProgressTimer = window.setInterval(() => {
+				this.fetchFileAnalysisProgress();
+			}, 1000);
+		},
+		stopFileAnalysisProgressPolling() {
+			if (this.fileAnalysisProgressTimer) {
+				window.clearInterval(this.fileAnalysisProgressTimer);
+				this.fileAnalysisProgressTimer = null;
+			}
+		},
+		formatCountSummary(counterMap) {
+			if (!counterMap || typeof counterMap !== 'object') {
+				return '-';
+			}
+			const entries = Object.entries(counterMap)
+				.filter(([, value]) => Number(value) > 0)
+				.sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+			if (!entries.length) {
+				return '-';
+			}
+			return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
+		},
+		formatAnalysisCountSummary(counterMap, kind) {
+			if (!counterMap || typeof counterMap !== 'object') {
+				return '-';
+			}
+			const entries = Object.entries(counterMap)
+				.filter(([, value]) => Number(value) > 0)
+				.sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+			if (!entries.length) {
+				return '-';
+			}
+			return entries.map(([key, value]) => {
+				const label = kind === 'source'
+					? this.getFaceMatchSourceLabel(key)
+					: this.getFaceMatchFormatLabel(key);
+				return `${label}: ${value}`;
+			}).join(', ');
+		},
+		formatAnalysisTimestamp(value) {
+			if (!value) {
+				return '-';
+			}
+			const parsed = new Date(value);
+			if (Number.isNaN(parsed.getTime())) {
+				return String(value);
+			}
+			return parsed.toLocaleString();
+		},
+		getFileAnalysisStatusMessage(progress) {
+			const current = progress && typeof progress === 'object' ? progress : {};
+			const analyzed = Number(current.files_analyzed) || 0;
+			const total = Number(current.files_matched_total) || 0;
+
+			if (current.stop_requested) {
+				return this.$t('status:analyze_stopping', 'Stopping file analysis...');
+			}
+			if (current.running && current.phase === 'discovery') {
+				return this.$t('status:progress_discovery_running', 'Scanning files...');
+			}
+			if (current.running && current.phase === 'analysis') {
+				return this.$t(
+					'status:progress_analysis_running',
+					'Analyzing face metadata... {current} of {total} files analyzed.',
+					{ current: analyzed, total }
+				);
+			}
+			if (current.status === 'stopped' && current.phase === 'discovery') {
+				return this.$t(
+					'status:progress_discovery_stopped',
+					'Discovery stopped. 0 of {total} files analyzed.',
+					{ total }
+				);
+			}
+			if (current.status === 'stopped' && current.phase === 'analysis') {
+				return this.$t(
+					'status:progress_analysis_stopped',
+					'Analysis stopped. {current} of {total} files analyzed.',
+					{ current: analyzed, total }
+				);
+			}
+			if (current.status === 'finished' && current.phase === 'analysis') {
+				return this.$t(
+					'status:progress_analysis_finished',
+					'Analysis finished. {current} of {total} files analyzed.',
+					{ current: analyzed, total }
+				);
+			}
+			if (current.status === 'failed' && !current.shared_folder) {
+				return this.$t('status:progress_shared_folder_missing', 'Shared folder not found.');
+			}
+			if (current.status === 'failed') {
+				return this.$t('status:progress_analysis_failed', 'File analysis failed.');
+			}
+			return current.message || this.$t('status:analyze_idle', 'No file analysis has been started yet.');
 		},
 		getFaceMatchSourceLabel(source) {
 			const normalized = String(source || '').trim().toLowerCase();
@@ -522,7 +704,11 @@ export default {
 			if (normalized === 'metadata') {
 				return this.$t('face_match:source_metadata', 'Metadata');
 			}
-			return String(source);
+			return String(source || '')
+				.replace(/[_-]+/g, ' ')
+				.replace(/\s+/g, ' ')
+				trim()
+				.replace(/\b\w/g, (char) => char.toUpperCase());
 		},
 		getFaceMatchFormatLabel(format) {
 			const normalized = String(format || '').trim().toUpperCase();
@@ -554,6 +740,16 @@ export default {
 				known: Math.max(known, 0),
 				unknown: Math.max(unknown, 0),
 				mappings: Math.max(Number(personsSource.mappings) || 0, 0),
+			};
+		},
+		extractSystemFromPayload(payload) {
+			const root = payload && typeof payload === "object" ? payload : {};
+			const data = root.data && typeof root.data === "object" ? root.data : {};
+			const systemSource = (data.system && typeof data.system === "object")
+				? data.system
+				: ((root.system && typeof root.system === "object") ? root.system : {});
+			return {
+				sharedFolder: String(systemSource.shared_folder || systemSource.sharedFolder || ""),
 			};
 		},
 		getSynoToken() {
@@ -955,6 +1151,7 @@ export default {
 				}
 				if (updatePersons) {
 					this.persons = this.extractPersonsFromPayload(data);
+					this.system = this.extractSystemFromPayload(data);
 					this.statusLoaded = true;
 				}
 				this.output = JSON.stringify(data, null, 2);
@@ -967,11 +1164,22 @@ export default {
 		async getStatus(options = {}) {
 			return this.callStatusApi('/webman/3rdparty/AV_ImgData/index.cgi/api/status', options);
 		},
-		async makeTestRequest(options = {}) {
-			return this.callStatusApi('/webman/3rdparty/AV_ImgData/index.cgi/api/test_request', {
-				...options,
-				updatePersons: false,
-			});
+		async handleFilesAnalyze() {
+			try {
+				const current = this.isFileAnalysisRunning;
+				if (current) {
+					await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_stop');
+					this.output = this.$t('status:analyze_stopping', 'Stopping file analysis...');
+					await this.fetchFileAnalysisProgress();
+					return;
+				}
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_start');
+				this.fileAnalysisProgress = (data && data.data && typeof data.data === 'object') ? data.data : {};
+				this.startFileAnalysisProgressPolling();
+				this.output = JSON.stringify(data, null, 2);
+			} catch (err) {
+				this.output = `Error: ${err.message}`;
+			}
 		},
 		async loadNextFaceMatch() {
 			this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
