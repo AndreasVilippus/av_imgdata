@@ -54,9 +54,9 @@
 									<div><strong>{{ $t('status:files_with_sidecar', 'With sidecar') }}:</strong> {{ Number(fileAnalysisProgress.files_with_sidecar) || 0 }}</div>
 									<div><strong>{{ $t('status:files_with_embedded_xmp', 'With embedded XMP') }}:</strong> {{ Number(fileAnalysisProgress.files_with_embedded_xmp) || 0 }}</div>
 									<div><strong>{{ $t('status:files_with_face_metadata', 'With face metadata') }}:</strong> {{ Number(fileAnalysisProgress.files_with_face_metadata) || 0 }}</div>
-									<div><strong>{{ $t('status:files_with_mwg_applied_to_dimensions', 'MWG with AppliedToDimensions') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_applied_to_dimensions) || 0 }}</div>
-									<div><strong>{{ $t('status:files_with_mwg_dimension_mismatch', 'MWG dimension mismatch') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_dimension_mismatch) || 0 }}</div>
-									<div><strong>{{ $t('status:files_with_mwg_orientation_transform_risk', 'MWG orientation risk') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_orientation_transform_risk) || 0 }}</div>
+									<div><strong>{{ $t('status:files_with_mwg_applied_to_dimensions', 'With MWG AppliedToDimensions') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_applied_to_dimensions) || 0 }}</div>
+									<div><strong>{{ $t('status:files_with_mwg_dimension_mismatch', 'With MWG dimension mismatch') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_dimension_mismatch) || 0 }}</div>
+									<div><strong>{{ $t('status:files_with_mwg_orientation_transform_risk', 'With MWG orientation transform risk') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_orientation_transform_risk) || 0 }}</div>
 									<div><strong>{{ $t('status:faces_total', 'Faces') }}:</strong> {{ Number(fileAnalysisProgress.faces_total) || 0 }}</div>
 									<div><strong>{{ $t('status:faces_named', 'Named') }}:</strong> {{ Number(fileAnalysisProgress.faces_named) || 0 }}</div>
 									<div><strong>{{ $t('status:faces_unnamed', 'Unnamed') }}:</strong> {{ Number(fileAnalysisProgress.faces_unnamed) || 0 }}</div>
@@ -65,8 +65,8 @@
 									<div><strong>{{ $t('status:formats', 'Formats') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.formats, 'format') }}</div>
 									<div><strong>{{ $t('status:sources', 'Sources') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.sources, 'source') }}</div>
 								</div>
-								<div v-if="Number(fileAnalysisProgress.files_with_mwg_dimension_mismatch) > 0" class="sm-files-warning">
-									{{ $t('status:warning_mwg_dimension_mismatch', 'Warning: MWG region dimensions do not match the current image for some files. Face positions may be unreliable.') }}
+								<div v-if="getFileAnalysisWarningMessage(fileAnalysisProgress)" class="sm-files-warning">
+									{{ getFileAnalysisWarningMessage(fileAnalysisProgress) }}
 								</div>
 								<div class="sm-files-action-row">
 									<v-button @click="handleFilesAnalyze" style="width: 160px;">{{ isFileAnalysisRunning ? $t('status:button_stop_analysis', 'Stop') : $t('status:button_analyze', 'Analyze') }}</v-button>
@@ -818,6 +818,33 @@ export default {
 				return this.$t('status:progress_analysis_failed', 'File analysis failed.');
 			}
 			return current.message || this.$t('status:analyze_idle', 'No file analysis has been started yet.');
+		},
+		getFileAnalysisWarningMessage(progress) {
+			const current = progress && typeof progress === 'object' ? progress : {};
+			const mismatchCount = Number(current.files_with_mwg_dimension_mismatch) || 0;
+			const orientationRiskCount = Number(current.files_with_mwg_orientation_transform_risk) || 0;
+			if (mismatchCount > 0 && orientationRiskCount > 0) {
+				return this.$t(
+					'status:warning_mwg_mismatch_and_orientation',
+					'Warning: {mismatch} files with MWG dimension mismatches and {risk} files with MWG orientation transform risk were found.',
+					{ mismatch: mismatchCount, risk: orientationRiskCount }
+				);
+			}
+			if (mismatchCount > 0) {
+				return this.$t(
+					'status:warning_mwg_mismatch',
+					'Warning: {count} files with MWG dimension mismatches were found.',
+					{ count: mismatchCount }
+				);
+			}
+			if (orientationRiskCount > 0) {
+				return this.$t(
+					'status:warning_mwg_orientation_risk',
+					'Warning: {count} files with MWG orientation transform risk were found.',
+					{ count: orientationRiskCount }
+				);
+			}
+			return '';
 		},
 		getChecksImageUrl(item) {
 			const imagePath = item && item.image_path ? String(item.image_path).trim() : '';

@@ -3,9 +3,11 @@ include /env.mak
 
 SUBDIR=ui
 
-.PHONY: all install $(SUBDIR)
+.PHONY: all clean install $(SUBDIR)
 
 all: $(SUBDIR)
+
+clean: $(SUBDIR)
 
 $(SUBDIR):
 	@echo "===>" $@

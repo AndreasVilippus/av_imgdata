@@ -5,7 +5,7 @@ JS_NAMESPACE="SYNO.SDS.App.AV_ImgData"
 BUNDLE_JS="dist/av-img-data.bundle.js"
 BUNDLE_CSS="dist/style/av-img-data.bundle.css"
 
-.PHONY: all $(SUBDIR)
+.PHONY: all clean $(SUBDIR)
 
 all: $(BUNDLE_JS) style.css $(SUBDIR)
 
@@ -23,8 +23,9 @@ $(SUBDIR):
 style.css: $(BUNDLE_JS)
 	cp $(BUNDLE_CSS) $@
 
-clean: clean_JSCompress $(SUBDIR)
-	rm $(BUNDLE_JS)
+clean: clean_JSCompress
+	rm -rf dist
+	rm -f style.css
 
 install: $(SUBDIR) install_JSCompress
 	[ -d $(INSTALLDIR)/texts ] || install -d $(INSTALLDIR)/texts

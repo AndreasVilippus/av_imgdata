@@ -134,6 +134,11 @@ class FileHandler:
     def analyzeImageFaceMetadata(self, image_path: str) -> Dict[str, Any]:
         metadata = self._readFaceMetadata(image_path)
         faces = metadata.get("faces") if isinstance(metadata.get("faces"), list) else []
+        image_dimensions = metadata.get("image_dimensions") if isinstance(metadata.get("image_dimensions"), dict) else {}
+        image_orientation = metadata.get("image_orientation")
+        applied_dimensions = metadata.get("mwg_applied_to_dimensions") if isinstance(metadata.get("mwg_applied_to_dimensions"), dict) else {}
+        displayed_image_dimensions = self._orientedImageDimensions(image_dimensions, image_orientation)
+        mwg_matches = self._appliedDimensionsMatch(displayed_image_dimensions, applied_dimensions)
 
         named_faces = 0
         unnamed_faces = 0
@@ -171,8 +176,13 @@ class FileHandler:
                 "sources": source_counts,
                 "formats": format_counts,
                 "focus_usages": focus_usage_counts,
+                "image_dimensions": image_dimensions,
+                "displayed_image_dimensions": displayed_image_dimensions,
+                "image_orientation": image_orientation,
+                "mwg_applied_to_dimensions": applied_dimensions,
+                "mwg_applied_to_dimensions_matches_current": mwg_matches,
                 "files_with_mwg_applied_to_dimensions": 1 if metadata.get("mwg_applied_to_dimensions_present") else 0,
-                "files_with_mwg_dimension_mismatch": 1 if metadata.get("mwg_applied_to_dimensions_matches_current") is False else 0,
+                "files_with_mwg_dimension_mismatch": 1 if mwg_matches is False else 0,
                 "files_with_mwg_orientation_transform_risk": 1 if metadata.get("mwg_orientation_transform_required") else 0,
             }
         )
@@ -637,6 +647,31 @@ class FileHandler:
                 }
             )
         return persons
+
+    @staticmethod
+    def _orientedImageDimensions(image_dimensions: Dict[str, Any], orientation: Optional[int]) -> Dict[str, Any]:
+        if not image_dimensions:
+            return {}
+        width = image_dimensions.get("width")
+        height = image_dimensions.get("height")
+        unit = image_dimensions.get("unit") or "pixel"
+        if not width or not height:
+            return {"width": width, "height": height, "unit": unit}
+        if orientation in {5, 6, 7, 8}:
+            return {"width": height, "height": width, "unit": unit}
+        return {"width": width, "height": height, "unit": unit}
+
+    @staticmethod
+    def _appliedDimensionsMatch(image_dimensions: Dict[str, Any], applied_dimensions: Dict[str, Any]) -> Optional[bool]:
+        if not image_dimensions or not applied_dimensions:
+            return None
+        try:
+            return (
+                int(image_dimensions.get("width") or 0) == int(applied_dimensions.get("width") or 0)
+                and int(image_dimensions.get("height") or 0) == int(applied_dimensions.get("height") or 0)
+            )
+        except (TypeError, ValueError):
+            return None
 
     def readAllPersonsFromImage(self, image_path: str) -> List[Dict[str, Any]]:
         metadata = self._readFaceMetadata(image_path)

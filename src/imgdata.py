@@ -145,15 +145,31 @@ class ImgDataService:
                 current["message"] = "Last file analysis is no longer running."
         return current
 
+    def _enrichFileAnalysisProgressWithFindings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        current = dict(payload) if isinstance(payload, dict) else {}
+        findings = self.file_analysis.readDimensionMismatchFindings()
+        if not isinstance(findings, dict):
+            return current
+
+        findings_count = int(findings.get("count") or 0)
+        same_job = (
+            not current.get("job_id")
+            or not findings.get("job_id")
+            or str(current.get("job_id")) == str(findings.get("job_id"))
+        )
+        if same_job and "files_with_mwg_dimension_mismatch" not in current and findings_count > 0:
+            current["files_with_mwg_dimension_mismatch"] = findings_count
+        return current
+
     def getFileAnalysisProgress(self) -> Dict[str, Any]:
         with self._file_analysis_progress_lock:
             current = dict(self._file_analysis_progress)
         if current:
-            return self._normalizeFileAnalysisProgress(current)
+            return self._enrichFileAnalysisProgressWithFindings(self._normalizeFileAnalysisProgress(current))
         latest = self.file_analysis.readLatestResult()
         if not isinstance(latest, dict):
             return {}
-        return self._normalizeFileAnalysisProgress(latest)
+        return self._enrichFileAnalysisProgressWithFindings(self._normalizeFileAnalysisProgress(latest))
 
     def getFileAnalysisDimensionMismatchFindings(self) -> Dict[str, Any]:
         findings = self.file_analysis.readDimensionMismatchFindings()
