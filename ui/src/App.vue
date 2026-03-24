@@ -472,7 +472,7 @@ export default {
 	computed: {
 		isFileAnalysisRunning() {
 			const progress = this.fileAnalysisProgress && typeof this.fileAnalysisProgress === 'object' ? this.fileAnalysisProgress : {};
-			return Boolean(progress.running) && !Boolean(progress.finished);
+			return !!progress.running && !progress.finished;
 		},
 		knownRatioPercent() {
 			if (!this.persons.total) {
@@ -624,6 +624,9 @@ export default {
 		close() {
 			this.$refs.appWindow.close();
 		},
+		escapeRegExp(value) {
+			return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		},
 		resolveLocalIconUrl(filename) {
 			if (!filename) {
 				return '';
@@ -640,7 +643,7 @@ export default {
 			}
 		},
 		readCookie(name) {
-			const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\\/+^]/g, '\\$&') + '=([^;]*)'));
+			const match = document.cookie.match(new RegExp('(?:^|; )' + this.escapeRegExp(name) + '=([^;]*)'));
 			return match ? decodeURIComponent(match[1]) : '';
 		},
 		collectDsmCookies() {
@@ -873,7 +876,7 @@ export default {
 			return String(source || '')
 				.replace(/[_-]+/g, ' ')
 				.replace(/\s+/g, ' ')
-				trim()
+				.trim()
 				.replace(/\b\w/g, (char) => char.toUpperCase());
 		},
 		getFaceMatchFormatLabel(format) {

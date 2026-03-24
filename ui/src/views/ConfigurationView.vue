@@ -106,6 +106,9 @@ export default {
 		this.loadConfig();
 	},
 	methods: {
+		escapeRegExp(value) {
+			return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		},
 		createDefaultConfig() {
 			return {
 				files: {
@@ -129,7 +132,7 @@ export default {
 			return (SYNO && SYNO.SDS && SYNO.SDS.Session && SYNO.SDS.Session.SynoToken) || '';
 		},
 		readCookie(name) {
-			const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\\/+^]/g, '\\$&') + '=([^;]*)'));
+			const match = document.cookie.match(new RegExp('(?:^|; )' + this.escapeRegExp(name) + '=([^;]*)'));
 			return match ? decodeURIComponent(match[1]) : '';
 		},
 		normalizeImageExtensions(value, fallback = []) {

@@ -22,17 +22,23 @@ function detectLocale() {
 		if (document && document.documentElement && document.documentElement.lang) {
 			candidates.push(document.documentElement.lang);
 		}
-	} catch (err) {}
+	} catch (err) {
+		// Ignore locale access restrictions from embedded DSM contexts.
+	}
 	try {
 		if (window.parent && window.parent.document && window.parent.document.documentElement) {
 			candidates.push(window.parent.document.documentElement.lang);
 		}
-	} catch (err) {}
+	} catch (err) {
+		// Ignore cross-frame access restrictions.
+	}
 	try {
 		if (navigator && navigator.language) {
 			candidates.push(navigator.language);
 		}
-	} catch (err) {}
+	} catch (err) {
+		// Ignore restricted navigator access.
+	}
 
 	for (const candidate of candidates) {
 		const locale = normalizeLocale(candidate);
