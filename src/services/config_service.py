@@ -23,6 +23,8 @@ class ConfigService:
             },
             "files": {
                 "USE_EXIFTOOL": False,
+                "USE_EXIFTOOL_FOR_SIDECARS": False,
+                "PREFER_EXIFTOOL_FOR_CONTEXT": False,
                 "PATHEXIFTOOL": "exiftool",
                 "IMAGE_EXTENSIONS": ["jpg", "jpeg", "tif", "tiff", "png", "heic", "heif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "rw2", "raf", "pef"],
             },

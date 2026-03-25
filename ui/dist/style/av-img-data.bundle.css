@@ -169,6 +169,68 @@
 	box-sizing: border-box;
 }
 
+.sm-system-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+	gap: 12px;
+}
+
+.sm-status-card {
+	border: 1px solid var(--sm-border);
+	border-radius: var(--sm-radius-1);
+	background: var(--sm-surface);
+	padding: 12px 14px;
+	box-sizing: border-box;
+	min-width: 0;
+}
+
+.sm-status-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--sm-space-3);
+}
+
+.sm-status-title {
+	font-size: 13px;
+	font-weight: 700;
+	color: var(--sm-text);
+}
+
+.sm-kv-list {
+	margin-top: 8px;
+	display: grid;
+	gap: 8px;
+}
+
+.sm-kv-list-compact {
+	gap: 6px;
+}
+
+.sm-kv-row {
+	display: grid;
+	grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+	gap: 12px;
+	align-items: start;
+}
+
+.sm-kv-key,
+.sm-kv-value {
+	font-size: var(--sm-font-sm);
+	line-height: 20px;
+	word-break: break-word;
+	overflow-wrap: anywhere;
+}
+
+.sm-kv-key {
+	color: var(--sm-text);
+	font-weight: 700;
+}
+
+.sm-kv-value {
+	color: rgba(65, 75, 85, 0.82);
+}
+
 .sm-system-row {
 	display: flex;
 	flex-direction: column;
@@ -187,6 +249,10 @@
 	color: rgba(65, 75, 85, 0.82);
 	word-break: break-word;
 	overflow-wrap: anywhere;
+}
+
+.sm-system-value-block {
+	margin-top: 6px;
 }
 
 .sm-files-result-details {
@@ -233,6 +299,11 @@
 @media (max-width: 900px) {
 	.sm-files-result-details {
 		grid-template-columns: 1fr;
+	}
+
+	.sm-kv-row {
+		grid-template-columns: 1fr;
+		gap: 2px;
 	}
 }
 
@@ -305,6 +376,10 @@
 	flex-wrap: wrap;
 	gap: var(--sm-space-2);
 	margin-bottom: var(--sm-space-4);
+}
+
+.config-actions-right {
+	justify-content: flex-end;
 }
 
 .checks-actions {
@@ -571,6 +646,7 @@
 	}
 }
 
+.sm-status-card,
 .face-match-status-card,
 .face-match-result-name-input,
 .face-match-suggest-list {
@@ -643,6 +719,7 @@
 	flex-wrap: wrap;
 }
 
+.sm-status-head,
 .face-match-status-head {
 	display: flex;
 	align-items: center;
@@ -650,6 +727,7 @@
 	gap: var(--sm-space-3);
 }
 
+.sm-status-title,
 .face-match-status-title {
 	font-size: 13px;
 	font-weight: 700;

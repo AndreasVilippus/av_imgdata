@@ -30,22 +30,6 @@
 				<div class="config-card-desc">{{ $t('config:config_path', 'Config path: {path}', { path: configPath || '-' }) }}</div>
 
 				<div class="config-form-grid">
-					<label class="config-field">
-						<span class="config-field-label">{{ $t('config:label_exiftool_path', 'ExifTool path') }}</span>
-						<input
-							v-model="configModel.files.PATHEXIFTOOL"
-							type="text"
-							class="config-text-input"
-							:disabled="saving"
-							:placeholder="$t('config:placeholder_exiftool_path', 'exiftool')"
-						/>
-					</label>
-
-					<label class="config-checkbox">
-						<input v-model="configModel.files.USE_EXIFTOOL" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_use_exiftool', 'Use ExifTool for embedded XMP') }}</span>
-					</label>
-
 					<label class="config-checkbox">
 						<input v-model="configModel.metadata.SCHEMAS.ACD" type="checkbox" :disabled="saving" />
 						<span>{{ $t('config:label_schema_acd', 'Read ACDSee metadata') }}</span>
@@ -83,6 +67,67 @@
 							:disabled="saving"
 						/>
 					</label>
+				</div>
+			</section>
+
+			<section class="config-card">
+				<div class="config-card-title">{{ $t('config:section_exiftool', 'ExifTool') }}</div>
+				<div class="config-card-desc">{{ $t('config:section_exiftool_desc', 'Settings for optional ExifTool usage when reading embedded XMP metadata.') }}</div>
+
+				<div class="config-form-grid">
+					<label class="config-checkbox">
+						<input v-model="configModel.files.USE_EXIFTOOL" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_use_exiftool', 'Use ExifTool for embedded XMP') }}</span>
+					</label>
+
+					<label
+						class="config-checkbox"
+						:title="$t('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.')"
+					>
+						<input
+							v-model="configModel.files.USE_EXIFTOOL_FOR_SIDECARS"
+							type="checkbox"
+							:disabled="saving || !configModel.files.USE_EXIFTOOL"
+						/>
+						<span>{{ $t('config:label_use_exiftool_for_sidecars', 'Use ExifTool for XMP sidecars') }}</span>
+					</label>
+
+					<label
+						class="config-checkbox"
+						:title="$t('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.')"
+					>
+						<input
+							v-model="configModel.files.PREFER_EXIFTOOL_FOR_CONTEXT"
+							type="checkbox"
+							:disabled="saving || !configModel.files.USE_EXIFTOOL"
+						/>
+						<span>{{ $t('config:label_prefer_exiftool_for_context', 'Prefer ExifTool for metadata context') }}</span>
+					</label>
+				</div>
+
+				<div class="config-card-desc">
+					{{ $t('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.') }}
+				</div>
+				<div class="config-card-desc">
+					{{ $t('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.') }}
+				</div>
+
+				<div v-if="exiftoolStatus.online && exiftoolStatus.online.unix_download_url" class="config-card-desc">
+					{{ $t('config:exiftool_download_source', 'Latest ExifTool package will be downloaded from: {url}', { url: exiftoolStatus.online.unix_download_url }) }}
+				</div>
+
+				<div class="config-actions config-actions-right">
+					<v-button @click="installExiftool" :disabled="loading || saving || exiftoolInstalling" style="width: 220px;">
+						{{ exiftoolInstalling ? $t('config:button_exiftool_installing', 'Installing ExifTool...') : $t('config:button_exiftool_install', 'Download and install ExifTool') }}
+					</v-button>
+					<v-button
+						v-if="hasBundledExiftool"
+						@click="removeExiftool"
+						:disabled="loading || saving || exiftoolInstalling || exiftoolRemoving"
+						style="width: 220px;"
+					>
+						{{ exiftoolRemoving ? $t('config:button_exiftool_removing', 'Removing ExifTool...') : $t('config:button_exiftool_remove', 'Remove ExifTool') }}
+					</v-button>
 				</div>
 			</section>
 
@@ -139,10 +184,22 @@ export default {
 			configPath: '',
 			configModel: this.createDefaultConfig(),
 			imageExtensionsInput: '',
+			exiftoolStatus: {},
+			exiftoolInstalling: false,
+			exiftoolRemoving: false,
 		};
+	},
+	computed: {
+		hasBundledExiftool() {
+			const resolvedPath = this.exiftoolStatus && this.exiftoolStatus.local && this.exiftoolStatus.local.resolved_path
+				? String(this.exiftoolStatus.local.resolved_path)
+				: '';
+			return resolvedPath.includes('/var/packages/AV_ImgData/') || resolvedPath.includes('/volume') && resolvedPath.includes('/AV_ImgData/');
+		},
 	},
 	mounted() {
 		this.loadConfig();
+		this.loadExiftoolStatus();
 	},
 	methods: {
 		escapeRegExp(value) {
@@ -152,6 +209,8 @@ export default {
 			return {
 				files: {
 					USE_EXIFTOOL: false,
+					USE_EXIFTOOL_FOR_SIDECARS: false,
+					PREFER_EXIFTOOL_FOR_CONTEXT: false,
 					PATHEXIFTOOL: 'exiftool',
 					IMAGE_EXTENSIONS: ['jpg', 'jpeg', 'tif', 'tiff', 'png', 'heic', 'heif', 'dng', 'cr2', 'cr3', 'nef', 'nrw', 'arw', 'orf', 'rw2', 'raf', 'pef'],
 				},
@@ -204,6 +263,27 @@ export default {
 				did: this.readCookie('did'),
 			};
 		},
+		async callApi(apiPath, body = {}) {
+			const resp = await fetch(apiPath, {
+				method: 'POST',
+				credentials: 'include',
+				headers: {
+					'Content-Type': 'application/json',
+					'X-SYNO-TOKEN': this.getSynoToken(),
+				},
+				body: JSON.stringify({
+					...body,
+					cookies: this.collectDsmCookies(),
+					synoToken: this.getSynoToken(),
+				}),
+			});
+			const data = await resp.json().catch(() => ({}));
+			if (!resp.ok || data.success === false) {
+				const backendError = data.error || `HTTP ${resp.status}`;
+				throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
+			}
+			return data;
+		},
 		normalizeConfig(input) {
 			const root = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
 			const defaults = this.createDefaultConfig();
@@ -223,6 +303,8 @@ export default {
 				files: {
 					...files,
 					USE_EXIFTOOL: Boolean(files.USE_EXIFTOOL ?? defaults.files.USE_EXIFTOOL),
+					USE_EXIFTOOL_FOR_SIDECARS: Boolean(files.USE_EXIFTOOL_FOR_SIDECARS ?? defaults.files.USE_EXIFTOOL_FOR_SIDECARS),
+					PREFER_EXIFTOOL_FOR_CONTEXT: Boolean(files.PREFER_EXIFTOOL_FOR_CONTEXT ?? defaults.files.PREFER_EXIFTOOL_FOR_CONTEXT),
 					PATHEXIFTOOL: String(files.PATHEXIFTOOL || defaults.files.PATHEXIFTOOL),
 					IMAGE_EXTENSIONS: imageExtensions,
 				},
@@ -271,23 +353,7 @@ export default {
 			this.loading = true;
 			this.message = '';
 			try {
-				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/config_get', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': this.getSynoToken(),
-					},
-					body: JSON.stringify({
-						cookies: this.collectDsmCookies(),
-						synoToken: this.getSynoToken(),
-					}),
-				});
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					const backendError = data.error || `HTTP ${resp.status}`;
-					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-				}
+				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/config_get');
 				this.configPath = (data && data.data && data.data.config_path) || '';
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
@@ -313,24 +379,7 @@ export default {
 					},
 				};
 				const normalized = this.normalizeConfig(payloadConfig);
-				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/config_save', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': this.getSynoToken(),
-					},
-					body: JSON.stringify({
-						config: normalized,
-						cookies: this.collectDsmCookies(),
-						synoToken: this.getSynoToken(),
-					}),
-				});
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					const backendError = data.error || `HTTP ${resp.status}`;
-					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-				}
+				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/config_save', { config: normalized });
 				this.configPath = (data && data.data && data.data.config_path) || this.configPath;
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
@@ -339,6 +388,60 @@ export default {
 				this.message = `Error: ${err.message}`;
 			} finally {
 				this.saving = false;
+			}
+		},
+		async loadExiftoolStatus() {
+			try {
+				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_status');
+				this.exiftoolStatus = (data && data.data && typeof data.data === 'object') ? data.data : {};
+			} catch (err) {
+				this.exiftoolStatus = {};
+			}
+		},
+		async installExiftool() {
+			this.exiftoolInstalling = true;
+			this.message = '';
+			try {
+				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_install');
+				const installedPath = data && data.data && data.data.installed_path ? data.data.installed_path : '';
+				if (installedPath) {
+					this.configModel.files.PATHEXIFTOOL = installedPath;
+					this.configModel.files.USE_EXIFTOOL = true;
+				}
+				await this.loadExiftoolStatus();
+				this.message = this.$t('config:message_exiftool_installed', 'ExifTool downloaded and installed.');
+			} catch (err) {
+				const detail = String(err.message || '');
+				if (detail.includes('perl_not_available')) {
+					this.message = this.$t(
+						'config:error_exiftool_perl_required',
+						'ExifTool cannot be installed because Perl is not available. Please install the Synology Perl package first.'
+					);
+				} else if (detail.includes('installed_exiftool_smoke_test_failed')) {
+					this.message = this.$t(
+						'config:error_exiftool_smoke_test_failed',
+						'ExifTool was downloaded, but the installation test failed. ExifTool remains disabled.'
+					);
+				} else {
+					this.message = `Error: ${detail}`;
+				}
+			} finally {
+				this.exiftoolInstalling = false;
+			}
+		},
+		async removeExiftool() {
+			this.exiftoolRemoving = true;
+			this.message = '';
+			try {
+				await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_remove');
+				this.configModel.files.PATHEXIFTOOL = 'exiftool';
+				this.configModel.files.USE_EXIFTOOL = false;
+				await this.loadExiftoolStatus();
+				this.message = this.$t('config:message_exiftool_removed', 'ExifTool installation removed.');
+			} catch (err) {
+				this.message = `Error: ${err.message}`;
+			} finally {
+				this.exiftoolRemoving = false;
 			}
 		},
 	},

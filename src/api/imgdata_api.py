@@ -144,6 +144,74 @@ async def status(request: Request):
     }
 
 
+@router.post("/exiftool_status")
+async def exiftool_status(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    return {
+        "success": True,
+        "data": IMGDATA.exiftool_status(),
+    }
+
+
+@router.post("/exiftool_install")
+async def exiftool_install(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    try:
+        result = IMGDATA.install_exiftool()
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "exiftool_install_failed",
+                "details": str(exc),
+            },
+        }
+
+    return {
+        "success": bool(result.get("success")),
+        "data": result if result.get("success") else {},
+        "error": None if result.get("success") else {
+            "code": 500,
+            "message": result.get("message") or "exiftool_install_failed",
+        },
+    }
+
+
+@router.post("/exiftool_remove")
+async def exiftool_remove(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    try:
+        result = IMGDATA.remove_exiftool()
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "exiftool_remove_failed",
+                "details": str(exc),
+            },
+        }
+
+    return {
+        "success": bool(result.get("success")),
+        "data": result if result.get("success") else {},
+        "error": None if result.get("success") else {
+            "code": 500,
+            "message": result.get("message") or "exiftool_remove_failed",
+        },
+    }
+
+
 @router.post("/face_matching_action")
 async def face_matching_action(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)

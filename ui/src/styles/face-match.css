@@ -1,3 +1,4 @@
+.sm-status-card,
 .face-match-status-card,
 .face-match-result-name-input,
 .face-match-suggest-list {
@@ -70,6 +71,7 @@
 	flex-wrap: wrap;
 }
 
+.sm-status-head,
 .face-match-status-head {
 	display: flex;
 	align-items: center;
@@ -77,6 +79,7 @@
 	gap: var(--sm-space-3);
 }
 
+.sm-status-title,
 .face-match-status-title {
 	font-size: 13px;
 	font-weight: 700;

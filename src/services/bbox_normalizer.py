@@ -1,6 +1,23 @@
 from models.bbox import BoundingBox
 
 
+def _as_face_dict(face_like):
+    if isinstance(face_like, dict):
+        return face_like
+    if hasattr(face_like, "to_dict"):
+        return face_like.to_dict()
+    return {
+        "x": getattr(face_like, "x", 0),
+        "y": getattr(face_like, "y", 0),
+        "w": getattr(face_like, "w", 0),
+        "h": getattr(face_like, "h", 0),
+        "orientation": getattr(face_like, "orientation", None),
+        "name": getattr(face_like, "name", ""),
+        "source": getattr(face_like, "source", "metadata"),
+        "source_format": getattr(face_like, "source_format", ""),
+    }
+
+
 def from_photos(face_dict) -> BoundingBox:
     return BoundingBox(
         x1=face_dict["bbox"]["top_left"]["x"],
@@ -11,6 +28,7 @@ def from_photos(face_dict) -> BoundingBox:
 
 
 def normalize_xmp_face(face_dict) -> dict:
+    face_dict = _as_face_dict(face_dict)
     center_x = face_dict["x"]
     center_y = face_dict["y"]
     width = face_dict["w"]

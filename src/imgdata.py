@@ -7,12 +7,17 @@ from typing import Any, Dict, List, Optional
 
 from api.session_manager import SessionManager
 from handler.core_handler import CoreHandler
+from handler.exiftool_handler import ExifToolHandler
 from handler.file_handler import FileHandler
 from handler.photos_handler import PhotosHandler
 from models.file_face import FileFace
+from models.metadata_face import MetadataFace
+from models.metadata_payload import MetadataPayload
 from models.photos_face import PhotosFace
+from parser.metadata_parser import MetadataParser
 from services.bbox_normalizer import from_photos, from_xmp, normalize_xmp_face
 from services.config_service import ConfigService
+from services.exiftool_service import ExifToolService
 from services.face_matcher import FaceMatcher
 from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
@@ -24,9 +29,12 @@ class ImgDataService:
     def __init__(self, session_manager: SessionManager):
         self.session_manager = session_manager
         self.config = ConfigService()
+        self.exiftool = ExifToolService(self.config)
+        self.exiftool_handler = ExifToolHandler(self.config)
         self.core = CoreHandler(session_manager)
         self.photos = PhotosHandler(session_manager, self.config)
         self.files = FileHandler(self.config)
+        self.metadata_parser = MetadataParser()
         self.name_mappings = NameMappingService()
         self.face_matcher = FaceMatcher()
         self.file_analysis = FileAnalysisService()
@@ -78,6 +86,66 @@ class ImgDataService:
             folder_name="photo",
         )
         return {"shared_folder": shared_folder or ""}
+
+    def exiftool_status(self) -> Dict[str, Any]:
+        return self.exiftool.getStatus()
+
+    def install_exiftool(self) -> Dict[str, Any]:
+        return self.exiftool.installLatest()
+
+    def remove_exiftool(self) -> Dict[str, Any]:
+        return self.exiftool.removeInstalled()
+
+    def _readImageMetadata(self, image_path: str) -> MetadataPayload:
+        config = self.config.readMergedConfig()
+        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        use_exiftool_for_sidecars = bool(files_config.get("USE_EXIFTOOL_FOR_SIDECARS", False))
+        prefer_exiftool_for_context = bool(files_config.get("PREFER_EXIFTOOL_FOR_CONTEXT", False))
+
+        xmp_path = self.files.findXmpForImage(image_path)
+        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path and use_exiftool_for_sidecars else self.files.loadXmpFromFile(xmp_path)
+        xmp_source = "xmp_file" if xmp_content else ""
+
+        if not xmp_content:
+            xmp_content = self.exiftool_handler.loadEmbeddedXmp(image_path)
+            xmp_source = "embedded_xmp_exiftool" if xmp_content else ""
+
+        if not xmp_content:
+            xmp_content = self.files.loadXmpFromImageParsed(image_path)
+            xmp_source = "embedded_xmp_parsed" if xmp_content else ""
+
+        if prefer_exiftool_for_context and self.exiftool_handler.isEnabled() and self.exiftool_handler.isAvailable():
+            image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
+            image_orientation = self.exiftool_handler.readImageOrientation(image_path)
+            if not image_dimensions.get("width") or not image_dimensions.get("height"):
+                image_dimensions = self.files.readImageDimensions(image_path)
+            if image_orientation is None:
+                image_orientation = self.files.readJpegExifOrientation(image_path)
+        else:
+            image_dimensions = self.files.readImageDimensions(image_path)
+            image_orientation = self.files.readJpegExifOrientation(image_path)
+            if (not image_dimensions.get("width") or not image_dimensions.get("height")) and self.exiftool_handler.isEnabled() and self.exiftool_handler.isAvailable():
+                image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
+            if image_orientation is None and self.exiftool_handler.isEnabled() and self.exiftool_handler.isAvailable():
+                image_orientation = self.exiftool_handler.readImageOrientation(image_path)
+        schemas = self.files.configuredMetadataSchemas()
+        return self.metadata_parser.parse(
+            image_path=image_path,
+            xmp_content=xmp_content,
+            xmp_path=xmp_path or "",
+            xmp_source=xmp_source,
+            image_dimensions=image_dimensions,
+            image_orientation=image_orientation,
+            use_acd=schemas["ACD"],
+            use_microsoft=schemas["MICROSOFT"],
+            use_mwg_regions=schemas["MWG_REGIONS"],
+        )
+
+    def analyzeImageFaceMetadata(self, image_path: str) -> Dict[str, Any]:
+        return self.files.analyzeMetadata(self._readImageMetadata(image_path))
+
+    def readAllPersonsFromImage(self, image_path: str) -> List[Dict[str, Any]]:
+        return self.files.readAllPersonsFromMetadata(self._readImageMetadata(image_path))
 
     def _setFaceMatchingProgress(self, user_key: str, **updates: Any) -> None:
         with self._face_matching_progress_lock:
@@ -244,30 +312,43 @@ class ImgDataService:
             )
 
     @staticmethod
-    def _pickReviewFace(faces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _pickReviewFace(faces: List[MetadataFace]) -> Optional[MetadataFace]:
         if not isinstance(faces, list):
             return None
-        mwg_faces = [face for face in faces if isinstance(face, dict) and str(face.get("source_format") or "") == "MWG_REGIONS"]
+        mwg_faces = [face for face in faces if isinstance(face, MetadataFace) and face.source_format == "MWG_REGIONS"]
         if not mwg_faces:
             return None
-        named = [face for face in mwg_faces if str(face.get("name") or "").strip()]
-        return dict(named[0] if named else mwg_faces[0])
+        named = [face for face in mwg_faces if str(face.name or "").strip()]
+        return named[0] if named else mwg_faces[0]
 
     @staticmethod
-    def _normalizedReviewFace(face: Dict[str, Any]) -> Dict[str, Any]:
-        if str(face.get("source_format") or "") == "MWG_REGIONS":
-            return normalize_xmp_face(face)
-        return dict(face)
+    def _normalizedReviewFace(face: Any) -> Dict[str, Any]:
+        if isinstance(face, MetadataFace):
+            face_data = face.to_dict()
+        elif isinstance(face, dict):
+            face_data = dict(face)
+        else:
+            return {}
+
+        if str(face_data.get("source_format") or "") == "MWG_REGIONS":
+            return normalize_xmp_face(face_data)
+        return face_data
 
     @staticmethod
-    def _isSameFace(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    def _isSameFace(left: Any, right: Any) -> bool:
+        if isinstance(left, MetadataFace):
+            left = left.to_dict()
+        if isinstance(right, MetadataFace):
+            right = right.to_dict()
         if not isinstance(left, dict) or not isinstance(right, dict):
             return False
         keys = ("source_format", "source", "name", "x", "y", "w", "h", "orientation")
         return all(left.get(key) == right.get(key) for key in keys)
 
     @staticmethod
-    def _faceSignature(face: Dict[str, Any]) -> Dict[str, Any]:
+    def _faceSignature(face: Any) -> Dict[str, Any]:
+        if isinstance(face, MetadataFace):
+            face = face.to_dict()
         if not isinstance(face, dict):
             return {}
         return {
@@ -281,12 +362,12 @@ class ImgDataService:
             "orientation": face.get("orientation"),
         }
 
-    def _findFaceBySignature(self, faces: List[Dict[str, Any]], signature: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _findFaceBySignature(self, faces: List[MetadataFace], signature: Dict[str, Any]) -> Optional[MetadataFace]:
         if not isinstance(signature, dict):
             return None
         for face in faces:
             if self._isSameFace(face, signature):
-                return dict(face)
+                return face
         return None
 
     def _buildCheckEntry(
@@ -295,8 +376,8 @@ class ImgDataService:
         review_type: str,
         image_path: str,
         face_name: str = "",
-        left_face: Optional[Dict[str, Any]] = None,
-        right_face: Optional[Dict[str, Any]] = None,
+        left_face: Optional[MetadataFace] = None,
+        right_face: Optional[MetadataFace] = None,
     ) -> Dict[str, Any]:
         return {
             "review_type": review_type,
@@ -312,20 +393,20 @@ class ImgDataService:
         image_path: str,
         analysis: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        payload = self._readImageMetadata(image_path)
+        analysis = analysis or self.files.analyzeMetadata(payload)
         if analysis.get("files_with_mwg_dimension_mismatch") != 1:
             return None
 
-        faces = analysis.get("faces") if isinstance(analysis.get("faces"), list) else []
-        mwg_faces = [dict(face) for face in faces if isinstance(face, dict) and str(face.get("source_format") or "") == "MWG_REGIONS"]
+        mwg_faces = [face for face in payload.faces if face.source_format == "MWG_REGIONS"]
         if not mwg_faces:
             return None
 
-        review_face = dict(self._pickReviewFace(mwg_faces) or mwg_faces[0])
+        review_face = self._pickReviewFace(mwg_faces) or mwg_faces[0]
         return self._buildCheckEntry(
             review_type="dimension_issues",
             image_path=image_path,
-            face_name=str(review_face.get("name") or ""),
+            face_name=str(review_face.name or ""),
             left_face=review_face,
         )
 
@@ -335,20 +416,20 @@ class ImgDataService:
         analysis: Optional[Dict[str, Any]] = None,
         entry: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        payload = self._readImageMetadata(image_path)
+        analysis = analysis or self.files.analyzeMetadata(payload)
         if analysis.get("files_with_mwg_dimension_mismatch") != 1:
             return None
 
-        faces = analysis.get("faces") if isinstance(analysis.get("faces"), list) else []
-        mwg_faces = [dict(face) for face in faces if isinstance(face, dict) and str(face.get("source_format") or "") == "MWG_REGIONS"]
-        reference_faces = [dict(face) for face in faces if isinstance(face, dict) and str(face.get("source_format") or "") != "MWG_REGIONS"]
+        mwg_faces = [face for face in payload.faces if face.source_format == "MWG_REGIONS"]
+        reference_faces = [face for face in payload.faces if face.source_format != "MWG_REGIONS"]
         if not mwg_faces:
             return None
 
         review_face = self._findFaceBySignature(mwg_faces, (entry or {}).get("left_face_signature") or {})
-        review_face = dict(review_face or self._pickReviewFace(mwg_faces) or mwg_faces[0])
+        review_face = review_face or self._pickReviewFace(mwg_faces) or mwg_faces[0]
         applied_face = normalize_xmp_face(review_face)
-        reference_face = self._findBestReferenceFace(review_face, reference_faces) or dict(review_face)
+        reference_face = self._findBestReferenceFace(review_face, reference_faces) or review_face
 
         return {
             "review_type": "dimension_issues",
@@ -363,24 +444,24 @@ class ImgDataService:
             "left_reference_faces": [self._normalizedReviewFace(face) for face in reference_faces],
             "right_alert_faces": [],
             "right_reference_faces": [],
-            "face_name": str(review_face.get("name") or ""),
-            "left_name": str(review_face.get("name") or ""),
-            "right_name": str(reference_face.get("name") or ""),
-            "left_format": str(review_face.get("source_format") or ""),
-            "right_format": str(reference_face.get("source_format") or ""),
+            "face_name": str(review_face.name or ""),
+            "left_name": str(review_face.name or ""),
+            "right_name": str(reference_face.name or ""),
+            "left_format": str(review_face.source_format or ""),
+            "right_format": str(reference_face.source_format or ""),
             "image_dimensions": analysis.get("image_dimensions") if isinstance(analysis.get("image_dimensions"), dict) else {},
             "applied_to_dimensions": analysis.get("mwg_applied_to_dimensions") if isinstance(analysis.get("mwg_applied_to_dimensions"), dict) else {},
             "image_orientation": analysis.get("image_orientation"),
             "mwg_applied_to_dimensions_matches_current": analysis.get("mwg_applied_to_dimensions_matches_current"),
         }
 
-    def _findBestReferenceFace(self, review_face: Dict[str, Any], candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        review_name = str(review_face.get("name") or "").strip().casefold()
+    def _findBestReferenceFace(self, review_face: MetadataFace, candidates: List[MetadataFace]) -> Optional[MetadataFace]:
+        review_name = str(review_face.name or "").strip().casefold()
         if review_name:
-            same_name = [face for face in candidates if str(face.get("name") or "").strip().casefold() == review_name]
+            same_name = [face for face in candidates if str(face.name or "").strip().casefold() == review_name]
             if same_name:
-                return dict(same_name[0])
-        return dict(candidates[0]) if candidates else None
+                return same_name[0]
+        return candidates[0] if candidates else None
 
     def _configuredReviewOptions(self) -> Dict[str, bool]:
         config = self.config.readMergedConfig()
@@ -403,12 +484,11 @@ class ImgDataService:
         image_path: str,
         analysis: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
-        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
-        grouped: Dict[tuple, List[Dict[str, Any]]] = {}
-        for face in faces:
-            name = str(face.get("name") or "").strip()
-            source_format = str(face.get("source_format") or "").strip()
+        payload = self._readImageMetadata(image_path)
+        grouped: Dict[tuple, List[MetadataFace]] = {}
+        for face in payload.faces:
+            name = str(face.name or "").strip()
+            source_format = str(face.source_format or "").strip()
             if not name or not source_format:
                 continue
             grouped.setdefault((source_format, name.casefold()), []).append(face)
@@ -437,9 +517,10 @@ class ImgDataService:
         analysis: Optional[Dict[str, Any]] = None,
         entry: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        payload = self._readImageMetadata(image_path)
+        analysis = analysis or self.files.analyzeMetadata(payload)
         review_options = self._configuredReviewOptions()
-        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        faces = payload.faces
         left = self._findFaceBySignature(faces, (entry or {}).get("left_face_signature") or {})
         right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
         if not left or not right:
@@ -459,11 +540,11 @@ class ImgDataService:
             "review_type": "duplicate_faces",
             "image_path": image_path,
             "image_name": Path(image_path).name,
-            "face_name": str(left.get("name") or ""),
-            "left_name": str(left.get("name") or ""),
-            "right_name": str(right.get("name") or ""),
-            "left_format": str(left.get("source_format") or ""),
-            "right_format": str(right.get("source_format") or ""),
+            "face_name": str(left.name or ""),
+            "left_name": str(left.name or ""),
+            "right_name": str(right.name or ""),
+            "left_format": str(left.source_format or ""),
+            "right_format": str(right.source_format or ""),
             "left_face": self._normalizedReviewFace(left),
             "right_face": self._normalizedReviewFace(right),
             "left_state": left_state,
@@ -474,19 +555,17 @@ class ImgDataService:
             "right_reference_faces": [],
         }
 
-    def _countDuplicateSuggestionMatches(self, candidate: Dict[str, Any], faces: List[Dict[str, Any]]) -> int:
-        candidate_name = str(candidate.get("name") or "").strip().casefold()
-        candidate_format = str(candidate.get("source_format") or "").strip().upper()
+    def _countDuplicateSuggestionMatches(self, candidate: MetadataFace, faces: List[MetadataFace]) -> int:
+        candidate_name = str(candidate.name or "").strip().casefold()
+        candidate_format = str(candidate.source_format or "").strip().upper()
         if not candidate_name or not candidate_format:
             return 0
 
         normalized_candidate = self._normalizedReviewFace(candidate)
         matches = 0
         for face in faces:
-            if not isinstance(face, dict):
-                continue
-            face_name = str(face.get("name") or "").strip().casefold()
-            face_format = str(face.get("source_format") or "").strip().upper()
+            face_name = str(face.name or "").strip().casefold()
+            face_format = str(face.source_format or "").strip().upper()
             if face_name != candidate_name or face_format == candidate_format:
                 continue
             normalized_face = self._normalizedReviewFace(face)
@@ -499,18 +578,18 @@ class ImgDataService:
         image_path: str,
         analysis: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
-        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        payload = self._readImageMetadata(image_path)
+        faces = payload.faces
         entries: List[Dict[str, Any]] = []
         for index, left in enumerate(faces):
-            left_name = str(left.get("name") or "").strip().casefold()
-            left_format = str(left.get("source_format") or "").strip().upper()
+            left_name = str(left.name or "").strip().casefold()
+            left_format = str(left.source_format or "").strip().upper()
             if not left_name or not left_format:
                 continue
             normalized_left = self._normalizedReviewFace(left)
             for right in faces[index + 1:]:
-                right_name = str(right.get("name") or "").strip().casefold()
-                right_format = str(right.get("source_format") or "").strip().upper()
+                right_name = str(right.name or "").strip().casefold()
+                right_format = str(right.source_format or "").strip().upper()
                 if left_name != right_name or left_format == right_format:
                     continue
                 normalized_right = self._normalizedReviewFace(right)
@@ -520,7 +599,7 @@ class ImgDataService:
                     self._buildCheckEntry(
                         review_type="position_deviations",
                         image_path=image_path,
-                        face_name=str(left.get("name") or ""),
+                        face_name=str(left.name or ""),
                         left_face=left,
                         right_face=right,
                     )
@@ -533,8 +612,8 @@ class ImgDataService:
         analysis: Optional[Dict[str, Any]] = None,
         entry: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
-        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        payload = self._readImageMetadata(image_path)
+        faces = payload.faces
         left = self._findFaceBySignature(faces, (entry or {}).get("left_face_signature") or {})
         right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
         if not left or not right:
@@ -543,11 +622,11 @@ class ImgDataService:
             "review_type": "position_deviations",
             "image_path": image_path,
             "image_name": Path(image_path).name,
-            "face_name": str(left.get("name") or ""),
-            "left_name": str(left.get("name") or ""),
-            "right_name": str(right.get("name") or ""),
-            "left_format": str(left.get("source_format") or ""),
-            "right_format": str(right.get("source_format") or ""),
+            "face_name": str(left.name or ""),
+            "left_name": str(left.name or ""),
+            "right_name": str(right.name or ""),
+            "left_format": str(left.source_format or ""),
+            "right_format": str(right.source_format or ""),
             "left_face": self._normalizedReviewFace(left),
             "right_face": self._normalizedReviewFace(right),
             "left_alert_faces": [],
@@ -561,16 +640,16 @@ class ImgDataService:
         image_path: str,
         analysis: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
-        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        payload = self._readImageMetadata(image_path)
+        faces = payload.faces
         entries: List[Dict[str, Any]] = []
         for index, left in enumerate(faces):
-            left_name = str(left.get("name") or "").strip()
+            left_name = str(left.name or "").strip()
             if not left_name:
                 continue
             normalized_left = self._normalizedReviewFace(left)
             for right in faces[index + 1:]:
-                right_name = str(right.get("name") or "").strip()
+                right_name = str(right.name or "").strip()
                 if not right_name or left_name.casefold() == right_name.casefold():
                     continue
                 normalized_right = self._normalizedReviewFace(right)
@@ -593,8 +672,8 @@ class ImgDataService:
         analysis: Optional[Dict[str, Any]] = None,
         entry: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
-        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        payload = self._readImageMetadata(image_path)
+        faces = payload.faces
         left = self._findFaceBySignature(faces, (entry or {}).get("left_face_signature") or {})
         right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
         if not left or not right:
@@ -603,11 +682,11 @@ class ImgDataService:
             "review_type": "name_conflicts",
             "image_path": image_path,
             "image_name": Path(image_path).name,
-            "face_name": str(left.get("name") or ""),
-            "left_name": str(left.get("name") or ""),
-            "right_name": str(right.get("name") or ""),
-            "left_format": str(left.get("source_format") or ""),
-            "right_format": str(right.get("source_format") or ""),
+            "face_name": str(left.name or ""),
+            "left_name": str(left.name or ""),
+            "right_name": str(right.name or ""),
+            "left_format": str(left.source_format or ""),
+            "right_format": str(right.source_format or ""),
             "left_face": self._normalizedReviewFace(left),
             "right_face": self._normalizedReviewFace(right),
             "left_alert_faces": [],
@@ -656,7 +735,7 @@ class ImgDataService:
             if image_path in seen_paths:
                 continue
             seen_paths.append(image_path)
-            analysis = self.files.analyzeImageFaceMetadata(image_path)
+            analysis = self.analyzeImageFaceMetadata(image_path)
             if check_type_normalized == "dimension_issues":
                 entry = self._buildDimensionMismatchReviewEntry(image_path, analysis)
                 if entry:
@@ -680,7 +759,7 @@ class ImgDataService:
         review_type = str(entry.get("review_type") or "").strip().lower()
         if not image_path or not review_type:
             return None
-        analysis = self.files.analyzeImageFaceMetadata(image_path)
+        analysis = self.analyzeImageFaceMetadata(image_path)
         if review_type == "dimension_issues":
             return self._buildDimensionMismatchReviewItem(image_path, analysis, entry)
         if review_type == "duplicate_faces":
@@ -717,7 +796,7 @@ class ImgDataService:
             mismatch_paths = []
             if shared_folder:
                 for image_path in self.files.listImageFiles(shared_folder):
-                    analysis = self.files.analyzeImageFaceMetadata(image_path)
+                    analysis = self.analyzeImageFaceMetadata(image_path)
                     if analysis.get("files_with_mwg_dimension_mismatch") == 1:
                         mismatch_paths.append(image_path)
 
@@ -1215,7 +1294,8 @@ class ImgDataService:
                     self._file_analysis_thread = None
                     return
 
-                analysis = self.files.analyzeImageFaceMetadata(image_path)
+                metadata_payload = self._readImageMetadata(image_path)
+                analysis = self.files.analyzeMetadata(metadata_payload)
                 files_analyzed += 1
                 if analysis.get("has_sidecar"):
                     files_with_sidecar += 1
@@ -1288,13 +1368,12 @@ class ImgDataService:
                 for key, value in (analysis.get("focus_usages") or {}).items():
                     self._incrementCounter(focus_usage_counts, str(key), int(value))
 
-                faces = analysis.get("faces") if isinstance(analysis.get("faces"), list) else []
-                for face in faces:
-                    name = str(face.get("name") or "").strip()
+                for face in metadata_payload.faces:
+                    name = str(face.name or "").strip()
                     if name:
                         distinct_person_names.add(name.casefold())
-                    self._incrementCounter(source_counts, str(face.get("source") or analysis.get("xmp_source") or "metadata"))
-                    self._incrementCounter(format_counts, str(face.get("source_format") or face.get("format") or ""))
+                    self._incrementCounter(source_counts, str(face.source or analysis.get("xmp_source") or "metadata"))
+                    self._incrementCounter(format_counts, str(face.source_format or ""))
 
                 self._setFileAnalysisProgress(
                     running=True,
@@ -1771,7 +1850,8 @@ class ImgDataService:
                             continue
 
                         image_path = self._buildPhotoImagePath(shared_folder, folder_name, filename)
-                        metadata_faces = self.files.readAllPersonsFromImage(image_path)
+                        metadata_payload = self._readImageMetadata(image_path)
+                        metadata_faces = metadata_payload.faces
                         metadata_faces_read += len(metadata_faces)
                         self._setFaceMatchingProgressMessage(
                             user_key,
@@ -1789,14 +1869,13 @@ class ImgDataService:
                             (
                                 metadata_index,
                                 FileFace(
-                                    name=str(metadata_face.get("name") or ""),
+                                    name=metadata_face.name,
                                     bbox=from_xmp(metadata_face),
-                                    source=str(metadata_face.get("source") or "metadata"),
-                                    source_format=str(metadata_face.get("source_format") or metadata_face.get("format") or ""),
+                                    source=metadata_face.source,
+                                    source_format=metadata_face.source_format,
                                 ),
                             )
                             for metadata_index, metadata_face in enumerate(metadata_faces)
-                            if isinstance(metadata_face, dict)
                         ]
                         file_faces = [entry[1] for entry in indexed_file_faces]
                         if not file_faces:

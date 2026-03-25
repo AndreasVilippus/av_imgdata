@@ -94,10 +94,61 @@
 									<span class="sm-loader"></span>
 									{{ $t('status:loading', 'Loading data...') }}
 								</div>
-								<div v-else class="sm-system-card">
-									<div class="sm-system-row">
-										<div class="sm-system-label">{{ $t('status:shared_folder', 'Photos shared folder') }}</div>
-										<div class="sm-system-value">{{ system.sharedFolder || $t('status:not_available', 'Not available') }}</div>
+								<div v-else class="sm-system-grid">
+									<div class="sm-status-card">
+										<div class="sm-status-head">
+											<div class="sm-status-title">{{ $t('status:shared_folder', 'Photos shared folder') }}</div>
+										</div>
+										<div class="sm-kv-list sm-kv-list-compact">
+											<div class="sm-kv-row">
+												<div class="sm-kv-key">{{ $t('status:shared_folder', 'Photos shared folder') }}</div>
+												<div class="sm-kv-value">{{ system.sharedFolder || $t('status:not_available', 'Not available') }}</div>
+											</div>
+										</div>
+									</div>
+									<div class="sm-status-card">
+										<div class="sm-status-head">
+											<div class="sm-status-title">{{ $t('status:perl_title', 'Perl') }}</div>
+										</div>
+										<div class="sm-kv-list sm-kv-list-compact">
+											<div class="sm-kv-row">
+												<div class="sm-kv-key">{{ $t('status:perl_version', 'Version') }}</div>
+												<div class="sm-kv-value">{{ getPerlStatusValue() }}</div>
+											</div>
+										</div>
+									</div>
+									<div class="sm-status-card">
+										<div class="sm-status-head">
+											<div class="sm-status-title">{{ $t('status:exiftool_title', 'ExifTool') }}</div>
+										</div>
+										<div class="sm-kv-list">
+											<div class="sm-kv-row">
+												<div class="sm-kv-key">{{ $t('status:exiftool_found', 'Found') }}</div>
+												<div class="sm-kv-value">{{ hasLocalExiftool ? $t('status:yes', 'Yes') : $t('status:no', 'No') }}</div>
+											</div>
+											<div class="sm-kv-row">
+												<div class="sm-kv-key">{{ $t('status:exiftool_configured_path', 'Configured path') }}</div>
+												<div class="sm-kv-value">{{ exiftoolStatus.configured_path || $t('status:not_available', 'Not available') }}</div>
+											</div>
+										<template v-if="hasLocalExiftool">
+											<div class="sm-kv-row">
+												<div class="sm-kv-key">{{ $t('status:exiftool_local_version', 'Local version') }}</div>
+												<div class="sm-kv-value">{{ exiftoolStatus.local && exiftoolStatus.local.version || $t('status:not_available', 'Not available') }}</div>
+											</div>
+											<div class="sm-kv-row">
+												<div class="sm-kv-key">{{ $t('status:exiftool_latest_version', 'Latest official version') }}</div>
+												<div class="sm-kv-value">{{ exiftoolStatus.online && exiftoolStatus.online.latest_version || $t('status:not_available', 'Not available') }}</div>
+											</div>
+											<div class="sm-kv-row">
+												<div class="sm-kv-key">{{ $t('status:exiftool_update_available', 'Update available') }}</div>
+												<div class="sm-kv-value">{{ exiftoolStatus.update_available ? $t('status:yes', 'Yes') : $t('status:no', 'No') }}</div>
+											</div>
+											<div class="sm-kv-row">
+												<div class="sm-kv-key">{{ $t('status:exiftool_resolved_path', 'Resolved path') }}</div>
+												<div class="sm-kv-value">{{ exiftoolStatus.local && exiftoolStatus.local.resolved_path || $t('status:not_available', 'Not available') }}</div>
+											</div>
+										</template>
+										</div>
 									</div>
 								</div>
 							</section>
@@ -515,6 +566,7 @@ export default {
 			system: {
 				sharedFolder: "",
 			},
+			exiftoolStatus: {},
 			personsIconUrl: '/webman/3rdparty/AV_ImgData/images/persons_known_unknown.png',
 			addIconUrl: '',
 			personDataToLeftIconUrl: '',
@@ -529,6 +581,9 @@ export default {
 		isFileAnalysisRunning() {
 			const progress = this.fileAnalysisProgress && typeof this.fileAnalysisProgress === 'object' ? this.fileAnalysisProgress : {};
 			return !!progress.running && !progress.finished;
+		},
+		hasLocalExiftool() {
+			return !!(this.exiftoolStatus && this.exiftoolStatus.local && this.exiftoolStatus.local.found);
 		},
 		knownRatioPercent() {
 			if (!this.persons.total) {
@@ -659,6 +714,7 @@ export default {
 		this.personDataToLeftIconUrl = this.resolveLocalIconUrl('person_data_to_left.png');
 		this.getStatus({ auto: true });
 		this.fetchFileAnalysisProgress();
+		this.fetchExiftoolStatus();
 	},
 	beforeDestroy() {
 		if (this.faceMatchSuggestTimer) {
@@ -693,6 +749,7 @@ export default {
 			}
 			if (option === 'status') {
 				this.fetchFileAnalysisProgress();
+				this.fetchExiftoolStatus();
 			}
 		},
 		readCookie(name) {
@@ -775,6 +832,26 @@ export default {
 			} catch (err) {
 				return;
 			}
+		},
+		async fetchExiftoolStatus() {
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_status');
+				this.exiftoolStatus = (data && data.data && typeof data.data === 'object') ? data.data : {};
+			} catch (err) {
+				return;
+			}
+		},
+		getPerlStatusValue() {
+			const perlInfo = this.exiftoolStatus && typeof this.exiftoolStatus === 'object'
+				? this.exiftoolStatus.perl
+				: null;
+			if (perlInfo && perlInfo.available && perlInfo.version) {
+				return String(perlInfo.version);
+			}
+			if (perlInfo && perlInfo.available) {
+				return this.$t('status:yes', 'Yes');
+			}
+			return this.$t('status:not_available', 'Not available');
 		},
 		startFileAnalysisProgressPolling() {
 			this.stopFileAnalysisProgressPolling();
