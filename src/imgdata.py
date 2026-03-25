@@ -2,10 +2,11 @@
 import os
 from pathlib import Path
 from datetime import datetime, timezone
+from time import monotonic
 from threading import Lock, Thread
 from typing import Any, Dict, List, Optional
 
-from api.session_manager import SessionManager
+from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
 from handler.core_handler import CoreHandler
 from handler.exiftool_handler import ExifToolHandler
 from handler.file_handler import FileHandler
@@ -25,6 +26,7 @@ from services.name_mapping_service import NameMappingService
 
 class ImgDataService:
     """Orchestrates business use-cases across Photos and file handlers."""
+    FACE_MATCH_KEEPALIVE_INTERVAL_SECONDS = 180
 
     def __init__(self, session_manager: SessionManager):
         self.session_manager = session_manager
@@ -40,6 +42,7 @@ class ImgDataService:
         self.file_analysis = FileAnalysisService()
         self._face_matching_progress: Dict[str, Dict[str, Any]] = {}
         self._face_matching_progress_lock = Lock()
+        self._face_matching_threads: Dict[str, Thread] = {}
         self._file_analysis_progress: Dict[str, Any] = {}
         self._file_analysis_progress_lock = Lock()
         self._file_analysis_thread: Optional[Thread] = None
@@ -52,6 +55,7 @@ class ImgDataService:
         kk_message: Optional[str] = None,
         synotoken: Optional[str] = None,
         account: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
     ) -> None:
         self.session_manager.update_context(
             user_key,
@@ -59,6 +63,7 @@ class ImgDataService:
             kk_message=kk_message,
             synotoken=synotoken,
             account=account,
+            cookies=cookies,
         )
 
     def status_persons(
@@ -170,10 +175,39 @@ class ImgDataService:
         payload.update(updates)
         self._setFaceMatchingProgress(user_key, **payload)
 
+    def _buildFaceMatchResumeCursor(
+        self,
+        *,
+        skip_face_ids: List[int],
+        transferred_count: int,
+        auto: bool,
+        save_only: bool,
+    ) -> Dict[str, Any]:
+        return {
+            "skip_face_ids": sorted({int(face_id) for face_id in skip_face_ids if isinstance(face_id, int)}),
+            "transferred_count": int(transferred_count),
+            "auto": bool(auto),
+            "save_only": bool(save_only),
+        }
+
     def getFaceMatchingProgress(self, user_key: str) -> Dict[str, Any]:
         with self._face_matching_progress_lock:
             current = self._face_matching_progress.get(user_key, {})
-            return dict(current) if isinstance(current, dict) else {}
+        payload = dict(current) if isinstance(current, dict) else {}
+        return self._normalizeFaceMatchingProgress(user_key, payload)
+
+    def _normalizeFaceMatchingProgress(self, user_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        current = dict(payload) if isinstance(payload, dict) else {}
+        worker = self._face_matching_threads.get(user_key)
+        worker_alive = bool(worker and worker.is_alive())
+        if current.get("running") and not worker_alive:
+            current["running"] = False
+            current["stop_requested"] = False
+            if "finished" not in current:
+                current["finished"] = True
+            if not current.get("message"):
+                current["message"] = "Last face matching job is no longer running."
+        return current
 
     def requestStopFaceMatching(self, user_key: str) -> Dict[str, Any]:
         self._setFaceMatchingProgressMessage(
@@ -186,6 +220,87 @@ class ImgDataService:
     def _shouldStopFaceMatching(self, user_key: str) -> bool:
         progress = self.getFaceMatchingProgress(user_key)
         return bool(progress.get("stop_requested"))
+
+    def _refreshFaceMatchingSessionIfNeeded(
+        self,
+        *,
+        user_key: str,
+        base_url: str,
+        last_keepalive_at: float,
+    ) -> float:
+        now = monotonic()
+        if now - last_keepalive_at < self.FACE_MATCH_KEEPALIVE_INTERVAL_SECONDS:
+            return last_keepalive_at
+        self.session_manager.keepalive(user_key, base_url=base_url)
+        return now
+
+    def _runFaceMatching(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        limit: int,
+        offset: int,
+        skip_face_ids: Optional[List[int]],
+        auto: bool,
+        save_only: bool,
+        resume_cursor: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        try:
+            self.session_manager.keepalive(user_key, base_url=base_url)
+            result = self.searchPhotoFaceInFile(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                limit=limit,
+                offset=offset,
+                skip_face_ids=skip_face_ids,
+                auto=auto,
+                save_only=save_only,
+                resume_cursor=resume_cursor,
+            )
+            self._setFaceMatchingProgress(
+                user_key,
+                result=result,
+                finished=True,
+                auto=auto,
+                save_only=save_only,
+            )
+        except (SessionBootstrapRequired, SessionManagerError) as exc:
+            self._setFaceMatchingProgressMessage(
+                user_key,
+                "face_match:progress_auth_required",
+                message=str(exc),
+                running=False,
+                finished=False,
+                paused=True,
+                auth_required=True,
+                error=str(exc),
+                auto=auto,
+                save_only=save_only,
+                resume_cursor=resume_cursor or self._buildFaceMatchResumeCursor(
+                    skip_face_ids=list(skip_face_ids or []),
+                    transferred_count=0,
+                    auto=auto,
+                    save_only=save_only,
+                ),
+            )
+        except Exception as exc:
+            self._setFaceMatchingProgressMessage(
+                user_key,
+                "face_match:progress_failed",
+                message="Face matching failed.",
+                running=False,
+                finished=True,
+                paused=False,
+                auth_required=False,
+                error=str(exc),
+                auto=auto,
+                save_only=save_only,
+            )
+        finally:
+            self._face_matching_threads.pop(user_key, None)
 
     @staticmethod
     def _timestamp_now() -> str:
@@ -1683,6 +1798,85 @@ class ImgDataService:
         if folder_relative:
             return str(Path(shared_folder) / folder_relative / filename)
         return str(Path(shared_folder) / filename)
+
+    def startFaceMatchingDiscovery(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        limit: int = 1,
+        offset: int = 0,
+        skip_face_ids: Optional[List[int]] = None,
+        auto: bool = False,
+        save_only: bool = False,
+        resume_from_progress: bool = False,
+    ) -> Dict[str, Any]:
+        current = self.getFaceMatchingProgress(user_key)
+        worker = self._face_matching_threads.get(user_key)
+        if current.get("running") and worker and worker.is_alive():
+            return current
+
+        resume_cursor = current.get("resume_cursor") if resume_from_progress and isinstance(current.get("resume_cursor"), dict) else {}
+        cursor_skip_face_ids = resume_cursor.get("skip_face_ids") if isinstance(resume_cursor.get("skip_face_ids"), list) else []
+        combined_skip_face_ids = list(skip_face_ids or [])
+        for face_id in cursor_skip_face_ids:
+            try:
+                normalized_face_id = int(face_id)
+            except Exception:
+                continue
+            if normalized_face_id not in combined_skip_face_ids:
+                combined_skip_face_ids.append(normalized_face_id)
+        if resume_cursor:
+            auto = bool(resume_cursor.get("auto", auto))
+            save_only = bool(resume_cursor.get("save_only", save_only))
+
+        self._setFaceMatchingProgressMessage(
+            user_key,
+            "face_match:status_starting",
+            running=True,
+            finished=False,
+            paused=False,
+            auth_required=False,
+            stop_requested=False,
+            action="search_photo_face_in_file",
+            result=None,
+            error="",
+            auto=auto,
+            save_only=save_only,
+            persons_read=0,
+            images_read=0,
+            faces_read=0,
+            current_person_id=None,
+            current_image_id=None,
+            current_face_id=None,
+            metadata_faces_read=0,
+            transferred_count=int(resume_cursor.get("transferred_count") or 0) if resume_cursor else 0,
+            resume_cursor=self._buildFaceMatchResumeCursor(
+                skip_face_ids=combined_skip_face_ids,
+                transferred_count=int(resume_cursor.get("transferred_count") or 0) if resume_cursor else 0,
+                auto=auto,
+                save_only=save_only,
+            ),
+        )
+        worker = Thread(
+            target=self._runFaceMatching,
+            kwargs={
+                "user_key": user_key,
+                "cookies": dict(cookies),
+                "base_url": base_url,
+                "limit": limit,
+                "offset": offset,
+                "skip_face_ids": combined_skip_face_ids,
+                "auto": auto,
+                "save_only": save_only,
+                "resume_cursor": resume_cursor if resume_cursor else None,
+            },
+            daemon=True,
+        )
+        self._face_matching_threads[user_key] = worker
+        worker.start()
+        return self.getFaceMatchingProgress(user_key)
     
     def searchPhotoFaceInFile(
         self,
@@ -1695,18 +1889,25 @@ class ImgDataService:
         skip_face_ids: Optional[List[int]] = None,
         auto: bool = False,
         save_only: bool = False,
+        resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        last_keepalive_at = monotonic()
         known_persons_cache: Optional[List[Dict[str, Any]]] = None
         saved_entries: List[Dict[str, Any]] = []
         skip_face_ids_set = {
             int(face_id) for face_id in (skip_face_ids or [])
             if isinstance(face_id, int) or str(face_id).isdigit()
         }
+        resume_skip_face_ids = resume_cursor.get("skip_face_ids") if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("skip_face_ids"), list) else []
+        skip_face_ids_set.update(
+            int(face_id) for face_id in resume_skip_face_ids
+            if isinstance(face_id, int) or str(face_id).isdigit()
+        )
         persons_read = 0
         images_read = 0
         faces_read = 0
         metadata_faces_read = 0
-        transferred_count = 0
+        transferred_count = int(resume_cursor.get("transferred_count") or 0) if isinstance(resume_cursor, dict) else 0
         final_message_key = "face_match:progress_finished"
         final_message_params: Dict[str, Any] = {}
         self._setFaceMatchingProgressMessage(
@@ -1722,7 +1923,13 @@ class ImgDataService:
             current_image_id=None,
             current_face_id=None,
             metadata_faces_read=0,
-            transferred_count=0,
+            transferred_count=transferred_count,
+            resume_cursor=self._buildFaceMatchResumeCursor(
+                skip_face_ids=list(skip_face_ids_set),
+                transferred_count=transferred_count,
+                auto=auto,
+                save_only=save_only,
+            ),
         )
         try:
             shared_folder = self.core.getSharedFolder(
@@ -1770,6 +1977,11 @@ class ImgDataService:
             )
 
             for person in unknown_persons:
+                last_keepalive_at = self._refreshFaceMatchingSessionIfNeeded(
+                    user_key=user_key,
+                    base_url=base_url,
+                    last_keepalive_at=last_keepalive_at,
+                )
                 if self._shouldStopFaceMatching(user_key):
                     final_message_key = "face_match:progress_stopped"
                     return {
@@ -1782,6 +1994,12 @@ class ImgDataService:
                         "image_path": None,
                         "transferred_count": transferred_count,
                         "auto": auto,
+                        "resume_cursor": self._buildFaceMatchResumeCursor(
+                            skip_face_ids=list(skip_face_ids_set),
+                            transferred_count=transferred_count,
+                            auto=auto,
+                            save_only=save_only,
+                        ),
                     }
                 person_id = person.get("id")
                 if person_id is None:
@@ -1799,6 +2017,12 @@ class ImgDataService:
                     message_params={"current": persons_read, "total": len(unknown_persons)},
                     persons_read=persons_read,
                     current_person_id=person_id_int,
+                    resume_cursor=self._buildFaceMatchResumeCursor(
+                        skip_face_ids=list(skip_face_ids_set),
+                        transferred_count=transferred_count,
+                        auto=auto,
+                        save_only=save_only,
+                    ),
                 )
 
                 images = self.photos.listFotoTeamItems(
@@ -1810,6 +2034,11 @@ class ImgDataService:
                 )
 
                 for image in images:
+                    last_keepalive_at = self._refreshFaceMatchingSessionIfNeeded(
+                        user_key=user_key,
+                        base_url=base_url,
+                        last_keepalive_at=last_keepalive_at,
+                    )
                     if self._shouldStopFaceMatching(user_key):
                         final_message_key = "face_match:progress_stopped"
                         return {
@@ -1820,9 +2049,15 @@ class ImgDataService:
                             "face": None,
                             "metadata_face": None,
                             "image_path": None,
-                            "transferred_count": transferred_count,
-                            "auto": auto,
-                        }
+                        "transferred_count": transferred_count,
+                        "auto": auto,
+                        "resume_cursor": self._buildFaceMatchResumeCursor(
+                            skip_face_ids=list(skip_face_ids_set),
+                            transferred_count=transferred_count,
+                            auto=auto,
+                            save_only=save_only,
+                        ),
+                    }
                     image_id = image.get("id")
                     if image_id is None:
                         continue
@@ -1839,6 +2074,12 @@ class ImgDataService:
                         message_params={"count": images_read},
                         images_read=images_read,
                         current_image_id=image_id_int,
+                        resume_cursor=self._buildFaceMatchResumeCursor(
+                            skip_face_ids=list(skip_face_ids_set),
+                            transferred_count=transferred_count,
+                            auto=auto,
+                            save_only=save_only,
+                        ),
                     )
 
                     faces = self.photos.list_faceFotoTeamItems(
@@ -1848,6 +2089,11 @@ class ImgDataService:
                         id_item=image_id_int
                     )
                     for face in faces:
+                        last_keepalive_at = self._refreshFaceMatchingSessionIfNeeded(
+                            user_key=user_key,
+                            base_url=base_url,
+                            last_keepalive_at=last_keepalive_at,
+                        )
                         if self._shouldStopFaceMatching(user_key):
                             final_message_key = "face_match:progress_stopped"
                             return {
@@ -1860,6 +2106,12 @@ class ImgDataService:
                                 "image_path": None,
                                 "transferred_count": transferred_count,
                                 "auto": auto,
+                                "resume_cursor": self._buildFaceMatchResumeCursor(
+                                    skip_face_ids=list(skip_face_ids_set),
+                                    transferred_count=transferred_count,
+                                    auto=auto,
+                                    save_only=save_only,
+                                ),
                             }
                         faces_read += 1
                         self._setFaceMatchingProgressMessage(
@@ -1868,6 +2120,12 @@ class ImgDataService:
                             message_params={"count": faces_read},
                             faces_read=faces_read,
                             current_face_id=face.get("face_id"),
+                            resume_cursor=self._buildFaceMatchResumeCursor(
+                                skip_face_ids=list(skip_face_ids_set),
+                                transferred_count=transferred_count,
+                                auto=auto,
+                                save_only=save_only,
+                            ),
                         )
                         face_person_id = face.get("person_id")
                         face_id = face.get("face_id")
@@ -1882,6 +2140,7 @@ class ImgDataService:
                             continue
                         if face_person_id_int != person_id_int:
                             continue
+                        skip_face_ids_set.add(face_id_int)
 
                         folder_id = image.get("folder_id")
                         filename = image.get("filename")
@@ -1912,6 +2171,12 @@ class ImgDataService:
                             "face_match:progress_checking_metadata",
                             message_params={"count": images_read},
                             metadata_faces_read=metadata_faces_read,
+                            resume_cursor=self._buildFaceMatchResumeCursor(
+                                skip_face_ids=list(skip_face_ids_set),
+                                transferred_count=transferred_count,
+                                auto=auto,
+                                save_only=save_only,
+                            ),
                         )
 
                         photo_face = PhotosFace(
@@ -1940,6 +2205,12 @@ class ImgDataService:
                             user_key,
                             "face_match:progress_match_candidates",
                             message_params={"face": faces_read, "count": len(matches)},
+                            resume_cursor=self._buildFaceMatchResumeCursor(
+                                skip_face_ids=list(skip_face_ids_set),
+                                transferred_count=transferred_count,
+                                auto=auto,
+                                save_only=save_only,
+                            ),
                         )
                         if not matches:
                             continue
@@ -2014,8 +2285,13 @@ class ImgDataService:
                                     final_message_key,
                                     message_params=final_message_params,
                                     transferred_count=transferred_count,
+                                    resume_cursor=self._buildFaceMatchResumeCursor(
+                                        skip_face_ids=list(skip_face_ids_set),
+                                        transferred_count=transferred_count,
+                                        auto=auto,
+                                        save_only=save_only,
+                                    ),
                                 )
-                                skip_face_ids_set.add(face_id_int)
                                 continue
 
                         result_entry = {
@@ -2031,6 +2307,12 @@ class ImgDataService:
                             "name_mapping": mapped_assignment,
                             "transferred_count": transferred_count,
                             "auto": auto,
+                            "resume_cursor": self._buildFaceMatchResumeCursor(
+                                skip_face_ids=list(skip_face_ids_set),
+                                transferred_count=transferred_count,
+                                auto=auto,
+                                save_only=save_only,
+                            ),
                         }
                         if save_only:
                             saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
@@ -2066,6 +2348,12 @@ class ImgDataService:
                 "auto": auto,
                 "save_only": save_only,
                 "findings_count": len(saved_entries),
+                "resume_cursor": self._buildFaceMatchResumeCursor(
+                    skip_face_ids=list(skip_face_ids_set),
+                    transferred_count=transferred_count,
+                    auto=auto,
+                    save_only=save_only,
+                ),
             }
         finally:
             self._setFaceMatchingProgressMessage(
@@ -2078,6 +2366,12 @@ class ImgDataService:
                 images_read=images_read,
                 faces_read=faces_read,
                 transferred_count=transferred_count,
+                resume_cursor=self._buildFaceMatchResumeCursor(
+                    skip_face_ids=list(skip_face_ids_set),
+                    transferred_count=transferred_count,
+                    auto=auto,
+                    save_only=save_only,
+                ),
             )
 
     def list_files(self, *, base_path: str, pattern: str = "*") -> Dict[str, object]:

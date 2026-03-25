@@ -179,12 +179,18 @@
 												{{ $t('face_match:button_next', 'Next') }}
 											</v-button>
 										</div>
-										<label class="face-match-switch">
+										<label
+											class="face-match-switch"
+											:title="$t('face_match:hint_face_only', 'Only the face crop is shown in the preview windows.')"
+										>
 											<input v-model="faceMatchPreviewMode" type="checkbox" true-value="face" false-value="photo" />
 											<span class="face-match-switch-slider"></span>
 											<span class="face-match-switch-label">{{ $t('face_match:switch_face_only', 'Show face only') }}</span>
 										</label>
-										<label class="face-match-switch">
+										<label
+											class="face-match-switch"
+											:title="$t('face_match:hint_auto_assign', 'If a person with that name exists, the face is assigned automatically.')"
+										>
 											<input v-model="faceMatchAutoAssignKnown" type="checkbox" />
 											<span class="face-match-switch-slider"></span>
 											<span class="face-match-switch-label">{{ $t('face_match:switch_auto_assign', 'Assign all known') }}</span>
@@ -546,7 +552,6 @@ export default {
 			faceMatchProgress: {},
 			faceMatchProgressBase: {},
 			faceMatchProgressTimer: null,
-			faceMatchAbortController: null,
 			faceMatchResult: null,
 			faceMatchSkippedFaceIds: [],
 			faceMatchPreviewMode: 'photo',
@@ -645,12 +650,21 @@ export default {
 				? this.$t('face_match:status_search_running', 'Search running...')
 				: this.$t('face_match:status_idle', 'No action running.');
 		},
+		faceMatchAuthRequired() {
+			return !!(this.faceMatchProgress && this.faceMatchProgress.auth_required);
+		},
 		faceMatchIsPaused() {
-			return !this.faceMatchLoading && !!(this.faceMatchResult && this.faceMatchResult.searched);
+			return !this.faceMatchLoading && (
+				!!(this.faceMatchResult && this.faceMatchResult.searched)
+				|| !!(this.faceMatchProgress && this.faceMatchProgress.paused)
+			);
 		},
 		faceMatchPrimaryButtonLabel() {
 			if (this.faceMatchLoading) {
 				return this.$t('face_match:button_stop', 'Stop');
+			}
+			if (this.faceMatchAuthRequired) {
+				return this.$t('face_match:button_resume_login', 'Resume after login');
 			}
 			if (this.faceMatchIsPaused) {
 				return this.$t('face_match:button_restart', 'Restart');
@@ -745,10 +759,6 @@ export default {
 		if (this.faceMatchSuggestTimer) {
 			window.clearTimeout(this.faceMatchSuggestTimer);
 			this.faceMatchSuggestTimer = null;
-		}
-		if (this.faceMatchAbortController) {
-			this.faceMatchAbortController.abort();
-			this.faceMatchAbortController = null;
 		}
 		this.resolveNameMappingConfirm(false);
 		this.stopFaceMatchProgressPolling();
@@ -1615,7 +1625,20 @@ export default {
 				if (!resp.ok || data.success === false) {
 					return;
 				}
-				this.faceMatchProgress = this.getResponseData(data);
+				const progress = this.getResponseData(data);
+				this.faceMatchProgress = progress;
+				const result = progress && typeof progress.result === 'object' ? progress.result : null;
+				if (result && Object.keys(result).length) {
+					this.faceMatchResult = result;
+					this.syncFaceMatchEditableName();
+				} else if (!progress.running && !progress.paused) {
+					this.faceMatchResult = null;
+					this.resetFaceMatchSelectionState();
+				}
+				if (!progress.running) {
+					this.faceMatchLoading = false;
+					this.stopFaceMatchProgressPolling();
+				}
 			} catch (err) {
 				return;
 			}
@@ -1721,11 +1744,14 @@ export default {
 				await this.stopFaceMatchingAction();
 				return;
 			}
-			await this.startFaceMatchingAction();
+			await this.startFaceMatchingAction({
+				resetSkippedFaceIds: !this.faceMatchAuthRequired,
+				resumeFromProgress: this.faceMatchAuthRequired,
+			});
 		},
 		async stopFaceMatchingAction() {
 			try {
-			const synoToken = this.getSynoToken();
+				const synoToken = this.getSynoToken();
 				await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_stop', {
 					method: 'POST',
 					credentials: 'include',
@@ -1739,14 +1765,8 @@ export default {
 					}),
 				});
 			} catch (err) {
-				// Best effort; the in-flight search request is aborted below.
+				// Best effort.
 			}
-			if (this.faceMatchAbortController) {
-				this.faceMatchAbortController.abort();
-				this.faceMatchAbortController = null;
-			}
-			this.faceMatchLoading = false;
-			this.stopFaceMatchProgressPolling();
 			this.output = this.$t('face_match:output_stopping', 'Stopping search...');
 			await this.fetchFaceMatchingProgress();
 		},
@@ -1895,6 +1915,7 @@ export default {
 				return;
 			}
 			const resetSkippedFaceIds = options.resetSkippedFaceIds !== false;
+			const resumeFromProgress = options.resumeFromProgress === true;
 			if (resetSkippedFaceIds) {
 				this.faceMatchSkippedFaceIds = [];
 				this.faceMatchTransferredCount = 0;
@@ -1902,6 +1923,17 @@ export default {
 				this.resetFaceMatchFindingsReview();
 			} else {
 				this.captureFaceMatchProgressBase();
+				const resumeCursor = this.faceMatchProgress && typeof this.faceMatchProgress.resume_cursor === 'object'
+					? this.faceMatchProgress.resume_cursor
+					: null;
+				const cursorSkipFaceIds = resumeCursor && Array.isArray(resumeCursor.skip_face_ids)
+					? resumeCursor.skip_face_ids
+					: [];
+				if (cursorSkipFaceIds.length) {
+					this.faceMatchSkippedFaceIds = cursorSkipFaceIds
+						.map(value => Number(value))
+						.filter(value => Number.isFinite(value) && value > 0);
+				}
 			}
 
 			this.faceMatchLoading = true;
@@ -1913,7 +1945,6 @@ export default {
 			};
 			this.faceMatchResult = null;
 			this.resetFaceMatchSelectionState();
-			this.faceMatchAbortController = new AbortController();
 			this.startFaceMatchProgressPolling();
 			this.output = this.$t('face_match:output_start_action', 'Starting action: {action}', { action: this.selectedFaceMatchingAction });
 			try {
@@ -1935,7 +1966,6 @@ export default {
 				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
 					method: 'POST',
 					credentials: 'include',
-					signal: this.faceMatchAbortController.signal,
 					headers: {
 						'Content-Type': 'application/json',
 						'X-SYNO-TOKEN': synoToken,
@@ -1944,6 +1974,7 @@ export default {
 						action: this.selectedFaceMatchingAction,
 						auto: this.faceMatchAutoAssignKnown,
 						save_only: this.faceMatchSaveOnly,
+						resume_from_progress: resumeFromProgress,
 						skip_face_ids: this.faceMatchSkippedFaceIds,
 						kk_message,
 						synoToken,
@@ -1958,25 +1989,22 @@ export default {
 				}
 
 				const faceMatches = this.getResponseDataObject(data, 'face_matches');
-				this.faceMatchResult = Object.keys(faceMatches).length ? faceMatches : null;
-				this.syncFaceMatchEditableName();
+				this.faceMatchProgress = faceMatches;
+				const result = faceMatches && typeof faceMatches.result === 'object' ? faceMatches.result : null;
+				if (result && Object.keys(result).length) {
+					this.faceMatchResult = result;
+					this.syncFaceMatchEditableName();
+				}
 				await this.fetchFaceMatchFindingsStatus();
-				const transferredCount = Number(faceMatches.transferred_count) || 0;
+				const transferredCount = Number((result && result.transferred_count) || faceMatches.transferred_count) || 0;
 				this.faceMatchTransferredCount += transferredCount;
 				this.output = JSON.stringify(data, null, 2);
 			} catch (err) {
-				if (err && err.name === 'AbortError') {
-					this.output = this.$t('face_match:output_stopped', 'Search stopped.');
-					return;
-				}
 				this.faceMatchResult = null;
 				this.resetFaceMatchSelectionState();
-				this.output = `Error: ${err.message}`;
-			} finally {
-				this.faceMatchAbortController = null;
 				this.faceMatchLoading = false;
 				this.stopFaceMatchProgressPolling();
-				await this.fetchFaceMatchingProgress();
+				this.output = `Error: ${err.message}`;
 			}
 		},
 	},

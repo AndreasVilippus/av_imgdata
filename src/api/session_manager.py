@@ -2,6 +2,7 @@
 import hashlib
 import json
 import threading
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import requests
@@ -48,9 +49,15 @@ class SessionManager:
                 "kk_message": None,
                 "account": None,
                 "base_url": None,
+                "cookies": {},
+                "last_seen_at": "",
             }
             self._sessions[user_key] = state
         return state
+
+    @staticmethod
+    def _timestamp_now() -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
     def _error_code(payload: Dict[str, Any]) -> Optional[int]:
@@ -89,6 +96,7 @@ class SessionManager:
         kk_message: Optional[str] = None,
         synotoken: Optional[str] = None,
         account: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         state = self._get_state(user_key)
         state["base_url"] = base_url
@@ -98,10 +106,44 @@ class SessionManager:
             state["synotoken"] = synotoken
         if account:
             state["account"] = account
+        if isinstance(cookies, dict):
+            stored_cookies = state.get("cookies") if isinstance(state.get("cookies"), dict) else {}
+            merged_cookies = dict(stored_cookies)
+            for key, value in cookies.items():
+                if isinstance(key, str) and isinstance(value, str) and value:
+                    merged_cookies[key] = value
+            state["cookies"] = merged_cookies
+        state["last_seen_at"] = self._timestamp_now()
         return state
+
+    def get_context(self, user_key: str) -> Dict[str, Any]:
+        state = self._get_state(user_key)
+        return {
+            "sid": state.get("sid"),
+            "synotoken": state.get("synotoken"),
+            "kk_message": state.get("kk_message"),
+            "account": state.get("account"),
+            "base_url": state.get("base_url"),
+            "cookies": dict(state.get("cookies") or {}),
+            "last_seen_at": state.get("last_seen_at") or "",
+        }
+
+    def _resolve_cookies(self, user_key: str, cookies: Optional[Dict[str, str]]) -> Dict[str, str]:
+        state = self._get_state(user_key)
+        stored_cookies = state.get("cookies") if isinstance(state.get("cookies"), dict) else {}
+        merged = dict(stored_cookies)
+        if isinstance(cookies, dict):
+            for key, value in cookies.items():
+                if isinstance(key, str) and isinstance(value, str) and value:
+                    merged[key] = value
+        if merged:
+            state["cookies"] = dict(merged)
+            state["last_seen_at"] = self._timestamp_now()
+        return merged
 
     def _resume(self, user_key: str, cookies: Dict[str, str], base_url: str) -> Dict[str, Any]:
         state = self._get_state(user_key)
+        cookies = self._resolve_cookies(user_key, cookies)
         if not state.get("kk_message"):
             raise SessionBootstrapRequired("missing kk_message for resume bootstrap")
 
@@ -145,6 +187,8 @@ class SessionManager:
         state["synotoken"] = resume_data.get("synotoken") or state.get("synotoken")
         state["kk_message"] = resume_data.get("kk_message") or state.get("kk_message")
         state["base_url"] = base_url
+        state["cookies"] = dict(cookies)
+        state["last_seen_at"] = self._timestamp_now()
 
         if not state.get("synotoken"):
             raise SessionManagerError(
@@ -158,9 +202,24 @@ class SessionManager:
         with lock:
             state = self._get_state(user_key)
             state["base_url"] = base_url
+            cookies = self._resolve_cookies(user_key, cookies)
             if not state.get("sid") and not state.get("synotoken"):
                 state = self._resume(user_key, cookies, base_url)
             return state
+
+    def keepalive(self, user_key: str, *, base_url: Optional[str] = None) -> Dict[str, Any]:
+        lock = self._get_lock(user_key)
+        with lock:
+            state = self._get_state(user_key)
+            effective_base_url = base_url or state.get("base_url")
+            cookies = self._resolve_cookies(user_key, None)
+            if not effective_base_url:
+                raise SessionBootstrapRequired("missing base_url for keepalive")
+            if not cookies:
+                raise SessionBootstrapRequired("missing cookies for keepalive")
+            self.ensure_session(user_key, cookies, effective_base_url)
+            state["last_seen_at"] = self._timestamp_now()
+            return self.get_context(user_key)
 
     def call_api(
         self,
@@ -173,6 +232,7 @@ class SessionManager:
         lock = self._get_lock(user_key)
         with lock:
             state = self.ensure_session(user_key, cookies, base_url)
+            cookies = self._resolve_cookies(user_key, cookies)
             request_params = self._normalize_params(dict(params))
             request_params["api"] = api
             if state.get("sid"):
@@ -237,6 +297,7 @@ class SessionManager:
         lock = self._get_lock(user_key)
         with lock:
             state = self.ensure_session(user_key, cookies, base_url)
+            cookies = self._resolve_cookies(user_key, cookies)
             request_params = self._normalize_params(dict(params))
             request_params["api"] = api
             if state.get("sid"):

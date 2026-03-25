@@ -35,6 +35,8 @@ Prebuilt packages are available under [GitHub Releases](https://github.com/<owne
 
 After installation, DSM exposes the desktop UI defined under [`ui/`](./ui).
 
+ExifTool can also be installed from within the package UI, but this is optional. If ExifTool is already available on the system or not required for your workflow, no additional ExifTool installation is needed.
+
 ## Build From Source
 
 The package is built with the Synology toolkit and `pkgscripts-ng`.

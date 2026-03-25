@@ -78,6 +78,7 @@ async def _prepare_session_request(
         kk_message=body_kk_message,
         synotoken=body_syno_token or header_syno_token,
         account=body_account,
+        cookies=cookies,
     )
 
     return {
@@ -222,6 +223,7 @@ async def face_matching_action(request: Request):
     action = body.get("action", "")
     auto = bool(body.get("auto"))
     save_only = bool(body.get("save_only"))
+    resume_from_progress = bool(body.get("resume_from_progress"))
     limit = body.get("limit", 100)
     offset = body.get("offset", 0)
     skip_face_ids = body.get("skip_face_ids") if isinstance(body.get("skip_face_ids"), list) else []
@@ -251,22 +253,20 @@ async def face_matching_action(request: Request):
         }
 
     try:
-        loop = asyncio.get_running_loop()
         if action == "search_photo_face_in_file":
-            face_matches = await loop.run_in_executor(
-                None,
-                lambda: IMGDATA.searchPhotoFaceInFile(
-                    user_key=session_ctx["user_key"],
-                    cookies=session_ctx["cookies"],
-                    base_url=session_ctx["base_url"],
-                    limit=limit,
-                    offset=offset,
-                    skip_face_ids=normalized_skip_face_ids,
-                    auto=auto,
-                    save_only=save_only,
-                ),
+            face_matches = IMGDATA.startFaceMatchingDiscovery(
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+                limit=limit,
+                offset=offset,
+                skip_face_ids=normalized_skip_face_ids,
+                auto=auto,
+                save_only=save_only,
+                resume_from_progress=resume_from_progress,
             )
         else:
+            loop = asyncio.get_running_loop()
             face_matches = await loop.run_in_executor(
                 None,
                 IMGDATA.getFaceMatchFindingEntries,
@@ -280,6 +280,7 @@ async def face_matching_action(request: Request):
             "action": action,
             "auto": auto,
             "save_only": save_only,
+            "resume_from_progress": resume_from_progress,
             "face_matches": face_matches
         },
     }
