@@ -13,6 +13,7 @@ class FileAnalysisService:
         "duplicate_faces": "duplicate_faces.json",
         "position_deviations": "position_deviations.json",
         "name_conflicts": "name_conflicts.json",
+        "face_match": "face_match.json",
     }
 
     def __init__(self, result_path: Optional[str] = None, mismatch_path: Optional[str] = None):

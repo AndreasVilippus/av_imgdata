@@ -221,6 +221,7 @@ async def face_matching_action(request: Request):
     body = await _read_request_body(request)
     action = body.get("action", "")
     auto = bool(body.get("auto"))
+    save_only = bool(body.get("save_only"))
     limit = body.get("limit", 100)
     offset = body.get("offset", 0)
     skip_face_ids = body.get("skip_face_ids") if isinstance(body.get("skip_face_ids"), list) else []
@@ -239,7 +240,7 @@ async def face_matching_action(request: Request):
         except Exception:
             continue
 
-    if action != "search_photo_face_in_file":
+    if action not in {"search_photo_face_in_file", "load_photo_face_match_findings"}:
         return {
             "success": False,
             "error": {
@@ -251,18 +252,25 @@ async def face_matching_action(request: Request):
 
     try:
         loop = asyncio.get_running_loop()
-        face_matches = await loop.run_in_executor(
-            None,
-            lambda: IMGDATA.searchPhotoFaceInFile(
-                user_key=session_ctx["user_key"],
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
-                limit=limit,
-                offset=offset,
-                skip_face_ids=normalized_skip_face_ids,
-                auto=auto,
-            ),
-        )
+        if action == "search_photo_face_in_file":
+            face_matches = await loop.run_in_executor(
+                None,
+                lambda: IMGDATA.searchPhotoFaceInFile(
+                    user_key=session_ctx["user_key"],
+                    cookies=session_ctx["cookies"],
+                    base_url=session_ctx["base_url"],
+                    limit=limit,
+                    offset=offset,
+                    skip_face_ids=normalized_skip_face_ids,
+                    auto=auto,
+                    save_only=save_only,
+                ),
+            )
+        else:
+            face_matches = await loop.run_in_executor(
+                None,
+                IMGDATA.getFaceMatchFindingEntries,
+            )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="face_matching_action_bootstrap_required")
 
@@ -271,7 +279,28 @@ async def face_matching_action(request: Request):
         "data": {
             "action": action,
             "auto": auto,
+            "save_only": save_only,
             "face_matches": face_matches
+        },
+    }
+
+
+@router.post("/face_matching_findings_status")
+async def face_matching_findings_status(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    findings = IMGDATA.getFaceMatchFindings()
+    entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+    return {
+        "success": True,
+        "data": {
+            "status": str(findings.get("status") or ""),
+            "count": len(entries),
+            "transferred_count": int(findings.get("transferred_count") or 0),
+            "save_only": bool(findings.get("save_only")),
+            "auto": bool(findings.get("auto")),
         },
     }
 

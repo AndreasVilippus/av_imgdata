@@ -164,13 +164,14 @@
 									<div class="face-match-action-controls">
 										<select v-model="selectedFaceMatchingAction" class="face-match-select" :disabled="faceMatchLoading">
 											<option value="search_photo_face_in_file">{{ $t('face_match:action_search_photo_face_in_file', 'search unknown Photos face in file') }}</option>
+											<option v-if="hasFaceMatchStoredFindings" value="load_photo_face_match_findings">{{ $t('face_match:action_load_photo_face_match_findings', 'load unknown Photos face from list') }}</option>
 										</select>
 										<div class="face-match-action-buttons">
 											<v-button @click="handlePrimaryFaceMatchButton" style="width: 160px;">
 												{{ faceMatchPrimaryButtonLabel }}
 											</v-button>
 											<v-button
-												v-if="faceMatchResultSummary.found"
+												v-if="hasNextFaceMatch"
 												@click="loadNextFaceMatch"
 												:disabled="faceMatchLoading"
 												style="width: 160px;"
@@ -187,6 +188,14 @@
 											<input v-model="faceMatchAutoAssignKnown" type="checkbox" />
 											<span class="face-match-switch-slider"></span>
 											<span class="face-match-switch-label">{{ $t('face_match:switch_auto_assign', 'Assign all known') }}</span>
+										</label>
+										<label
+											class="face-match-switch"
+											:title="$t('face_match:hint_save_only', 'Known persons are still assigned depending on the setting; otherwise matches are only listed for later.')"
+										>
+											<input v-model="faceMatchSaveOnly" type="checkbox" :disabled="faceMatchLoading || selectedFaceMatchingAction !== 'search_photo_face_in_file'" />
+											<span class="face-match-switch-slider"></span>
+											<span class="face-match-switch-label">{{ $t('face_match:switch_save_only', 'Save matches only') }}</span>
 										</label>
 									</div>
 									<div class="face-match-status-column">
@@ -210,6 +219,8 @@
 												<span v-if="faceMatchProgress.current_person_id">{{ $t('face_match:label_person_id', 'Person ID') }}: {{ faceMatchProgress.current_person_id }}</span>
 												<span v-if="faceMatchProgress.current_image_id">{{ $t('face_match:label_image_id', 'Image ID') }}: {{ faceMatchProgress.current_image_id }}</span>
 												<span v-if="faceMatchProgress.current_face_id">{{ $t('face_match:label_face_id', 'Face ID') }}: {{ faceMatchProgress.current_face_id }}</span>
+												<span v-if="hasFaceMatchStoredFindings">{{ $t('face_match:label_list_entries', 'List entries') }}: {{ faceMatchFindingsStatus.count }}</span>
+												<span v-if="selectedFaceMatchingAction === 'load_photo_face_match_findings' && faceMatchFindingEntries.length">{{ $t('face_match:label_index', 'Entry') }}: {{ faceMatchFindingIndex + 1 }} / {{ faceMatchFindingEntries.length }}</span>
 											</div>
 										</div>
 										<div class="face-match-status-card face-match-status-card-result">
@@ -540,6 +551,7 @@ export default {
 			faceMatchSkippedFaceIds: [],
 			faceMatchPreviewMode: 'photo',
 			faceMatchAutoAssignKnown: false,
+			faceMatchSaveOnly: false,
 			faceMatchTransferredCount: 0,
 			faceMatchEditableName: '',
 			faceMatchInitialEditableName: '',
@@ -549,6 +561,9 @@ export default {
 			faceMatchShowSuggestions: false,
 			faceMatchSuggestTimer: null,
 			faceMatchSuggestRequestId: 0,
+			faceMatchFindingEntries: [],
+			faceMatchFindingIndex: 0,
+			faceMatchFindingsStatus: {},
 			selectedFaceMatchingAction: 'search_photo_face_in_file',
 			selectedChecksType: 'dimension_issues',
 			selectedChecksAction: 'findings',
@@ -705,6 +720,15 @@ export default {
 			const mapping = this.faceMatchResult && this.faceMatchResult.name_mapping;
 			return !!(mapping && mapping.source_name && mapping.target_name);
 		},
+		hasFaceMatchStoredFindings() {
+			return (Number(this.faceMatchFindingsStatus && this.faceMatchFindingsStatus.count) || 0) > 0;
+		},
+		hasNextFaceMatch() {
+			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+				return this.faceMatchFindingIndex + 1 < this.faceMatchFindingEntries.length;
+			}
+			return !!this.faceMatchResultSummary.found;
+		},
 		hasNextChecksItem() {
 			return this.checksCurrentIndex + 1 < this.checksEntries.length;
 		},
@@ -715,6 +739,7 @@ export default {
 		this.getStatus({ auto: true });
 		this.fetchFileAnalysisProgress();
 		this.fetchExiftoolStatus();
+		this.fetchFaceMatchFindingsStatus();
 	},
 	beforeDestroy() {
 		if (this.faceMatchSuggestTimer) {
@@ -751,6 +776,9 @@ export default {
 				this.fetchFileAnalysisProgress();
 				this.fetchExiftoolStatus();
 			}
+			if (option === 'face_match') {
+				this.fetchFaceMatchFindingsStatus();
+			}
 		},
 		readCookie(name) {
 			const match = document.cookie.match(new RegExp('(?:^|; )' + this.escapeRegExp(name) + '=([^;]*)'));
@@ -763,7 +791,7 @@ export default {
 				did: this.readCookie('did'),
 			};
 		},
-		async callFileAnalysisApi(apiPath) {
+		async callFileAnalysisApi(apiPath, body = {}) {
 			await synocredential._instance.Resume();
 
 			const remote = synocredential._instance.GetRemoteKey();
@@ -780,6 +808,7 @@ export default {
 					'X-SYNO-TOKEN': synoToken,
 				},
 				body: JSON.stringify({
+					...body,
 					kk_message,
 					synoToken,
 					cookies,
@@ -839,6 +868,64 @@ export default {
 				this.exiftoolStatus = (data && data.data && typeof data.data === 'object') ? data.data : {};
 			} catch (err) {
 				return;
+			}
+		},
+		async fetchFaceMatchFindingsStatus() {
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_findings_status');
+				this.faceMatchFindingsStatus = (data && data.data && typeof data.data === 'object') ? data.data : {};
+			} catch (err) {
+				this.faceMatchFindingsStatus = {};
+			}
+		},
+		resetFaceMatchFindingsReview() {
+			this.faceMatchFindingEntries = [];
+			this.faceMatchFindingIndex = 0;
+		},
+		async loadFaceMatchFindingAtIndex(index) {
+			const entry = this.faceMatchFindingEntries[index];
+			if (!entry) {
+				this.faceMatchResult = null;
+				return;
+			}
+			this.faceMatchResult = entry;
+			this.faceMatchFindingIndex = index;
+			this.syncFaceMatchEditableName();
+			this.faceMatchProgress = {
+				...(this.faceMatchProgress || {}),
+				message: this.$t('face_match:status_list_entry', 'List entry {current} of {total}.', {
+					current: index + 1,
+					total: this.faceMatchFindingEntries.length,
+				}),
+			};
+		},
+		async loadStoredFaceMatchFindings() {
+			const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
+				action: 'load_photo_face_match_findings',
+			});
+			const payload = (data && data.data && data.data.face_matches && typeof data.data.face_matches === 'object')
+				? data.data.face_matches
+				: {};
+			const entries = Array.isArray(payload.entries) ? payload.entries : [];
+			this.faceMatchFindingEntries = entries;
+			this.faceMatchFindingIndex = 0;
+			this.faceMatchTransferredCount = Number(payload.transferred_count) || 0;
+			this.faceMatchFindingsStatus = {
+				...(this.faceMatchFindingsStatus || {}),
+				count: Number(payload.count) || entries.length,
+				status: payload.status || '',
+				transferred_count: Number(payload.transferred_count) || 0,
+				save_only: !!payload.save_only,
+				auto: !!payload.auto,
+			};
+			if (entries.length) {
+				await this.loadFaceMatchFindingAtIndex(0);
+			} else {
+				this.faceMatchResult = null;
+				this.faceMatchProgress = {
+					...(this.faceMatchProgress || {}),
+					message: this.$t('face_match:status_findings_empty', 'No saved matches found.'),
+				};
 			}
 		},
 		getPerlStatusValue() {
@@ -1616,6 +1703,13 @@ export default {
 			}
 		},
 		async loadNextFaceMatch() {
+			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+				if (!this.hasNextFaceMatch) {
+					return;
+				}
+				await this.loadFaceMatchFindingAtIndex(this.faceMatchFindingIndex + 1);
+				return;
+			}
 			this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
 			await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
 		},
@@ -1780,11 +1874,34 @@ export default {
 			if (this.faceMatchLoading) {
 				return;
 			}
+			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+				this.faceMatchLoading = true;
+				this.faceMatchResult = null;
+				this.faceMatchEditableName = '';
+				this.faceMatchInitialEditableName = '';
+				this.faceMatchSelectedPerson = null;
+				this.faceMatchPersonSuggestions = [];
+				this.faceMatchPersonSuggestLoading = false;
+				this.faceMatchShowSuggestions = false;
+				try {
+					await this.loadStoredFaceMatchFindings();
+				} catch (err) {
+					this.faceMatchResult = null;
+					this.faceMatchProgress = {
+						...(this.faceMatchProgress || {}),
+						message: `Error: ${err.message}`,
+					};
+				} finally {
+					this.faceMatchLoading = false;
+				}
+				return;
+			}
 			const resetSkippedFaceIds = options.resetSkippedFaceIds !== false;
 			if (resetSkippedFaceIds) {
 				this.faceMatchSkippedFaceIds = [];
 				this.faceMatchTransferredCount = 0;
 				this.faceMatchProgressBase = {};
+				this.resetFaceMatchFindingsReview();
 			} else {
 				this.captureFaceMatchProgressBase();
 			}
@@ -1833,6 +1950,7 @@ export default {
 					body: JSON.stringify({
 						action: this.selectedFaceMatchingAction,
 						auto: this.faceMatchAutoAssignKnown,
+						save_only: this.faceMatchSaveOnly,
 						skip_face_ids: this.faceMatchSkippedFaceIds,
 						kk_message,
 						synoToken,
@@ -1848,6 +1966,7 @@ export default {
 
 				this.faceMatchResult = data.data && data.data.face_matches ? data.data.face_matches : null;
 				this.syncFaceMatchEditableName();
+				await this.fetchFaceMatchFindingsStatus();
 				const transferredCount = Number(
 					data && data.data && data.data.face_matches && data.data.face_matches.transferred_count
 				) || 0;

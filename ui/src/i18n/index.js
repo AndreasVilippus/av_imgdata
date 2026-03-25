@@ -4,6 +4,14 @@ const LOCALE_MAP = {
 	en: 'enu',
 };
 
+const DSM_LOCALE_PATHS = [
+	['SYNO', 'SDS', 'Session', 'language'],
+	['SYNO', 'SDS', 'Session', 'lang'],
+	['SYNO', 'SDS', 'Session', 'locale'],
+];
+
+const COOKIE_LOCALE_KEYS = ['language', 'lang', 'locale', 'SYNO_LANGUAGE'];
+
 function normalizeLocale(input) {
 	const raw = String(input || '').trim().toLowerCase();
 	if (!raw) {
@@ -16,8 +24,89 @@ function normalizeLocale(input) {
 	return LOCALE_MAP[base] || '';
 }
 
-function detectLocale() {
+function getNestedValue(root, path) {
+	try {
+		let current = root;
+		for (const key of path) {
+			if (!current || typeof current !== 'object' || !(key in current)) {
+				return '';
+			}
+			current = current[key];
+		}
+		return current;
+	} catch (err) {
+		return '';
+	}
+}
+
+function collectDsmGlobalLocales(target, candidates) {
+	for (const path of DSM_LOCALE_PATHS) {
+		const value = getNestedValue(target, path);
+		if (value) {
+			candidates.push(value);
+		}
+	}
+}
+
+function collectCookieLocales(candidates) {
+	try {
+		const rawCookie = String(document && document.cookie || '');
+		if (!rawCookie) {
+			return;
+		}
+		const cookieMap = {};
+		for (const entry of rawCookie.split(';')) {
+			const separatorIndex = entry.indexOf('=');
+			if (separatorIndex < 0) {
+				continue;
+			}
+			const key = entry.slice(0, separatorIndex).trim();
+			const value = entry.slice(separatorIndex + 1).trim();
+			if (key) {
+				cookieMap[key] = decodeURIComponent(value);
+			}
+		}
+		for (const key of COOKIE_LOCALE_KEYS) {
+			if (cookieMap[key]) {
+				candidates.push(cookieMap[key]);
+			}
+		}
+	} catch (err) {
+		// Ignore cookie access restrictions.
+	}
+}
+
+function collectQueryLocales(candidates) {
+	try {
+		const search = String(window && window.location && window.location.search || '');
+		if (!search) {
+			return;
+		}
+		const params = new URLSearchParams(search);
+		for (const key of COOKIE_LOCALE_KEYS) {
+			const value = params.get(key);
+			if (value) {
+				candidates.push(value);
+			}
+		}
+	} catch (err) {
+		// Ignore invalid or restricted query access.
+	}
+}
+
+function collectStandardLocales(options = {}) {
+	const allowNavigator = options.allowNavigator !== false;
 	const candidates = [];
+	try {
+		collectQueryLocales(candidates);
+		collectDsmGlobalLocales(window, candidates);
+		if (window.parent && window.parent !== window) {
+			collectDsmGlobalLocales(window.parent, candidates);
+		}
+		collectCookieLocales(candidates);
+	} catch (err) {
+		// Ignore locale access restrictions from embedded DSM contexts.
+	}
 	try {
 		if (document && document.documentElement && document.documentElement.lang) {
 			candidates.push(document.documentElement.lang);
@@ -32,14 +121,28 @@ function detectLocale() {
 	} catch (err) {
 		// Ignore cross-frame access restrictions.
 	}
-	try {
-		if (navigator && navigator.language) {
-			candidates.push(navigator.language);
-		}
-	} catch (err) {
-		// Ignore restricted navigator access.
-	}
 
+	if (allowNavigator) {
+		try {
+			if (navigator && Array.isArray(navigator.languages)) {
+				candidates.push(...navigator.languages);
+			}
+		} catch (err) {
+			// Ignore restricted navigator access.
+		}
+		try {
+			if (navigator && navigator.language) {
+				candidates.push(navigator.language);
+			}
+		} catch (err) {
+			// Ignore restricted navigator access.
+		}
+	}
+	return candidates;
+}
+
+function detectLocale(options = {}) {
+	const candidates = collectStandardLocales(options);
 	for (const candidate of candidates) {
 		const locale = normalizeLocale(candidate);
 		if (locale) {
@@ -47,6 +150,22 @@ function detectLocale() {
 		}
 	}
 	return FALLBACK_LOCALE;
+}
+
+function detectExplicitDsmLocale() {
+	return detectLocale({ allowNavigator: false });
+}
+
+async function waitForDsmLocale(timeoutMs = 1500, intervalMs = 100) {
+	const startedAt = Date.now();
+	while (Date.now() - startedAt < timeoutMs) {
+		const locale = detectExplicitDsmLocale();
+		if (locale && locale !== FALLBACK_LOCALE) {
+			return locale;
+		}
+		await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
+	}
+	return '';
 }
 
 function parseStringsFile(content) {
@@ -94,7 +213,16 @@ async function loadLocaleMessages(locale) {
 }
 
 export async function createI18n() {
-	const locale = detectLocale();
+	let locale = detectExplicitDsmLocale();
+	if (!locale || locale === FALLBACK_LOCALE) {
+		const delayedLocale = await waitForDsmLocale();
+		if (delayedLocale) {
+			locale = delayedLocale;
+		}
+	}
+	if (!locale || locale === FALLBACK_LOCALE) {
+		locale = detectLocale({ allowNavigator: true });
+	}
 	let messages = {};
 
 	try {

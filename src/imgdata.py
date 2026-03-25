@@ -252,6 +252,10 @@ class ImgDataService:
         findings = self.file_analysis.readCheckFindings("dimension_issues")
         return findings if isinstance(findings, dict) else {}
 
+    def getFaceMatchFindings(self) -> Dict[str, Any]:
+        findings = self.file_analysis.readCheckFindings("face_match")
+        return findings if isinstance(findings, dict) else {}
+
     def requestStopFileAnalysis(self) -> Dict[str, Any]:
         self._setFileAnalysisProgress(stop_requested=True, message="Stopping file analysis...")
         return self.getFileAnalysisProgress()
@@ -310,6 +314,44 @@ class ImgDataService:
                 finished=finished,
                 findings=paths,
             )
+
+    def _writeFaceMatchFindings(
+        self,
+        *,
+        status: str,
+        shared_folder: str,
+        action: str,
+        auto: bool,
+        save_only: bool,
+        transferred_count: int,
+        entries: List[Dict[str, Any]],
+    ) -> None:
+        timestamp = self._timestamp_now()
+        self.file_analysis.writeCheckFindings(
+            "face_match",
+            {
+                "job_id": timestamp,
+                "started_at": timestamp,
+                "finished_at": timestamp,
+                "last_updated_at": timestamp,
+                "status": status,
+                "shared_folder": shared_folder,
+                "action": action,
+                "auto": auto,
+                "save_only": save_only,
+                "transferred_count": transferred_count,
+                "count": len(entries),
+                "entries": entries,
+            }
+        )
+
+    @staticmethod
+    def _normalizeFaceMatchEntry(entry: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(entry or {})
+        metadata_face = normalized.get("metadata_face")
+        if hasattr(metadata_face, "to_dict"):
+            normalized["metadata_face"] = metadata_face.to_dict()
+        return normalized
 
     @staticmethod
     def _pickReviewFace(faces: List[MetadataFace]) -> Optional[MetadataFace]:
@@ -1652,8 +1694,10 @@ class ImgDataService:
         offset: int = 0,
         skip_face_ids: Optional[List[int]] = None,
         auto: bool = False,
+        save_only: bool = False,
     ) -> Dict[str, Any]:
         known_persons_cache: Optional[List[Dict[str, Any]]] = None
+        saved_entries: List[Dict[str, Any]] = []
         skip_face_ids_set = {
             int(face_id) for face_id in (skip_face_ids or [])
             if isinstance(face_id, int) or str(face_id).isdigit()
@@ -1689,6 +1733,16 @@ class ImgDataService:
             )
             if not shared_folder:
                 final_message_key = "face_match:progress_shared_folder_missing"
+                if save_only:
+                    self._writeFaceMatchFindings(
+                        status="failed",
+                        shared_folder="",
+                        action="search_photo_face_in_file",
+                        auto=auto,
+                        save_only=save_only,
+                        transferred_count=transferred_count,
+                        entries=[],
+                    )
                 return {
                     "searched": False,
                     "person": None,
@@ -1964,7 +2018,7 @@ class ImgDataService:
                                 skip_face_ids_set.add(face_id_int)
                                 continue
 
-                        return {
+                        result_entry = {
                             "searched": True,
                             "person": person,
                             "image": image,
@@ -1978,12 +2032,29 @@ class ImgDataService:
                             "transferred_count": transferred_count,
                             "auto": auto,
                         }
+                        if save_only:
+                            saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
+                            skip_face_ids_set.add(face_id_int)
+                            continue
+                        return result_entry
 
             final_message_key = "face_match:result_no_match"
             final_message_params = {}
             if auto and transferred_count:
                 final_message_key = "face_match:progress_auto_assign_complete"
                 final_message_params = {"count": transferred_count}
+            if save_only:
+                final_message_key = "face_match:progress_findings_saved" if saved_entries else "face_match:progress_findings_empty"
+                final_message_params = {"count": len(saved_entries)}
+                self._writeFaceMatchFindings(
+                    status="finished",
+                    shared_folder=shared_folder,
+                    action="search_photo_face_in_file",
+                    auto=auto,
+                    save_only=save_only,
+                    transferred_count=transferred_count,
+                    entries=saved_entries,
+                )
             return {
                 "searched": True,
                 "person": None,
@@ -1993,6 +2064,8 @@ class ImgDataService:
                 "image_path": None,
                 "transferred_count": transferred_count,
                 "auto": auto,
+                "save_only": save_only,
+                "findings_count": len(saved_entries),
             }
         finally:
             self._setFaceMatchingProgressMessage(
@@ -2013,6 +2086,19 @@ class ImgDataService:
         else:
             files = self.files.list_files(base_path=base_path, pattern=pattern)
         return {"count": len(files), "files": files}
+
+    def getFaceMatchFindingEntries(self) -> Dict[str, Any]:
+        findings = self.getFaceMatchFindings()
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        return {
+            "status": str(findings.get("status") or ""),
+            "shared_folder": str(findings.get("shared_folder") or ""),
+            "count": len(entries),
+            "entries": entries,
+            "transferred_count": int(findings.get("transferred_count") or 0),
+            "save_only": bool(findings.get("save_only")),
+            "auto": bool(findings.get("auto")),
+        }
 
     def read_file_text(self, *, path: str, max_bytes: int = 1024 * 1024) -> Dict[str, object]:
         return self.files.read_text(path=path, max_bytes=max_bytes)
