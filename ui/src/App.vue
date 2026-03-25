@@ -784,6 +784,24 @@ export default {
 			const match = document.cookie.match(new RegExp('(?:^|; )' + this.escapeRegExp(name) + '=([^;]*)'));
 			return match ? decodeURIComponent(match[1]) : '';
 		},
+		getResponseData(data) {
+			return (data && typeof data.data === 'object' && data.data) ? data.data : {};
+		},
+		getResponseDataObject(data, key) {
+			const root = this.getResponseData(data);
+			return (root && typeof root[key] === 'object' && root[key]) ? root[key] : {};
+		},
+		resetFaceMatchSelectionState() {
+			this.faceMatchEditableName = '';
+			this.faceMatchInitialEditableName = '';
+			this.faceMatchSelectedPerson = null;
+			this.clearFaceMatchSuggestions();
+		},
+		clearFaceMatchSuggestions() {
+			this.faceMatchPersonSuggestions = [];
+			this.faceMatchPersonSuggestLoading = false;
+			this.faceMatchShowSuggestions = false;
+		},
 		collectDsmCookies() {
 			return {
 				_SSID: this.readCookie('_SSID'),
@@ -854,26 +872,26 @@ export default {
 		async fetchFileAnalysisProgress() {
 			try {
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_progress');
-				this.fileAnalysisProgress = (data && data.data && typeof data.data === 'object') ? data.data : {};
+				this.fileAnalysisProgress = this.getResponseData(data);
 				if (!this.isFileAnalysisRunning) {
 					this.stopFileAnalysisProgressPolling();
 				}
 			} catch (err) {
-				return;
+				this.stopFileAnalysisProgressPolling();
 			}
 		},
 		async fetchExiftoolStatus() {
 			try {
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_status');
-				this.exiftoolStatus = (data && data.data && typeof data.data === 'object') ? data.data : {};
+				this.exiftoolStatus = this.getResponseData(data);
 			} catch (err) {
-				return;
+				this.exiftoolStatus = {};
 			}
 		},
 		async fetchFaceMatchFindingsStatus() {
 			try {
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_findings_status');
-				this.faceMatchFindingsStatus = (data && data.data && typeof data.data === 'object') ? data.data : {};
+				this.faceMatchFindingsStatus = this.getResponseData(data);
 			} catch (err) {
 				this.faceMatchFindingsStatus = {};
 			}
@@ -903,9 +921,7 @@ export default {
 			const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
 				action: 'load_photo_face_match_findings',
 			});
-			const payload = (data && data.data && data.data.face_matches && typeof data.data.face_matches === 'object')
-				? data.data.face_matches
-				: {};
+			const payload = this.getResponseDataObject(data, 'face_matches');
 			const entries = Array.isArray(payload.entries) ? payload.entries : [];
 			this.faceMatchFindingEntries = entries;
 			this.faceMatchFindingIndex = 0;
@@ -1126,7 +1142,8 @@ export default {
 					source_mode: this.selectedChecksAction,
 					check_type: this.selectedChecksType,
 				});
-				const entries = data && data.data && Array.isArray(data.data.entries) ? data.data.entries : [];
+				const root = this.getResponseData(data);
+				const entries = Array.isArray(root.entries) ? root.entries : [];
 				this.checksEntries = entries;
 				this.checksCurrentIndex = 0;
 				this.checksCurrentItem = null;
@@ -1151,9 +1168,8 @@ export default {
 			const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_item', {
 				entry,
 			});
-			this.checksCurrentItem = (data && data.data && data.data.item && typeof data.data.item === 'object')
-				? data.data.item
-				: null;
+			const item = this.getResponseDataObject(data, 'item');
+			this.checksCurrentItem = Object.keys(item).length ? item : null;
 			this.checksCurrentIndex = index;
 			this.checksStatusMessage = this.checksCurrentItem
 				? this.$t('checks:status_entry', 'Entry {current} of {total}.', {
@@ -1176,17 +1192,11 @@ export default {
 			}
 		},
 		extractPersonsFromPayload(payload) {
-			const root = payload && typeof payload === 'object' ? payload : {};
-			const data = root.data && typeof root.data === 'object' ? root.data : {};
-			const personsSource = (data.persons && typeof data.persons === 'object')
-				? data.persons
-				: ((root.persons && typeof root.persons === 'object') ? root.persons : {});
+			const data = this.getResponseData(payload);
+			const personsSource = (data.persons && typeof data.persons === 'object') ? data.persons : {};
 			const total = Number(personsSource.total) || 0;
 			const known = Number(personsSource.known) || 0;
-			const unknownFromPayload = personsSource.unknown ?? personsSource.unkwown;
-			const unknown = Number.isFinite(Number(unknownFromPayload))
-				? Number(unknownFromPayload)
-				: Math.max(total - known, 0);
+			const unknown = Number(personsSource.unknown) || Math.max(total - known, 0);
 			return {
 				total: Math.max(total, 0),
 				known: Math.max(known, 0),
@@ -1195,13 +1205,10 @@ export default {
 			};
 		},
 		extractSystemFromPayload(payload) {
-			const root = payload && typeof payload === "object" ? payload : {};
-			const data = root.data && typeof root.data === "object" ? root.data : {};
-			const systemSource = (data.system && typeof data.system === "object")
-				? data.system
-				: ((root.system && typeof root.system === "object") ? root.system : {});
+			const data = this.getResponseData(payload);
+			const systemSource = (data.system && typeof data.system === "object") ? data.system : {};
 			return {
-				sharedFolder: String(systemSource.shared_folder || systemSource.sharedFolder || ""),
+				sharedFolder: String(systemSource.shared_folder || ""),
 			};
 		},
 		getSynoToken() {
@@ -1215,22 +1222,26 @@ export default {
 			if (face.bbox) {
 				const topLeft = face.bbox.top_left;
 				const bottomRight = face.bbox.bottom_right;
-				const left = Number(topLeft && topLeft.x);
-				const top = Number(topLeft && topLeft.y);
-				const right = Number(bottomRight && bottomRight.x);
-				const bottom = Number(bottomRight && bottomRight.y);
+				let left = Number(topLeft && topLeft.x);
+				let top = Number(topLeft && topLeft.y);
+				let right = Number(bottomRight && bottomRight.x);
+				let bottom = Number(bottomRight && bottomRight.y);
 
+				// Metadata faces are serialized with x1/y1/x2/y2, while Photos faces use top_left/bottom_right.
 				if (![left, top, right, bottom].every(Number.isFinite)) {
-					return null;
+					left = Number(face.bbox.x1);
+					top = Number(face.bbox.y1);
+					right = Number(face.bbox.x2);
+					bottom = Number(face.bbox.y2);
 				}
 
-				const width = right - left;
-				const height = bottom - top;
-				if (width <= 0 || height <= 0) {
-					return null;
+				if ([left, top, right, bottom].every(Number.isFinite)) {
+					const width = right - left;
+					const height = bottom - top;
+					if (width > 0 && height > 0) {
+						return { left, top, width, height };
+					}
 				}
-
-				return { left, top, width, height };
 			}
 
 			const centerX = Number(face.x);
@@ -1441,9 +1452,7 @@ export default {
 			this.faceMatchEditableName = matchedPersonName || sourceName;
 			this.faceMatchInitialEditableName = sourceName;
 			this.faceMatchSelectedPerson = matchedPerson && matchedPerson.id ? matchedPerson : null;
-			this.faceMatchPersonSuggestions = [];
-			this.faceMatchPersonSuggestLoading = false;
-			this.faceMatchShowSuggestions = false;
+			this.clearFaceMatchSuggestions();
 		},
 		handleFaceMatchNameFocus() {
 			if (this.faceMatchPersonSuggestions.length) {
@@ -1464,9 +1473,7 @@ export default {
 			}
 			const query = this.faceMatchEditableName.trim();
 			if (!query || query.length < 1) {
-				this.faceMatchPersonSuggestions = [];
-				this.faceMatchPersonSuggestLoading = false;
-				this.faceMatchShowSuggestions = false;
+				this.clearFaceMatchSuggestions();
 				return;
 			}
 			this.faceMatchSuggestTimer = window.setTimeout(() => {
@@ -1476,9 +1483,7 @@ export default {
 		async fetchFaceMatchSuggestions(query) {
 			const currentQuery = String(query || '').trim();
 			if (!currentQuery) {
-				this.faceMatchPersonSuggestions = [];
-				this.faceMatchPersonSuggestLoading = false;
-				this.faceMatchShowSuggestions = false;
+				this.clearFaceMatchSuggestions();
 				return;
 			}
 			const requestId = this.faceMatchSuggestRequestId + 1;
@@ -1525,14 +1530,14 @@ export default {
 				if (this.faceMatchSuggestRequestId !== requestId) {
 					return;
 				}
-				this.faceMatchPersonSuggestions = Array.isArray(data && data.data && data.data.list) ? data.data.list : [];
+				const root = this.getResponseData(data);
+				this.faceMatchPersonSuggestions = Array.isArray(root.list) ? root.list : [];
 				this.faceMatchShowSuggestions = this.faceMatchPersonSuggestions.length > 0;
 			} catch (err) {
 				if (this.faceMatchSuggestRequestId !== requestId) {
 					return;
 				}
-				this.faceMatchPersonSuggestions = [];
-				this.faceMatchShowSuggestions = false;
+				this.clearFaceMatchSuggestions();
 			} finally {
 				if (this.faceMatchSuggestRequestId === requestId) {
 					this.faceMatchPersonSuggestLoading = false;
@@ -1545,9 +1550,7 @@ export default {
 			}
 			this.faceMatchSelectedPerson = person;
 			this.faceMatchEditableName = person.name || '';
-			this.faceMatchPersonSuggestions = [];
-			this.faceMatchShowSuggestions = false;
-			this.faceMatchPersonSuggestLoading = false;
+			this.clearFaceMatchSuggestions();
 		},
 		resolveFaceMatchNameMappingPreference(targetName) {
 			const sourceName = (this.faceMatchInitialEditableName || '').trim();
@@ -1612,7 +1615,7 @@ export default {
 				if (!resp.ok || data.success === false) {
 					return;
 				}
-				this.faceMatchProgress = (data && data.data && typeof data.data === 'object') ? data.data : {};
+				this.faceMatchProgress = this.getResponseData(data);
 			} catch (err) {
 				return;
 			}
@@ -1695,7 +1698,7 @@ export default {
 					return;
 				}
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_start');
-				this.fileAnalysisProgress = (data && data.data && typeof data.data === 'object') ? data.data : {};
+				this.fileAnalysisProgress = this.getResponseData(data);
 				this.startFileAnalysisProgressPolling();
 				this.output = JSON.stringify(data, null, 2);
 			} catch (err) {
@@ -1877,12 +1880,7 @@ export default {
 			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
 				this.faceMatchLoading = true;
 				this.faceMatchResult = null;
-				this.faceMatchEditableName = '';
-				this.faceMatchInitialEditableName = '';
-				this.faceMatchSelectedPerson = null;
-				this.faceMatchPersonSuggestions = [];
-				this.faceMatchPersonSuggestLoading = false;
-				this.faceMatchShowSuggestions = false;
+				this.resetFaceMatchSelectionState();
 				try {
 					await this.loadStoredFaceMatchFindings();
 				} catch (err) {
@@ -1914,12 +1912,7 @@ export default {
 				faces_read: 0,
 			};
 			this.faceMatchResult = null;
-			this.faceMatchEditableName = '';
-			this.faceMatchInitialEditableName = '';
-			this.faceMatchSelectedPerson = null;
-			this.faceMatchPersonSuggestions = [];
-			this.faceMatchPersonSuggestLoading = false;
-			this.faceMatchShowSuggestions = false;
+			this.resetFaceMatchSelectionState();
 			this.faceMatchAbortController = new AbortController();
 			this.startFaceMatchProgressPolling();
 			this.output = this.$t('face_match:output_start_action', 'Starting action: {action}', { action: this.selectedFaceMatchingAction });
@@ -1964,12 +1957,11 @@ export default {
 					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
 				}
 
-				this.faceMatchResult = data.data && data.data.face_matches ? data.data.face_matches : null;
+				const faceMatches = this.getResponseDataObject(data, 'face_matches');
+				this.faceMatchResult = Object.keys(faceMatches).length ? faceMatches : null;
 				this.syncFaceMatchEditableName();
 				await this.fetchFaceMatchFindingsStatus();
-				const transferredCount = Number(
-					data && data.data && data.data.face_matches && data.data.face_matches.transferred_count
-				) || 0;
+				const transferredCount = Number(faceMatches.transferred_count) || 0;
 				this.faceMatchTransferredCount += transferredCount;
 				this.output = JSON.stringify(data, null, 2);
 			} catch (err) {
@@ -1978,12 +1970,7 @@ export default {
 					return;
 				}
 				this.faceMatchResult = null;
-				this.faceMatchEditableName = '';
-				this.faceMatchInitialEditableName = '';
-				this.faceMatchSelectedPerson = null;
-				this.faceMatchPersonSuggestions = [];
-				this.faceMatchPersonSuggestLoading = false;
-				this.faceMatchShowSuggestions = false;
+				this.resetFaceMatchSelectionState();
 				this.output = `Error: ${err.message}`;
 			} finally {
 				this.faceMatchAbortController = null;

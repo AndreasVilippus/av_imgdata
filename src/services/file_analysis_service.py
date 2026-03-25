@@ -16,17 +16,13 @@ class FileAnalysisService:
         "face_match": "face_match.json",
     }
 
-    def __init__(self, result_path: Optional[str] = None, mismatch_path: Optional[str] = None):
+    def __init__(self, result_path: Optional[str] = None):
         if result_path:
             self._result_path = Path(result_path)
         else:
             package_var = os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")
             self._result_path = Path(package_var) / "file_analysis.json"
         self._findings_dir = self._result_path.parent / "analysis_findings"
-        if mismatch_path:
-            self._mismatch_path = Path(mismatch_path)
-        else:
-            self._mismatch_path = self._findings_dir / self.FINDING_FILES["dimension_issues"]
 
     def readLatestResult(self) -> Dict[str, Any]:
         candidate = self._result_path
@@ -51,12 +47,6 @@ class FileAnalysisService:
         except Exception:
             return False
         return True
-
-    def readDimensionMismatchFindings(self) -> Dict[str, Any]:
-        return self.readCheckFindings("dimension_issues")
-
-    def writeDimensionMismatchFindings(self, payload: Dict[str, Any]) -> bool:
-        return self.writeCheckFindings("dimension_issues", payload)
 
     def readCheckFindings(self, finding_type: str) -> Dict[str, Any]:
         candidate = self._finding_path(finding_type)
