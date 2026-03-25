@@ -29,6 +29,14 @@
       "MWG_REGIONS": true
     }
   },
+  "analysis": {
+    "CHECKS": {
+      "DIMENSION_ISSUES": true,
+      "DUPLICATE_FACES": true,
+      "NAME_CONFLICTS": true,
+      "POSITION_DEVIATIONS": true
+    }
+  },
   "photos": {
     "MAX_PHOTOS_PERSONS": 5000
   }

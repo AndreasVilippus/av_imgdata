@@ -85,6 +85,33 @@
 					</label>
 				</div>
 			</section>
+
+			<section class="config-card">
+				<div class="config-card-title">{{ $t('config:section_analysis', 'Analysis') }}</div>
+				<div class="config-card-desc">{{ $t('config:section_analysis_desc', 'Select which checks should be performed during analysis runs.') }}</div>
+
+				<div class="config-form-grid">
+					<label class="config-checkbox">
+						<input v-model="configModel.analysis.CHECKS.DUPLICATE_FACES" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_check_duplicate_faces', 'Check for duplicate face markings') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input v-model="configModel.analysis.CHECKS.POSITION_DEVIATIONS" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_check_position_deviations', 'Check for deviating face positions') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input v-model="configModel.analysis.CHECKS.DIMENSION_ISSUES" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_check_dimension_issues', 'Check for dimension issues') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input v-model="configModel.analysis.CHECKS.NAME_CONFLICTS" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_check_name_conflicts', 'Check for name conflicts') }}</span>
+					</label>
+				</div>
+			</section>
 		</div>
 	</section>
 </template>
@@ -123,6 +150,14 @@ export default {
 						MWG_REGIONS: true,
 					},
 				},
+				analysis: {
+					CHECKS: {
+						DUPLICATE_FACES: true,
+						POSITION_DEVIATIONS: true,
+						DIMENSION_ISSUES: true,
+						NAME_CONFLICTS: true,
+					},
+				},
 				photos: {
 					MAX_PHOTOS_PERSONS: 5000,
 				},
@@ -158,6 +193,8 @@ export default {
 			const files = (root.files && typeof root.files === 'object' && !Array.isArray(root.files)) ? root.files : {};
 			const metadata = (root.metadata && typeof root.metadata === 'object' && !Array.isArray(root.metadata)) ? root.metadata : {};
 			const schemas = (metadata.SCHEMAS && typeof metadata.SCHEMAS === 'object' && !Array.isArray(metadata.SCHEMAS)) ? metadata.SCHEMAS : {};
+			const analysis = (root.analysis && typeof root.analysis === 'object' && !Array.isArray(root.analysis)) ? root.analysis : {};
+			const checks = (analysis.CHECKS && typeof analysis.CHECKS === 'object' && !Array.isArray(analysis.CHECKS)) ? analysis.CHECKS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 
 			const imageExtensions = this.normalizeImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
@@ -177,6 +214,16 @@ export default {
 						ACD: Boolean(schemas.ACD ?? defaults.metadata.SCHEMAS.ACD),
 						MICROSOFT: Boolean(schemas.MICROSOFT ?? defaults.metadata.SCHEMAS.MICROSOFT),
 						MWG_REGIONS: Boolean(schemas.MWG_REGIONS ?? defaults.metadata.SCHEMAS.MWG_REGIONS),
+					},
+				},
+				analysis: {
+					...analysis,
+					CHECKS: {
+						...checks,
+						DUPLICATE_FACES: Boolean(checks.DUPLICATE_FACES ?? defaults.analysis.CHECKS.DUPLICATE_FACES),
+						POSITION_DEVIATIONS: Boolean(checks.POSITION_DEVIATIONS ?? defaults.analysis.CHECKS.POSITION_DEVIATIONS),
+						DIMENSION_ISSUES: Boolean(checks.DIMENSION_ISSUES ?? defaults.analysis.CHECKS.DIMENSION_ISSUES),
+						NAME_CONFLICTS: Boolean(checks.NAME_CONFLICTS ?? defaults.analysis.CHECKS.NAME_CONFLICTS),
 					},
 				},
 				photos: {
@@ -226,16 +273,16 @@ export default {
 			this.message = '';
 			try {
 				const payloadConfig = {
-				...this.configModel,
-				files: {
-					...this.configModel.files,
-					IMAGE_EXTENSIONS: this.normalizeImageExtensions(
-						this.imageExtensionsInput,
-						this.createDefaultConfig().files.IMAGE_EXTENSIONS
-					),
-				},
-			};
-			const normalized = this.normalizeConfig(payloadConfig);
+					...this.configModel,
+					files: {
+						...this.configModel.files,
+						IMAGE_EXTENSIONS: this.normalizeImageExtensions(
+							this.imageExtensionsInput,
+							this.createDefaultConfig().files.IMAGE_EXTENSIONS
+						),
+					},
+				};
+				const normalized = this.normalizeConfig(payloadConfig);
 				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/config_save', {
 					method: 'POST',
 					credentials: 'include',

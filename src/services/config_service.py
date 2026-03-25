@@ -33,6 +33,14 @@ class ConfigService:
                     "MWG_REGIONS": True,
                 },
             },
+            "analysis": {
+                "CHECKS": {
+                    "DUPLICATE_FACES": True,
+                    "POSITION_DEVIATIONS": True,
+                    "DIMENSION_ISSUES": True,
+                    "NAME_CONFLICTS": True,
+                },
+            },
         }
 
     def readMergedConfig(self) -> Dict[str, Any]:

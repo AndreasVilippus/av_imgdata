@@ -221,6 +221,15 @@
 	color: #7a5900;
 }
 
+.checks-primary-bbox {
+	box-shadow: 0 0 0 1px rgba(216, 32, 32, 0.2), 0 0 10px rgba(216, 32, 32, 0.45);
+}
+
+.checks-other-bbox {
+	border-color: var(--sm-green);
+	box-shadow: none;
+}
+
 @media (max-width: 900px) {
 	.sm-files-result-details {
 		grid-template-columns: 1fr;

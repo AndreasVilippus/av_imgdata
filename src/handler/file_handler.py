@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from services.config_service import ConfigService
+from services.bbox_normalizer import normalize_xmp_face
 
 
 NS_ACD = {
@@ -54,6 +55,18 @@ class FileHandler:
         default_extensions = ConfigService.defaultConfig()["files"]["IMAGE_EXTENSIONS"]
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
         return self._normalize_image_extensions(files_config.get("IMAGE_EXTENSIONS"), default_extensions)
+
+    def configuredAnalysisChecks(self) -> Dict[str, bool]:
+        config = self._config.readMergedConfig()
+        analysis_config = config.get("analysis") if isinstance(config.get("analysis"), dict) else {}
+        checks_config = analysis_config.get("CHECKS") if isinstance(analysis_config.get("CHECKS"), dict) else {}
+        defaults = ConfigService.defaultConfig()["analysis"]["CHECKS"]
+        return {
+            "DUPLICATE_FACES": bool(checks_config.get("DUPLICATE_FACES", defaults["DUPLICATE_FACES"])),
+            "POSITION_DEVIATIONS": bool(checks_config.get("POSITION_DEVIATIONS", defaults["POSITION_DEVIATIONS"])),
+            "DIMENSION_ISSUES": bool(checks_config.get("DIMENSION_ISSUES", defaults["DIMENSION_ISSUES"])),
+            "NAME_CONFLICTS": bool(checks_config.get("NAME_CONFLICTS", defaults["NAME_CONFLICTS"])),
+        }
 
     def _readFaceMetadata(self, image_path: str) -> Dict[str, Any]:
         config = self._config.readMergedConfig()
@@ -133,12 +146,16 @@ class FileHandler:
 
     def analyzeImageFaceMetadata(self, image_path: str) -> Dict[str, Any]:
         metadata = self._readFaceMetadata(image_path)
+        analysis_checks = self.configuredAnalysisChecks()
         faces = metadata.get("faces") if isinstance(metadata.get("faces"), list) else []
         image_dimensions = metadata.get("image_dimensions") if isinstance(metadata.get("image_dimensions"), dict) else {}
         image_orientation = metadata.get("image_orientation")
         applied_dimensions = metadata.get("mwg_applied_to_dimensions") if isinstance(metadata.get("mwg_applied_to_dimensions"), dict) else {}
         displayed_image_dimensions = self._orientedImageDimensions(image_dimensions, image_orientation)
-        mwg_matches = self._appliedDimensionsMatch(displayed_image_dimensions, applied_dimensions)
+        mwg_matches = self._appliedDimensionsMatch(displayed_image_dimensions, applied_dimensions) if analysis_checks["DIMENSION_ISSUES"] else None
+        duplicate_faces_count = self._countDuplicateNamedFacesPerFormat(faces) if analysis_checks["DUPLICATE_FACES"] else None
+        face_position_deviations_count = self._countCrossFormatPositionDeviations(faces) if analysis_checks["POSITION_DEVIATIONS"] else None
+        name_conflicts_count = self._countOverlappingNameConflicts(faces) if analysis_checks["NAME_CONFLICTS"] else None
 
         named_faces = 0
         unnamed_faces = 0
@@ -181,12 +198,113 @@ class FileHandler:
                 "image_orientation": image_orientation,
                 "mwg_applied_to_dimensions": applied_dimensions,
                 "mwg_applied_to_dimensions_matches_current": mwg_matches,
-                "files_with_mwg_applied_to_dimensions": 1 if metadata.get("mwg_applied_to_dimensions_present") else 0,
-                "files_with_mwg_dimension_mismatch": 1 if mwg_matches is False else 0,
-                "files_with_mwg_orientation_transform_risk": 1 if metadata.get("mwg_orientation_transform_required") else 0,
+                "files_with_duplicate_faces": 1 if analysis_checks["DUPLICATE_FACES"] and duplicate_faces_count > 0 else (0 if analysis_checks["DUPLICATE_FACES"] else None),
+                "files_with_face_position_deviations": 1 if analysis_checks["POSITION_DEVIATIONS"] and face_position_deviations_count > 0 else (0 if analysis_checks["POSITION_DEVIATIONS"] else None),
+                "files_with_name_conflicts": 1 if analysis_checks["NAME_CONFLICTS"] and name_conflicts_count > 0 else (0 if analysis_checks["NAME_CONFLICTS"] else None),
+                "files_with_mwg_applied_to_dimensions": 1 if analysis_checks["DIMENSION_ISSUES"] and metadata.get("mwg_applied_to_dimensions_present") else (0 if analysis_checks["DIMENSION_ISSUES"] else None),
+                "files_with_mwg_dimension_mismatch": 1 if analysis_checks["DIMENSION_ISSUES"] and mwg_matches is False else (0 if analysis_checks["DIMENSION_ISSUES"] else None),
+                "files_with_dimension_issues": 1 if analysis_checks["DIMENSION_ISSUES"] and mwg_matches is False else (0 if analysis_checks["DIMENSION_ISSUES"] else None),
+                "files_with_mwg_orientation_transform_risk": 1 if analysis_checks["DIMENSION_ISSUES"] and metadata.get("mwg_orientation_transform_required") else (0 if analysis_checks["DIMENSION_ISSUES"] else None),
             }
         )
         return metadata
+
+    @staticmethod
+    def _normalizeFaceName(value: Any) -> str:
+        return str(value or "").strip().casefold()
+
+    @staticmethod
+    def _normalizedFaceForComparison(face: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = normalize_xmp_face(face) if str(face.get("source_format") or "") == "MWG_REGIONS" else dict(face)
+        return {
+            "name": str(normalized.get("name") or "").strip(),
+            "source_format": str(normalized.get("source_format") or ""),
+            "x": float(normalized.get("x") or 0),
+            "y": float(normalized.get("y") or 0),
+            "w": float(normalized.get("w") or 0),
+            "h": float(normalized.get("h") or 0),
+        }
+
+    @staticmethod
+    def _faceBox(face: Dict[str, Any]) -> Dict[str, float]:
+        center_x = float(face.get("x") or 0)
+        center_y = float(face.get("y") or 0)
+        width = float(face.get("w") or 0)
+        height = float(face.get("h") or 0)
+        return {
+            "x1": center_x - (width / 2),
+            "y1": center_y - (height / 2),
+            "x2": center_x + (width / 2),
+            "y2": center_y + (height / 2),
+        }
+
+    @staticmethod
+    def _boxesOverlapStrongly(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+        left_box = FileHandler._faceBox(left)
+        right_box = FileHandler._faceBox(right)
+        overlap_width = min(left_box["x2"], right_box["x2"]) - max(left_box["x1"], right_box["x1"])
+        overlap_height = min(left_box["y2"], right_box["y2"]) - max(left_box["y1"], right_box["y1"])
+        if overlap_width <= 0 or overlap_height <= 0:
+            return False
+
+        overlap_area = overlap_width * overlap_height
+        left_area = max(0.0, left_box["x2"] - left_box["x1"]) * max(0.0, left_box["y2"] - left_box["y1"])
+        right_area = max(0.0, right_box["x2"] - right_box["x1"]) * max(0.0, right_box["y2"] - right_box["y1"])
+        smaller_area = min(left_area, right_area)
+        if smaller_area <= 0:
+            return False
+        return (overlap_area / smaller_area) >= 0.5
+
+    def _countDuplicateNamedFacesPerFormat(self, faces: List[Dict[str, Any]]) -> int:
+        seen: Dict[tuple, int] = {}
+        duplicates = 0
+        for face in faces:
+            if not isinstance(face, dict):
+                continue
+            name = self._normalizeFaceName(face.get("name"))
+            source_format = str(face.get("source_format") or "").strip().upper()
+            if not name or not source_format:
+                continue
+            key = (source_format, name)
+            seen[key] = seen.get(key, 0) + 1
+        for count in seen.values():
+            if count > 1:
+                duplicates += 1
+        return duplicates
+
+    def _countCrossFormatPositionDeviations(self, faces: List[Dict[str, Any]]) -> int:
+        normalized_faces = [
+            self._normalizedFaceForComparison(face)
+            for face in faces
+            if isinstance(face, dict) and self._normalizeFaceName(face.get("name"))
+        ]
+        deviations = set()
+        for index, left in enumerate(normalized_faces):
+            for right in normalized_faces[index + 1:]:
+                if self._normalizeFaceName(left.get("name")) != self._normalizeFaceName(right.get("name")):
+                    continue
+                if left.get("source_format") == right.get("source_format"):
+                    continue
+                if not self._boxesOverlapStrongly(left, right):
+                    deviations.add(self._normalizeFaceName(left.get("name")))
+        return len(deviations)
+
+    def _countOverlappingNameConflicts(self, faces: List[Dict[str, Any]]) -> int:
+        normalized_faces = [
+            self._normalizedFaceForComparison(face)
+            for face in faces
+            if isinstance(face, dict) and self._normalizeFaceName(face.get("name"))
+        ]
+        conflicts = set()
+        for index, left in enumerate(normalized_faces):
+            for right in normalized_faces[index + 1:]:
+                left_name = self._normalizeFaceName(left.get("name"))
+                right_name = self._normalizeFaceName(right.get("name"))
+                if not left_name or not right_name or left_name == right_name:
+                    continue
+                if self._boxesOverlapStrongly(left, right):
+                    conflicts.add(tuple(sorted((left_name, right_name))))
+        return len(conflicts)
 
     def listImageFiles(self, base_path: str) -> List[str]:
         root = Path(base_path).expanduser().resolve()

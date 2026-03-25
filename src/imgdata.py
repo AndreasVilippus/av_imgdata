@@ -147,18 +147,27 @@ class ImgDataService:
 
     def _enrichFileAnalysisProgressWithFindings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
-        findings = self.file_analysis.readDimensionMismatchFindings()
-        if not isinstance(findings, dict):
-            return current
-
-        findings_count = int(findings.get("count") or 0)
-        same_job = (
-            not current.get("job_id")
-            or not findings.get("job_id")
-            or str(current.get("job_id")) == str(findings.get("job_id"))
-        )
-        if same_job and "files_with_mwg_dimension_mismatch" not in current and findings_count > 0:
-            current["files_with_mwg_dimension_mismatch"] = findings_count
+        field_map = {
+            "dimension_issues": ["files_with_mwg_dimension_mismatch", "files_with_dimension_issues"],
+            "duplicate_faces": ["files_with_duplicate_faces"],
+            "position_deviations": ["files_with_face_position_deviations"],
+            "name_conflicts": ["files_with_name_conflicts"],
+        }
+        for finding_type, fields in field_map.items():
+            findings = self.file_analysis.readCheckFindings(finding_type)
+            if not isinstance(findings, dict):
+                continue
+            findings_count = int(findings.get("count") or 0)
+            same_job = (
+                not current.get("job_id")
+                or not findings.get("job_id")
+                or str(current.get("job_id")) == str(findings.get("job_id"))
+            )
+            if not same_job:
+                continue
+            for field in fields:
+                if field not in current and findings_count >= 0:
+                    current[field] = findings_count
         return current
 
     def getFileAnalysisProgress(self) -> Dict[str, Any]:
@@ -172,7 +181,7 @@ class ImgDataService:
         return self._enrichFileAnalysisProgressWithFindings(self._normalizeFileAnalysisProgress(latest))
 
     def getFileAnalysisDimensionMismatchFindings(self) -> Dict[str, Any]:
-        findings = self.file_analysis.readDimensionMismatchFindings()
+        findings = self.file_analysis.readCheckFindings("dimension_issues")
         return findings if isinstance(findings, dict) else {}
 
     def requestStopFileAnalysis(self) -> Dict[str, Any]:
@@ -188,9 +197,10 @@ class ImgDataService:
         self._setFileAnalysisProgress(**payload)
         return payload
 
-    def _writeFileAnalysisDimensionMismatchFindings(
+    def _writeFileAnalysisCheckFindings(
         self,
         *,
+        finding_type: str,
         job_id: str,
         started_at: str,
         shared_folder: str,
@@ -198,7 +208,8 @@ class ImgDataService:
         finished: bool,
         findings: List[str],
     ) -> None:
-        self.file_analysis.writeDimensionMismatchFindings(
+        self.file_analysis.writeCheckFindings(
+            finding_type,
             {
                 "job_id": job_id,
                 "started_at": started_at,
@@ -211,6 +222,27 @@ class ImgDataService:
             }
         )
 
+    def _writeAllFileAnalysisCheckFindings(
+        self,
+        *,
+        job_id: str,
+        started_at: str,
+        shared_folder: str,
+        status: str,
+        finished: bool,
+        findings_by_type: Dict[str, List[str]],
+    ) -> None:
+        for finding_type, paths in findings_by_type.items():
+            self._writeFileAnalysisCheckFindings(
+                finding_type=finding_type,
+                job_id=job_id,
+                started_at=started_at,
+                shared_folder=shared_folder,
+                status=status,
+                finished=finished,
+                findings=paths,
+            )
+
     @staticmethod
     def _pickReviewFace(faces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not isinstance(faces, list):
@@ -221,24 +253,45 @@ class ImgDataService:
         named = [face for face in mwg_faces if str(face.get("name") or "").strip()]
         return dict(named[0] if named else mwg_faces[0])
 
+    @staticmethod
+    def _isSameFace(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            return False
+        keys = ("source_format", "source", "name", "x", "y", "w", "h", "orientation")
+        return all(left.get(key) == right.get(key) for key in keys)
+
     def _buildDimensionMismatchReviewItem(self, image_path: str) -> Optional[Dict[str, Any]]:
         analysis = self.files.analyzeImageFaceMetadata(image_path)
         if analysis.get("files_with_mwg_dimension_mismatch") != 1:
             return None
 
-        review_face = self._pickReviewFace(analysis.get("faces") if isinstance(analysis.get("faces"), list) else [])
+        faces = analysis.get("faces") if isinstance(analysis.get("faces"), list) else []
+        review_face = self._pickReviewFace(faces)
         if not review_face:
             return None
 
         applied_face = normalize_xmp_face(review_face)
         raw_face = dict(review_face)
         raw_face.pop("orientation", None)
+        other_applied_faces = []
+        skipped_selected = False
+        for face in faces:
+            if not isinstance(face, dict):
+                continue
+            if not skipped_selected and self._isSameFace(face, review_face):
+                skipped_selected = True
+                continue
+            if str(face.get("source_format") or "") == "MWG_REGIONS":
+                other_applied_faces.append(normalize_xmp_face(face))
+            else:
+                other_applied_faces.append(dict(face))
 
         return {
             "image_path": image_path,
             "image_name": Path(image_path).name,
             "raw_face": raw_face,
             "applied_face": applied_face,
+            "other_applied_faces": other_applied_faces,
             "face_name": str(review_face.get("name") or ""),
             "image_dimensions": analysis.get("image_dimensions") if isinstance(analysis.get("image_dimensions"), dict) else {},
             "applied_to_dimensions": analysis.get("mwg_applied_to_dimensions") if isinstance(analysis.get("mwg_applied_to_dimensions"), dict) else {},
@@ -323,6 +376,10 @@ class ImgDataService:
         faces_named: int,
         faces_unnamed: int,
         persons_distinct_names: set,
+        files_with_duplicate_faces: Optional[int] = None,
+        files_with_face_position_deviations: Optional[int] = None,
+        files_with_dimension_issues: Optional[int] = None,
+        files_with_name_conflicts: Optional[int] = None,
         focus_usages: Dict[str, int],
         extensions: Dict[str, int],
         formats: Dict[str, int],
@@ -359,6 +416,10 @@ class ImgDataService:
             "faces_named": faces_named,
             "faces_unnamed": faces_unnamed,
             "persons_distinct_by_name": len(persons_distinct_names),
+            "files_with_duplicate_faces": files_with_duplicate_faces,
+            "files_with_face_position_deviations": files_with_face_position_deviations,
+            "files_with_dimension_issues": files_with_dimension_issues,
+            "files_with_name_conflicts": files_with_name_conflicts,
             "focus_usages": self._nonZeroCounters(focus_usages),
             "running": running,
             "finished": finished,
@@ -372,6 +433,17 @@ class ImgDataService:
         if error:
             payload["error"] = error
         return payload
+
+    def _configuredAnalysisChecks(self) -> Dict[str, bool]:
+        config = self.config.readMergedConfig()
+        analysis = config.get("analysis") if isinstance(config.get("analysis"), dict) else {}
+        checks = analysis.get("CHECKS") if isinstance(analysis.get("CHECKS"), dict) else {}
+        return {
+            "DUPLICATE_FACES": bool(checks.get("DUPLICATE_FACES", True)),
+            "POSITION_DEVIATIONS": bool(checks.get("POSITION_DEVIATIONS", True)),
+            "DIMENSION_ISSUES": bool(checks.get("DIMENSION_ISSUES", True)),
+            "NAME_CONFLICTS": bool(checks.get("NAME_CONFLICTS", True)),
+        }
 
     def _runFileAnalysis(
         self,
@@ -389,6 +461,7 @@ class ImgDataService:
             folder_name="photo",
         )
         configured_extensions = self.files.configuredImageExtensions()
+        analysis_checks = self._configuredAnalysisChecks()
         extension_counts: Dict[str, int] = {ext: 0 for ext in configured_extensions}
         source_counts: Dict[str, int] = {}
         format_counts: Dict[str, int] = {}
@@ -409,15 +482,27 @@ class ImgDataService:
         faces_unnamed = 0
         directories_read = 0
         dimension_mismatch_paths: List[str] = []
+        duplicate_faces_paths: List[str] = []
+        position_deviation_paths: List[str] = []
+        name_conflict_paths: List[str] = []
+        files_with_duplicate_faces: Optional[int] = None
+        files_with_face_position_deviations: Optional[int] = None
+        files_with_dimension_issues: Optional[int] = 0 if analysis_checks["DIMENSION_ISSUES"] else None
+        files_with_name_conflicts: Optional[int] = 0 if analysis_checks["NAME_CONFLICTS"] else None
 
         if not shared_folder:
-            self._writeFileAnalysisDimensionMismatchFindings(
+            self._writeAllFileAnalysisCheckFindings(
                 job_id=job_id,
                 started_at=started_at,
                 shared_folder="",
                 status="failed",
                 finished=True,
-                findings=[],
+                findings_by_type={
+                    "dimension_issues": [],
+                    "duplicate_faces": [],
+                    "position_deviations": [],
+                    "name_conflicts": [],
+                },
             )
             self._persistFileAnalysisResult(
                 self._buildFileAnalysisPayload(
@@ -442,6 +527,10 @@ class ImgDataService:
                     faces_named=0,
                     faces_unnamed=0,
                     persons_distinct_names=set(),
+                    files_with_duplicate_faces=files_with_duplicate_faces,
+                    files_with_face_position_deviations=files_with_face_position_deviations,
+                    files_with_dimension_issues=files_with_dimension_issues,
+                    files_with_name_conflicts=files_with_name_conflicts,
                     focus_usages={},
                     extensions={},
                     formats={},
@@ -483,19 +572,28 @@ class ImgDataService:
             faces_named=0,
             faces_unnamed=0,
             persons_distinct_by_name=0,
+            files_with_duplicate_faces=files_with_duplicate_faces,
+            files_with_face_position_deviations=files_with_face_position_deviations,
+            files_with_dimension_issues=files_with_dimension_issues,
+            files_with_name_conflicts=files_with_name_conflicts,
             current_path="",
             extensions={},
             focus_usages={},
             formats={},
             sources={},
         )
-        self._writeFileAnalysisDimensionMismatchFindings(
+        self._writeAllFileAnalysisCheckFindings(
             job_id=job_id,
             started_at=started_at,
             shared_folder=shared_folder,
             status="running",
             finished=False,
-            findings=[],
+            findings_by_type={
+                "dimension_issues": [],
+                "duplicate_faces": [],
+                "position_deviations": [],
+                "name_conflicts": [],
+            },
         )
 
         try:
@@ -507,13 +605,18 @@ class ImgDataService:
                     last_updated_at=self._timestamp_now(),
                 )
                 if self._shouldStopFileAnalysis():
-                    self._writeFileAnalysisDimensionMismatchFindings(
+                    self._writeAllFileAnalysisCheckFindings(
                         job_id=job_id,
                         started_at=started_at,
                         shared_folder=shared_folder,
                         status="stopped",
                         finished=True,
-                        findings=dimension_mismatch_paths,
+                        findings_by_type={
+                            "dimension_issues": dimension_mismatch_paths,
+                            "duplicate_faces": duplicate_faces_paths,
+                            "position_deviations": position_deviation_paths,
+                            "name_conflicts": name_conflict_paths,
+                        },
                     )
                     self._persistFileAnalysisResult(
                         self._buildFileAnalysisPayload(
@@ -538,6 +641,10 @@ class ImgDataService:
                             faces_named=0,
                             faces_unnamed=0,
                             persons_distinct_names=set(),
+                            files_with_duplicate_faces=files_with_duplicate_faces,
+                            files_with_face_position_deviations=files_with_face_position_deviations,
+                            files_with_dimension_issues=files_with_dimension_issues,
+                            files_with_name_conflicts=files_with_name_conflicts,
                             focus_usages={},
                             extensions=extension_counts,
                             formats={},
@@ -548,15 +655,6 @@ class ImgDataService:
                             stopped=True,
                             stop_requested=False,
                         )
-                    )
-                    self.file_analysis.writeDimensionMismatchFindings(
-                        {
-                            "job_id": job_id,
-                            "status": "stopped",
-                            "shared_folder": shared_folder,
-                            "count": len(dimension_mismatch_paths),
-                            "paths": dimension_mismatch_paths,
-                        }
                     )
                     self._file_analysis_thread = None
                     return
@@ -576,13 +674,18 @@ class ImgDataService:
                         extensions=self._nonZeroCounters(extension_counts),
                     )
                     if self._shouldStopFileAnalysis():
-                        self._writeFileAnalysisDimensionMismatchFindings(
+                        self._writeAllFileAnalysisCheckFindings(
                             job_id=job_id,
                             started_at=started_at,
                             shared_folder=shared_folder,
                             status="stopped",
                             finished=True,
-                            findings=dimension_mismatch_paths,
+                            findings_by_type={
+                                "dimension_issues": dimension_mismatch_paths,
+                                "duplicate_faces": duplicate_faces_paths,
+                                "position_deviations": position_deviation_paths,
+                                "name_conflicts": name_conflict_paths,
+                            },
                         )
                         self._persistFileAnalysisResult(
                             self._buildFileAnalysisPayload(
@@ -607,6 +710,10 @@ class ImgDataService:
                                 faces_named=0,
                                 faces_unnamed=0,
                                 persons_distinct_names=set(),
+                                files_with_duplicate_faces=files_with_duplicate_faces,
+                                files_with_face_position_deviations=files_with_face_position_deviations,
+                                files_with_dimension_issues=files_with_dimension_issues,
+                                files_with_name_conflicts=files_with_name_conflicts,
                                 focus_usages={},
                                 extensions=extension_counts,
                                 formats={},
@@ -644,6 +751,10 @@ class ImgDataService:
                     faces_named=0,
                     faces_unnamed=0,
                     persons_distinct_names=set(),
+                    files_with_duplicate_faces=files_with_duplicate_faces,
+                    files_with_face_position_deviations=files_with_face_position_deviations,
+                    files_with_dimension_issues=files_with_dimension_issues,
+                    files_with_name_conflicts=files_with_name_conflicts,
                     focus_usages={},
                     extensions=extension_counts,
                     formats={},
@@ -658,13 +769,18 @@ class ImgDataService:
 
             for image_path in matching_files:
                 if self._shouldStopFileAnalysis():
-                    self._writeFileAnalysisDimensionMismatchFindings(
+                    self._writeAllFileAnalysisCheckFindings(
                         job_id=job_id,
                         started_at=started_at,
                         shared_folder=shared_folder,
                         status="stopped",
                         finished=True,
-                        findings=dimension_mismatch_paths,
+                        findings_by_type={
+                            "dimension_issues": dimension_mismatch_paths,
+                            "duplicate_faces": duplicate_faces_paths,
+                            "position_deviations": position_deviation_paths,
+                            "name_conflicts": name_conflict_paths,
+                        },
                     )
                     self._persistFileAnalysisResult(
                         self._buildFileAnalysisPayload(
@@ -689,6 +805,10 @@ class ImgDataService:
                             faces_named=faces_named,
                             faces_unnamed=faces_unnamed,
                             persons_distinct_names=distinct_person_names,
+                            files_with_duplicate_faces=files_with_duplicate_faces,
+                            files_with_face_position_deviations=files_with_face_position_deviations,
+                            files_with_dimension_issues=files_with_dimension_issues,
+                            files_with_name_conflicts=files_with_name_conflicts,
                             focus_usages=focus_usage_counts,
                             extensions=extension_counts,
                             formats=format_counts,
@@ -699,15 +819,6 @@ class ImgDataService:
                             stopped=True,
                             stop_requested=False,
                         )
-                    )
-                    self.file_analysis.writeDimensionMismatchFindings(
-                        {
-                            "job_id": job_id,
-                            "status": "stopped",
-                            "shared_folder": shared_folder,
-                            "count": len(dimension_mismatch_paths),
-                            "paths": dimension_mismatch_paths,
-                        }
                     )
                     self._file_analysis_thread = None
                     return
@@ -723,15 +834,60 @@ class ImgDataService:
                 files_with_mwg_applied_to_dimensions += int(analysis.get("files_with_mwg_applied_to_dimensions") or 0)
                 files_with_mwg_dimension_mismatch += int(analysis.get("files_with_mwg_dimension_mismatch") or 0)
                 files_with_mwg_orientation_transform_risk += int(analysis.get("files_with_mwg_orientation_transform_risk") or 0)
+                if analysis_checks["DIMENSION_ISSUES"]:
+                    files_with_dimension_issues = files_with_mwg_dimension_mismatch
+                if analysis_checks["DUPLICATE_FACES"]:
+                    files_with_duplicate_faces = (files_with_duplicate_faces or 0) + int(analysis.get("files_with_duplicate_faces") or 0)
+                    if analysis.get("files_with_duplicate_faces"):
+                        duplicate_faces_paths.append(image_path)
+                if analysis_checks["POSITION_DEVIATIONS"]:
+                    files_with_face_position_deviations = (files_with_face_position_deviations or 0) + int(analysis.get("files_with_face_position_deviations") or 0)
+                    if analysis.get("files_with_face_position_deviations"):
+                        position_deviation_paths.append(image_path)
+                if analysis_checks["NAME_CONFLICTS"]:
+                    files_with_name_conflicts = (files_with_name_conflicts or 0) + int(analysis.get("files_with_name_conflicts") or 0)
+                    if analysis.get("files_with_name_conflicts"):
+                        name_conflict_paths.append(image_path)
                 if analysis.get("files_with_mwg_dimension_mismatch"):
                     dimension_mismatch_paths.append(image_path)
-                    self._writeFileAnalysisDimensionMismatchFindings(
+                    self._writeFileAnalysisCheckFindings(
+                        finding_type="dimension_issues",
                         job_id=job_id,
                         started_at=started_at,
                         shared_folder=shared_folder,
                         status="running",
                         finished=False,
                         findings=dimension_mismatch_paths,
+                    )
+                if analysis.get("files_with_duplicate_faces"):
+                    self._writeFileAnalysisCheckFindings(
+                        finding_type="duplicate_faces",
+                        job_id=job_id,
+                        started_at=started_at,
+                        shared_folder=shared_folder,
+                        status="running",
+                        finished=False,
+                        findings=duplicate_faces_paths,
+                    )
+                if analysis.get("files_with_face_position_deviations"):
+                    self._writeFileAnalysisCheckFindings(
+                        finding_type="position_deviations",
+                        job_id=job_id,
+                        started_at=started_at,
+                        shared_folder=shared_folder,
+                        status="running",
+                        finished=False,
+                        findings=position_deviation_paths,
+                    )
+                if analysis.get("files_with_name_conflicts"):
+                    self._writeFileAnalysisCheckFindings(
+                        finding_type="name_conflicts",
+                        job_id=job_id,
+                        started_at=started_at,
+                        shared_folder=shared_folder,
+                        status="running",
+                        finished=False,
+                        findings=name_conflict_paths,
                     )
 
                 faces_total += int(analysis.get("faces_total") or 0)
@@ -769,19 +925,28 @@ class ImgDataService:
                     faces_named=faces_named,
                     faces_unnamed=faces_unnamed,
                     persons_distinct_by_name=len(distinct_person_names),
+                    files_with_duplicate_faces=files_with_duplicate_faces,
+                    files_with_face_position_deviations=files_with_face_position_deviations,
+                    files_with_dimension_issues=files_with_dimension_issues,
+                    files_with_name_conflicts=files_with_name_conflicts,
                     focus_usages=self._nonZeroCounters(focus_usage_counts),
                     formats=self._nonZeroCounters(format_counts),
                     sources=self._nonZeroCounters(source_counts),
                 )
 
                 if files_analyzed % 25 == 0:
-                    self._writeFileAnalysisDimensionMismatchFindings(
+                    self._writeAllFileAnalysisCheckFindings(
                         job_id=job_id,
                         started_at=started_at,
                         shared_folder=shared_folder,
                         status="running",
                         finished=False,
-                        findings=dimension_mismatch_paths,
+                        findings_by_type={
+                            "dimension_issues": dimension_mismatch_paths,
+                            "duplicate_faces": duplicate_faces_paths,
+                            "position_deviations": position_deviation_paths,
+                            "name_conflicts": name_conflict_paths,
+                        },
                     )
                     self.file_analysis.writeLatestResult(
                         self._buildFileAnalysisPayload(
@@ -806,6 +971,10 @@ class ImgDataService:
                             faces_named=faces_named,
                             faces_unnamed=faces_unnamed,
                             persons_distinct_names=distinct_person_names,
+                            files_with_duplicate_faces=files_with_duplicate_faces,
+                            files_with_face_position_deviations=files_with_face_position_deviations,
+                            files_with_dimension_issues=files_with_dimension_issues,
+                            files_with_name_conflicts=files_with_name_conflicts,
                             focus_usages=focus_usage_counts,
                             extensions=extension_counts,
                             formats=format_counts,
@@ -818,13 +987,18 @@ class ImgDataService:
                         )
                     )
 
-            self._writeFileAnalysisDimensionMismatchFindings(
+            self._writeAllFileAnalysisCheckFindings(
                 job_id=job_id,
                 started_at=started_at,
                 shared_folder=shared_folder,
                 status="finished",
                 finished=True,
-                findings=dimension_mismatch_paths,
+                findings_by_type={
+                    "dimension_issues": dimension_mismatch_paths,
+                    "duplicate_faces": duplicate_faces_paths,
+                    "position_deviations": position_deviation_paths,
+                    "name_conflicts": name_conflict_paths,
+                },
             )
             self._persistFileAnalysisResult(
                 self._buildFileAnalysisPayload(
@@ -849,6 +1023,10 @@ class ImgDataService:
                     faces_named=faces_named,
                     faces_unnamed=faces_unnamed,
                     persons_distinct_names=distinct_person_names,
+                    files_with_duplicate_faces=files_with_duplicate_faces,
+                    files_with_face_position_deviations=files_with_face_position_deviations,
+                    files_with_dimension_issues=files_with_dimension_issues,
+                    files_with_name_conflicts=files_with_name_conflicts,
                     focus_usages=focus_usage_counts,
                     extensions=extension_counts,
                     formats=format_counts,
@@ -860,33 +1038,20 @@ class ImgDataService:
                     stop_requested=False,
                 )
             )
-            self.file_analysis.writeDimensionMismatchFindings(
-                {
-                    "job_id": job_id,
-                    "status": "finished",
-                    "shared_folder": shared_folder,
-                    "count": len(dimension_mismatch_paths),
-                    "paths": dimension_mismatch_paths,
-                }
-            )
         except Exception as exc:
-            self.file_analysis.writeDimensionMismatchFindings(
-                {
-                    "job_id": job_id,
-                    "status": "failed",
-                    "shared_folder": shared_folder,
-                    "count": len(dimension_mismatch_paths),
-                    "paths": dimension_mismatch_paths,
-                }
-            )
             failure_phase = "analysis" if files_matched_total else "discovery"
-            self._writeFileAnalysisDimensionMismatchFindings(
+            self._writeAllFileAnalysisCheckFindings(
                 job_id=job_id,
                 started_at=started_at,
                 shared_folder=shared_folder,
                 status="failed",
                 finished=True,
-                findings=dimension_mismatch_paths,
+                findings_by_type={
+                    "dimension_issues": dimension_mismatch_paths,
+                    "duplicate_faces": duplicate_faces_paths,
+                    "position_deviations": position_deviation_paths,
+                    "name_conflicts": name_conflict_paths,
+                },
             )
             self._persistFileAnalysisResult(
                 self._buildFileAnalysisPayload(
@@ -911,6 +1076,10 @@ class ImgDataService:
                     faces_named=faces_named,
                     faces_unnamed=faces_unnamed,
                     persons_distinct_names=distinct_person_names,
+                    files_with_duplicate_faces=files_with_duplicate_faces,
+                    files_with_face_position_deviations=files_with_face_position_deviations,
+                    files_with_dimension_issues=files_with_dimension_issues,
+                    files_with_name_conflicts=files_with_name_conflicts,
                     focus_usages=focus_usage_counts,
                     extensions=extension_counts,
                     formats=format_counts,

@@ -54,13 +54,29 @@
 									<div><strong>{{ $t('status:files_with_sidecar', 'With sidecar') }}:</strong> {{ Number(fileAnalysisProgress.files_with_sidecar) || 0 }}</div>
 									<div><strong>{{ $t('status:files_with_embedded_xmp', 'With embedded XMP') }}:</strong> {{ Number(fileAnalysisProgress.files_with_embedded_xmp) || 0 }}</div>
 									<div><strong>{{ $t('status:files_with_face_metadata', 'With face metadata') }}:</strong> {{ Number(fileAnalysisProgress.files_with_face_metadata) || 0 }}</div>
-									<div><strong>{{ $t('status:files_with_mwg_applied_to_dimensions', 'With MWG AppliedToDimensions') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_applied_to_dimensions) || 0 }}</div>
-									<div><strong>{{ $t('status:files_with_mwg_dimension_mismatch', 'With MWG dimension mismatch') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_dimension_mismatch) || 0 }}</div>
-									<div><strong>{{ $t('status:files_with_mwg_orientation_transform_risk', 'With MWG orientation transform risk') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_orientation_transform_risk) || 0 }}</div>
+									<div v-if="hasAnalysisCheckValue(fileAnalysisProgress.files_with_dimension_issues)"><strong>{{ $t('status:files_with_mwg_applied_to_dimensions', 'With MWG AppliedToDimensions') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_applied_to_dimensions) || 0 }}</div>
+									<div v-if="hasAnalysisCheckValue(fileAnalysisProgress.files_with_dimension_issues)"><strong>{{ $t('status:files_with_mwg_dimension_mismatch', 'With MWG dimension mismatch') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_dimension_mismatch) || 0 }}</div>
+									<div v-if="hasAnalysisCheckValue(fileAnalysisProgress.files_with_dimension_issues)"><strong>{{ $t('status:files_with_mwg_orientation_transform_risk', 'With MWG orientation transform risk') }}:</strong> {{ Number(fileAnalysisProgress.files_with_mwg_orientation_transform_risk) || 0 }}</div>
 									<div><strong>{{ $t('status:faces_total', 'Faces') }}:</strong> {{ Number(fileAnalysisProgress.faces_total) || 0 }}</div>
 									<div><strong>{{ $t('status:faces_named', 'Named') }}:</strong> {{ Number(fileAnalysisProgress.faces_named) || 0 }}</div>
 									<div><strong>{{ $t('status:faces_unnamed', 'Unnamed') }}:</strong> {{ Number(fileAnalysisProgress.faces_unnamed) || 0 }}</div>
 									<div><strong>{{ $t('status:persons_distinct', 'Distinct persons') }}:</strong> {{ Number(fileAnalysisProgress.persons_distinct_by_name) || 0 }}</div>
+									<div v-if="hasAnalysisCheckValue(fileAnalysisProgress.files_with_duplicate_faces)">
+										<strong>{{ $t('status:files_with_duplicate_faces', 'With duplicate face markings') }}:</strong>
+										{{ Number(fileAnalysisProgress.files_with_duplicate_faces) }}
+									</div>
+									<div v-if="hasAnalysisCheckValue(fileAnalysisProgress.files_with_face_position_deviations)">
+										<strong>{{ $t('status:files_with_face_position_deviations', 'With deviating face positions') }}:</strong>
+										{{ Number(fileAnalysisProgress.files_with_face_position_deviations) }}
+									</div>
+									<div v-if="hasAnalysisCheckValue(fileAnalysisProgress.files_with_dimension_issues)">
+										<strong>{{ $t('status:files_with_dimension_issues', 'With dimension issues') }}:</strong>
+										{{ Number(fileAnalysisProgress.files_with_dimension_issues) }}
+									</div>
+									<div v-if="hasAnalysisCheckValue(fileAnalysisProgress.files_with_name_conflicts)">
+										<strong>{{ $t('status:files_with_name_conflicts', 'With name conflicts') }}:</strong>
+										{{ Number(fileAnalysisProgress.files_with_name_conflicts) }}
+									</div>
 									<div><strong>{{ $t('status:focus_usages', 'Focus usage') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.focus_usages, 'raw') }}</div>
 									<div><strong>{{ $t('status:formats', 'Formats') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.formats, 'format') }}</div>
 									<div><strong>{{ $t('status:sources', 'Sources') }}:</strong> {{ formatAnalysisCountSummary(fileAnalysisProgress.sources, 'source') }}</div>
@@ -354,8 +370,14 @@
 												:style="maskStyle"
 											></div>
 											<div
+												v-for="(face, index) in currentChecksItem.other_applied_faces || []"
+												:key="`checks-applied-other-${index}`"
+												class="face-match-bbox checks-other-bbox"
+												:style="getChecksOtherBoxStyle(face)"
+											></div>
+											<div
 												v-if="getFaceMatchBoxStyle(currentChecksItem.applied_face)"
-												class="face-match-bbox"
+												class="face-match-bbox checks-primary-bbox"
 												:style="getFaceMatchBoxStyle(currentChecksItem.applied_face)"
 											></div>
 										</div>
@@ -775,6 +797,9 @@ export default {
 			}
 			return parsed.toLocaleString();
 		},
+		hasAnalysisCheckValue(value) {
+			return value !== null && value !== undefined && !Number.isNaN(Number(value));
+		},
 		getFileAnalysisStatusMessage(progress) {
 			const current = progress && typeof progress === 'object' ? progress : {};
 			const analyzed = Number(current.files_analyzed) || 0;
@@ -824,6 +849,9 @@ export default {
 		},
 		getFileAnalysisWarningMessage(progress) {
 			const current = progress && typeof progress === 'object' ? progress : {};
+			if (!this.hasAnalysisCheckValue(current.files_with_dimension_issues)) {
+				return '';
+			}
 			const mismatchCount = Number(current.files_with_mwg_dimension_mismatch) || 0;
 			const orientationRiskCount = Number(current.files_with_mwg_orientation_transform_risk) || 0;
 			if (mismatchCount > 0 && orientationRiskCount > 0) {
@@ -1012,6 +1040,17 @@ export default {
 				top: `${bbox.top * 100}%`,
 				width: `${bbox.width * 100}%`,
 				height: `${bbox.height * 100}%`,
+			};
+		},
+		getChecksOtherBoxStyle(face) {
+			const style = this.getFaceMatchBoxStyle(face);
+			if (!style) {
+				return null;
+			}
+			return {
+				...style,
+				borderColor: '#009e05',
+				boxShadow: 'none',
 			};
 		},
 		getFaceMatchMaskStyles(face) {
