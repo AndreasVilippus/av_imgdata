@@ -254,50 +254,442 @@ class ImgDataService:
         return dict(named[0] if named else mwg_faces[0])
 
     @staticmethod
+    def _normalizedReviewFace(face: Dict[str, Any]) -> Dict[str, Any]:
+        if str(face.get("source_format") or "") == "MWG_REGIONS":
+            return normalize_xmp_face(face)
+        return dict(face)
+
+    @staticmethod
     def _isSameFace(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
         if not isinstance(left, dict) or not isinstance(right, dict):
             return False
         keys = ("source_format", "source", "name", "x", "y", "w", "h", "orientation")
         return all(left.get(key) == right.get(key) for key in keys)
 
-    def _buildDimensionMismatchReviewItem(self, image_path: str) -> Optional[Dict[str, Any]]:
-        analysis = self.files.analyzeImageFaceMetadata(image_path)
+    @staticmethod
+    def _faceSignature(face: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(face, dict):
+            return {}
+        return {
+            "source_format": face.get("source_format"),
+            "source": face.get("source"),
+            "name": face.get("name"),
+            "x": face.get("x"),
+            "y": face.get("y"),
+            "w": face.get("w"),
+            "h": face.get("h"),
+            "orientation": face.get("orientation"),
+        }
+
+    def _findFaceBySignature(self, faces: List[Dict[str, Any]], signature: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(signature, dict):
+            return None
+        for face in faces:
+            if self._isSameFace(face, signature):
+                return dict(face)
+        return None
+
+    def _buildCheckEntry(
+        self,
+        *,
+        review_type: str,
+        image_path: str,
+        face_name: str = "",
+        left_face: Optional[Dict[str, Any]] = None,
+        right_face: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "review_type": review_type,
+            "image_path": image_path,
+            "image_name": Path(image_path).name,
+            "face_name": face_name,
+            "left_face_signature": self._faceSignature(left_face or {}),
+            "right_face_signature": self._faceSignature(right_face or {}),
+        }
+
+    def _buildDimensionMismatchReviewEntry(
+        self,
+        image_path: str,
+        analysis: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
         if analysis.get("files_with_mwg_dimension_mismatch") != 1:
             return None
 
         faces = analysis.get("faces") if isinstance(analysis.get("faces"), list) else []
-        review_face = self._pickReviewFace(faces)
-        if not review_face:
+        mwg_faces = [dict(face) for face in faces if isinstance(face, dict) and str(face.get("source_format") or "") == "MWG_REGIONS"]
+        if not mwg_faces:
             return None
 
+        review_face = dict(self._pickReviewFace(mwg_faces) or mwg_faces[0])
+        return self._buildCheckEntry(
+            review_type="dimension_issues",
+            image_path=image_path,
+            face_name=str(review_face.get("name") or ""),
+            left_face=review_face,
+        )
+
+    def _buildDimensionMismatchReviewItem(
+        self,
+        image_path: str,
+        analysis: Optional[Dict[str, Any]] = None,
+        entry: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        if analysis.get("files_with_mwg_dimension_mismatch") != 1:
+            return None
+
+        faces = analysis.get("faces") if isinstance(analysis.get("faces"), list) else []
+        mwg_faces = [dict(face) for face in faces if isinstance(face, dict) and str(face.get("source_format") or "") == "MWG_REGIONS"]
+        reference_faces = [dict(face) for face in faces if isinstance(face, dict) and str(face.get("source_format") or "") != "MWG_REGIONS"]
+        if not mwg_faces:
+            return None
+
+        review_face = self._findFaceBySignature(mwg_faces, (entry or {}).get("left_face_signature") or {})
+        review_face = dict(review_face or self._pickReviewFace(mwg_faces) or mwg_faces[0])
         applied_face = normalize_xmp_face(review_face)
-        raw_face = dict(review_face)
-        raw_face.pop("orientation", None)
-        other_applied_faces = []
-        skipped_selected = False
-        for face in faces:
-            if not isinstance(face, dict):
-                continue
-            if not skipped_selected and self._isSameFace(face, review_face):
-                skipped_selected = True
-                continue
-            if str(face.get("source_format") or "") == "MWG_REGIONS":
-                other_applied_faces.append(normalize_xmp_face(face))
-            else:
-                other_applied_faces.append(dict(face))
+        reference_face = self._findBestReferenceFace(review_face, reference_faces) or dict(review_face)
 
         return {
+            "review_type": "dimension_issues",
             "image_path": image_path,
             "image_name": Path(image_path).name,
-            "raw_face": raw_face,
-            "applied_face": applied_face,
-            "other_applied_faces": other_applied_faces,
+            "left_face": applied_face,
+            "right_face": self._normalizedReviewFace(reference_face),
+            "left_alert_faces": [
+                normalize_xmp_face(face) for face in mwg_faces
+                if not self._isSameFace(face, review_face)
+            ],
+            "left_reference_faces": [self._normalizedReviewFace(face) for face in reference_faces],
+            "right_alert_faces": [],
+            "right_reference_faces": [],
             "face_name": str(review_face.get("name") or ""),
+            "left_name": str(review_face.get("name") or ""),
+            "right_name": str(reference_face.get("name") or ""),
+            "left_format": str(review_face.get("source_format") or ""),
+            "right_format": str(reference_face.get("source_format") or ""),
             "image_dimensions": analysis.get("image_dimensions") if isinstance(analysis.get("image_dimensions"), dict) else {},
             "applied_to_dimensions": analysis.get("mwg_applied_to_dimensions") if isinstance(analysis.get("mwg_applied_to_dimensions"), dict) else {},
             "image_orientation": analysis.get("image_orientation"),
             "mwg_applied_to_dimensions_matches_current": analysis.get("mwg_applied_to_dimensions_matches_current"),
         }
+
+    def _findBestReferenceFace(self, review_face: Dict[str, Any], candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        review_name = str(review_face.get("name") or "").strip().casefold()
+        if review_name:
+            same_name = [face for face in candidates if str(face.get("name") or "").strip().casefold() == review_name]
+            if same_name:
+                return dict(same_name[0])
+        return dict(candidates[0]) if candidates else None
+
+    def _configuredReviewOptions(self) -> Dict[str, bool]:
+        config = self.config.readMergedConfig()
+        review_config = config.get("review") if isinstance(config.get("review"), dict) else {}
+        review_options = review_config.get("OPTIONS") if isinstance(review_config.get("OPTIONS"), dict) else {}
+        legacy_analysis = config.get("analysis") if isinstance(config.get("analysis"), dict) else {}
+        legacy_checks = legacy_analysis.get("CHECKS") if isinstance(legacy_analysis.get("CHECKS"), dict) else {}
+        default_options = ConfigService.defaultConfig()["review"]["OPTIONS"]
+        return {
+            "DUPLICATE_FACE_SUGGESTIONS": bool(
+                review_options.get(
+                    "DUPLICATE_FACE_SUGGESTIONS",
+                    legacy_checks.get("DUPLICATE_FACE_SUGGESTIONS", default_options["DUPLICATE_FACE_SUGGESTIONS"]),
+                )
+            ),
+        }
+
+    def _buildDuplicateFaceReviewEntries(
+        self,
+        image_path: str,
+        analysis: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        grouped: Dict[tuple, List[Dict[str, Any]]] = {}
+        for face in faces:
+            name = str(face.get("name") or "").strip()
+            source_format = str(face.get("source_format") or "").strip()
+            if not name or not source_format:
+                continue
+            grouped.setdefault((source_format, name.casefold()), []).append(face)
+
+        entries: List[Dict[str, Any]] = []
+        for (_, _), grouped_faces in grouped.items():
+            if len(grouped_faces) < 2:
+                continue
+            for index in range(len(grouped_faces) - 1):
+                left = grouped_faces[index]
+                right = grouped_faces[index + 1]
+                entries.append(
+                    self._buildCheckEntry(
+                        review_type="duplicate_faces",
+                        image_path=image_path,
+                        face_name=str(left.get("name") or ""),
+                        left_face=left,
+                        right_face=right,
+                    )
+                )
+        return entries
+
+    def _buildDuplicateFaceReviewItem(
+        self,
+        image_path: str,
+        analysis: Optional[Dict[str, Any]] = None,
+        entry: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        review_options = self._configuredReviewOptions()
+        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        left = self._findFaceBySignature(faces, (entry or {}).get("left_face_signature") or {})
+        right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
+        if not left or not right:
+            return None
+
+        left_state = "alert"
+        right_state = "alert"
+        if review_options.get("DUPLICATE_FACE_SUGGESTIONS", True):
+            left_matches = self._countDuplicateSuggestionMatches(left, faces)
+            right_matches = self._countDuplicateSuggestionMatches(right, faces)
+            if left_matches > right_matches:
+                left_state = "suggested"
+            elif right_matches > left_matches:
+                right_state = "suggested"
+
+        return {
+            "review_type": "duplicate_faces",
+            "image_path": image_path,
+            "image_name": Path(image_path).name,
+            "face_name": str(left.get("name") or ""),
+            "left_name": str(left.get("name") or ""),
+            "right_name": str(right.get("name") or ""),
+            "left_format": str(left.get("source_format") or ""),
+            "right_format": str(right.get("source_format") or ""),
+            "left_face": self._normalizedReviewFace(left),
+            "right_face": self._normalizedReviewFace(right),
+            "left_state": left_state,
+            "right_state": right_state,
+            "left_alert_faces": [],
+            "left_reference_faces": [],
+            "right_alert_faces": [],
+            "right_reference_faces": [],
+        }
+
+    def _countDuplicateSuggestionMatches(self, candidate: Dict[str, Any], faces: List[Dict[str, Any]]) -> int:
+        candidate_name = str(candidate.get("name") or "").strip().casefold()
+        candidate_format = str(candidate.get("source_format") or "").strip().upper()
+        if not candidate_name or not candidate_format:
+            return 0
+
+        normalized_candidate = self._normalizedReviewFace(candidate)
+        matches = 0
+        for face in faces:
+            if not isinstance(face, dict):
+                continue
+            face_name = str(face.get("name") or "").strip().casefold()
+            face_format = str(face.get("source_format") or "").strip().upper()
+            if face_name != candidate_name or face_format == candidate_format:
+                continue
+            normalized_face = self._normalizedReviewFace(face)
+            if self.files._boxesOverlapStrongly(normalized_candidate, normalized_face):
+                matches += 1
+        return matches
+
+    def _buildPositionDeviationReviewEntries(
+        self,
+        image_path: str,
+        analysis: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        entries: List[Dict[str, Any]] = []
+        for index, left in enumerate(faces):
+            left_name = str(left.get("name") or "").strip().casefold()
+            left_format = str(left.get("source_format") or "").strip().upper()
+            if not left_name or not left_format:
+                continue
+            normalized_left = self._normalizedReviewFace(left)
+            for right in faces[index + 1:]:
+                right_name = str(right.get("name") or "").strip().casefold()
+                right_format = str(right.get("source_format") or "").strip().upper()
+                if left_name != right_name or left_format == right_format:
+                    continue
+                normalized_right = self._normalizedReviewFace(right)
+                if self.files._boxesOverlapStrongly(normalized_left, normalized_right):
+                    continue
+                entries.append(
+                    self._buildCheckEntry(
+                        review_type="position_deviations",
+                        image_path=image_path,
+                        face_name=str(left.get("name") or ""),
+                        left_face=left,
+                        right_face=right,
+                    )
+                )
+        return entries
+
+    def _buildPositionDeviationReviewItem(
+        self,
+        image_path: str,
+        analysis: Optional[Dict[str, Any]] = None,
+        entry: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        left = self._findFaceBySignature(faces, (entry or {}).get("left_face_signature") or {})
+        right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
+        if not left or not right:
+            return None
+        return {
+            "review_type": "position_deviations",
+            "image_path": image_path,
+            "image_name": Path(image_path).name,
+            "face_name": str(left.get("name") or ""),
+            "left_name": str(left.get("name") or ""),
+            "right_name": str(right.get("name") or ""),
+            "left_format": str(left.get("source_format") or ""),
+            "right_format": str(right.get("source_format") or ""),
+            "left_face": self._normalizedReviewFace(left),
+            "right_face": self._normalizedReviewFace(right),
+            "left_alert_faces": [],
+            "left_reference_faces": [],
+            "right_alert_faces": [],
+            "right_reference_faces": [],
+        }
+
+    def _buildNameConflictReviewEntries(
+        self,
+        image_path: str,
+        analysis: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        entries: List[Dict[str, Any]] = []
+        for index, left in enumerate(faces):
+            left_name = str(left.get("name") or "").strip()
+            if not left_name:
+                continue
+            normalized_left = self._normalizedReviewFace(left)
+            for right in faces[index + 1:]:
+                right_name = str(right.get("name") or "").strip()
+                if not right_name or left_name.casefold() == right_name.casefold():
+                    continue
+                normalized_right = self._normalizedReviewFace(right)
+                if not self.files._boxesOverlapStrongly(normalized_left, normalized_right):
+                    continue
+                entries.append(
+                    self._buildCheckEntry(
+                        review_type="name_conflicts",
+                        image_path=image_path,
+                        face_name=left_name,
+                        left_face=left,
+                        right_face=right,
+                    )
+                )
+        return entries
+
+    def _buildNameConflictReviewItem(
+        self,
+        image_path: str,
+        analysis: Optional[Dict[str, Any]] = None,
+        entry: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        analysis = analysis or self.files.analyzeImageFaceMetadata(image_path)
+        faces = [dict(face) for face in (analysis.get("faces") if isinstance(analysis.get("faces"), list) else []) if isinstance(face, dict)]
+        left = self._findFaceBySignature(faces, (entry or {}).get("left_face_signature") or {})
+        right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
+        if not left or not right:
+            return None
+        return {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "image_name": Path(image_path).name,
+            "face_name": str(left.get("name") or ""),
+            "left_name": str(left.get("name") or ""),
+            "right_name": str(right.get("name") or ""),
+            "left_format": str(left.get("source_format") or ""),
+            "right_format": str(right.get("source_format") or ""),
+            "left_face": self._normalizedReviewFace(left),
+            "right_face": self._normalizedReviewFace(right),
+            "left_alert_faces": [],
+            "left_reference_faces": [],
+            "right_alert_faces": [],
+            "right_reference_faces": [],
+        }
+
+    def _getCheckFindingPaths(self, finding_type: str) -> List[str]:
+        findings_payload = self.file_analysis.readCheckFindings(finding_type)
+        paths = findings_payload.get("paths") if isinstance(findings_payload.get("paths"), list) else []
+        return [str(path) for path in paths if isinstance(path, str) and path]
+
+    def startChecksReview(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        source_mode: str,
+        check_type: str,
+    ) -> Dict[str, Any]:
+        source_mode_normalized = str(source_mode or "findings").strip().lower()
+        if source_mode_normalized not in {"findings", "scan"}:
+            source_mode_normalized = "findings"
+
+        check_type_normalized = str(check_type or "dimension_issues").strip().lower()
+        supported_types = {"dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts"}
+        if check_type_normalized not in supported_types:
+            check_type_normalized = "dimension_issues"
+
+        if source_mode_normalized == "findings":
+            candidate_paths = self._getCheckFindingPaths(check_type_normalized)
+        else:
+            shared_folder = self.core.getSharedFolder(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                folder_name="photo",
+            )
+            candidate_paths = self.files.listImageFiles(shared_folder) if shared_folder else []
+
+        entries: List[Dict[str, Any]] = []
+        seen_paths = []
+        for image_path in candidate_paths:
+            if image_path in seen_paths:
+                continue
+            seen_paths.append(image_path)
+            analysis = self.files.analyzeImageFaceMetadata(image_path)
+            if check_type_normalized == "dimension_issues":
+                entry = self._buildDimensionMismatchReviewEntry(image_path, analysis)
+                if entry:
+                    entries.append(entry)
+            elif check_type_normalized == "duplicate_faces":
+                entries.extend(self._buildDuplicateFaceReviewEntries(image_path, analysis))
+            elif check_type_normalized == "position_deviations":
+                entries.extend(self._buildPositionDeviationReviewEntries(image_path, analysis))
+            elif check_type_normalized == "name_conflicts":
+                entries.extend(self._buildNameConflictReviewEntries(image_path, analysis))
+
+        return {
+            "check_type": check_type_normalized,
+            "source_mode": source_mode_normalized,
+            "count": len(entries),
+            "entries": entries,
+        }
+
+    def getChecksReviewItem(self, *, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        image_path = str(entry.get("image_path") or "").strip()
+        review_type = str(entry.get("review_type") or "").strip().lower()
+        if not image_path or not review_type:
+            return None
+        analysis = self.files.analyzeImageFaceMetadata(image_path)
+        if review_type == "dimension_issues":
+            return self._buildDimensionMismatchReviewItem(image_path, analysis, entry)
+        if review_type == "duplicate_faces":
+            return self._buildDuplicateFaceReviewItem(image_path, analysis, entry)
+        if review_type == "position_deviations":
+            return self._buildPositionDeviationReviewItem(image_path, analysis, entry)
+        if review_type == "name_conflicts":
+            return self._buildNameConflictReviewItem(image_path, analysis, entry)
+        return None
 
     def startDimensionMismatchCheck(
         self,

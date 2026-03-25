@@ -445,13 +445,15 @@ async def checks_dimension_mismatch_start(request: Request):
 
     body = await _read_request_body(request)
     source_mode = body.get("source_mode", "findings")
+    check_type = body.get("check_type", "dimension_issues")
 
     try:
-        result = IMGDATA.startDimensionMismatchCheck(
+        result = IMGDATA.startChecksReview(
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
             source_mode=source_mode,
+            check_type=check_type,
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="checks_dimension_mismatch_start_bootstrap_required")
@@ -459,6 +461,41 @@ async def checks_dimension_mismatch_start(request: Request):
     return {
         "success": True,
         "data": result,
+    }
+
+
+@router.post("/checks_start")
+async def checks_start(request: Request):
+    return await checks_dimension_mismatch_start(request)
+
+
+@router.post("/checks_item")
+async def checks_item(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    entry = body.get("entry")
+    if not isinstance(entry, dict):
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_check_entry",
+            },
+        }
+
+    try:
+        item = IMGDATA.getChecksReviewItem(entry=entry)
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return _session_exception_response(exc, bootstrap_message="checks_item_bootstrap_required")
+
+    return {
+        "success": True,
+        "data": {
+            "item": item,
+        },
     }
 
 

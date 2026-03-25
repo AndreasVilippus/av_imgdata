@@ -37,6 +37,11 @@
       "POSITION_DEVIATIONS": true
     }
   },
+  "review": {
+    "OPTIONS": {
+      "DUPLICATE_FACE_SUGGESTIONS": true
+    }
+  },
   "photos": {
     "MAX_PHOTOS_PERSONS": 5000
   }

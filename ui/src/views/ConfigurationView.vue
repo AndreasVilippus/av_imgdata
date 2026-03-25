@@ -112,6 +112,18 @@
 					</label>
 				</div>
 			</section>
+
+			<section class="config-card">
+				<div class="config-card-title">{{ $t('config:section_review', 'Review') }}</div>
+				<div class="config-card-desc">{{ $t('config:section_review_desc', 'Select optional support behavior for the checks view.') }}</div>
+
+				<div class="config-form-grid">
+					<label class="config-checkbox">
+						<input v-model="configModel.review.OPTIONS.DUPLICATE_FACE_SUGGESTIONS" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_review_duplicate_face_suggestions', 'Suggest likely valid duplicate face markings') }}</span>
+					</label>
+				</div>
+			</section>
 		</div>
 	</section>
 </template>
@@ -158,6 +170,11 @@ export default {
 						NAME_CONFLICTS: true,
 					},
 				},
+				review: {
+					OPTIONS: {
+						DUPLICATE_FACE_SUGGESTIONS: true,
+					},
+				},
 				photos: {
 					MAX_PHOTOS_PERSONS: 5000,
 				},
@@ -195,6 +212,8 @@ export default {
 			const schemas = (metadata.SCHEMAS && typeof metadata.SCHEMAS === 'object' && !Array.isArray(metadata.SCHEMAS)) ? metadata.SCHEMAS : {};
 			const analysis = (root.analysis && typeof root.analysis === 'object' && !Array.isArray(root.analysis)) ? root.analysis : {};
 			const checks = (analysis.CHECKS && typeof analysis.CHECKS === 'object' && !Array.isArray(analysis.CHECKS)) ? analysis.CHECKS : {};
+			const review = (root.review && typeof root.review === 'object' && !Array.isArray(root.review)) ? root.review : {};
+			const reviewOptions = (review.OPTIONS && typeof review.OPTIONS === 'object' && !Array.isArray(review.OPTIONS)) ? review.OPTIONS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 
 			const imageExtensions = this.normalizeImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
@@ -224,6 +243,17 @@ export default {
 						POSITION_DEVIATIONS: Boolean(checks.POSITION_DEVIATIONS ?? defaults.analysis.CHECKS.POSITION_DEVIATIONS),
 						DIMENSION_ISSUES: Boolean(checks.DIMENSION_ISSUES ?? defaults.analysis.CHECKS.DIMENSION_ISSUES),
 						NAME_CONFLICTS: Boolean(checks.NAME_CONFLICTS ?? defaults.analysis.CHECKS.NAME_CONFLICTS),
+					},
+				},
+				review: {
+					...review,
+					OPTIONS: {
+						...reviewOptions,
+						DUPLICATE_FACE_SUGGESTIONS: Boolean(
+							reviewOptions.DUPLICATE_FACE_SUGGESTIONS
+							?? checks.DUPLICATE_FACE_SUGGESTIONS
+							?? defaults.review.OPTIONS.DUPLICATE_FACE_SUGGESTIONS
+						),
 					},
 				},
 				photos: {

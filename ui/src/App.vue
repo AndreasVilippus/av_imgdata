@@ -329,9 +329,15 @@
 								<p>{{ $t('checks:desc', 'Area for validation and review functions.') }}</p>
 							</div>
 							<div class="checks-actions">
+								<select v-model="selectedChecksType" class="face-match-select" :disabled="checksLoading">
+									<option value="dimension_issues">{{ $t('checks:type_dimension_issues', 'Dimension issues') }}</option>
+									<option value="duplicate_faces">{{ $t('checks:type_duplicate_faces', 'Duplicate face markings') }}</option>
+									<option value="position_deviations">{{ $t('checks:type_position_deviations', 'Deviating face positions') }}</option>
+									<option value="name_conflicts">{{ $t('checks:type_name_conflicts', 'Name conflicts') }}</option>
+								</select>
 								<select v-model="selectedChecksAction" class="face-match-select" :disabled="checksLoading">
-									<option value="findings">{{ $t('checks:action_findings', 'Use mismatch findings') }}</option>
-									<option value="scan">{{ $t('checks:action_scan', 'Run mismatch scan') }}</option>
+									<option value="findings">{{ $t('checks:action_findings', 'Use analysis findings') }}</option>
+									<option value="scan">{{ $t('checks:action_scan', 'Run check scan') }}</option>
 								</select>
 								<div class="face-match-action-buttons">
 									<v-button @click="startChecksReview" :disabled="checksLoading" style="width: 160px;">
@@ -348,14 +354,19 @@
 								</div>
 								<div class="face-match-status-message">{{ checksStatusMessage }}</div>
 								<div v-if="currentChecksItem" class="face-match-status-stats">
+									<div><strong>{{ $t('checks:label_type', 'Check:') }}</strong> {{ getChecksTypeLabel(selectedChecksType) }}</div>
 									<div><strong>{{ $t('checks:label_file', 'File:') }}</strong> {{ currentChecksItem.image_name }}</div>
 									<div><strong>{{ $t('checks:label_face_name', 'Face:') }}</strong> {{ currentChecksItem.face_name || $t('face_match:unknown_name', '(unnamed)') }}</div>
-									<div><strong>{{ $t('checks:label_index', 'Entry:') }}</strong> {{ checksCurrentIndex + 1 }} / {{ checksItems.length }}</div>
+									<div><strong>{{ $t('checks:label_pair', 'Pair:') }}</strong> {{ getChecksPairLabel(currentChecksItem) }}</div>
+									<div><strong>{{ $t('checks:label_index', 'Entry:') }}</strong> {{ checksCurrentIndex + 1 }} / {{ checksEntries.length }}</div>
 								</div>
 							</div>
-							<div v-if="currentChecksItem" class="face-match-split checks-split">
+								<div v-if="currentChecksItem" class="face-match-split checks-split">
 								<div class="face-match-col">
-									<h2>{{ $t('checks:preview_applied', 'With handling') }}</h2>
+									<h2>{{ getChecksLeftTitle(currentChecksItem) }}</h2>
+									<div v-if="showChecksFaceName(currentChecksItem)" class="checks-face-name">
+										{{ getChecksDisplayName(currentChecksItem.left_name) }}
+									</div>
 									<div v-if="getChecksImageUrl(currentChecksItem)" class="face-match-thumbnail-wrap">
 										<div class="face-match-preview">
 											<img
@@ -364,28 +375,37 @@
 												class="face-match-thumbnail"
 											/>
 											<div
-												v-for="(maskStyle, index) in getFaceMatchMaskStyles(currentChecksItem.applied_face)"
-												:key="`checks-applied-mask-${index}`"
+												v-for="(maskStyle, index) in getFaceMatchMaskStyles(currentChecksItem.left_face)"
+												:key="`checks-left-mask-${index}`"
 												class="face-match-mask"
 												:style="maskStyle"
 											></div>
 											<div
-												v-for="(face, index) in currentChecksItem.other_applied_faces || []"
-												:key="`checks-applied-other-${index}`"
-												class="face-match-bbox checks-other-bbox"
-												:style="getChecksOtherBoxStyle(face)"
+												v-for="(face, index) in currentChecksItem.left_reference_faces || []"
+												:key="`checks-left-reference-${index}`"
+												class="face-match-bbox"
+												:style="getChecksReferenceBoxStyle(face)"
 											></div>
 											<div
-												v-if="getFaceMatchBoxStyle(currentChecksItem.applied_face)"
-												class="face-match-bbox checks-primary-bbox"
-												:style="getFaceMatchBoxStyle(currentChecksItem.applied_face)"
+												v-for="(face, index) in currentChecksItem.left_alert_faces || []"
+												:key="`checks-left-alert-${index}`"
+												class="face-match-bbox"
+												:style="getChecksAlertBoxStyle(face, currentChecksItem.left_face)"
+											></div>
+											<div
+												v-if="getFaceMatchBoxStyle(currentChecksItem.left_face)"
+												class="face-match-bbox"
+												:style="getChecksAlertBoxStyle(currentChecksItem.left_face, currentChecksItem.left_face, currentChecksItem.left_state || 'alert')"
 											></div>
 										</div>
 									</div>
 									<div v-else class="face-match-empty">{{ $t('checks:empty_image', 'No preview available.') }}</div>
 								</div>
 								<div class="face-match-col">
-									<h2>{{ $t('checks:preview_ignored', 'Ignoring handling') }}</h2>
+									<h2>{{ getChecksRightTitle(currentChecksItem) }}</h2>
+									<div v-if="showChecksFaceName(currentChecksItem)" class="checks-face-name">
+										{{ getChecksDisplayName(currentChecksItem.right_name) }}
+									</div>
 									<div v-if="getChecksImageUrl(currentChecksItem)" class="face-match-thumbnail-wrap">
 										<div class="face-match-preview">
 											<img
@@ -394,15 +414,27 @@
 												class="face-match-thumbnail"
 											/>
 											<div
-												v-for="(maskStyle, index) in getFaceMatchMaskStyles(currentChecksItem.raw_face)"
-												:key="`checks-raw-mask-${index}`"
+												v-for="(maskStyle, index) in getFaceMatchMaskStyles(currentChecksItem.right_face)"
+												:key="`checks-right-mask-${index}`"
 												class="face-match-mask"
 												:style="maskStyle"
 											></div>
 											<div
-												v-if="getFaceMatchBoxStyle(currentChecksItem.raw_face)"
+												v-for="(face, index) in currentChecksItem.right_reference_faces || []"
+												:key="`checks-right-reference-${index}`"
 												class="face-match-bbox"
-												:style="getFaceMatchBoxStyle(currentChecksItem.raw_face)"
+												:style="getChecksReferenceBoxStyle(face)"
+											></div>
+											<div
+												v-for="(face, index) in currentChecksItem.right_alert_faces || []"
+												:key="`checks-right-alert-${index}`"
+												class="face-match-bbox"
+												:style="getChecksAlertBoxStyle(face, currentChecksItem.right_face)"
+											></div>
+											<div
+												v-if="getFaceMatchBoxStyle(currentChecksItem.right_face)"
+												class="face-match-bbox"
+												:style="getChecksAlertBoxStyle(currentChecksItem.right_face, currentChecksItem.right_face, currentChecksItem.right_state || 'alert')"
 											></div>
 										</div>
 									</div>
@@ -467,11 +499,13 @@ export default {
 			faceMatchSuggestTimer: null,
 			faceMatchSuggestRequestId: 0,
 			selectedFaceMatchingAction: 'search_photo_face_in_file',
+			selectedChecksType: 'dimension_issues',
 			selectedChecksAction: 'findings',
 			checksLoading: false,
-			checksItems: [],
+			checksEntries: [],
 			checksCurrentIndex: 0,
 			checksStatusMessage: '',
+			checksCurrentItem: null,
 			persons: {
 				total: 0,
 				known: 0,
@@ -616,11 +650,8 @@ export default {
 			const mapping = this.faceMatchResult && this.faceMatchResult.name_mapping;
 			return !!(mapping && mapping.source_name && mapping.target_name);
 		},
-		currentChecksItem() {
-			return this.checksItems[this.checksCurrentIndex] || null;
-		},
 		hasNextChecksItem() {
-			return this.checksCurrentIndex + 1 < this.checksItems.length;
+			return this.checksCurrentIndex + 1 < this.checksEntries.length;
 		},
 	},
 	mounted() {
@@ -927,30 +958,58 @@ export default {
 			this.checksLoading = true;
 			this.checksStatusMessage = this.$t('checks:status_loading', 'Loading checks...');
 			try {
-				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_dimension_mismatch_start', {
+				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_start', {
 					source_mode: this.selectedChecksAction,
+					check_type: this.selectedChecksType,
 				});
-				const items = data && data.data && Array.isArray(data.data.items) ? data.data.items : [];
-				this.checksItems = items;
+				const entries = data && data.data && Array.isArray(data.data.entries) ? data.data.entries : [];
+				this.checksEntries = entries;
 				this.checksCurrentIndex = 0;
-				this.checksStatusMessage = items.length
-					? this.$t('checks:status_loaded', '{count} entries loaded.', { count: items.length })
+				this.checksCurrentItem = null;
+				this.checksStatusMessage = entries.length
+					? this.$t('checks:status_loaded', '{count} entries loaded.', { count: entries.length })
 					: this.$t('checks:status_empty', 'No matching entries found.');
+				if (entries.length) {
+					await this.loadChecksItemAtIndex(0);
+				}
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${err.message}`;
 			} finally {
 				this.checksLoading = false;
 			}
 		},
-		nextChecksReview() {
+		async loadChecksItemAtIndex(index) {
+			const entry = this.checksEntries[index];
+			if (!entry) {
+				this.checksCurrentItem = null;
+				return;
+			}
+			const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_item', {
+				entry,
+			});
+			this.checksCurrentItem = (data && data.data && data.data.item && typeof data.data.item === 'object')
+				? data.data.item
+				: null;
+			this.checksCurrentIndex = index;
+			this.checksStatusMessage = this.checksCurrentItem
+				? this.$t('checks:status_entry', 'Entry {current} of {total}.', {
+					current: this.checksCurrentIndex + 1,
+					total: this.checksEntries.length,
+				})
+				: this.$t('checks:status_empty', 'No matching entries found.');
+		},
+		async nextChecksReview() {
 			if (!this.hasNextChecksItem) {
 				return;
 			}
-			this.checksCurrentIndex += 1;
-			this.checksStatusMessage = this.$t('checks:status_entry', 'Entry {current} of {total}.', {
-				current: this.checksCurrentIndex + 1,
-				total: this.checksItems.length,
-			});
+			this.checksLoading = true;
+			try {
+				await this.loadChecksItemAtIndex(this.checksCurrentIndex + 1);
+			} catch (err) {
+				this.checksStatusMessage = `Error: ${err.message}`;
+			} finally {
+				this.checksLoading = false;
+			}
 		},
 		extractPersonsFromPayload(payload) {
 			const root = payload && typeof payload === 'object' ? payload : {};
@@ -1042,7 +1101,7 @@ export default {
 				height: `${bbox.height * 100}%`,
 			};
 		},
-		getChecksOtherBoxStyle(face) {
+		getChecksReferenceBoxStyle(face) {
 			const style = this.getFaceMatchBoxStyle(face);
 			if (!style) {
 				return null;
@@ -1052,6 +1111,64 @@ export default {
 				borderColor: '#009e05',
 				boxShadow: 'none',
 			};
+		},
+		getChecksAlertBoxStyle(face, primaryFace, state = 'alert') {
+			const style = this.getFaceMatchBoxStyle(face);
+			if (!style) {
+				return null;
+			}
+			const primaryStyle = this.getFaceMatchBoxStyle(primaryFace);
+			const isPrimary = primaryStyle && JSON.stringify(primaryStyle) === JSON.stringify(style);
+			const isSuggested = state === 'suggested';
+			return {
+				...style,
+				borderColor: isSuggested ? '#009e05' : '#d82020',
+				boxShadow: !isSuggested && isPrimary ? '0 0 0 1px rgba(216, 32, 32, 0.2), 0 0 10px rgba(216, 32, 32, 0.45)' : 'none',
+			};
+		},
+		getChecksTypeLabel(type) {
+			const normalized = String(type || '').trim().toLowerCase();
+			if (normalized === 'dimension_issues') {
+				return this.$t('checks:type_dimension_issues', 'Dimension issues');
+			}
+			if (normalized === 'duplicate_faces') {
+				return this.$t('checks:type_duplicate_faces', 'Duplicate face markings');
+			}
+			if (normalized === 'position_deviations') {
+				return this.$t('checks:type_position_deviations', 'Deviating face positions');
+			}
+			if (normalized === 'name_conflicts') {
+				return this.$t('checks:type_name_conflicts', 'Name conflicts');
+			}
+			return String(type || '');
+		},
+		getChecksLeftTitle(item) {
+			if (item && item.review_type === 'dimension_issues') {
+				return this.$t('checks:preview_left_dimension', 'Affected metadata');
+			}
+			return this.$t('checks:preview_left_pair', 'Left face');
+		},
+		getChecksRightTitle(item) {
+			if (item && item.review_type === 'dimension_issues') {
+				return this.$t('checks:preview_right_dimension', 'Reference metadata');
+			}
+			return this.$t('checks:preview_right_pair', 'Right face');
+		},
+		getChecksPairLabel(item) {
+			if (!item) {
+				return '-';
+			}
+			const left = this.getChecksDisplayName(item.left_name);
+			const right = this.getChecksDisplayName(item.right_name);
+			const leftFormat = item.left_format ? this.getFaceMatchFormatLabel(item.left_format) : '';
+			const rightFormat = item.right_format ? this.getFaceMatchFormatLabel(item.right_format) : '';
+			return `${left}${leftFormat ? ` (${leftFormat})` : ''} / ${right}${rightFormat ? ` (${rightFormat})` : ''}`;
+		},
+		getChecksDisplayName(name) {
+			return name || this.$t('face_match:unknown_name', '(unnamed)');
+		},
+		showChecksFaceName(item) {
+			return !!(item && item.review_type === 'name_conflicts');
 		},
 		getFaceMatchMaskStyles(face) {
 			const bbox = this.getFaceMatchBBox(face);

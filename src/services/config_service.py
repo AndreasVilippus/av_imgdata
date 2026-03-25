@@ -41,6 +41,11 @@ class ConfigService:
                     "NAME_CONFLICTS": True,
                 },
             },
+            "review": {
+                "OPTIONS": {
+                    "DUPLICATE_FACE_SUGGESTIONS": True,
+                },
+            },
         }
 
     def readMergedConfig(self) -> Dict[str, Any]:

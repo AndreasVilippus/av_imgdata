@@ -319,6 +319,13 @@
 	margin-top: 16px;
 }
 
+.checks-face-name {
+	margin: 4px 0 10px;
+	font-size: var(--sm-font-sm);
+	font-weight: 700;
+	color: var(--sm-text);
+}
+
 .config-message {
 	margin-bottom: var(--sm-space-3);
 	font-size: var(--sm-font-sm);
