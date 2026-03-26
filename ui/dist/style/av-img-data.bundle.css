@@ -984,6 +984,10 @@
 	user-select: none;
 }
 
+.face-match-switch-label-disabled {
+	color: var(--sm-text-muted);
+}
+
 .face-match-select {
 	width: 100%;
 	min-width: 280px;

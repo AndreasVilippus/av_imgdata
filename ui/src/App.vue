@@ -97,22 +97,15 @@
 								<div v-else class="sm-system-grid">
 									<div class="sm-status-card">
 										<div class="sm-status-head">
-											<div class="sm-status-title">{{ $t('status:shared_folder', 'Photos shared folder') }}</div>
+											<div class="sm-status-title">{{ $t('status:settings_components', 'Settings and components') }}</div>
 										</div>
 										<div class="sm-kv-list sm-kv-list-compact">
 											<div class="sm-kv-row">
 												<div class="sm-kv-key">{{ $t('status:shared_folder', 'Photos shared folder') }}</div>
 												<div class="sm-kv-value">{{ system.sharedFolder || $t('status:not_available', 'Not available') }}</div>
 											</div>
-										</div>
-									</div>
-									<div class="sm-status-card">
-										<div class="sm-status-head">
-											<div class="sm-status-title">{{ $t('status:perl_title', 'Perl') }}</div>
-										</div>
-										<div class="sm-kv-list sm-kv-list-compact">
 											<div class="sm-kv-row">
-												<div class="sm-kv-key">{{ $t('status:perl_version', 'Version') }}</div>
+												<div class="sm-kv-key">{{ $t('status:perl_component_version', 'Perl version') }}</div>
 												<div class="sm-kv-value">{{ getPerlStatusValue() }}</div>
 											</div>
 										</div>
@@ -201,7 +194,10 @@
 										>
 											<input v-model="faceMatchSaveOnly" type="checkbox" :disabled="faceMatchLoading || selectedFaceMatchingAction !== 'search_photo_face_in_file'" />
 											<span class="face-match-switch-slider"></span>
-											<span class="face-match-switch-label">{{ $t('face_match:switch_save_only', 'Save matches only') }}</span>
+											<span
+												class="face-match-switch-label"
+												:class="{ 'face-match-switch-label-disabled': faceMatchLoading || selectedFaceMatchingAction !== 'search_photo_face_in_file' }"
+											>{{ $t('face_match:switch_save_only', 'Save matches only') }}</span>
 										</label>
 									</div>
 									<div class="face-match-status-column">
@@ -745,6 +741,13 @@ export default {
 		},
 		hasNextChecksItem() {
 			return this.checksCurrentIndex + 1 < this.checksEntries.length;
+		},
+	},
+	watch: {
+		selectedFaceMatchingAction(nextAction) {
+			if (nextAction !== 'search_photo_face_in_file') {
+				this.faceMatchSaveOnly = false;
+			}
 		},
 	},
 	mounted() {

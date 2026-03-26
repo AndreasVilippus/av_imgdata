@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import time
 from typing import Any, Dict, List, Optional
 from api.session_manager import SessionManager
 from services.config_service import ConfigService
@@ -398,4 +399,41 @@ class PhotosHandler:
             },
         )
         data = payload.get("data", {})
-        return data if isinstance(data, dict) else {}
+        result = data if isinstance(data, dict) else {}
+
+        created_person_id = result.get("id") or result.get("person_id")
+        confirmed_person = None
+        for attempt in range(3):
+            known_persons = self.listFotoTeamPersonKnown(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                additional=["thumbnail"],
+            )
+            if created_person_id is not None:
+                try:
+                    confirmed_person = self.findKnownPersonById(
+                        person_id=int(created_person_id),
+                        known_persons=known_persons,
+                    )
+                except Exception:
+                    confirmed_person = None
+            if confirmed_person is None:
+                confirmed_person = self.findKnownPersonByName(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    name=person_name,
+                    known_persons=known_persons,
+                )
+            if confirmed_person is not None:
+                break
+            if attempt < 2:
+                time.sleep(0.4)
+
+        if confirmed_person is not None:
+            result["person"] = confirmed_person
+            if result.get("id") is None and confirmed_person.get("id") is not None:
+                result["id"] = confirmed_person.get("id")
+
+        return result
