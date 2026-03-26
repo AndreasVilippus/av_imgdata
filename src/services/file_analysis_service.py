@@ -72,6 +72,16 @@ class FileAnalysisService:
             return False
         return True
 
+    def deleteCheckFindings(self, finding_type: str) -> bool:
+        candidate = self._finding_path(finding_type)
+        if not candidate.exists():
+            return True
+        try:
+            candidate.unlink()
+        except Exception:
+            return False
+        return True
+
     def _finding_path(self, finding_type: str) -> Path:
         normalized = str(finding_type or "").strip().lower()
         filename = self.FINDING_FILES.get(normalized)

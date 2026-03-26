@@ -468,6 +468,126 @@ class ImgDataService:
             normalized["metadata_face"] = metadata_face.to_dict()
         return normalized
 
+    def _resolveStoredFaceMatchEntry(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        entry: Dict[str, Any],
+        known_persons_cache: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        normalized = self._normalizeFaceMatchEntry(entry)
+        resolved = dict(normalized)
+
+        mapped_assignment = resolved.get("name_mapping")
+        mapped_target_name = ""
+        if isinstance(mapped_assignment, dict):
+            mapped_target_name = str(mapped_assignment.get("target_name") or "").strip()
+
+        metadata_face = resolved.get("metadata_face")
+        metadata_name = ""
+        if isinstance(metadata_face, dict):
+            metadata_name = str(metadata_face.get("name") or "").strip()
+
+        match = resolved.get("match")
+        match_name = ""
+        if isinstance(match, dict):
+            match_name = str(match.get("file_name") or "").strip()
+
+        lookup_name = mapped_target_name or metadata_name or match_name
+        if not lookup_name:
+            resolved["matched_person"] = None
+            resolved["matched_person_id"] = None
+            resolved["lookup_debug"] = {}
+            return resolved
+
+        matched_person = self.photos.findKnownPersonByName(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            name=lookup_name,
+            known_persons=known_persons_cache,
+        )
+        lookup_debug = self.photos.debugKnownPersonLookup(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            name=lookup_name,
+            known_persons=known_persons_cache,
+        )
+        resolved["matched_person"] = matched_person
+        resolved["matched_person_id"] = matched_person.get("id") if isinstance(matched_person, dict) else None
+        resolved["lookup_debug"] = lookup_debug
+        return resolved
+
+    def _persistFaceMatchFindingsEntries(
+        self,
+        *,
+        findings: Dict[str, Any],
+        entries: List[Dict[str, Any]],
+        transferred_count: int,
+    ) -> None:
+        if not entries:
+            self.file_analysis.deleteCheckFindings("face_match")
+            return
+
+        timestamp = self._timestamp_now()
+        self.file_analysis.writeCheckFindings(
+            "face_match",
+            {
+                "job_id": str(findings.get("job_id") or timestamp),
+                "started_at": str(findings.get("started_at") or timestamp),
+                "finished_at": str(findings.get("finished_at") or timestamp),
+                "last_updated_at": timestamp,
+                "status": str(findings.get("status") or "finished"),
+                "shared_folder": str(findings.get("shared_folder") or ""),
+                "action": str(findings.get("action") or "search_photo_face_in_file"),
+                "auto": bool(findings.get("auto")),
+                "save_only": bool(findings.get("save_only")),
+                "transferred_count": int(transferred_count),
+                "count": len(entries),
+                "entries": entries,
+            },
+        )
+
+    def _storedFaceMatchEntryExists(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        entry: Dict[str, Any],
+        image_faces_cache: Dict[int, List[Dict[str, Any]]],
+    ) -> bool:
+        if not isinstance(entry, dict):
+            return False
+        image = entry.get("image")
+        face = entry.get("face")
+        if not isinstance(image, dict) or not isinstance(face, dict):
+            return False
+        try:
+            image_id = int(image.get("id"))
+            face_id = int(face.get("face_id"))
+        except (TypeError, ValueError):
+            return False
+
+        if image_id not in image_faces_cache:
+            image_faces_cache[image_id] = self.photos.list_faceFotoTeamItems(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                id_item=image_id,
+            )
+
+        for image_face in image_faces_cache[image_id]:
+            try:
+                if int(image_face.get("face_id")) == face_id:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
     @staticmethod
     def _pickReviewFace(faces: List[MetadataFace]) -> Optional[MetadataFace]:
         if not isinstance(faces, list):
@@ -2231,6 +2351,7 @@ class ImgDataService:
                         metadata_face_index = indexed_file_faces[file_face_index][0]
                         matched_person = None
                         mapped_assignment = None
+                        lookup_debug: Dict[str, Any] = {}
                         matched_name = str(matched.get("file_name") or "").strip()
                         if matched_name:
                             if known_persons_cache is None:
@@ -2259,6 +2380,13 @@ class ImgDataService:
                                     name=matched_name,
                                     known_persons=known_persons_cache,
                                 )
+                            lookup_debug = self.photos.debugKnownPersonLookup(
+                                user_key=user_key,
+                                cookies=cookies,
+                                base_url=base_url,
+                                name=mapped_target_name if mapped_assignment and str(mapped_assignment.get("target_name") or "").strip() else matched_name,
+                                known_persons=known_persons_cache,
+                            )
                         final_message_key = "face_match:result_named_match"
                         final_message_params = {}
                         if matched_person:
@@ -2305,6 +2433,7 @@ class ImgDataService:
                             "matched_person": matched_person,
                             "matched_person_id": matched_person.get("id") if isinstance(matched_person, dict) else None,
                             "name_mapping": mapped_assignment,
+                            "lookup_debug": lookup_debug,
                             "transferred_count": transferred_count,
                             "auto": auto,
                             "resume_cursor": self._buildFaceMatchResumeCursor(
@@ -2381,17 +2510,154 @@ class ImgDataService:
             files = self.files.list_files(base_path=base_path, pattern=pattern)
         return {"count": len(files), "files": files}
 
-    def getFaceMatchFindingEntries(self) -> Dict[str, Any]:
+    def getFaceMatchFindingEntries(
+        self,
+        *,
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: Optional[str] = None,
+        auto: bool = False,
+    ) -> Dict[str, Any]:
         findings = self.getFaceMatchFindings()
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        resolved_entries = entries
+        transferred_count = int(findings.get("transferred_count") or 0)
+        if user_key and isinstance(cookies, dict) and base_url:
+            known_persons_cache = self.photos.listFotoTeamPersonKnown(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                additional=["thumbnail"],
+            )
+            image_faces_cache: Dict[int, List[Dict[str, Any]]] = {}
+            next_entries = []
+            findings_changed = False
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    findings_changed = True
+                    continue
+                if not self._storedFaceMatchEntryExists(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    entry=entry,
+                    image_faces_cache=image_faces_cache,
+                ):
+                    findings_changed = True
+                    continue
+                resolved_entry = self._resolveStoredFaceMatchEntry(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    entry=entry,
+                    known_persons_cache=known_persons_cache,
+                )
+                if auto:
+                    matched_person = resolved_entry.get("matched_person")
+                    matched_person_id = matched_person.get("id") if isinstance(matched_person, dict) else None
+                    matched_person_name = matched_person.get("name") if isinstance(matched_person, dict) else None
+                    face = resolved_entry.get("face")
+                    face_id = face.get("face_id") if isinstance(face, dict) else None
+                    if matched_person_id is not None and matched_person_name and face_id is not None:
+                        self.assignMatchedFaceToKnownPerson(
+                            user_key=user_key,
+                            cookies=cookies,
+                            base_url=base_url,
+                            face_id=int(face_id),
+                            person_id=int(matched_person_id),
+                            person_name=str(matched_person_name),
+                        )
+                        transferred_count += 1
+                        findings_changed = True
+                        continue
+                next_entries.append(resolved_entry)
+            resolved_entries = next_entries
+            if findings_changed:
+                self._persistFaceMatchFindingsEntries(
+                    findings=findings,
+                    entries=resolved_entries,
+                    transferred_count=transferred_count,
+                )
         return {
             "status": str(findings.get("status") or ""),
             "shared_folder": str(findings.get("shared_folder") or ""),
-            "count": len(entries),
-            "entries": entries,
-            "transferred_count": int(findings.get("transferred_count") or 0),
+            "count": len(resolved_entries),
+            "entries": resolved_entries,
+            "transferred_count": transferred_count,
             "save_only": bool(findings.get("save_only")),
+            "auto": bool(auto or findings.get("auto")),
+        }
+
+    def removeFaceMatchFindingEntry(
+        self,
+        *,
+        face_id: int,
+        increment_transferred_count: bool = True,
+    ) -> Dict[str, Any]:
+        findings = self.getFaceMatchFindings()
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        remaining_entries = []
+        removed_count = 0
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            face = entry.get("face")
+            entry_face_id = None
+            if isinstance(face, dict):
+                try:
+                    entry_face_id = int(face.get("face_id"))
+                except (TypeError, ValueError):
+                    entry_face_id = None
+            if entry_face_id == int(face_id):
+                removed_count += 1
+                continue
+            remaining_entries.append(entry)
+
+        if removed_count == 0:
+            return {
+                "removed": False,
+                "removed_count": 0,
+                "remaining_count": len(entries),
+                "deleted": False,
+            }
+
+        transferred_count = int(findings.get("transferred_count") or 0)
+        if increment_transferred_count:
+            transferred_count += removed_count
+
+        if not remaining_entries:
+            deleted = self.file_analysis.deleteCheckFindings("face_match")
+            return {
+                "removed": deleted,
+                "removed_count": removed_count,
+                "remaining_count": 0,
+                "deleted": bool(deleted),
+                "transferred_count": transferred_count,
+            }
+
+        timestamp = self._timestamp_now()
+        updated_payload = {
+            "job_id": str(findings.get("job_id") or timestamp),
+            "started_at": str(findings.get("started_at") or timestamp),
+            "finished_at": str(findings.get("finished_at") or timestamp),
+            "last_updated_at": timestamp,
+            "status": str(findings.get("status") or "finished"),
+            "shared_folder": str(findings.get("shared_folder") or ""),
+            "action": str(findings.get("action") or "search_photo_face_in_file"),
             "auto": bool(findings.get("auto")),
+            "save_only": bool(findings.get("save_only")),
+            "transferred_count": transferred_count,
+            "count": len(remaining_entries),
+            "entries": remaining_entries,
+        }
+        written = self.file_analysis.writeCheckFindings("face_match", updated_payload)
+        return {
+            "removed": bool(written),
+            "removed_count": removed_count,
+            "remaining_count": len(remaining_entries),
+            "deleted": False,
+            "transferred_count": transferred_count,
         }
 
     def read_file_text(self, *, path: str, max_bytes: int = 1024 * 1024) -> Dict[str, object]:

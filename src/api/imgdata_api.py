@@ -269,7 +269,12 @@ async def face_matching_action(request: Request):
             loop = asyncio.get_running_loop()
             face_matches = await loop.run_in_executor(
                 None,
-                IMGDATA.getFaceMatchFindingEntries,
+                lambda: IMGDATA.getFaceMatchFindingEntries(
+                    user_key=session_ctx["user_key"],
+                    cookies=session_ctx["cookies"],
+                    base_url=session_ctx["base_url"],
+                    auto=auto,
+                ),
             )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="face_matching_action_bootstrap_required")
@@ -371,6 +376,10 @@ async def face_assign_match(request: Request):
             person_id=person_id,
             person_name=person_name.strip(),
         )
+        findings_update = IMGDATA.removeFaceMatchFindingEntry(
+            face_id=face_id,
+            increment_transferred_count=True,
+        )
         mapping_saved = False
         if save_mapping and isinstance(source_name, str) and source_name.strip():
             mapping_saved = IMGDATA.saveNameMapping(
@@ -386,6 +395,7 @@ async def face_assign_match(request: Request):
             "face_id": face_id,
             "person_id": person_id,
             "result": result,
+            "findings_update": findings_update,
             "mapping_saved": mapping_saved if save_mapping else False,
         },
     }
@@ -429,7 +439,10 @@ async def face_create_match(request: Request):
             face_id=face_id,
             person_name=person_name.strip(),
         )
-        created_person_id = result.get("id") if isinstance(result, dict) else None
+        findings_update = IMGDATA.removeFaceMatchFindingEntry(
+            face_id=face_id,
+            increment_transferred_count=True,
+        )
         mapping_saved = False
         if save_mapping and isinstance(source_name, str) and source_name.strip():
             mapping_saved = IMGDATA.saveNameMapping(
@@ -445,6 +458,7 @@ async def face_create_match(request: Request):
             "face_id": face_id,
             "person_name": person_name.strip(),
             "result": result,
+            "findings_update": findings_update,
             "mapping_saved": mapping_saved if save_mapping else False,
         },
     }

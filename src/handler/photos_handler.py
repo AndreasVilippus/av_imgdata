@@ -32,8 +32,21 @@ class PhotosHandler:
 
     @staticmethod
     def _normalize_person_name(name: Any) -> str:
-        normalized = unicodedata.normalize("NFC", str(name or ""))
+        raw_value = unicodedata.normalize("NFKC", str(name or ""))
+        cleaned_chars = []
+        for char in raw_value:
+            category = unicodedata.category(char)
+            if category.startswith("C"):
+                if char.isspace():
+                    cleaned_chars.append(" ")
+                continue
+            cleaned_chars.append(char)
+        normalized = "".join(cleaned_chars)
         return " ".join(normalized.strip().casefold().split())
+
+    @staticmethod
+    def _string_codepoints(value: Any) -> List[str]:
+        return [f"U+{ord(char):04X}" for char in str(value or "")]
 
     def person_status(
         self,
@@ -160,7 +173,73 @@ class PhotosHandler:
         for person in persons:
             if self._normalize_person_name(person.get("name")) == normalized_name:
                 return person
+
+        suggestions = self.suggestFotoTeamPerson(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            name_prefix=name,
+            additional=["thumbnail"],
+            limit=20,
+        )
+        for person in suggestions:
+            if self._normalize_person_name(person.get("name")) == normalized_name:
+                return person
         return None
+
+    def debugKnownPersonLookup(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        name: str,
+        known_persons: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        normalized_name = self._normalize_person_name(name)
+        persons = known_persons
+        if persons is None:
+            persons = self.listFotoTeamPersonKnown(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                additional=["thumbnail"],
+            )
+
+        list_matches = []
+        for person in persons:
+            person_name = person.get("name")
+            if self._normalize_person_name(person_name) == normalized_name:
+                list_matches.append({
+                    "id": person.get("id"),
+                    "name": person_name,
+                })
+
+        suggestions = self.suggestFotoTeamPerson(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            name_prefix=name,
+            additional=["thumbnail"],
+            limit=20,
+        )
+        suggest_matches = []
+        for person in suggestions:
+            person_name = person.get("name")
+            if self._normalize_person_name(person_name) == normalized_name:
+                suggest_matches.append({
+                    "id": person.get("id"),
+                    "name": person_name,
+                })
+
+        return {
+            "raw_name": str(name or ""),
+            "normalized_name": normalized_name,
+            "raw_name_codepoints": self._string_codepoints(name),
+            "known_persons_count": len(persons),
+            "list_exact_matches": list_matches,
+            "suggest_exact_matches": suggest_matches,
+        }
 
     def findKnownPersonById(
         self,

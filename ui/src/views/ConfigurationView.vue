@@ -80,37 +80,41 @@
 						<span>{{ $t('config:label_use_exiftool', 'Use ExifTool for embedded XMP') }}</span>
 					</label>
 
-					<label
-						class="config-checkbox"
-						:title="$t('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.')"
-					>
-						<input
-							v-model="configModel.files.USE_EXIFTOOL_FOR_SIDECARS"
-							type="checkbox"
-							:disabled="saving || !configModel.files.USE_EXIFTOOL"
-						/>
-						<span>{{ $t('config:label_use_exiftool_for_sidecars', 'Use ExifTool for XMP sidecars') }}</span>
-					</label>
+					<template v-if="configModel.files.USE_EXIFTOOL">
+						<label
+							class="config-checkbox"
+							:title="$t('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.')"
+						>
+							<input
+								v-model="configModel.files.USE_EXIFTOOL_FOR_SIDECARS"
+								type="checkbox"
+								:disabled="saving"
+							/>
+							<span>{{ $t('config:label_use_exiftool_for_sidecars', 'Use ExifTool for XMP sidecars') }}</span>
+						</label>
 
-					<label
-						class="config-checkbox"
-						:title="$t('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.')"
-					>
-						<input
-							v-model="configModel.files.PREFER_EXIFTOOL_FOR_CONTEXT"
-							type="checkbox"
-							:disabled="saving || !configModel.files.USE_EXIFTOOL"
-						/>
-						<span>{{ $t('config:label_prefer_exiftool_for_context', 'Prefer ExifTool for metadata context') }}</span>
-					</label>
+						<label
+							class="config-checkbox"
+							:title="$t('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.')"
+						>
+							<input
+								v-model="configModel.files.PREFER_EXIFTOOL_FOR_CONTEXT"
+								type="checkbox"
+								:disabled="saving"
+							/>
+							<span>{{ $t('config:label_prefer_exiftool_for_context', 'Prefer ExifTool for metadata context') }}</span>
+						</label>
+					</template>
 				</div>
 
-				<div class="config-card-desc">
-					{{ $t('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.') }}
-				</div>
-				<div class="config-card-desc">
-					{{ $t('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.') }}
-				</div>
+				<template v-if="configModel.files.USE_EXIFTOOL">
+					<div class="config-card-desc">
+						{{ $t('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.') }}
+					</div>
+					<div class="config-card-desc">
+						{{ $t('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.') }}
+					</div>
+				</template>
 
 				<div v-if="exiftoolStatus.online && exiftoolStatus.online.unix_download_url" class="config-card-desc">
 					{{ $t('config:exiftool_download_source', 'Latest ExifTool package will be downloaded from: {url}', { url: exiftoolStatus.online.unix_download_url }) }}
