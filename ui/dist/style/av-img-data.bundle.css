@@ -476,12 +476,12 @@
 .checks-replace-actions {
 	position: absolute;
 	left: 50%;
-	top: 64px;
+	top: 90px;
 	transform: translateX(-50%);
 	z-index: 5;
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: 16px;
 	align-items: center;
 }
 
@@ -918,7 +918,7 @@
 	background: #fff;
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: 16px;
 	text-align: left;
 	cursor: pointer;
 }

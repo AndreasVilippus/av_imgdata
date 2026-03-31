@@ -2,7 +2,6 @@
 	<section class="panel">
 		<div class="panel-head">
 			<h1>{{ $t('config:title', 'Configuration') }}</h1>
-			<p>{{ $t('config:desc', 'Central area for runtime and package configuration.') }}</p>
 		</div>
 
 		<div class="config-actions">
@@ -106,15 +105,6 @@
 						</label>
 					</template>
 				</div>
-
-				<template v-if="configModel.files.USE_EXIFTOOL">
-					<div class="config-card-desc">
-						{{ $t('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.') }}
-					</div>
-					<div class="config-card-desc">
-						{{ $t('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.') }}
-					</div>
-				</template>
 
 				<div v-if="exiftoolStatus.online && exiftoolStatus.online.unix_download_url" class="config-card-desc">
 					{{ $t('config:exiftool_download_source', 'Latest ExifTool package will be downloaded from: {url}', { url: exiftoolStatus.online.unix_download_url }) }}
@@ -361,7 +351,7 @@ export default {
 				this.configPath = (data && data.data && data.data.config_path) || '';
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
-				this.message = this.$t('config:message_loaded', 'Configuration loaded.');
+				this.message = '';
 			} catch (err) {
 				this.message = `Error: ${err.message}`;
 			} finally {

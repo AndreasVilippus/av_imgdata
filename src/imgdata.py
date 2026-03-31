@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from time import monotonic
 from threading import Lock, Thread
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
 from handler.core_handler import CoreHandler
@@ -693,6 +693,172 @@ class ImgDataService:
             "entries": entries,
         }
 
+    def refreshChecksFindingEntries(self, *, check_type: str) -> Dict[str, Any]:
+        normalized_type = self._normalizeChecksType(check_type)
+        findings = self.file_analysis.readCheckFindings(normalized_type)
+        if not isinstance(findings, dict) or (
+            not isinstance(findings.get("entries"), list)
+            and not isinstance(findings.get("paths"), list)
+        ):
+            return self.getChecksFindingEntries(check_type=normalized_type)
+
+        shared_folder = str(findings.get("shared_folder") or "")
+        status = str(findings.get("status") or "finished")
+        source_mode = str(findings.get("source_mode") or "findings")
+        save_only = bool(findings.get("save_only"))
+        candidate_paths = self._getCheckFindingPaths(normalized_type)
+
+        refreshed_entries: List[Dict[str, Any]] = []
+        seen_paths = set()
+        for image_path in candidate_paths:
+            normalized_path = str(image_path or "").strip()
+            if not normalized_path or normalized_path in seen_paths:
+                continue
+            seen_paths.add(normalized_path)
+            refreshed_entries.extend(
+                self._buildCheckEntriesForType(
+                    image_path=normalized_path,
+                    review_type=normalized_type,
+                )
+            )
+
+        self._writeChecksFindings(
+            check_type=normalized_type,
+            status=status,
+            shared_folder=shared_folder,
+            source_mode=source_mode,
+            save_only=save_only,
+            entries=refreshed_entries,
+        )
+        return self.getChecksFindingEntries(check_type=normalized_type)
+
+    def refreshChecksFindingEntriesForImage(self, *, check_type: str, image_path: str) -> Dict[str, Any]:
+        normalized_type = self._normalizeChecksType(check_type)
+        normalized_path = str(image_path or "").strip()
+        if not normalized_path:
+            return self.getChecksFindingEntries(check_type=normalized_type)
+
+        findings = self.file_analysis.readCheckFindings(normalized_type)
+        existing_entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        if not existing_entries:
+            return self.getChecksFindingEntries(check_type=normalized_type)
+
+        rebuilt_entries = self._buildCheckEntriesForType(
+            image_path=normalized_path,
+            review_type=normalized_type,
+        )
+
+        updated_entries: List[Dict[str, Any]] = []
+        replaced = False
+        for entry in existing_entries:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("image_path") or "").strip() == normalized_path:
+                if not replaced:
+                    updated_entries.extend(rebuilt_entries)
+                    replaced = True
+                continue
+            updated_entries.append(entry)
+
+        if not replaced:
+            return self.getChecksFindingEntries(check_type=normalized_type)
+
+        self._writeChecksFindings(
+            check_type=normalized_type,
+            status=str(findings.get("status") or "finished"),
+            shared_folder=str(findings.get("shared_folder") or ""),
+            source_mode=str(findings.get("source_mode") or "findings"),
+            save_only=bool(findings.get("save_only")),
+            entries=updated_entries,
+        )
+        return self.getChecksFindingEntries(check_type=normalized_type)
+
+    def _getSuggestedNameConflictRename(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(item, dict) or str(item.get("review_type") or "").strip().lower() != "name_conflicts":
+            return None
+
+        left_state = str(item.get("left_state") or "").strip().lower()
+        right_state = str(item.get("right_state") or "").strip().lower()
+        left_face = item.get("left_face")
+        right_face = item.get("right_face")
+        left_name = str(item.get("left_name") or "").strip()
+        right_name = str(item.get("right_name") or "").strip()
+
+        if right_state == "suggested" and isinstance(left_face, dict) and right_name:
+            return {
+                "face": left_face,
+                "new_name": right_name,
+                "source_name": str(left_face.get("name") or "").strip(),
+            }
+        if left_state == "suggested" and isinstance(right_face, dict) and left_name:
+            return {
+                "face": right_face,
+                "new_name": left_name,
+                "source_name": str(right_face.get("name") or "").strip(),
+            }
+        return None
+
+    def _resolveChecksReviewEntry(
+        self,
+        *,
+        entry: Dict[str, Any],
+        auto_apply_suggested_names: bool = False,
+    ) -> Dict[str, Any]:
+        normalized_entry = dict(entry or {})
+        auto_applied_count = 0
+
+        while True:
+            item = self.getChecksReviewItem(entry=normalized_entry)
+            if not item:
+                return {
+                    "entry": None,
+                    "item": None,
+                    "auto_applied_count": auto_applied_count,
+                }
+
+            action = (
+                self._getSuggestedNameConflictRename(item)
+                if auto_apply_suggested_names
+                else None
+            )
+            if not action:
+                return {
+                    "entry": normalized_entry,
+                    "item": item,
+                    "auto_applied_count": auto_applied_count,
+                }
+
+            result = self.replaceMetadataFaceName(
+                image_path=str(item.get("image_path") or ""),
+                face_data=action["face"],
+                new_name=str(action["new_name"] or ""),
+            )
+            if not result.get("updated"):
+                return {
+                    "entry": normalized_entry,
+                    "item": item,
+                    "auto_applied_count": auto_applied_count,
+                    "auto_apply_warning": str(result.get("warning") or ""),
+                }
+
+            auto_applied_count += 1
+            next_entry = next(
+                iter(
+                    self._buildCheckEntriesForType(
+                        image_path=str(item.get("image_path") or ""),
+                        review_type=str(item.get("review_type") or ""),
+                    )
+                ),
+                None,
+            )
+            if not next_entry:
+                return {
+                    "entry": None,
+                    "item": None,
+                    "auto_applied_count": auto_applied_count,
+                }
+            normalized_entry = next_entry
+
     def _runFaceMatching(
         self,
         *,
@@ -1325,6 +1491,26 @@ class ImgDataService:
                 matches += 1
         return matches
 
+    def _getNameConflictSuggestionStates(self, left_name: str, right_name: str) -> Tuple[str, str]:
+        left_state = "alert"
+        right_state = "alert"
+
+        normalized_left = self.name_mappings._normalize_name_value(left_name)
+        normalized_right = self.name_mappings._normalize_name_value(right_name)
+        if not normalized_left or not normalized_right:
+            return left_state, right_state
+
+        left_mapping = self.name_mappings.findNameMapping(left_name)
+        if left_mapping and self.name_mappings._normalize_name_value(left_mapping.get("target_name")) == normalized_right:
+            right_state = "suggested"
+            return left_state, right_state
+
+        right_mapping = self.name_mappings.findNameMapping(right_name)
+        if right_mapping and self.name_mappings._normalize_name_value(right_mapping.get("target_name")) == normalized_left:
+            left_state = "suggested"
+
+        return left_state, right_state
+
     def _buildPositionDeviationReviewEntries(
         self,
         image_path: str,
@@ -1430,17 +1616,22 @@ class ImgDataService:
         right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
         if not left or not right:
             return None
+        left_name = str(left.name or "")
+        right_name = str(right.name or "")
+        left_state, right_state = self._getNameConflictSuggestionStates(left_name, right_name)
         return {
             "review_type": "name_conflicts",
             "image_path": image_path,
             "image_name": Path(image_path).name,
-            "face_name": str(left.name or ""),
-            "left_name": str(left.name or ""),
-            "right_name": str(right.name or ""),
+            "face_name": left_name,
+            "left_name": left_name,
+            "right_name": right_name,
             "left_format": str(left.source_format or ""),
             "right_format": str(right.source_format or ""),
             "left_face": self._normalizedReviewFace(left),
             "right_face": self._normalizedReviewFace(right),
+            "left_state": left_state,
+            "right_state": right_state,
             "left_alert_faces": [],
             "left_reference_faces": [],
             "right_alert_faces": [],
@@ -1477,6 +1668,7 @@ class ImgDataService:
         check_type: str,
         save_only: bool = False,
         resume_from_progress: bool = False,
+        auto_apply_suggested_names: bool = False,
     ) -> Dict[str, Any]:
         source_mode_normalized = str(source_mode or "findings").strip().lower()
         if source_mode_normalized not in {"findings", "scan"}:
@@ -1495,6 +1687,7 @@ class ImgDataService:
                 check_type=check_type_normalized,
                 save_only=save_only,
                 resume_from_progress=resume_from_progress,
+                auto_apply_suggested_names=auto_apply_suggested_names,
             )
 
         if source_mode_normalized == "findings":
@@ -1549,6 +1742,7 @@ class ImgDataService:
         check_type: str,
         save_only: bool = False,
         resume_from_progress: bool = False,
+        auto_apply_suggested_names: bool = False,
     ) -> Dict[str, Any]:
         check_type = self._normalizeChecksType(check_type)
         current = self.getChecksProgress(user_key, check_type)
@@ -1595,6 +1789,7 @@ class ImgDataService:
                 "base_url": base_url,
                 "check_type": check_type,
                 "save_only": save_only,
+                "auto_apply_suggested_names": auto_apply_suggested_names,
                 "resume_cursor": resume_cursor if resume_cursor else None,
             },
             daemon=True,
@@ -1612,6 +1807,7 @@ class ImgDataService:
         check_type: str,
         save_only: bool,
         resume_cursor: Optional[Dict[str, Any]] = None,
+        auto_apply_suggested_names: bool = False,
     ) -> None:
         try:
             result = self.searchNextChecksItem(
@@ -1621,6 +1817,7 @@ class ImgDataService:
                 check_type=check_type,
                 save_only=save_only,
                 resume_cursor=resume_cursor,
+                auto_apply_suggested_names=auto_apply_suggested_names,
             )
             self._setChecksProgress(
                 user_key,
@@ -1672,6 +1869,7 @@ class ImgDataService:
         check_type: str,
         save_only: bool = False,
         resume_cursor: Optional[Dict[str, Any]] = None,
+        auto_apply_suggested_names: bool = False,
     ) -> Dict[str, Any]:
         shared_folder = self.core.getSharedFolder(
             user_key=user_key,
@@ -1741,34 +1939,70 @@ class ImgDataService:
         if pending_entries and not save_only:
             entry = pending_entries[0]
             remaining_entries = pending_entries[1:]
-            item = self.getChecksReviewItem(entry=entry)
-            return {
-                "running": False,
-                "finished": True,
-                "stop_requested": False,
-                "source_mode": "scan",
-                "check_type": check_type,
-                "save_only": save_only,
-                "files_scanned": min(path_index, total_files),
-                "total_files": total_files,
-                "findings_count": max(findings_count, 1),
-                "current_path": str(entry.get("image_path") or ""),
-                "result": {
-                    "entry": entry,
-                    "item": item,
-                },
-                "resume_cursor": self._buildChecksResumeCursor(
-                    path_index=path_index,
-                    pending_entries=remaining_entries,
-                    source_mode="scan",
-                    check_type=check_type,
-                    save_only=save_only,
-                    findings_count=max(findings_count, 1),
-                ),
-                "message_key": "checks:progress_result_found",
-                "message": "Check finding found.",
-                "message_params": {"count": max(findings_count, 1)},
-            }
+            resolved = self._resolveChecksReviewEntry(
+                entry=entry,
+                auto_apply_suggested_names=auto_apply_suggested_names,
+            )
+            entry = resolved.get("entry")
+            item = resolved.get("item")
+            auto_applied_count = int(resolved.get("auto_applied_count") or 0)
+            if auto_applied_count:
+                findings_count = max(0, findings_count - auto_applied_count)
+            if resolved.get("auto_apply_warning"):
+                return {
+                    "running": False,
+                    "finished": True,
+                    "stop_requested": False,
+                    "source_mode": "scan",
+                    "check_type": check_type,
+                    "save_only": save_only,
+                    "files_scanned": min(path_index, total_files),
+                    "total_files": total_files,
+                    "findings_count": findings_count,
+                    "current_path": str((entry or {}).get("image_path") or ""),
+                    "result": {"entry": entry, "item": item} if entry and item else None,
+                    "resume_cursor": self._buildChecksResumeCursor(
+                        path_index=path_index,
+                        pending_entries=remaining_entries,
+                        source_mode="scan",
+                        check_type=check_type,
+                        save_only=save_only,
+                        findings_count=findings_count,
+                    ),
+                    "message_key": str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
+                    "message": "Suggested name could not be applied automatically.",
+                    "message_params": {"count": findings_count},
+                }
+            if not entry or not item:
+                pending_entries = remaining_entries
+            else:
+                return {
+                    "running": False,
+                    "finished": True,
+                    "stop_requested": False,
+                    "source_mode": "scan",
+                    "check_type": check_type,
+                    "save_only": save_only,
+                    "files_scanned": min(path_index, total_files),
+                    "total_files": total_files,
+                    "findings_count": max(findings_count, 1),
+                    "current_path": str(entry.get("image_path") or ""),
+                    "result": {
+                        "entry": entry,
+                        "item": item,
+                    },
+                    "resume_cursor": self._buildChecksResumeCursor(
+                        path_index=path_index,
+                        pending_entries=remaining_entries,
+                        source_mode="scan",
+                        check_type=check_type,
+                        save_only=save_only,
+                        findings_count=max(findings_count, 1),
+                    ),
+                    "message_key": "checks:progress_result_found",
+                    "message": "Check finding found.",
+                    "message_params": {"count": max(findings_count, 1)},
+                }
 
         for index in range(max(0, path_index), total_files):
             if self._shouldStopChecks(user_key, check_type):
@@ -1858,7 +2092,53 @@ class ImgDataService:
                 continue
 
             entry = entries[0]
-            item = self.getChecksReviewItem(entry=entry)
+            item = None
+            remaining_entries = entries[1:]
+            resolved = self._resolveChecksReviewEntry(
+                entry=entry,
+                auto_apply_suggested_names=auto_apply_suggested_names,
+            )
+            entry = resolved.get("entry")
+            item = resolved.get("item")
+            auto_applied_count = int(resolved.get("auto_applied_count") or 0)
+            if auto_applied_count:
+                refreshed_entries = self._buildCheckEntriesForType(
+                    image_path=image_path,
+                    review_type=check_type,
+                )
+                findings_count = max(0, findings_count - auto_applied_count)
+                if not refreshed_entries:
+                    continue
+                entry = refreshed_entries[0]
+                remaining_entries = refreshed_entries[1:]
+                item = self.getChecksReviewItem(entry=entry)
+            if resolved.get("auto_apply_warning"):
+                return {
+                    "running": False,
+                    "finished": True,
+                    "stop_requested": False,
+                    "source_mode": "scan",
+                    "check_type": check_type,
+                    "save_only": False,
+                    "files_scanned": scanned_count,
+                    "total_files": total_files,
+                    "findings_count": findings_count,
+                    "current_path": image_path,
+                    "result": {"entry": entry, "item": item} if entry and item else None,
+                    "resume_cursor": self._buildChecksResumeCursor(
+                        path_index=index + 1,
+                        pending_entries=remaining_entries,
+                        source_mode="scan",
+                        check_type=check_type,
+                        save_only=False,
+                        findings_count=findings_count,
+                    ),
+                    "message_key": str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
+                    "message": "Suggested name could not be applied automatically.",
+                    "message_params": {"count": findings_count},
+                }
+            if not entry or not item:
+                continue
             return {
                 "running": False,
                 "finished": True,
@@ -1876,7 +2156,7 @@ class ImgDataService:
                 },
                 "resume_cursor": self._buildChecksResumeCursor(
                     path_index=index + 1,
-                    pending_entries=entries[1:],
+                    pending_entries=remaining_entries,
                     source_mode="scan",
                     check_type=check_type,
                     save_only=False,

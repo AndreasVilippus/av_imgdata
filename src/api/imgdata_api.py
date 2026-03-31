@@ -561,6 +561,7 @@ async def checks_start(request: Request):
     check_type = body.get("check_type", "dimension_issues")
     save_only = bool(body.get("save_only"))
     resume_from_progress = bool(body.get("resume_from_progress"))
+    auto_apply_suggested_names = bool(body.get("auto_apply_suggested_names"))
 
     try:
         loop = asyncio.get_running_loop()
@@ -574,6 +575,7 @@ async def checks_start(request: Request):
                 check_type=check_type,
                 save_only=save_only,
                 resume_from_progress=resume_from_progress,
+                auto_apply_suggested_names=auto_apply_suggested_names,
             ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
@@ -605,6 +607,7 @@ async def checks_item(request: Request):
 
     body = await _read_request_body(request)
     entry = body.get("entry")
+    auto_apply_suggested_names = bool(body.get("auto_apply_suggested_names"))
     if not isinstance(entry, dict):
         return {
             "success": False,
@@ -616,9 +619,12 @@ async def checks_item(request: Request):
 
     try:
         loop = asyncio.get_running_loop()
-        item = await loop.run_in_executor(
+        resolved = await loop.run_in_executor(
             None,
-            lambda: IMGDATA.getChecksReviewItem(entry=entry),
+            lambda: IMGDATA._resolveChecksReviewEntry(
+                entry=entry,
+                auto_apply_suggested_names=auto_apply_suggested_names,
+            ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         error_payload = _session_exception_response(exc, bootstrap_message="checks_item_bootstrap_required")
@@ -637,7 +643,21 @@ async def checks_item(request: Request):
     response_payload = {
         "success": True,
         "data": {
-            "item": item,
+            "entry": resolved.get("entry"),
+            "item": resolved.get("item"),
+            "auto_applied_count": int(resolved.get("auto_applied_count") or 0),
+            "findings_update": (
+                IMGDATA.refreshChecksFindingEntriesForImage(
+                    check_type="name_conflicts",
+                    image_path=str(entry.get("image_path") or ""),
+                )
+                if (
+                    auto_apply_suggested_names
+                    and int(resolved.get("auto_applied_count") or 0) > 0
+                    and str(entry.get("review_type") or "").strip().lower() == "name_conflicts"
+                )
+                else None
+            ),
         },
     }
     return JSONResponse(response_payload)
@@ -720,6 +740,8 @@ async def checks_replace_metadata_face_name(request: Request):
     image_path = str(body.get("image_path") or "").strip()
     face = body.get("face")
     new_name = str(body.get("new_name") or "").strip()
+    save_mapping = bool(body.get("save_mapping"))
+    source_name = str(body.get("source_name") or "").strip()
     if not image_path or not isinstance(face, dict) or not new_name:
         return JSONResponse({
             "success": False,
@@ -735,6 +757,18 @@ async def checks_replace_metadata_face_name(request: Request):
             face_data=face,
             new_name=new_name,
         )
+        mapping_saved = False
+        findings_update = None
+        if result.get("updated") and save_mapping and source_name:
+            mapping_saved = IMGDATA.saveNameMapping(
+                source_name=source_name,
+                target_name=new_name,
+            )
+        if result.get("updated"):
+            findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
+                check_type="name_conflicts",
+                image_path=image_path,
+            )
     except Exception as exc:
         return JSONResponse({
             "success": False,
@@ -747,7 +781,11 @@ async def checks_replace_metadata_face_name(request: Request):
 
     return JSONResponse({
         "success": True,
-        "data": result,
+        "data": {
+            **result,
+            "mapping_saved": mapping_saved if save_mapping else False,
+            "findings_update": findings_update,
+        },
     })
 
 @router.get("/file_image")

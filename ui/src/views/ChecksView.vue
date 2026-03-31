@@ -24,6 +24,15 @@
 				<span class="face-match-switch-slider"></span>
 				<span class="face-match-switch-label">{{ vm.$t('checks:switch_save_only', 'Save findings only') }}</span>
 			</label>
+			<label
+				v-if="vm.selectedChecksType === 'name_conflicts'"
+				class="face-match-switch"
+				:title="vm.$t('checks:hint_auto_apply_suggested_names', 'Suggested target names from stored name mappings are applied automatically.')"
+			>
+				<input v-model="vm.checksAutoApplySuggestedNames" type="checkbox" :disabled="vm.checksLoading" />
+				<span class="face-match-switch-slider"></span>
+				<span class="face-match-switch-label">{{ vm.$t('checks:switch_auto_apply_suggested_names', 'Apply suggested names automatically') }}</span>
+			</label>
 			<div class="face-match-action-buttons">
 				<v-button @click="vm.startChecksReview" style="width: 160px;">
 					{{ vm.checksPrimaryButtonLabel }}
@@ -180,6 +189,16 @@
 					</div>
 				</div>
 				<div v-else class="face-match-empty">{{ vm.$t('checks:empty_image', 'No preview available.') }}</div>
+			</div>
+		</div>
+		<div v-if="vm.nameMappingConfirm.visible" class="sm-modal-backdrop">
+			<div class="sm-modal" role="dialog" aria-modal="true" aria-labelledby="checks-name-mapping-confirm-title">
+				<div id="checks-name-mapping-confirm-title" class="sm-modal-title">{{ vm.$t('face_match:modal_mapping_title', 'Save name mapping') }}</div>
+				<div class="sm-modal-text">{{ vm.nameMappingConfirm.message }}</div>
+				<div class="sm-modal-actions">
+					<v-button @click="vm.resolveNameMappingConfirm(false)" style="width: 120px;">{{ vm.$t('face_match:button_no', 'No') }}</v-button>
+					<v-button @click="vm.resolveNameMappingConfirm(true)" style="width: 120px;">{{ vm.$t('face_match:button_yes', 'Yes') }}</v-button>
+				</div>
 			</div>
 		</div>
 	</section>

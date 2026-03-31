@@ -4,6 +4,7 @@ export default {
 			selectedChecksType: 'dimension_issues',
 			selectedChecksAction: 'findings',
 			checksSaveOnly: false,
+			checksAutoApplySuggestedNames: false,
 			checksLoading: false,
 			checksEntries: [],
 			checksCurrentIndex: 0,
@@ -137,6 +138,42 @@ export default {
 				{ from: leftName, to: rightName }
 			);
 		},
+		checksRenameUsesStoredMapping(item, face, newName) {
+			if (!this.isChecksNameConflict(item) || !face || !newName) {
+				return false;
+			}
+			const faceName = String(face.name || '').trim();
+			const targetName = String(newName || '').trim();
+			if (!faceName || !targetName) {
+				return false;
+			}
+			const leftName = String(item.left_name || '').trim();
+			const rightName = String(item.right_name || '').trim();
+			const faceFormat = String(face.source_format || '').trim().toUpperCase();
+			const leftFormat = String(item.left_format || '').trim().toUpperCase();
+			const rightFormat = String(item.right_format || '').trim().toUpperCase();
+			if (faceFormat === rightFormat && faceName === rightName && targetName === leftName) {
+				return String(item.left_state || '') === 'suggested';
+			}
+			if (faceFormat === leftFormat && faceName === leftName && targetName === rightName) {
+				return String(item.right_state || '') === 'suggested';
+			}
+			return false;
+		},
+		applyChecksFindingsUpdate(findingsUpdate) {
+			if (!findingsUpdate || typeof findingsUpdate !== 'object' || !Array.isArray(findingsUpdate.entries)) {
+				return false;
+			}
+			this.checksEntries = findingsUpdate.entries;
+			if (!this.checksEntries.length) {
+				this.checksCurrentIndex = 0;
+				this.checksCurrentItem = null;
+				this.checksStatusMessage = this.$t('checks:status_empty', 'No matching entries found.');
+				return true;
+			}
+			this.checksCurrentIndex = Math.min(this.checksCurrentIndex, this.checksEntries.length - 1);
+			return true;
+		},
 		async refreshChecksSessionState() {
 			const progress = await this.fetchChecksProgress({ applyFinishedState: false });
 			const matchesCurrentSelection = !!(
@@ -267,8 +304,11 @@ export default {
 				}
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_item', {
 					entry,
+					auto_apply_suggested_names: this.checksAutoApplySuggestedNames,
 				});
-				const item = this.getResponseDataObject(data, 'item');
+				const root = this.getResponseData(data);
+				this.applyChecksFindingsUpdate(root.findings_update);
+				const item = root && root.item && typeof root.item === 'object' ? root.item : {};
 				if (Object.keys(item).length) {
 					this.checksCurrentItem = item;
 					this.checksCurrentIndex = resolvedIndex;
@@ -277,6 +317,9 @@ export default {
 						total: this.checksEntries.length,
 					});
 					return;
+				}
+				if (!this.checksEntries.length) {
+					break;
 				}
 				resolvedIndex += 1;
 			}
@@ -304,6 +347,7 @@ export default {
 					check_type: this.selectedChecksType,
 					save_only: this.checksSaveOnly,
 					resume_from_progress: resumeFromProgress,
+					auto_apply_suggested_names: this.checksAutoApplySuggestedNames,
 				});
 				const progress = this.getResponseData(data);
 				this.applyChecksProgress(progress);
@@ -395,10 +439,23 @@ export default {
 			this.checksLoading = true;
 			let keepLoadingState = false;
 			try {
+				const sourceName = String(face && face.name || '').trim();
+				const targetName = String(newName || '').trim();
+				let saveMapping = false;
+				if (
+					sourceName
+					&& targetName
+					&& this.normalizeFaceMatchName(sourceName) !== this.normalizeFaceMatchName(targetName)
+					&& !this.checksRenameUsesStoredMapping(this.checksCurrentItem, face, targetName)
+				) {
+					saveMapping = await this.confirmFaceMatchNameMapping(sourceName, targetName);
+				}
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_replace_metadata_face_name', {
 					image_path: this.checksCurrentItem.image_path,
 					face,
-					new_name: String(newName || '').trim(),
+					new_name: targetName,
+					save_mapping: saveMapping,
+					source_name: sourceName,
 				});
 				const result = this.getResponseData(data);
 				if (result.warning) {
@@ -410,10 +467,15 @@ export default {
 					);
 					return;
 				}
+				this.applyChecksFindingsUpdate(result.findings_update);
 				this.checksStatusMessage = this.$t('checks:status_face_name_replaced', 'Face name replaced in metadata.');
 				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
 					keepLoadingState = true;
 					await this.startChecksScan({ resumeFromProgress: true });
+					return;
+				}
+				if (!this.checksEntries.length) {
+					this.checksCurrentItem = null;
 					return;
 				}
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
