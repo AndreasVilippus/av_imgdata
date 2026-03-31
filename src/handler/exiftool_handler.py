@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -131,3 +132,49 @@ class ExifToolHandler:
             return int(float(value))
         except (TypeError, ValueError):
             return None
+
+    def writeXmp(self, target_path: str, xmp_content: str) -> bool:
+        executable_path, _ = self.resolveExecutable()
+        if not executable_path or not target_path or not xmp_content:
+            return False
+
+        packet_content = str(xmp_content or "").strip()
+        if not packet_content:
+            return False
+        if "<?xpacket" not in packet_content:
+            packet_content = (
+                "<?xpacket begin='\ufeff' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
+                f"{packet_content}\n"
+                "<?xpacket end='w'?>\n"
+            )
+
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".xmp", encoding="utf-8", delete=False) as handle:
+                handle.write(packet_content)
+                temp_path = handle.name
+            result = subprocess.run(
+                [executable_path, "-overwrite_original", f"-XMP<={temp_path}", target_path],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except (FileNotFoundError, OSError):
+            return False
+        finally:
+            if temp_path:
+                Path(temp_path).unlink(missing_ok=True)
+
+        if result.returncode != 0:
+            return False
+
+        stdout = str(result.stdout or "")
+        stderr = str(result.stderr or "")
+        combined_output = f"{stdout}\n{stderr}".lower()
+        if "0 image files updated" in combined_output or "0 image files created" in combined_output:
+            return False
+        if "1 image files updated" in combined_output or "1 image files created" in combined_output:
+            return True
+        if "1 image files unchanged" in combined_output:
+            return True
+        return True

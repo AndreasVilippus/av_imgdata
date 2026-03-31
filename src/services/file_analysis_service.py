@@ -23,6 +23,7 @@ class FileAnalysisService:
             package_var = os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")
             self._result_path = Path(package_var) / "file_analysis.json"
         self._findings_dir = self._result_path.parent / "analysis_findings"
+        self._runtime_dir = self._result_path.parent / "runtime_state"
 
     def readLatestResult(self) -> Dict[str, Any]:
         candidate = self._result_path
@@ -82,9 +83,53 @@ class FileAnalysisService:
             return False
         return True
 
+    def readRuntimeState(self, state_type: str, state_key: str) -> Dict[str, Any]:
+        candidate = self._runtime_state_path(state_type, state_key)
+        if not candidate.exists() or not candidate.is_file():
+            return {}
+        try:
+            with candidate.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def writeRuntimeState(self, state_type: str, state_key: str, payload: Dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        candidate = self._runtime_state_path(state_type, state_key)
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            with candidate.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+                handle.write("\n")
+        except Exception:
+            return False
+        return True
+
+    def deleteRuntimeState(self, state_type: str, state_key: str) -> bool:
+        candidate = self._runtime_state_path(state_type, state_key)
+        if not candidate.exists():
+            return True
+        try:
+            candidate.unlink()
+        except Exception:
+            return False
+        return True
+
     def _finding_path(self, finding_type: str) -> Path:
         normalized = str(finding_type or "").strip().lower()
         filename = self.FINDING_FILES.get(normalized)
         if not filename:
             raise ValueError(f"unknown_finding_type: {finding_type}")
         return self._findings_dir / filename
+
+    def _runtime_state_path(self, state_type: str, state_key: str) -> Path:
+        normalized_type = str(state_type or "").strip().lower()
+        normalized_key = str(state_key or "").strip().lower()
+        if not normalized_type or not normalized_key:
+            raise ValueError("state_type and state_key are required")
+        safe_key = "".join(char for char in normalized_key if char.isalnum() or char in {"-", "_"})
+        if not safe_key:
+            raise ValueError("invalid_state_key")
+        return self._runtime_dir / f"{normalized_type}_{safe_key}.json"

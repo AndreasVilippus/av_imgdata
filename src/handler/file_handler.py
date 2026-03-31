@@ -226,6 +226,7 @@ class FileHandler:
         return sorted([
             str(p) for p in root.rglob("*")
             if p.is_file() and p.suffix.lower().lstrip(".") in extensions
+            and "@eaDir" not in p.parts
         ])
 
     @staticmethod

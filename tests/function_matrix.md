@@ -37,6 +37,7 @@ It intentionally excludes downstream functions that merely consume already disco
 | Metadata discovery | Find matching XMP sidecar | Locate an `.xmp` file that belongs to an image file | yes | no | Sidecar matching is handled by our own filename logic, not by ExifTool |
 | Metadata loading | Read XMP sidecar content | Load raw XMP text from sidecar file | yes | yes | Native is the default path; ExifTool is an optional fallback for sidecar problems |
 | Metadata loading | Read embedded XMP from image | Read embedded XMP from image files | yes | yes | Native and ExifTool-backed paths both exist; ExifTool is the optional preferred helper when enabled |
+| Metadata writing | Replace metadata face name | Replace one face name in XMP metadata | no | yes | Implemented only through the ExifTool-backed write path used by checks |
 | Image context | Read image dimensions | Read width and height from image file | yes | yes | Native is the default path; ExifTool can be preferred by config or used as fallback |
 | Image context | Read image orientation | Read image rotation/orientation metadata from image files | yes | yes | Native JPEG EXIF reader exists; ExifTool can be preferred by config or used as fallback |
 

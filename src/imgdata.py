@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime, timezone
 from time import monotonic
@@ -15,7 +16,7 @@ from models.file_face import FileFace
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
 from models.photos_face import PhotosFace
-from parser.metadata_parser import MetadataParser
+from parser.metadata_parser import MetadataParser, NS_ACD, NS_MICROSOFT, NS_MWG_REGIONS
 from services.bbox_normalizer import from_photos, from_xmp, normalize_xmp_face
 from services.config_service import ConfigService
 from services.exiftool_service import ExifToolService
@@ -43,6 +44,11 @@ class ImgDataService:
         self._face_matching_progress: Dict[str, Dict[str, Any]] = {}
         self._face_matching_progress_lock = Lock()
         self._face_matching_threads: Dict[str, Thread] = {}
+        self._checks_progress: Dict[str, Dict[str, Any]] = {}
+        self._checks_progress_lock = Lock()
+        self._checks_threads: Dict[str, Thread] = {}
+        self._checks_candidate_paths_cache: Dict[str, Dict[str, Any]] = {}
+        self._checks_candidate_paths_cache_lock = Lock()
         self._file_analysis_progress: Dict[str, Any] = {}
         self._file_analysis_progress_lock = Lock()
         self._file_analysis_thread: Optional[Thread] = None
@@ -152,6 +158,270 @@ class ImgDataService:
     def readAllPersonsFromImage(self, image_path: str) -> List[Dict[str, Any]]:
         return self.files.readAllPersonsFromMetadata(self._readImageMetadata(image_path))
 
+    @staticmethod
+    def _sameMetadataFaceCandidate(left: MetadataFace, right: MetadataFace, *, tolerance: float = 1e-6) -> bool:
+        if str(left.source_format or "").strip().upper() != str(right.source_format or "").strip().upper():
+            return False
+        if str(left.name or "").strip() != str(right.name or "").strip():
+            return False
+        return all(
+            abs(float(getattr(left, key, 0.0)) - float(getattr(right, key, 0.0))) <= tolerance
+            for key in ("x", "y", "w", "h")
+        )
+
+    @staticmethod
+    def _findParentMap(root: ET.Element) -> Dict[ET.Element, ET.Element]:
+        return {child: parent for parent in root.iter() for child in parent}
+
+    def _acdFaceElements(self, root: ET.Element, *, source: str) -> List[Dict[str, Any]]:
+        elements: List[Dict[str, Any]] = []
+        for description in root.findall(".//rdf:Description", NS_ACD):
+            if description.get("{http://ns.acdsee.com/regions/}Type") != "Face":
+                continue
+            if description.get("{http://ns.acdsee.com/regions/}NameAssignType") == "denied":
+                continue
+            name = description.get("{http://ns.acdsee.com/regions/}Name")
+            if name is None:
+                continue
+            area = description.find("acdsee-rs:DLYArea", NS_ACD)
+            if area is None:
+                continue
+            try:
+                face = MetadataFace.from_center_box(
+                    name=str(name or ""),
+                    x=float(area.get("{http://ns.acdsee.com/sType/Area#}x")),
+                    y=float(area.get("{http://ns.acdsee.com/sType/Area#}y")),
+                    w=float(area.get("{http://ns.acdsee.com/sType/Area#}w")),
+                    h=float(area.get("{http://ns.acdsee.com/sType/Area#}h")),
+                    source=source,
+                    source_format="ACD",
+                )
+            except (TypeError, ValueError):
+                continue
+            elements.append({"element": description, "face": face})
+        return elements
+
+    def _mwgFaceElements(self, root: ET.Element, *, source: str, orientation: Optional[int]) -> List[Dict[str, Any]]:
+        elements: List[Dict[str, Any]] = []
+        candidates = list(root.findall(".//rdf:Description", NS_MWG_REGIONS)) + list(root.findall(".//rdf:li", NS_MWG_REGIONS))
+        for description in candidates:
+            face_type = description.get("{http://www.metadataworkinggroup.com/schemas/regions/}Type")
+            if not face_type:
+                type_node = description.find("mwg-rs:Type", NS_MWG_REGIONS)
+                face_type = type_node.text.strip() if type_node is not None and type_node.text else ""
+            if face_type != "Face":
+                continue
+            area = description.find("mwg-rs:Area", NS_MWG_REGIONS)
+            if area is None:
+                continue
+            try:
+                face = MetadataFace.from_center_box(
+                    name=str(
+                        description.get("{http://www.metadataworkinggroup.com/schemas/regions/}Name")
+                        or (description.findtext("mwg-rs:Name", default="", namespaces=NS_MWG_REGIONS) or "")
+                    ),
+                    x=MetadataParser._readFloatAttributeOrChild(area, "x", NS_MWG_REGIONS["stArea"]),
+                    y=MetadataParser._readFloatAttributeOrChild(area, "y", NS_MWG_REGIONS["stArea"]),
+                    w=MetadataParser._readFloatAttributeOrChild(area, "w", NS_MWG_REGIONS["stArea"]),
+                    h=MetadataParser._readFloatAttributeOrChild(area, "h", NS_MWG_REGIONS["stArea"]),
+                    source=source,
+                    source_format="MWG_REGIONS",
+                    focus_usage=str(
+                        description.get("{http://www.metadataworkinggroup.com/schemas/regions/}FocusUsage")
+                        or (description.findtext("mwg-rs:FocusUsage", default="", namespaces=NS_MWG_REGIONS) or "")
+                    ),
+                    orientation=orientation,
+                )
+            except (TypeError, ValueError):
+                continue
+            if orientation not in (None, 1):
+                face = MetadataFace.from_dict(face.to_dict())
+            elements.append({"element": description, "face": face})
+        return elements
+
+    def _microsoftFaceElements(self, root: ET.Element, *, source: str) -> List[Dict[str, Any]]:
+        elements: List[Dict[str, Any]] = []
+        for description in root.iter():
+            if description.tag not in {
+                "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}Description",
+                "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}li",
+            }:
+                continue
+            rectangle = ""
+            name = ""
+            for key, value in description.attrib.items():
+                local_name = key.split("}", 1)[-1]
+                if local_name == "Rectangle" and value:
+                    rectangle = value.strip()
+                elif local_name == "PersonDisplayName" and value:
+                    name = value.strip()
+            if not rectangle or not name:
+                for child in list(description):
+                    local_name = child.tag.split("}", 1)[-1]
+                    text = child.text.strip() if child.text else ""
+                    if local_name == "Rectangle" and text and not rectangle:
+                        rectangle = text
+                    elif local_name == "PersonDisplayName" and text and not name:
+                        name = text
+            if not rectangle:
+                continue
+            try:
+                x, y, width, height = [float(value.strip()) for value in rectangle.split(",")]
+            except (TypeError, ValueError):
+                continue
+            face = MetadataFace.from_center_box(
+                name=name,
+                x=x,
+                y=y,
+                w=width,
+                h=height,
+                source=source,
+                source_format="MICROSOFT",
+            )
+            elements.append({"element": description, "face": face})
+        return elements
+
+    def deleteMetadataFace(self, *, image_path: str, face_data: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.exiftool_handler.isAvailable():
+            return {"deleted": False, "warning": "checks:warning_exiftool_required"}
+
+        payload = self._readImageMetadata(image_path)
+        if not payload.has_xmp:
+            return {"deleted": False, "warning": "checks:warning_face_delete_not_found"}
+
+        xmp_path = payload.xmp_path or ""
+        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
+        if not xmp_content:
+            return {"deleted": False, "warning": "checks:warning_face_delete_not_found"}
+
+        try:
+            root = ET.fromstring(xmp_content)
+        except ET.ParseError:
+            return {"deleted": False, "warning": "checks:warning_face_delete_not_found"}
+
+        target = MetadataFace.from_dict(face_data if isinstance(face_data, dict) else {})
+        source_format = str(target.source_format or "").strip().upper()
+        orientation = MetadataParser._extractXmpTiffOrientation(xmp_content)
+        parent_map = self._findParentMap(root)
+
+        if source_format == "ACD":
+            candidates = self._acdFaceElements(root, source="metadata")
+        elif source_format == "MICROSOFT":
+            candidates = self._microsoftFaceElements(root, source="metadata")
+        elif source_format == "MWG_REGIONS":
+            candidates = self._mwgFaceElements(root, source="metadata", orientation=orientation)
+        else:
+            candidates = []
+
+        removed = False
+        for candidate in candidates:
+            if not self._sameMetadataFaceCandidate(candidate["face"], target):
+                continue
+            parent = parent_map.get(candidate["element"])
+            if parent is None:
+                continue
+            parent.remove(candidate["element"])
+            removed = True
+            break
+
+        if not removed:
+            return {"deleted": False, "warning": "checks:warning_face_delete_not_found"}
+
+        written = self.exiftool_handler.writeXmp(xmp_path or image_path, ET.tostring(root, encoding="unicode"))
+        return {
+            "deleted": bool(written),
+            "warning": "" if written else "checks:warning_face_delete_failed",
+            "target_path": xmp_path or image_path,
+            "used_sidecar": bool(xmp_path),
+        }
+
+    @staticmethod
+    def _setExistingElementValueByLocalName(element: ET.Element, local_name: str, value: str) -> bool:
+        updated = False
+        replacement_value = str(value or "").strip()
+        for key in list(element.attrib.keys()):
+            if key.split("}", 1)[-1] != local_name:
+                continue
+            element.set(key, replacement_value)
+            updated = True
+        for child in list(element):
+            if child.tag.split("}", 1)[-1] != local_name:
+                continue
+            child.text = replacement_value
+            updated = True
+        return updated
+
+    @staticmethod
+    def _setMetadataFaceName(element: ET.Element, source_format: str, new_name: str) -> None:
+        normalized_format = str(source_format or "").strip().upper()
+        replacement_name = str(new_name or "").strip()
+        if normalized_format == "ACD":
+            if not ImgDataService._setExistingElementValueByLocalName(element, "Name", replacement_name):
+                element.set("{http://ns.acdsee.com/regions/}Name", replacement_name)
+            return
+        if normalized_format == "MICROSOFT":
+            if not ImgDataService._setExistingElementValueByLocalName(element, "PersonDisplayName", replacement_name):
+                element.append(ET.Element(f"{{{NS_MICROSOFT['MPReg']}}}PersonDisplayName"))
+                element[-1].text = replacement_name
+            return
+        if normalized_format == "MWG_REGIONS":
+            if not ImgDataService._setExistingElementValueByLocalName(element, "Name", replacement_name):
+                element.set("{http://www.metadataworkinggroup.com/schemas/regions/}Name", replacement_name)
+
+    def replaceMetadataFaceName(self, *, image_path: str, face_data: Dict[str, Any], new_name: str) -> Dict[str, Any]:
+        if not self.exiftool_handler.isAvailable():
+            return {"updated": False, "warning": "checks:warning_exiftool_required"}
+
+        replacement_name = str(new_name or "").strip()
+        if not replacement_name:
+            return {"updated": False, "warning": "checks:warning_face_replace_failed"}
+
+        payload = self._readImageMetadata(image_path)
+        if not payload.has_xmp:
+            return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
+
+        xmp_path = payload.xmp_path or ""
+        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
+        if not xmp_content:
+            return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
+
+        try:
+            root = ET.fromstring(xmp_content)
+        except ET.ParseError:
+            return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
+
+        target = MetadataFace.from_dict(face_data if isinstance(face_data, dict) else {})
+        source_format = str(target.source_format or "").strip().upper()
+        orientation = MetadataParser._extractXmpTiffOrientation(xmp_content)
+
+        if source_format == "ACD":
+            candidates = self._acdFaceElements(root, source="metadata")
+        elif source_format == "MICROSOFT":
+            candidates = self._microsoftFaceElements(root, source="metadata")
+        elif source_format == "MWG_REGIONS":
+            candidates = self._mwgFaceElements(root, source="metadata", orientation=orientation)
+        else:
+            candidates = []
+
+        updated = False
+        for candidate in candidates:
+            if not self._sameMetadataFaceCandidate(candidate["face"], target):
+                continue
+            self._setMetadataFaceName(candidate["element"], source_format, replacement_name)
+            updated = True
+            break
+
+        if not updated:
+            return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
+
+        written = self.exiftool_handler.writeXmp(xmp_path or image_path, ET.tostring(root, encoding="unicode"))
+        return {
+            "updated": bool(written),
+            "warning": "" if written else "checks:warning_face_replace_failed",
+            "target_path": xmp_path or image_path,
+            "used_sidecar": bool(xmp_path),
+        }
+
     def _setFaceMatchingProgress(self, user_key: str, **updates: Any) -> None:
         with self._face_matching_progress_lock:
             current = dict(self._face_matching_progress.get(user_key, {}))
@@ -233,6 +503,195 @@ class ImgDataService:
             return last_keepalive_at
         self.session_manager.keepalive(user_key, base_url=base_url)
         return now
+
+    def _setChecksProgress(self, user_key: str, **updates: Any) -> None:
+        check_type = self._normalizeChecksType(updates.get("check_type"))
+        state_key = self._checksStateKey(user_key, check_type)
+        with self._checks_progress_lock:
+            current = dict(self._checks_progress.get(state_key, {}))
+            current.update(updates)
+            current["check_type"] = check_type
+            current["last_updated_at"] = self._timestamp_now()
+            self._checks_progress[state_key] = current
+        self.file_analysis.writeRuntimeState("checks_progress", state_key, current)
+
+    def _setChecksProgressMessage(
+        self,
+        user_key: str,
+        check_type: str,
+        message_key: str,
+        *,
+        message_params: Optional[Dict[str, Any]] = None,
+        message: Optional[str] = None,
+        **updates: Any,
+    ) -> None:
+        payload: Dict[str, Any] = {
+            "message_key": message_key,
+            "message_params": message_params or {},
+            "message": message or message_key,
+            "check_type": self._normalizeChecksType(check_type),
+        }
+        payload.update(updates)
+        self._setChecksProgress(user_key, **payload)
+
+    @staticmethod
+    def _normalizeChecksType(check_type: Any) -> str:
+        normalized = str(check_type or "dimension_issues").strip().lower()
+        if normalized not in {"dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts"}:
+            return "dimension_issues"
+        return normalized
+
+    def _checksStateKey(self, user_key: str, check_type: Any) -> str:
+        return f"{user_key}_{self._normalizeChecksType(check_type)}"
+
+    def _invalidateChecksCandidatePathsCache(self, user_key: str, check_type: Any) -> None:
+        state_key = self._checksStateKey(user_key, check_type)
+        with self._checks_candidate_paths_cache_lock:
+            self._checks_candidate_paths_cache.pop(state_key, None)
+
+    def _getChecksCandidatePaths(
+        self,
+        *,
+        user_key: str,
+        check_type: Any,
+        shared_folder: str,
+        use_cache: bool = True,
+    ) -> List[str]:
+        state_key = self._checksStateKey(user_key, check_type)
+        normalized_shared_folder = str(shared_folder or "").strip()
+        if not normalized_shared_folder:
+            return []
+
+        if use_cache:
+            with self._checks_candidate_paths_cache_lock:
+                cached = self._checks_candidate_paths_cache.get(state_key)
+                if (
+                    isinstance(cached, dict)
+                    and str(cached.get("shared_folder") or "") == normalized_shared_folder
+                    and isinstance(cached.get("paths"), list)
+                ):
+                    return list(cached.get("paths") or [])
+
+        candidate_paths = self.files.listImageFiles(normalized_shared_folder)
+        with self._checks_candidate_paths_cache_lock:
+            self._checks_candidate_paths_cache[state_key] = {
+                "shared_folder": normalized_shared_folder,
+                "paths": list(candidate_paths),
+            }
+        return candidate_paths
+
+    def _normalizeChecksProgress(self, user_key: str, check_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        current = dict(payload) if isinstance(payload, dict) else {}
+        normalized_type = self._normalizeChecksType(check_type or current.get("check_type"))
+        current["check_type"] = normalized_type
+        worker = self._checks_threads.get(self._checksStateKey(user_key, normalized_type))
+        if current.get("running") and worker is not None and not worker.is_alive():
+            current["running"] = False
+            current["finished"] = True
+            if not current.get("message"):
+                current["message"] = "Last checks scan is no longer running."
+            self.file_analysis.writeRuntimeState("checks_progress", self._checksStateKey(user_key, normalized_type), current)
+        return current
+
+    def getChecksProgress(self, user_key: str, check_type: str) -> Dict[str, Any]:
+        normalized_type = self._normalizeChecksType(check_type)
+        state_key = self._checksStateKey(user_key, normalized_type)
+        current = self.file_analysis.readRuntimeState("checks_progress", state_key)
+        if not isinstance(current, dict) or not current:
+            with self._checks_progress_lock:
+                current = self._checks_progress.get(state_key, {})
+        return self._normalizeChecksProgress(user_key, normalized_type, dict(current) if isinstance(current, dict) else {})
+
+    def requestStopChecks(self, user_key: str, check_type: str) -> Dict[str, Any]:
+        normalized_type = self._normalizeChecksType(check_type)
+        self._setChecksProgressMessage(
+            user_key,
+            normalized_type,
+            "checks:progress_stopping",
+            stop_requested=True,
+        )
+        return self.getChecksProgress(user_key, normalized_type)
+
+    def _shouldStopChecks(self, user_key: str, check_type: str) -> bool:
+        progress = self.getChecksProgress(user_key, check_type)
+        return bool(progress.get("stop_requested"))
+
+    @staticmethod
+    def _buildChecksResumeCursor(
+        *,
+        path_index: int,
+        pending_entries: Optional[List[Dict[str, Any]]] = None,
+        source_mode: str,
+        check_type: str,
+        save_only: bool,
+        findings_count: int,
+    ) -> Dict[str, Any]:
+        return {
+            "path_index": max(0, int(path_index)),
+            "pending_entries": list(pending_entries or []),
+            "source_mode": str(source_mode or "scan"),
+            "check_type": str(check_type or "dimension_issues"),
+            "save_only": bool(save_only),
+            "findings_count": max(0, int(findings_count)),
+        }
+
+    def _buildCheckEntriesForType(
+        self,
+        *,
+        image_path: str,
+        review_type: str,
+        analysis: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        normalized_type = str(review_type or "").strip().lower()
+        if normalized_type == "dimension_issues":
+            entry = self._buildDimensionMismatchReviewEntry(image_path, analysis)
+            return [entry] if entry else []
+        if normalized_type == "duplicate_faces":
+            return self._buildDuplicateFaceReviewEntries(image_path, analysis)
+        if normalized_type == "position_deviations":
+            return self._buildPositionDeviationReviewEntries(image_path, analysis)
+        if normalized_type == "name_conflicts":
+            return self._buildNameConflictReviewEntries(image_path, analysis)
+        return []
+
+    def _writeChecksFindings(
+        self,
+        *,
+        check_type: str,
+        status: str,
+        shared_folder: str,
+        source_mode: str,
+        save_only: bool,
+        entries: List[Dict[str, Any]],
+    ) -> bool:
+        payload = {
+            "status": status,
+            "shared_folder": shared_folder,
+            "source_mode": source_mode,
+            "check_type": check_type,
+            "save_only": save_only,
+            "count": len(entries),
+            "paths": sorted({
+                str(entry.get("image_path") or "").strip()
+                for entry in entries
+                if isinstance(entry, dict) and str(entry.get("image_path") or "").strip()
+            }),
+            "entries": entries,
+            "finished_at": self._timestamp_now(),
+        }
+        return self.file_analysis.writeCheckFindings(check_type, payload)
+
+    def getChecksFindingEntries(self, *, check_type: str) -> Dict[str, Any]:
+        findings = self.file_analysis.readCheckFindings(check_type)
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        return {
+            "status": str(findings.get("status") or ""),
+            "check_type": str(findings.get("check_type") or check_type),
+            "source_mode": str(findings.get("source_mode") or "findings"),
+            "save_only": bool(findings.get("save_only")),
+            "count": len(entries),
+            "entries": entries,
+        }
 
     def _runFaceMatching(
         self,
@@ -363,10 +822,6 @@ class ImgDataService:
             return {}
         return self._enrichFileAnalysisProgressWithFindings(self._normalizeFileAnalysisProgress(latest))
 
-    def getFileAnalysisDimensionMismatchFindings(self) -> Dict[str, Any]:
-        findings = self.file_analysis.readCheckFindings("dimension_issues")
-        return findings if isinstance(findings, dict) else {}
-
     def getFaceMatchFindings(self) -> Dict[str, Any]:
         findings = self.file_analysis.readCheckFindings("face_match")
         return findings if isinstance(findings, dict) else {}
@@ -393,8 +848,23 @@ class ImgDataService:
         shared_folder: str,
         status: str,
         finished: bool,
-        findings: List[str],
+        findings: List[Any],
     ) -> None:
+        paths: List[str] = []
+        entries: List[Dict[str, Any]] = []
+        seen_paths = set()
+        for finding in findings:
+            if isinstance(finding, dict):
+                entries.append(finding)
+                image_path = str(finding.get("image_path") or "").strip()
+                if image_path and image_path not in seen_paths:
+                    seen_paths.add(image_path)
+                    paths.append(image_path)
+                continue
+            image_path = str(finding or "").strip()
+            if image_path and image_path not in seen_paths:
+                seen_paths.add(image_path)
+                paths.append(image_path)
         self.file_analysis.writeCheckFindings(
             finding_type,
             {
@@ -404,8 +874,9 @@ class ImgDataService:
                 "last_updated_at": self._timestamp_now(),
                 "status": status,
                 "shared_folder": shared_folder,
-                "count": len(findings),
-                "paths": list(findings),
+                "count": len(entries) if entries else len(paths),
+                "paths": paths,
+                "entries": entries,
             }
         )
 
@@ -665,6 +1136,10 @@ class ImgDataService:
             "right_face_signature": self._faceSignature(right_face or {}),
         }
 
+    @staticmethod
+    def _hasFaceSignature(signature: Any) -> bool:
+        return isinstance(signature, dict) and any(bool(signature.get(key)) for key in ("name", "source", "source_format", "bbox"))
+
     def _buildDimensionMismatchReviewEntry(
         self,
         image_path: str,
@@ -781,7 +1256,7 @@ class ImgDataService:
                     self._buildCheckEntry(
                         review_type="duplicate_faces",
                         image_path=image_path,
-                        face_name=str(left.get("name") or ""),
+                        face_name=str(left.name or ""),
                         left_face=left,
                         right_face=right,
                     )
@@ -975,7 +1450,22 @@ class ImgDataService:
     def _getCheckFindingPaths(self, finding_type: str) -> List[str]:
         findings_payload = self.file_analysis.readCheckFindings(finding_type)
         paths = findings_payload.get("paths") if isinstance(findings_payload.get("paths"), list) else []
-        return [str(path) for path in paths if isinstance(path, str) and path]
+        normalized_paths = [str(path) for path in paths if isinstance(path, str) and path]
+        if normalized_paths:
+            return normalized_paths
+
+        entries = findings_payload.get("entries") if isinstance(findings_payload.get("entries"), list) else []
+        resolved_paths: List[str] = []
+        seen_paths = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            image_path = str(entry.get("image_path") or "").strip()
+            if not image_path or image_path in seen_paths:
+                continue
+            seen_paths.add(image_path)
+            resolved_paths.append(image_path)
+        return resolved_paths
 
     def startChecksReview(
         self,
@@ -985,6 +1475,8 @@ class ImgDataService:
         base_url: str,
         source_mode: str,
         check_type: str,
+        save_only: bool = False,
+        resume_from_progress: bool = False,
     ) -> Dict[str, Any]:
         source_mode_normalized = str(source_mode or "findings").strip().lower()
         if source_mode_normalized not in {"findings", "scan"}:
@@ -995,7 +1487,28 @@ class ImgDataService:
         if check_type_normalized not in supported_types:
             check_type_normalized = "dimension_issues"
 
+        if source_mode_normalized == "scan":
+            return self.startChecksScanDiscovery(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                check_type=check_type_normalized,
+                save_only=save_only,
+                resume_from_progress=resume_from_progress,
+            )
+
         if source_mode_normalized == "findings":
+            findings_payload = self.file_analysis.readCheckFindings(check_type_normalized)
+            stored_entries = findings_payload.get("entries") if isinstance(findings_payload.get("entries"), list) else []
+            if stored_entries:
+                entries = [entry for entry in stored_entries if isinstance(entry, dict)]
+                return {
+                    "check_type": check_type_normalized,
+                    "source_mode": source_mode_normalized,
+                    "save_only": bool(findings_payload.get("save_only")),
+                    "count": len(entries),
+                    "entries": entries,
+                }
             candidate_paths = self._getCheckFindingPaths(check_type_normalized)
         else:
             shared_folder = self.core.getSharedFolder(
@@ -1007,28 +1520,430 @@ class ImgDataService:
             candidate_paths = self.files.listImageFiles(shared_folder) if shared_folder else []
 
         entries: List[Dict[str, Any]] = []
-        seen_paths = []
+        seen_paths = set()
         for image_path in candidate_paths:
             if image_path in seen_paths:
                 continue
-            seen_paths.append(image_path)
-            analysis = self.analyzeImageFaceMetadata(image_path)
-            if check_type_normalized == "dimension_issues":
-                entry = self._buildDimensionMismatchReviewEntry(image_path, analysis)
-                if entry:
-                    entries.append(entry)
-            elif check_type_normalized == "duplicate_faces":
-                entries.extend(self._buildDuplicateFaceReviewEntries(image_path, analysis))
-            elif check_type_normalized == "position_deviations":
-                entries.extend(self._buildPositionDeviationReviewEntries(image_path, analysis))
-            elif check_type_normalized == "name_conflicts":
-                entries.extend(self._buildNameConflictReviewEntries(image_path, analysis))
+            seen_paths.add(image_path)
+            entries.append(
+                self._buildCheckEntry(
+                    review_type=check_type_normalized,
+                    image_path=image_path,
+                )
+            )
 
         return {
             "check_type": check_type_normalized,
             "source_mode": source_mode_normalized,
+            "save_only": False,
             "count": len(entries),
             "entries": entries,
+        }
+
+    def startChecksScanDiscovery(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        check_type: str,
+        save_only: bool = False,
+        resume_from_progress: bool = False,
+    ) -> Dict[str, Any]:
+        check_type = self._normalizeChecksType(check_type)
+        current = self.getChecksProgress(user_key, check_type)
+        state_key = self._checksStateKey(user_key, check_type)
+        worker = self._checks_threads.get(state_key)
+        if current.get("running") and worker and worker.is_alive():
+            return current
+
+        resume_cursor = current.get("resume_cursor") if resume_from_progress and isinstance(current.get("resume_cursor"), dict) else {}
+        if resume_cursor:
+            save_only = bool(resume_cursor.get("save_only", save_only))
+            check_type = str(resume_cursor.get("check_type") or check_type or "dimension_issues").strip().lower()
+        else:
+            self._invalidateChecksCandidatePathsCache(user_key, check_type)
+
+        self._setChecksProgressMessage(
+            user_key,
+            check_type,
+            "checks:status_preparing_scan",
+            running=True,
+            finished=False,
+            stop_requested=False,
+            source_mode="scan",
+            save_only=save_only,
+            files_scanned=0,
+            total_files=0,
+            findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
+            current_path="",
+            result=None,
+            resume_cursor=resume_cursor or self._buildChecksResumeCursor(
+                path_index=0,
+                pending_entries=[],
+                source_mode="scan",
+                check_type=check_type,
+                save_only=save_only,
+                findings_count=0,
+            ),
+        )
+        worker = Thread(
+            target=self._runChecksScan,
+            kwargs={
+                "user_key": user_key,
+                "cookies": dict(cookies),
+                "base_url": base_url,
+                "check_type": check_type,
+                "save_only": save_only,
+                "resume_cursor": resume_cursor if resume_cursor else None,
+            },
+            daemon=True,
+        )
+        self._checks_threads[state_key] = worker
+        worker.start()
+        return self.getChecksProgress(user_key, check_type)
+
+    def _runChecksScan(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        check_type: str,
+        save_only: bool,
+        resume_cursor: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        try:
+            result = self.searchNextChecksItem(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                check_type=check_type,
+                save_only=save_only,
+                resume_cursor=resume_cursor,
+            )
+            self._setChecksProgress(
+                user_key,
+                **result,
+            )
+        except (SessionBootstrapRequired, SessionManagerError) as exc:
+            self._setChecksProgressMessage(
+                user_key,
+                check_type,
+                "checks:progress_failed",
+                message=str(exc),
+                running=False,
+                finished=False,
+                stop_requested=False,
+                error=str(exc),
+                save_only=save_only,
+                source_mode="scan",
+                resume_cursor=resume_cursor or self._buildChecksResumeCursor(
+                    path_index=0,
+                    pending_entries=[],
+                    source_mode="scan",
+                    check_type=check_type,
+                    save_only=save_only,
+                    findings_count=0,
+                ),
+            )
+        except Exception as exc:
+            self._setChecksProgressMessage(
+                user_key,
+                check_type,
+                "checks:progress_failed",
+                message="Checks scan failed.",
+                running=False,
+                finished=True,
+                stop_requested=False,
+                error=str(exc),
+                save_only=save_only,
+                source_mode="scan",
+            )
+        finally:
+            self._checks_threads.pop(self._checksStateKey(user_key, check_type), None)
+
+    def searchNextChecksItem(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        check_type: str,
+        save_only: bool = False,
+        resume_cursor: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        shared_folder = self.core.getSharedFolder(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            folder_name="photo",
+        )
+        if not shared_folder:
+            return {
+                "running": False,
+                "finished": True,
+                "source_mode": "scan",
+                "check_type": check_type,
+                "save_only": save_only,
+                "message_key": "checks:progress_shared_folder_missing",
+                "message": "Shared folder could not be resolved.",
+                "message_params": {},
+                "result": None,
+                "files_scanned": 0,
+                "total_files": 0,
+                "findings_count": 0,
+                "resume_cursor": self._buildChecksResumeCursor(
+                    path_index=0,
+                    pending_entries=[],
+                    source_mode="scan",
+                    check_type=check_type,
+                    save_only=save_only,
+                    findings_count=0,
+                ),
+            }
+
+        path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
+        pending_entries = resume_cursor.get("pending_entries") if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("pending_entries"), list) else []
+        findings_count = int(resume_cursor.get("findings_count") or 0) if isinstance(resume_cursor, dict) else 0
+        saved_entries: List[Dict[str, Any]] = []
+        candidate_paths = self._getChecksCandidatePaths(
+            user_key=user_key,
+            check_type=check_type,
+            shared_folder=shared_folder,
+            use_cache=True,
+        )
+        total_files = len(candidate_paths)
+        self._setChecksProgressMessage(
+            user_key,
+            check_type,
+            "checks:progress_scanning",
+            message_params={"current": max(0, path_index), "total": total_files, "findings": findings_count},
+            running=True,
+            finished=False,
+            stop_requested=False,
+            source_mode="scan",
+            save_only=save_only,
+            files_scanned=max(0, path_index),
+            total_files=total_files,
+            findings_count=findings_count,
+            current_path="",
+            resume_cursor=self._buildChecksResumeCursor(
+                path_index=path_index,
+                pending_entries=pending_entries,
+                source_mode="scan",
+                check_type=check_type,
+                save_only=save_only,
+                findings_count=findings_count,
+            ),
+        )
+
+        if pending_entries and not save_only:
+            entry = pending_entries[0]
+            remaining_entries = pending_entries[1:]
+            item = self.getChecksReviewItem(entry=entry)
+            return {
+                "running": False,
+                "finished": True,
+                "stop_requested": False,
+                "source_mode": "scan",
+                "check_type": check_type,
+                "save_only": save_only,
+                "files_scanned": min(path_index, total_files),
+                "total_files": total_files,
+                "findings_count": max(findings_count, 1),
+                "current_path": str(entry.get("image_path") or ""),
+                "result": {
+                    "entry": entry,
+                    "item": item,
+                },
+                "resume_cursor": self._buildChecksResumeCursor(
+                    path_index=path_index,
+                    pending_entries=remaining_entries,
+                    source_mode="scan",
+                    check_type=check_type,
+                    save_only=save_only,
+                    findings_count=max(findings_count, 1),
+                ),
+                "message_key": "checks:progress_result_found",
+                "message": "Check finding found.",
+                "message_params": {"count": max(findings_count, 1)},
+            }
+
+        for index in range(max(0, path_index), total_files):
+            if self._shouldStopChecks(user_key, check_type):
+                return {
+                    "running": False,
+                    "finished": True,
+                    "stop_requested": False,
+                    "source_mode": "scan",
+                    "check_type": check_type,
+                    "save_only": save_only,
+                    "files_scanned": index,
+                    "total_files": total_files,
+                    "findings_count": findings_count,
+                    "current_path": "",
+                    "result": None,
+                    "resume_cursor": self._buildChecksResumeCursor(
+                        path_index=index,
+                        pending_entries=[],
+                        source_mode="scan",
+                        check_type=check_type,
+                        save_only=save_only,
+                        findings_count=findings_count,
+                    ),
+                    "message_key": "checks:progress_stopped",
+                    "message": "Checks scan stopped.",
+                    "message_params": {"count": findings_count},
+                }
+            image_path = candidate_paths[index]
+            scanned_count = index + 1
+            self._setChecksProgressMessage(
+                user_key,
+                check_type,
+                "checks:progress_scanning",
+                message_params={"current": scanned_count, "total": total_files, "findings": findings_count},
+                running=True,
+                finished=False,
+                stop_requested=False,
+                source_mode="scan",
+                save_only=save_only,
+                files_scanned=scanned_count,
+                total_files=total_files,
+                findings_count=findings_count,
+                current_path=image_path,
+                resume_cursor=self._buildChecksResumeCursor(
+                    path_index=index,
+                    pending_entries=[],
+                    source_mode="scan",
+                    check_type=check_type,
+                    save_only=save_only,
+                    findings_count=findings_count,
+                ),
+            )
+            analysis = self.analyzeImageFaceMetadata(image_path)
+            entries = self._buildCheckEntriesForType(
+                image_path=image_path,
+                review_type=check_type,
+                analysis=analysis,
+            )
+            if not entries:
+                continue
+
+            findings_count += len(entries)
+            if save_only:
+                saved_entries.extend(entries)
+                self._setChecksProgressMessage(
+                    user_key,
+                    check_type,
+                    "checks:progress_scanning",
+                    message_params={"current": scanned_count, "total": total_files, "findings": findings_count},
+                    running=True,
+                    finished=False,
+                    source_mode="scan",
+                    save_only=True,
+                    files_scanned=scanned_count,
+                    total_files=total_files,
+                    findings_count=findings_count,
+                    current_path=image_path,
+                    resume_cursor=self._buildChecksResumeCursor(
+                        path_index=index + 1,
+                        pending_entries=[],
+                        source_mode="scan",
+                        check_type=check_type,
+                        save_only=True,
+                        findings_count=findings_count,
+                    ),
+                )
+                continue
+
+            entry = entries[0]
+            item = self.getChecksReviewItem(entry=entry)
+            return {
+                "running": False,
+                "finished": True,
+                "stop_requested": False,
+                "source_mode": "scan",
+                "check_type": check_type,
+                "save_only": False,
+                "files_scanned": scanned_count,
+                "total_files": total_files,
+                "findings_count": findings_count,
+                "current_path": image_path,
+                "result": {
+                    "entry": entry,
+                    "item": item,
+                },
+                "resume_cursor": self._buildChecksResumeCursor(
+                    path_index=index + 1,
+                    pending_entries=entries[1:],
+                    source_mode="scan",
+                    check_type=check_type,
+                    save_only=False,
+                    findings_count=findings_count,
+                ),
+                "message_key": "checks:progress_result_found",
+                "message": "Check finding found.",
+                "message_params": {"count": findings_count},
+            }
+
+        if save_only:
+            self._writeChecksFindings(
+                check_type=check_type,
+                status="finished",
+                shared_folder=shared_folder,
+                source_mode="scan",
+                save_only=True,
+                entries=saved_entries,
+            )
+            return {
+                "running": False,
+                "finished": True,
+                "stop_requested": False,
+                "source_mode": "scan",
+                "check_type": check_type,
+                "save_only": True,
+                "files_scanned": total_files,
+                "total_files": total_files,
+                "findings_count": len(saved_entries),
+                "current_path": "",
+                "result": None,
+                "resume_cursor": self._buildChecksResumeCursor(
+                    path_index=total_files,
+                    pending_entries=[],
+                    source_mode="scan",
+                    check_type=check_type,
+                    save_only=True,
+                    findings_count=len(saved_entries),
+                ),
+                "message_key": "checks:progress_findings_saved" if saved_entries else "checks:progress_findings_empty",
+                "message": "Checks findings saved." if saved_entries else "No checks findings were saved.",
+                "message_params": {"count": len(saved_entries)},
+            }
+
+        return {
+            "running": False,
+            "finished": True,
+            "stop_requested": False,
+            "source_mode": "scan",
+            "check_type": check_type,
+            "save_only": False,
+            "files_scanned": total_files,
+            "total_files": total_files,
+            "findings_count": findings_count,
+            "current_path": "",
+            "result": None,
+            "resume_cursor": self._buildChecksResumeCursor(
+                path_index=total_files,
+                pending_entries=[],
+                source_mode="scan",
+                check_type=check_type,
+                save_only=False,
+                findings_count=findings_count,
+            ),
+            "message_key": "checks:progress_finished_no_match",
+            "message": "No further checks findings found.",
+            "message_params": {"count": findings_count},
         }
 
     def getChecksReviewItem(self, *, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1040,54 +1955,27 @@ class ImgDataService:
         if review_type == "dimension_issues":
             return self._buildDimensionMismatchReviewItem(image_path, analysis, entry)
         if review_type == "duplicate_faces":
+            if not self._hasFaceSignature(entry.get("left_face_signature")) or not self._hasFaceSignature(entry.get("right_face_signature")):
+                first_entry = next(iter(self._buildDuplicateFaceReviewEntries(image_path, analysis)), None)
+                if not first_entry:
+                    return None
+                entry = first_entry
             return self._buildDuplicateFaceReviewItem(image_path, analysis, entry)
         if review_type == "position_deviations":
+            if not self._hasFaceSignature(entry.get("left_face_signature")) or not self._hasFaceSignature(entry.get("right_face_signature")):
+                first_entry = next(iter(self._buildPositionDeviationReviewEntries(image_path, analysis)), None)
+                if not first_entry:
+                    return None
+                entry = first_entry
             return self._buildPositionDeviationReviewItem(image_path, analysis, entry)
         if review_type == "name_conflicts":
+            if not self._hasFaceSignature(entry.get("left_face_signature")) or not self._hasFaceSignature(entry.get("right_face_signature")):
+                first_entry = next(iter(self._buildNameConflictReviewEntries(image_path, analysis)), None)
+                if not first_entry:
+                    return None
+                entry = first_entry
             return self._buildNameConflictReviewItem(image_path, analysis, entry)
         return None
-
-    def startDimensionMismatchCheck(
-        self,
-        *,
-        user_key: str,
-        cookies: Dict[str, str],
-        base_url: str,
-        source_mode: str,
-    ) -> Dict[str, Any]:
-        source_mode_normalized = str(source_mode or "findings").strip().lower()
-        if source_mode_normalized not in {"findings", "scan"}:
-            source_mode_normalized = "findings"
-
-        if source_mode_normalized == "findings":
-            findings_payload = self.getFileAnalysisDimensionMismatchFindings()
-            paths = findings_payload.get("paths") if isinstance(findings_payload.get("paths"), list) else []
-            mismatch_paths = [str(path) for path in paths if isinstance(path, str) and path]
-        else:
-            shared_folder = self.core.getSharedFolder(
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                folder_name="photo",
-            )
-            mismatch_paths = []
-            if shared_folder:
-                for image_path in self.files.listImageFiles(shared_folder):
-                    analysis = self.analyzeImageFaceMetadata(image_path)
-                    if analysis.get("files_with_mwg_dimension_mismatch") == 1:
-                        mismatch_paths.append(image_path)
-
-        items = []
-        for image_path in mismatch_paths:
-            item = self._buildDimensionMismatchReviewItem(image_path)
-            if item:
-                items.append(item)
-
-        return {
-            "source_mode": source_mode_normalized,
-            "count": len(items),
-            "items": items,
-        }
 
     @staticmethod
     def _incrementCounter(counter: Dict[str, int], key: str, amount: int = 1) -> None:
@@ -1233,6 +2121,10 @@ class ImgDataService:
         duplicate_faces_paths: List[str] = []
         position_deviation_paths: List[str] = []
         name_conflict_paths: List[str] = []
+        dimension_mismatch_entries: List[Dict[str, Any]] = []
+        duplicate_face_entries: List[Dict[str, Any]] = []
+        position_deviation_entries: List[Dict[str, Any]] = []
+        name_conflict_entries: List[Dict[str, Any]] = []
         files_with_duplicate_faces: Optional[int] = None
         files_with_face_position_deviations: Optional[int] = None
         files_with_dimension_issues: Optional[int] = 0 if analysis_checks["DIMENSION_ISSUES"] else None
@@ -1589,16 +2481,22 @@ class ImgDataService:
                     files_with_duplicate_faces = (files_with_duplicate_faces or 0) + int(analysis.get("files_with_duplicate_faces") or 0)
                     if analysis.get("files_with_duplicate_faces"):
                         duplicate_faces_paths.append(image_path)
+                        duplicate_face_entries.extend(self._buildDuplicateFaceReviewEntries(image_path, analysis))
                 if analysis_checks["POSITION_DEVIATIONS"]:
                     files_with_face_position_deviations = (files_with_face_position_deviations or 0) + int(analysis.get("files_with_face_position_deviations") or 0)
                     if analysis.get("files_with_face_position_deviations"):
                         position_deviation_paths.append(image_path)
+                        position_deviation_entries.extend(self._buildPositionDeviationReviewEntries(image_path, analysis))
                 if analysis_checks["NAME_CONFLICTS"]:
                     files_with_name_conflicts = (files_with_name_conflicts or 0) + int(analysis.get("files_with_name_conflicts") or 0)
                     if analysis.get("files_with_name_conflicts"):
                         name_conflict_paths.append(image_path)
+                        name_conflict_entries.extend(self._buildNameConflictReviewEntries(image_path, analysis))
                 if analysis.get("files_with_mwg_dimension_mismatch"):
                     dimension_mismatch_paths.append(image_path)
+                    review_entry = self._buildDimensionMismatchReviewEntry(image_path, analysis)
+                    if review_entry:
+                        dimension_mismatch_entries.append(review_entry)
                     self._writeFileAnalysisCheckFindings(
                         finding_type="dimension_issues",
                         job_id=job_id,
@@ -1606,7 +2504,7 @@ class ImgDataService:
                         shared_folder=shared_folder,
                         status="running",
                         finished=False,
-                        findings=dimension_mismatch_paths,
+                        findings=dimension_mismatch_entries,
                     )
                 if analysis.get("files_with_duplicate_faces"):
                     self._writeFileAnalysisCheckFindings(
@@ -1616,7 +2514,7 @@ class ImgDataService:
                         shared_folder=shared_folder,
                         status="running",
                         finished=False,
-                        findings=duplicate_faces_paths,
+                        findings=duplicate_face_entries,
                     )
                 if analysis.get("files_with_face_position_deviations"):
                     self._writeFileAnalysisCheckFindings(
@@ -1626,7 +2524,7 @@ class ImgDataService:
                         shared_folder=shared_folder,
                         status="running",
                         finished=False,
-                        findings=position_deviation_paths,
+                        findings=position_deviation_entries,
                     )
                 if analysis.get("files_with_name_conflicts"):
                     self._writeFileAnalysisCheckFindings(
@@ -1636,7 +2534,7 @@ class ImgDataService:
                         shared_folder=shared_folder,
                         status="running",
                         finished=False,
-                        findings=name_conflict_paths,
+                        findings=name_conflict_entries,
                     )
 
                 faces_total += int(analysis.get("faces_total") or 0)
@@ -1690,10 +2588,10 @@ class ImgDataService:
                         status="running",
                         finished=False,
                         findings_by_type={
-                            "dimension_issues": dimension_mismatch_paths,
-                            "duplicate_faces": duplicate_faces_paths,
-                            "position_deviations": position_deviation_paths,
-                            "name_conflicts": name_conflict_paths,
+                            "dimension_issues": dimension_mismatch_entries,
+                            "duplicate_faces": duplicate_face_entries,
+                            "position_deviations": position_deviation_entries,
+                            "name_conflicts": name_conflict_entries,
                         },
                     )
                     self.file_analysis.writeLatestResult(
@@ -1742,10 +2640,10 @@ class ImgDataService:
                 status="finished",
                 finished=True,
                 findings_by_type={
-                    "dimension_issues": dimension_mismatch_paths,
-                    "duplicate_faces": duplicate_faces_paths,
-                    "position_deviations": position_deviation_paths,
-                    "name_conflicts": name_conflict_paths,
+                    "dimension_issues": dimension_mismatch_entries,
+                    "duplicate_faces": duplicate_face_entries,
+                    "position_deviations": position_deviation_entries,
+                    "name_conflicts": name_conflict_entries,
                 },
             )
             self._persistFileAnalysisResult(

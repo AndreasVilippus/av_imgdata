@@ -20,6 +20,11 @@
 	--sm-font-sm: 13px;
 	--sm-font-xs: 12px;
 	--sm-preview-max-h: min(46vh, 340px);
+	--sm-icon-wide-w: 129px;
+	--sm-icon-wide-h: 64px;
+	--sm-icon-compact-h: 32px;
+	--sm-icon-compact-w: 64px;
+	--sm-icon-overlay-size: 16px;
 	height: 100%;
 	min-width: 600px;
 	position: relative;
@@ -184,7 +189,23 @@
 	min-width: 0;
 }
 
+.face-match-status-card,
+.face-match-result-name-input,
+.face-match-suggest-list {
+	border: 1px solid var(--sm-border);
+	border-radius: var(--sm-radius-1);
+	background: var(--sm-surface);
+	box-sizing: border-box;
+}
+
 .sm-status-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--sm-space-3);
+}
+
+.face-match-status-head {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -195,6 +216,57 @@
 	font-size: 13px;
 	font-weight: 700;
 	color: var(--sm-text);
+}
+
+.face-match-status-title {
+	font-size: 13px;
+	font-weight: 700;
+	color: var(--sm-text);
+}
+
+.face-match-icon-button {
+	width: var(--sm-icon-wide-w);
+	height: var(--sm-icon-wide-h);
+	padding: 0;
+	border: 0;
+	background: transparent;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+}
+
+.face-match-icon-button:focus-visible {
+	outline: 2px solid var(--sm-blue);
+	outline-offset: 2px;
+	border-radius: var(--sm-radius-1);
+}
+
+.face-match-icon-image {
+	display: block;
+	width: var(--sm-icon-wide-w);
+	height: var(--sm-icon-wide-h);
+	object-fit: contain;
+}
+
+.face-match-icon-stack {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--sm-icon-compact-w);
+	height: var(--sm-icon-compact-h);
+	overflow: visible;
+}
+
+.face-match-icon-overlay {
+	position: absolute;
+	top: -2px;
+	right: -2px;
+	width: var(--sm-icon-overlay-size);
+	height: var(--sm-icon-overlay-size);
+	object-fit: contain;
+	z-index: 2;
 }
 
 .sm-kv-list {
@@ -399,6 +471,64 @@
 	font-size: var(--sm-font-sm);
 	font-weight: 700;
 	color: var(--sm-text);
+}
+
+.checks-replace-actions {
+	position: absolute;
+	left: 50%;
+	top: 64px;
+	transform: translateX(-50%);
+	z-index: 5;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	align-items: center;
+}
+
+.checks-replace-button {
+	width: var(--sm-icon-compact-w);
+	height: var(--sm-icon-compact-h);
+	padding: 0;
+	filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.18));
+}
+
+.checks-replace-button .face-match-icon-image {
+	width: var(--sm-icon-compact-w);
+	height: var(--sm-icon-compact-h);
+}
+
+.checks-delete-button {
+	position: absolute;
+	top: -10px;
+	z-index: 4;
+	width: var(--sm-icon-compact-w);
+	height: var(--sm-icon-compact-h);
+	padding: 0;
+	filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.18));
+}
+
+.checks-delete-button-left {
+	left: -18px;
+}
+
+.checks-delete-button-right {
+	right: -18px;
+}
+
+.checks-delete-button .face-match-icon-stack {
+	width: auto;
+}
+
+.checks-delete-button .face-match-icon-image {
+	width: auto;
+	height: var(--sm-icon-compact-h);
+}
+
+.checks-delete-button .face-match-icon-overlay {
+	top: -2px;
+	right: -2px;
+	width: var(--sm-icon-overlay-size);
+	height: var(--sm-icon-overlay-size);
 }
 
 .config-message {

@@ -67,6 +67,9 @@ export default {
 			if (option === 'face_match') {
 				this.refreshFaceMatchSessionState();
 			}
+			if (option === 'checks') {
+				this.refreshChecksSessionState();
+			}
 		},
 		readCookie(name) {
 			const match = document.cookie.match(new RegExp('(?:^|; )' + this.escapeRegExp(name) + '=([^;]*)'));

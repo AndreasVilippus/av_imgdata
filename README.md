@@ -8,6 +8,7 @@
 - Match unknown Synology Photos faces against face names stored in image metadata.
 - Assign a matched face to an existing Photos person.
 - Create a new Photos person from a matched file face.
+- Delete a metadata face from image XMP via ExifTool from the checks view.
 - Maintain persistent name mappings for recurring metadata name variants.
 - Edit runtime configuration from the package UI.
 

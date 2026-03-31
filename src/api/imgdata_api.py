@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlsplit
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
 from imgdata import ImgDataService
 
@@ -549,43 +550,58 @@ async def file_analysis_stop(request: Request):
     }
 
 
-@router.post("/checks_dimension_mismatch_start")
-async def checks_dimension_mismatch_start(request: Request):
+@router.post("/checks_start")
+async def checks_start(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
-        return error_response
+        return JSONResponse(error_response)
 
     body = await _read_request_body(request)
     source_mode = body.get("source_mode", "findings")
     check_type = body.get("check_type", "dimension_issues")
+    save_only = bool(body.get("save_only"))
+    resume_from_progress = bool(body.get("resume_from_progress"))
 
     try:
-        result = IMGDATA.startChecksReview(
-            user_key=session_ctx["user_key"],
-            cookies=session_ctx["cookies"],
-            base_url=session_ctx["base_url"],
-            source_mode=source_mode,
-            check_type=check_type,
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: IMGDATA.startChecksReview(
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+                source_mode=source_mode,
+                check_type=check_type,
+                save_only=save_only,
+                resume_from_progress=resume_from_progress,
+            ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
-        return _session_exception_response(exc, bootstrap_message="checks_dimension_mismatch_start_bootstrap_required")
+        error_payload = _session_exception_response(exc, bootstrap_message="checks_start_bootstrap_required")
+        return JSONResponse(error_payload)
+    except Exception as exc:
+        error_payload = {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "checks_start_failed",
+                "details": str(exc),
+            },
+        }
+        return JSONResponse(error_payload)
 
-    return {
+    response_payload = {
         "success": True,
         "data": result,
     }
-
-
-@router.post("/checks_start")
-async def checks_start(request: Request):
-    return await checks_dimension_mismatch_start(request)
+    return JSONResponse(response_payload)
 
 
 @router.post("/checks_item")
 async def checks_item(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
-        return error_response
+        return JSONResponse(error_response)
 
     body = await _read_request_body(request)
     entry = body.get("entry")
@@ -599,29 +615,140 @@ async def checks_item(request: Request):
         }
 
     try:
-        item = IMGDATA.getChecksReviewItem(entry=entry)
+        loop = asyncio.get_running_loop()
+        item = await loop.run_in_executor(
+            None,
+            lambda: IMGDATA.getChecksReviewItem(entry=entry),
+        )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
-        return _session_exception_response(exc, bootstrap_message="checks_item_bootstrap_required")
+        error_payload = _session_exception_response(exc, bootstrap_message="checks_item_bootstrap_required")
+        return JSONResponse(error_payload)
+    except Exception as exc:
+        error_payload = {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "checks_item_failed",
+                "details": str(exc),
+            },
+        }
+        return JSONResponse(error_payload)
 
-    return {
+    response_payload = {
         "success": True,
         "data": {
             "item": item,
         },
     }
+    return JSONResponse(response_payload)
 
 
-@router.post("/checks_dimension_mismatch_findings")
-async def checks_dimension_mismatch_findings(request: Request):
+@router.post("/checks_progress")
+async def checks_progress(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
+    body = await _read_request_body(request)
+    check_type = body.get("check_type", "dimension_issues")
 
     return {
         "success": True,
-        "data": IMGDATA.getFileAnalysisDimensionMismatchFindings(),
+        "data": IMGDATA.getChecksProgress(session_ctx["user_key"], str(check_type or "dimension_issues")),
     }
 
+
+@router.post("/checks_stop")
+async def checks_stop(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+    body = await _read_request_body(request)
+    check_type = body.get("check_type", "dimension_issues")
+
+    return {
+        "success": True,
+        "data": IMGDATA.requestStopChecks(session_ctx["user_key"], str(check_type or "dimension_issues")),
+    }
+
+
+@router.post("/checks_delete_metadata_face")
+async def checks_delete_metadata_face(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+
+    body = await _read_request_body(request)
+    image_path = str(body.get("image_path") or "").strip()
+    face = body.get("face")
+    if not image_path or not isinstance(face, dict):
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_checks_delete_face_request",
+            },
+        })
+
+    try:
+        result = IMGDATA.deleteMetadataFace(
+            image_path=image_path,
+            face_data=face,
+        )
+    except Exception as exc:
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "checks_delete_metadata_face_failed",
+                "details": str(exc),
+            },
+        })
+
+    return JSONResponse({
+        "success": True,
+        "data": result,
+    })
+
+
+@router.post("/checks_replace_metadata_face_name")
+async def checks_replace_metadata_face_name(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+
+    body = await _read_request_body(request)
+    image_path = str(body.get("image_path") or "").strip()
+    face = body.get("face")
+    new_name = str(body.get("new_name") or "").strip()
+    if not image_path or not isinstance(face, dict) or not new_name:
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_checks_replace_face_request",
+            },
+        })
+
+    try:
+        result = IMGDATA.replaceMetadataFaceName(
+            image_path=image_path,
+            face_data=face,
+            new_name=new_name,
+        )
+    except Exception as exc:
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "checks_replace_metadata_face_name_failed",
+                "details": str(exc),
+            },
+        })
+
+    return JSONResponse({
+        "success": True,
+        "data": result,
+    })
 
 @router.get("/file_image")
 async def file_image(request: Request, path: str = ""):

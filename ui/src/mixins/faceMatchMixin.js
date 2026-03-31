@@ -224,6 +224,13 @@ export default {
 			this.faceMatchFindingEntries = [];
 			this.faceMatchFindingIndex = 0;
 		},
+		setFaceMatchProgressMessage(message, extra = {}) {
+			this.faceMatchProgress = {
+				...(this.faceMatchProgress || {}),
+				...extra,
+				message,
+			};
+		},
 		async loadFaceMatchFindingAtIndex(index) {
 			const entry = this.faceMatchFindingEntries[index];
 			if (!entry) {
@@ -233,17 +240,17 @@ export default {
 			this.faceMatchResult = entry;
 			this.faceMatchFindingIndex = index;
 			this.syncFaceMatchEditableName();
-			this.faceMatchProgress = {
-				...(this.faceMatchProgress || {}),
-				message: this.$t('face_match:status_list_entry', 'List entry {current} of {total}.', {
+			this.setFaceMatchProgressMessage(
+				this.$t('face_match:status_list_entry', 'List entry {current} of {total}.', {
 					current: index + 1,
 					total: this.faceMatchFindingEntries.length,
-				}),
-			};
+				})
+			);
 		},
 		async loadStoredFaceMatchFindings() {
 			const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
 				action: 'load_photo_face_match_findings',
+				auto: this.faceMatchAutoAssignKnown,
 			});
 			const payload = this.getResponseDataObject(data, 'face_matches');
 			const entries = Array.isArray(payload.entries) ? payload.entries : [];
@@ -616,6 +623,38 @@ export default {
 				resolver(!!value);
 			}
 		},
+		async advanceFaceMatchFindingsAfterTransfer(data) {
+			const findingsUpdate = this.getResponseDataObject(data, 'findings_update');
+			const faceId = this.getCurrentFaceMatchFaceId();
+			const remainingEntries = this.faceMatchFindingEntries.filter((entry) => {
+				if (!faceId || !entry || typeof entry !== 'object') {
+					return true;
+				}
+				const entryFaceId = Number(entry && entry.face && entry.face.face_id);
+				return !Number.isFinite(entryFaceId) || entryFaceId !== faceId;
+			});
+
+			this.faceMatchFindingEntries = remainingEntries;
+			this.faceMatchFindingsStatus = {
+				...(this.faceMatchFindingsStatus || {}),
+				count: Number(findingsUpdate.remaining_count) || remainingEntries.length,
+				transferred_count: Number(findingsUpdate.transferred_count) || (this.faceMatchTransferredCount + 1),
+			};
+			this.faceMatchTransferredCount = Number(this.faceMatchFindingsStatus.transferred_count) || 0;
+
+			if (!remainingEntries.length) {
+				this.faceMatchResult = null;
+				this.faceMatchFindingIndex = 0;
+				this.resetFaceMatchSelectionState();
+				this.setFaceMatchProgressMessage(
+					this.$t('face_match:status_findings_empty', 'No saved matches found.')
+				);
+				return;
+			}
+
+			const nextIndex = Math.min(this.faceMatchFindingIndex, remainingEntries.length - 1);
+			await this.loadFaceMatchFindingAtIndex(nextIndex);
+		},
 		buildNextSkippedFaceIds() {
 			const currentFaceId = this.getCurrentFaceMatchFaceId();
 			if (!currentFaceId) {
@@ -783,9 +822,13 @@ export default {
 				}
 
 				this.output = JSON.stringify(data, null, 2);
-				this.faceMatchTransferredCount += 1;
-				this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
-				await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
+				if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+					await this.advanceFaceMatchFindingsAfterTransfer(data);
+				} else {
+					this.faceMatchTransferredCount += 1;
+					this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
+					await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
+				}
 			} catch (err) {
 				this.output = `Error: ${err.message}`;
 			}
@@ -842,9 +885,13 @@ export default {
 				}
 
 				this.output = JSON.stringify(data, null, 2);
-				this.faceMatchTransferredCount += 1;
-				this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
-				await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
+				if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+					await this.advanceFaceMatchFindingsAfterTransfer(data);
+				} else {
+					this.faceMatchTransferredCount += 1;
+					this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
+					await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
+				}
 			} catch (err) {
 				this.output = `Error: ${err.message}`;
 			}
@@ -893,11 +940,15 @@ export default {
 			}
 
 			this.faceMatchLoading = true;
-			this.faceMatchProgress = {
+			this.faceMatchProgress = resetSkippedFaceIds ? {
 				message: this.$t('face_match:status_starting', 'Search starting...'),
 				persons_read: 0,
 				images_read: 0,
 				faces_read: 0,
+				metadata_faces_read: 0,
+			} : {
+				...(this.faceMatchProgress || {}),
+				message: this.$t('face_match:status_starting', 'Search starting...'),
 			};
 			this.faceMatchResult = null;
 			this.resetFaceMatchSelectionState();

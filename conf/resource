@@ -4,7 +4,7 @@
       {
         "name": "photo",
         "permission": {
-          "ro": ["AV_ImgData"]
+          "rw": ["AV_ImgData"]
         }
       }
     ]
