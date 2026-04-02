@@ -36,6 +36,7 @@ class ExifToolHandler:
             "/usr/bin/exiftool",
             "/usr/local/bin/exiftool",
             "/opt/bin/exiftool",
+            "/var/packages/AV_ImgData/target/usr/bin/exiftool",
             "/var/packages/ExifTool/target/bin/exiftool",
         ]
         for path in common_paths:

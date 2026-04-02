@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import tarfile
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.request import Request, urlopen
 
 from services.config_service import ConfigService
@@ -18,6 +18,7 @@ class ExifToolService:
     HISTORY_URL = "https://exiftool.org/history.html"
     INSTALL_URL = "https://exiftool.org/install.html"
     INDEX_URL = "https://exiftool.org/index.html"
+    PACKAGE_WRAPPER_PATH = "/var/packages/AV_ImgData/target/usr/bin/exiftool"
 
     def __init__(self, config_service: Optional[ConfigService] = None):
         self._config = config_service or ConfigService()
@@ -27,20 +28,55 @@ class ExifToolService:
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
         configured_path = str(files_config.get("PATHEXIFTOOL", "exiftool") or "exiftool").strip() or "exiftool"
         use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
+        check_updates = bool(files_config.get("CHECK_EXIFTOOL_UPDATES", True))
 
         local_info = self._detectLocalExifTool(configured_path)
-        online_info = self._fetchLatestOfficialInfo()
+        online_info = self._fetchLatestOfficialInfo() if check_updates else {
+            "checked": False,
+            "latest_version": "",
+            "latest_release_date": "",
+            "history_url": self.HISTORY_URL,
+            "install_url": self.INSTALL_URL,
+            "index_url": self.INDEX_URL,
+            "unix_package_name": "",
+            "unix_download_url": "",
+        }
         perl_info = self._detectPerl()
-        update_available = self._isUpdateAvailable(local_info.get("version"), online_info.get("latest_version"))
+        update_available = check_updates and self._isUpdateAvailable(local_info.get("version"), online_info.get("latest_version"))
 
         return {
             "configured_path": configured_path,
             "use_exiftool": use_exiftool,
+            "check_updates": check_updates,
             "local": local_info,
             "online": online_info,
             "perl": perl_info,
             "architecture": self._architectureInfo(local_info),
             "update_available": update_available,
+        }
+
+    def getSupportedReadableExtensions(self) -> Dict[str, Any]:
+        config = self._config.readMergedConfig()
+        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        configured_path = str(files_config.get("PATHEXIFTOOL", "exiftool") or "exiftool").strip() or "exiftool"
+        local_info = self._detectLocalExifTool(configured_path)
+        executable_path = str(local_info.get("resolved_path") or "").strip()
+        if not executable_path:
+            return {
+                "success": False,
+                "extensions": [],
+                "configured_path": configured_path,
+                "resolved_path": "",
+                "error": "exiftool_not_found",
+            }
+
+        extensions = self._readSupportedExtensions(executable_path)
+        return {
+            "success": bool(extensions),
+            "extensions": extensions,
+            "configured_path": configured_path,
+            "resolved_path": executable_path,
+            "error": "" if extensions else "exiftool_extensions_unavailable",
         }
 
     def installLatest(self) -> Dict[str, Any]:
@@ -101,7 +137,7 @@ class ExifToolService:
 
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
-        files_config["PATHEXIFTOOL"] = str(executable_path)
+        files_config["PATHEXIFTOOL"] = self.PACKAGE_WRAPPER_PATH
         files_config["USE_EXIFTOOL"] = True
         config["files"] = files_config
         self._config.writeConfig(config)
@@ -113,6 +149,7 @@ class ExifToolService:
             "version": installed_version,
             "archive_path": str(archive_path),
             "installed_path": str(executable_path),
+            "configured_path": self.PACKAGE_WRAPPER_PATH,
             "perl": perl_info,
             "online": online,
         }
@@ -177,6 +214,7 @@ class ExifToolService:
             "/usr/bin/exiftool",
             "/usr/local/bin/exiftool",
             "/opt/bin/exiftool",
+            self.PACKAGE_WRAPPER_PATH,
             "/var/packages/ExifTool/target/bin/exiftool",
         ]
         for path in common_paths:
@@ -200,6 +238,36 @@ class ExifToolService:
         if result.returncode != 0:
             return ""
         return str(result.stdout or "").strip()
+
+    @staticmethod
+    def _readSupportedExtensions(executable_path: str) -> List[str]:
+        try:
+            result = subprocess.run(
+                [executable_path, "-listf"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except Exception:
+            return []
+
+        if result.returncode != 0:
+            return []
+
+        normalized: List[str] = []
+        seen = set()
+        raw_output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        for token in re.split(r"[\s,]+", raw_output):
+            candidate = str(token or "").strip().lower().lstrip(".")
+            if not candidate or not re.fullmatch(r"[a-z0-9][a-z0-9+_-]*", candidate):
+                continue
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
+        return normalized
 
     @staticmethod
     def _detectInstallationKind(executable_path: str) -> str:

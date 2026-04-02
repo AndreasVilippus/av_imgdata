@@ -158,13 +158,6 @@
 	color: var(--sm-text-muted);
 }
 
-.sm-system-title {
-	font-size: 16px;
-	line-height: 24px;
-	font-weight: 700;
-	color: var(--sm-text);
-}
-
 .sm-system-card {
 	background: var(--sm-bg);
 	border-radius: var(--sm-radius-1);
@@ -210,18 +203,6 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: var(--sm-space-3);
-}
-
-.sm-status-title {
-	font-size: 13px;
-	font-weight: 700;
-	color: var(--sm-text);
-}
-
-.face-match-status-title {
-	font-size: 13px;
-	font-weight: 700;
-	color: var(--sm-text);
 }
 
 .face-match-icon-button {
@@ -421,14 +402,6 @@
 	padding: 16px;
 }
 
-.sm-overview-person-title {
-	font-size: 14px;
-	line-height: 24px;
-	font-weight: 700;
-	color: var(--sm-text);
-	margin-bottom: 10px;
-}
-
 .config-placeholder {
 	padding: 16px;
 	border: 1px dashed var(--sm-border);
@@ -560,10 +533,14 @@
 	box-sizing: border-box;
 }
 
-.config-card-title {
+.sm-section-title {
 	font-size: 14px;
 	font-weight: 700;
 	color: var(--sm-text);
+}
+
+.sm-section-title-block {
+	margin-bottom: 10px;
 }
 
 .config-card-desc {
@@ -604,6 +581,26 @@
 	box-sizing: border-box;
 	font: inherit;
 	color: var(--sm-text);
+}
+
+.config-textarea {
+	width: 100%;
+	min-height: 120px;
+	border: 1px solid var(--sm-border);
+	border-radius: var(--sm-radius-1);
+	background: var(--sm-surface);
+	padding: 8px 10px;
+	box-sizing: border-box;
+	font: inherit;
+	color: var(--sm-text);
+	line-height: 1.4;
+	resize: vertical;
+}
+
+.config-inline-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--sm-space-2);
 }
 
 .config-checkbox {

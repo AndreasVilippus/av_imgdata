@@ -1,7 +1,7 @@
 <template>
 	<div>
 		<section class="panel">
-			<div class="sm-overview-person-title">{{ vm.$t('status:overview_title', 'Person detection in Photos') }}</div>
+			<div class="sm-section-title sm-section-title-block">{{ vm.$t('status:overview_title', 'Person detection in Photos') }}</div>
 			<div v-if="vm.statusLoading" class="sm-overview-person-loading">
 				<span class="sm-loader"></span>
 				{{ vm.$t('status:loading', 'Loading data...') }}
@@ -32,7 +32,7 @@
 			</div>
 		</section>
 		<section class="panel">
-			<div class="sm-system-title">{{ vm.$t('status:files_title', 'Files') }}</div>
+			<div class="sm-section-title sm-section-title-block">{{ vm.$t('status:files_title', 'Files') }}</div>
 			<div class="sm-system-card">
 				<div class="sm-system-row">
 					<div class="sm-system-label">{{ vm.$t('status:files_desc', 'Analyze image files and sidecars for face metadata formats.') }}</div>
@@ -70,7 +70,10 @@
 					<strong>{{ vm.$t('status:files_with_name_conflicts', 'With name conflicts') }}:</strong>
 					{{ Number(vm.fileAnalysisProgress.files_with_name_conflicts) }}
 				</div>
-				<div><strong>{{ vm.$t('status:focus_usages', 'Focus usage') }}:</strong> {{ vm.formatAnalysisCountSummary(vm.fileAnalysisProgress.focus_usages, 'raw') }}</div>
+				<div v-if="vm.formatAnalysisCountSummary(vm.fileAnalysisProgress.focus_usages, 'raw') !== '-'">
+					<strong>{{ vm.$t('status:focus_usages', 'Focus usage') }}:</strong>
+					{{ vm.formatAnalysisCountSummary(vm.fileAnalysisProgress.focus_usages, 'raw') }}
+				</div>
 				<div><strong>{{ vm.$t('status:formats', 'Formats') }}:</strong> {{ vm.formatAnalysisCountSummary(vm.fileAnalysisProgress.formats, 'format') }}</div>
 				<div><strong>{{ vm.$t('status:sources', 'Sources') }}:</strong> {{ vm.formatAnalysisCountSummary(vm.fileAnalysisProgress.sources, 'source') }}</div>
 			</div>
@@ -82,7 +85,7 @@
 			</div>
 		</section>
 		<section class="panel">
-			<div class="sm-system-title">{{ vm.$t('status:system_title', 'System') }}</div>
+			<div class="sm-section-title sm-section-title-block">{{ vm.$t('status:system_title', 'System') }}</div>
 			<div v-if="vm.statusLoading" class="sm-overview-person-loading">
 				<span class="sm-loader"></span>
 				{{ vm.$t('status:loading', 'Loading data...') }}
@@ -90,7 +93,7 @@
 			<div v-else class="sm-system-grid">
 				<div class="sm-status-card">
 					<div class="sm-status-head">
-						<div class="sm-status-title">{{ vm.$t('status:settings_components', 'Settings and components') }}</div>
+						<div class="sm-section-title">{{ vm.$t('status:settings_components', 'Settings and components') }}</div>
 					</div>
 					<div class="sm-kv-list sm-kv-list-compact">
 						<div class="sm-kv-row">
@@ -105,7 +108,7 @@
 				</div>
 				<div class="sm-status-card">
 					<div class="sm-status-head">
-						<div class="sm-status-title">{{ vm.$t('status:exiftool_title', 'ExifTool') }}</div>
+						<div class="sm-section-title">{{ vm.$t('status:exiftool_title', 'ExifTool') }}</div>
 					</div>
 					<div class="sm-kv-list">
 						<div class="sm-kv-row">

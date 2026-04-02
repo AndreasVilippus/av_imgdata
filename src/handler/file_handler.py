@@ -4,14 +4,22 @@ import struct
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from services.config_service import ConfigService
+from services.exiftool_service import ExifToolService
 from models.metadata_payload import MetadataPayload
 from services.bbox_normalizer import normalize_xmp_face
 
 
 class FileHandler:
+    SIDECAR_LOOKUP_VARIANTS = [
+        "same_dir_stem",
+        "same_dir_filename",
+        "xmp_dir_stem",
+        "xmp_dir_filename",
+    ]
     
     def __init__(self, config_service: Optional[ConfigService] = None):
         self._config = config_service or ConfigService()
+        self._exiftool = ExifToolService(self._config)
 
     @staticmethod
     def _normalize_image_extensions(value: Any, default_extensions: List[str]) -> List[str]:
@@ -32,6 +40,51 @@ class FileHandler:
         default_extensions = ConfigService.defaultConfig()["files"]["IMAGE_EXTENSIONS"]
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
         return self._normalize_image_extensions(files_config.get("IMAGE_EXTENSIONS"), default_extensions)
+
+    def configuredExifToolImageExtensions(self) -> List[str]:
+        config = self._config.readMergedConfig()
+        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        return self._normalize_image_extensions(files_config.get("EXIFTOOL_IMAGE_EXTENSIONS"), [])
+
+    def configuredSidecarLookupVariants(self) -> List[str]:
+        config = self._config.readMergedConfig()
+        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        configured = files_config.get("SIDECAR_LOOKUP_VARIANTS")
+        if not isinstance(configured, list):
+            return list(self.SIDECAR_LOOKUP_VARIANTS)
+
+        normalized: List[str] = []
+        for entry in configured:
+            candidate = str(entry or "").strip().lower()
+            if candidate not in self.SIDECAR_LOOKUP_VARIANTS or candidate in normalized:
+                continue
+            normalized.append(candidate)
+        return normalized or list(self.SIDECAR_LOOKUP_VARIANTS)
+
+    def imageExtensionsNativeOnly(self) -> bool:
+        config = self._config.readMergedConfig()
+        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        return bool(files_config.get("IMAGE_EXTENSIONS_NATIVE_ONLY", False))
+
+    def useExifToolExtensionsForDiscovery(self) -> bool:
+        config = self._config.readMergedConfig()
+        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
+        return use_exiftool and not self.imageExtensionsNativeOnly()
+
+    def effectiveImageExtensions(self) -> List[str]:
+        native_extensions = self.configuredImageExtensions()
+        if not self.useExifToolExtensionsForDiscovery():
+            return native_extensions
+
+        configured_extensions = self.configuredExifToolImageExtensions()
+        if configured_extensions:
+            return configured_extensions
+
+        supported = self._exiftool.getSupportedReadableExtensions()
+        supported_extensions = supported.get("extensions") if isinstance(supported.get("extensions"), list) else []
+        normalized_supported = self._normalize_image_extensions(supported_extensions, [])
+        return normalized_supported or native_extensions
 
     def configuredAnalysisChecks(self) -> Dict[str, bool]:
         config = self._config.readMergedConfig()
@@ -222,7 +275,7 @@ class FileHandler:
         if not root.exists() or not root.is_dir():
             return []
 
-        extensions = set(self.configuredImageExtensions())
+        extensions = set(self.effectiveImageExtensions())
         return sorted([
             str(p) for p in root.rglob("*")
             if p.is_file() and p.suffix.lower().lstrip(".") in extensions
@@ -248,19 +301,47 @@ class FileHandler:
         return {"success": True, "error": "", "content": text}
 
     @staticmethod
-    def findXmpForImage(image_path: str) -> Optional[str]:
+    def _findCaseInsensitivePath(base_path: str, path_parts: List[str]) -> Optional[str]:
+        current = Path(base_path)
+        if not current.exists() or not current.is_dir():
+            return None
+
+        for part in path_parts:
+            if not part:
+                return None
+            try:
+                entries = {entry.name.lower(): entry for entry in current.iterdir()}
+            except Exception:
+                return None
+            matched = entries.get(part.lower())
+            if matched is None:
+                return None
+            current = matched
+
+        return str(current) if current.exists() else None
+
+    def findXmpForImage(self, image_path: str) -> Optional[str]:
         directory = os.path.dirname(image_path)
         filename = os.path.basename(image_path)
         name_no_ext, _ = os.path.splitext(filename)
-        candidates = [f"{name_no_ext}.xmp", f"{filename}.xmp"]
         if not os.path.isdir(directory):
             return None
 
-        files_lower = {entry.lower(): entry for entry in os.listdir(directory)}
-        for candidate in candidates:
-            matched = files_lower.get(candidate.lower())
-            if matched:
-                return os.path.join(directory, matched)
+        variants = self.configuredSidecarLookupVariants()
+        candidate_parts: List[List[str]] = []
+        if "same_dir_stem" in variants:
+            candidate_parts.append([f"{name_no_ext}.xmp"])
+        if "same_dir_filename" in variants:
+            candidate_parts.append([f"{filename}.xmp"])
+        if "xmp_dir_stem" in variants:
+            candidate_parts.append(["xmp", f"{name_no_ext}.xmp"])
+        if "xmp_dir_filename" in variants:
+            candidate_parts.append(["xmp", f"{filename}.xmp"])
+
+        for parts in candidate_parts:
+            matched = self._findCaseInsensitivePath(directory, parts)
+            if matched and os.path.isfile(matched):
+                return matched
         return None
 
     @staticmethod

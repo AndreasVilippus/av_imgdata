@@ -158,6 +158,28 @@ async def exiftool_status(request: Request):
     }
 
 
+@router.post("/exiftool_extensions")
+async def exiftool_extensions(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    data = IMGDATA.exiftool_extensions()
+    if not data.get("success"):
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": data.get("error") or "exiftool_extensions_unavailable",
+            },
+        }
+
+    return {
+        "success": True,
+        "data": data,
+    }
+
+
 @router.post("/exiftool_install")
 async def exiftool_install(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
@@ -562,6 +584,7 @@ async def checks_start(request: Request):
     save_only = bool(body.get("save_only"))
     resume_from_progress = bool(body.get("resume_from_progress"))
     auto_apply_suggested_names = bool(body.get("auto_apply_suggested_names"))
+    auto_apply_suggested_duplicates = bool(body.get("auto_apply_suggested_duplicates"))
 
     try:
         loop = asyncio.get_running_loop()
@@ -576,6 +599,7 @@ async def checks_start(request: Request):
                 save_only=save_only,
                 resume_from_progress=resume_from_progress,
                 auto_apply_suggested_names=auto_apply_suggested_names,
+                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
             ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
@@ -608,6 +632,7 @@ async def checks_item(request: Request):
     body = await _read_request_body(request)
     entry = body.get("entry")
     auto_apply_suggested_names = bool(body.get("auto_apply_suggested_names"))
+    auto_apply_suggested_duplicates = bool(body.get("auto_apply_suggested_duplicates"))
     if not isinstance(entry, dict):
         return {
             "success": False,
@@ -624,6 +649,7 @@ async def checks_item(request: Request):
             lambda: IMGDATA._resolveChecksReviewEntry(
                 entry=entry,
                 auto_apply_suggested_names=auto_apply_suggested_names,
+                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
             ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
@@ -648,13 +674,15 @@ async def checks_item(request: Request):
             "auto_applied_count": int(resolved.get("auto_applied_count") or 0),
             "findings_update": (
                 IMGDATA.refreshChecksFindingEntriesForImage(
-                    check_type="name_conflicts",
+                    check_type=str(entry.get("review_type") or ""),
                     image_path=str(entry.get("image_path") or ""),
                 )
                 if (
-                    auto_apply_suggested_names
-                    and int(resolved.get("auto_applied_count") or 0) > 0
-                    and str(entry.get("review_type") or "").strip().lower() == "name_conflicts"
+                    str(entry.get("review_type") or "").strip()
+                    and (
+                        int(resolved.get("auto_applied_count") or 0) > 0
+                        or resolved.get("item") is None
+                    )
                 )
                 else None
             ),
@@ -714,6 +742,13 @@ async def checks_delete_metadata_face(request: Request):
             image_path=image_path,
             face_data=face,
         )
+        findings_update = None
+        review_type = str(body.get("review_type") or "").strip().lower()
+        if result.get("deleted") and review_type:
+            findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
+                check_type=review_type,
+                image_path=image_path,
+            )
     except Exception as exc:
         return JSONResponse({
             "success": False,
@@ -726,7 +761,10 @@ async def checks_delete_metadata_face(request: Request):
 
     return JSONResponse({
         "success": True,
-        "data": result,
+        "data": {
+            **result,
+            "findings_update": findings_update,
+        },
     })
 
 
@@ -784,6 +822,57 @@ async def checks_replace_metadata_face_name(request: Request):
         "data": {
             **result,
             "mapping_saved": mapping_saved if save_mapping else False,
+            "findings_update": findings_update,
+        },
+    })
+
+
+@router.post("/checks_replace_metadata_face_position")
+async def checks_replace_metadata_face_position(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+
+    body = await _read_request_body(request)
+    image_path = str(body.get("image_path") or "").strip()
+    face = body.get("face")
+    source_face = body.get("source_face")
+    review_type = str(body.get("review_type") or "").strip().lower()
+    if not image_path or not isinstance(face, dict) or not isinstance(source_face, dict):
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_checks_replace_face_position_request",
+            },
+        })
+
+    try:
+        result = IMGDATA.replaceMetadataFacePosition(
+            image_path=image_path,
+            face_data=face,
+            source_face_data=source_face,
+        )
+        findings_update = None
+        if result.get("updated") and review_type:
+            findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
+                check_type=review_type,
+                image_path=image_path,
+            )
+    except Exception as exc:
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "checks_replace_metadata_face_position_failed",
+                "details": str(exc),
+            },
+        })
+
+    return JSONResponse({
+        "success": True,
+        "data": {
+            **result,
             "findings_update": findings_update,
         },
     })

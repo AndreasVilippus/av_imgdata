@@ -1,7 +1,7 @@
 <template>
 	<section class="panel">
 		<div class="panel-head">
-			<h1>{{ $t('config:title', 'Configuration') }}</h1>
+			<div class="sm-section-title">{{ $t('config:title', 'Configuration') }}</div>
 		</div>
 
 		<div class="config-actions">
@@ -25,7 +25,7 @@
 
 		<div v-else class="config-layout">
 			<section class="config-card">
-				<div class="config-card-title">{{ $t('config:section_runtime', 'Runtime settings') }}</div>
+				<div class="sm-section-title">{{ $t('config:section_runtime', 'Runtime settings') }}</div>
 				<div class="config-card-desc">{{ $t('config:config_path', 'Config path: {path}', { path: configPath || '-' }) }}</div>
 
 				<div class="config-form-grid">
@@ -66,11 +66,33 @@
 							:disabled="saving"
 						/>
 					</label>
+
+					<div class="config-field">
+						<span class="config-field-label">{{ $t('config:label_sidecar_lookup_variants', 'Sidecar lookup variants') }}</span>
+						<div class="config-form-grid">
+							<label
+								v-for="option in sidecarLookupOptions"
+								:key="option.value"
+								class="config-checkbox"
+							>
+								<input
+									v-model="configModel.files.SIDECAR_LOOKUP_VARIANTS"
+									type="checkbox"
+									:value="option.value"
+									:disabled="saving"
+								/>
+								<span>{{ option.label }}</span>
+							</label>
+						</div>
+						<span class="config-card-desc">
+							{{ $t('config:hint_sidecar_lookup_variants', 'Select which XMP sidecar naming and subfolder variants should be checked. All are enabled by default.') }}
+						</span>
+					</div>
 				</div>
 			</section>
 
 			<section class="config-card">
-				<div class="config-card-title">{{ $t('config:section_exiftool', 'ExifTool') }}</div>
+				<div class="sm-section-title">{{ $t('config:section_exiftool', 'ExifTool') }}</div>
 				<div class="config-card-desc">{{ $t('config:section_exiftool_desc', 'Settings for optional ExifTool usage when reading embedded XMP metadata.') }}</div>
 
 				<div class="config-form-grid">
@@ -79,7 +101,24 @@
 						<span>{{ $t('config:label_use_exiftool', 'Use ExifTool for embedded XMP') }}</span>
 					</label>
 
+					<label class="config-checkbox">
+						<input v-model="configModel.files.CHECK_EXIFTOOL_UPDATES" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_check_exiftool_updates', 'Check for newer ExifTool versions') }}</span>
+					</label>
+
 					<template v-if="configModel.files.USE_EXIFTOOL">
+						<label
+							class="config-checkbox"
+							:title="$t('config:hint_image_extensions_native_only', 'If enabled, the native image extension list is only used by native readers. ExifTool uses its own extension list instead.')"
+						>
+							<input
+								v-model="configModel.files.IMAGE_EXTENSIONS_NATIVE_ONLY"
+								type="checkbox"
+								:disabled="saving"
+							/>
+							<span>{{ $t('config:label_image_extensions_native_only', 'Use native extension list only for native readers') }}</span>
+						</label>
+
 						<label
 							class="config-checkbox"
 							:title="$t('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.')"
@@ -102,6 +141,28 @@
 								:disabled="saving"
 							/>
 							<span>{{ $t('config:label_prefer_exiftool_for_context', 'Prefer ExifTool for metadata context') }}</span>
+						</label>
+
+						<label class="config-field">
+							<span class="config-field-label">{{ $t('config:label_exiftool_image_extensions', 'ExifTool file extensions for metadata scan') }}</span>
+							<textarea
+								v-model="exiftoolImageExtensionsInput"
+								class="config-textarea"
+								:disabled="saving || exiftoolExtensionsLoading"
+								:placeholder="$t('config:placeholder_exiftool_image_extensions', 'Leave empty to use all readable extensions reported by ExifTool.')"
+							></textarea>
+							<span class="config-card-desc">
+								{{ $t('config:hint_exiftool_image_extensions', 'When the field is empty, all readable ExifTool extensions are queried automatically.') }}
+							</span>
+							<div class="config-inline-actions">
+								<v-button
+									@click="loadExiftoolExtensions"
+									:disabled="saving || exiftoolExtensionsLoading"
+									style="width: 220px;"
+								>
+									{{ exiftoolExtensionsLoading ? $t('config:button_exiftool_extensions_loading', 'Loading ExifTool extensions...') : $t('config:button_exiftool_extensions_load', 'Load all ExifTool extensions') }}
+								</v-button>
+							</div>
 						</label>
 					</template>
 				</div>
@@ -126,7 +187,7 @@
 			</section>
 
 			<section class="config-card">
-				<div class="config-card-title">{{ $t('config:section_analysis', 'Analysis') }}</div>
+				<div class="sm-section-title">{{ $t('config:section_analysis', 'Analysis') }}</div>
 				<div class="config-card-desc">{{ $t('config:section_analysis_desc', 'Select which checks should be performed during analysis runs.') }}</div>
 
 				<div class="config-form-grid">
@@ -153,7 +214,7 @@
 			</section>
 
 			<section class="config-card">
-				<div class="config-card-title">{{ $t('config:section_review', 'Review') }}</div>
+				<div class="sm-section-title">{{ $t('config:section_review', 'Review') }}</div>
 				<div class="config-card-desc">{{ $t('config:section_review_desc', 'Select optional support behavior for the checks view.') }}</div>
 
 				<div class="config-form-grid">
@@ -178,9 +239,11 @@ export default {
 			configPath: '',
 			configModel: this.createDefaultConfig(),
 			imageExtensionsInput: '',
+			exiftoolImageExtensionsInput: '',
 			exiftoolStatus: {},
 			exiftoolInstalling: false,
 			exiftoolRemoving: false,
+			exiftoolExtensionsLoading: false,
 		};
 	},
 	computed: {
@@ -189,6 +252,14 @@ export default {
 				? String(this.exiftoolStatus.local.resolved_path)
 				: '';
 			return resolvedPath.includes('/var/packages/AV_ImgData/') || resolvedPath.includes('/volume') && resolvedPath.includes('/AV_ImgData/');
+		},
+		sidecarLookupOptions() {
+			return [
+				{ value: 'same_dir_stem', label: this.$t('config:label_sidecar_variant_same_dir_stem', 'Same folder: image.xmp') },
+				{ value: 'same_dir_filename', label: this.$t('config:label_sidecar_variant_same_dir_filename', 'Same folder: image.jpg.xmp') },
+				{ value: 'xmp_dir_stem', label: this.$t('config:label_sidecar_variant_xmp_dir_stem', 'xmp subfolder: xmp/image.xmp') },
+				{ value: 'xmp_dir_filename', label: this.$t('config:label_sidecar_variant_xmp_dir_filename', 'xmp subfolder: xmp/image.jpg.xmp') },
+			];
 		},
 	},
 	mounted() {
@@ -203,10 +274,14 @@ export default {
 			return {
 				files: {
 					USE_EXIFTOOL: false,
+					CHECK_EXIFTOOL_UPDATES: true,
 					USE_EXIFTOOL_FOR_SIDECARS: false,
 					PREFER_EXIFTOOL_FOR_CONTEXT: false,
 					PATHEXIFTOOL: 'exiftool',
+					IMAGE_EXTENSIONS_NATIVE_ONLY: false,
 					IMAGE_EXTENSIONS: ['jpg', 'jpeg', 'tif', 'tiff', 'png', 'heic', 'heif', 'dng', 'cr2', 'cr3', 'nef', 'nrw', 'arw', 'orf', 'rw2', 'raf', 'pef'],
+					EXIFTOOL_IMAGE_EXTENSIONS: [],
+					SIDECAR_LOOKUP_VARIANTS: ['same_dir_stem', 'same_dir_filename', 'xmp_dir_stem', 'xmp_dir_filename'],
 				},
 				metadata: {
 					SCHEMAS: {
@@ -241,14 +316,25 @@ export default {
 			return match ? decodeURIComponent(match[1]) : '';
 		},
 		normalizeImageExtensions(value, fallback = []) {
-			const source = Array.isArray(value) ? value : String(value || '').split(',');
+			const source = Array.isArray(value) ? value : String(value || '').split(/[\s,;]+/);
 			const normalized = source
 				.map((entry) => String(entry || '').trim().toLowerCase().replace(/^\./, ''))
 				.filter((entry, index, arr) => entry && arr.indexOf(entry) === index);
 			return normalized.length ? normalized : [...fallback];
 		},
+		normalizeSelectionList(value, allowedValues, fallback = []) {
+			const source = Array.isArray(value) ? value : [];
+			const allowed = Array.isArray(allowedValues) ? allowedValues : [];
+			const normalized = source
+				.map((entry) => String(entry || '').trim())
+				.filter((entry, index, arr) => entry && allowed.includes(entry) && arr.indexOf(entry) === index);
+			return normalized.length ? normalized : [...fallback];
+		},
 		formatImageExtensions(value) {
 			return this.normalizeImageExtensions(value).join(', ');
+		},
+		formatImageExtensionsMultiline(value) {
+			return this.normalizeImageExtensions(value, []).join(',\n');
 		},
 		collectDsmCookies() {
 			return {
@@ -291,16 +377,26 @@ export default {
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 
 			const imageExtensions = this.normalizeImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
+			const exiftoolImageExtensions = this.normalizeImageExtensions(files.EXIFTOOL_IMAGE_EXTENSIONS, []);
+			const sidecarLookupVariants = this.normalizeSelectionList(
+				files.SIDECAR_LOOKUP_VARIANTS,
+				this.sidecarLookupOptions.map((option) => option.value),
+				defaults.files.SIDECAR_LOOKUP_VARIANTS
+			);
 
 			return {
 				...root,
 				files: {
 					...files,
 					USE_EXIFTOOL: Boolean(files.USE_EXIFTOOL ?? defaults.files.USE_EXIFTOOL),
+					CHECK_EXIFTOOL_UPDATES: Boolean(files.CHECK_EXIFTOOL_UPDATES ?? defaults.files.CHECK_EXIFTOOL_UPDATES),
 					USE_EXIFTOOL_FOR_SIDECARS: Boolean(files.USE_EXIFTOOL_FOR_SIDECARS ?? defaults.files.USE_EXIFTOOL_FOR_SIDECARS),
 					PREFER_EXIFTOOL_FOR_CONTEXT: Boolean(files.PREFER_EXIFTOOL_FOR_CONTEXT ?? defaults.files.PREFER_EXIFTOOL_FOR_CONTEXT),
 					PATHEXIFTOOL: String(files.PATHEXIFTOOL || defaults.files.PATHEXIFTOOL),
+					IMAGE_EXTENSIONS_NATIVE_ONLY: Boolean(files.IMAGE_EXTENSIONS_NATIVE_ONLY ?? defaults.files.IMAGE_EXTENSIONS_NATIVE_ONLY),
 					IMAGE_EXTENSIONS: imageExtensions,
+					EXIFTOOL_IMAGE_EXTENSIONS: exiftoolImageExtensions,
+					SIDECAR_LOOKUP_VARIANTS: sidecarLookupVariants,
 				},
 				metadata: {
 					...metadata,
@@ -341,6 +437,7 @@ export default {
 		applyDefaults() {
 			this.configModel = this.createDefaultConfig();
 			this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
+			this.exiftoolImageExtensionsInput = this.formatImageExtensionsMultiline(this.configModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 			this.message = this.$t('config:output_defaults_applied', 'Default values loaded into the editor.');
 		},
 		async loadConfig() {
@@ -351,6 +448,7 @@ export default {
 				this.configPath = (data && data.data && data.data.config_path) || '';
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
+				this.exiftoolImageExtensionsInput = this.formatImageExtensionsMultiline(this.configModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				this.message = '';
 			} catch (err) {
 				this.message = `Error: ${err.message}`;
@@ -370,6 +468,10 @@ export default {
 							this.imageExtensionsInput,
 							this.createDefaultConfig().files.IMAGE_EXTENSIONS
 						),
+						EXIFTOOL_IMAGE_EXTENSIONS: this.normalizeImageExtensions(
+							this.exiftoolImageExtensionsInput,
+							[]
+						),
 					},
 				};
 				const normalized = this.normalizeConfig(payloadConfig);
@@ -377,6 +479,8 @@ export default {
 				this.configPath = (data && data.data && data.data.config_path) || this.configPath;
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
+				this.exiftoolImageExtensionsInput = this.formatImageExtensionsMultiline(this.configModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
+				await this.loadExiftoolStatus();
 				this.message = this.$t('config:message_saved', 'Configuration saved.');
 			} catch (err) {
 				this.message = `Error: ${err.message}`;
@@ -390,6 +494,20 @@ export default {
 				this.exiftoolStatus = (data && data.data && typeof data.data === 'object') ? data.data : {};
 			} catch (err) {
 				this.exiftoolStatus = {};
+			}
+		},
+		async loadExiftoolExtensions() {
+			this.exiftoolExtensionsLoading = true;
+			this.message = '';
+			try {
+				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_extensions');
+				const extensions = data && data.data && Array.isArray(data.data.extensions) ? data.data.extensions : [];
+				this.exiftoolImageExtensionsInput = this.formatImageExtensionsMultiline(extensions);
+				this.message = this.$t('config:message_exiftool_extensions_loaded', 'ExifTool extensions loaded into the editor.');
+			} catch (err) {
+				this.message = `Error: ${err.message}`;
+			} finally {
+				this.exiftoolExtensionsLoading = false;
 			}
 		},
 		async installExiftool() {

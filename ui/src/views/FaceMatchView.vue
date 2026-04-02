@@ -2,7 +2,7 @@
 	<div class="face-match-view">
 		<section class="panel">
 			<div class="panel-head">
-				<h1>{{ vm.$t('face_match:title', 'Face Matching') }}</h1>
+				<div class="sm-section-title">{{ vm.$t('face_match:title', 'Face Matching') }}</div>
 				<p>{{ vm.$t('face_match:desc', 'Area for matching and file-processing actions.') }}</p>
 			</div>
 			<div class="face-match-top-layout">
@@ -47,7 +47,7 @@
 				<div class="face-match-status-column">
 					<div class="face-match-status-card face-match-status-card-action">
 						<div class="face-match-status-head">
-							<div class="face-match-status-title">{{ vm.$t('face_match:card_action', 'Action') }}</div>
+							<div class="sm-section-title">{{ vm.$t('face_match:card_action', 'Action') }}</div>
 							<div v-if="vm.faceMatchLoading" class="face-match-status-running">
 								<span class="sm-loader"></span>
 								{{ vm.$t('face_match:card_running', 'Running') }}
@@ -71,7 +71,7 @@
 					</div>
 					<div class="face-match-status-card face-match-status-card-result">
 						<div class="face-match-status-head">
-							<div class="face-match-status-title">{{ vm.$t('face_match:card_result', 'Result') }}</div>
+							<div class="sm-section-title">{{ vm.$t('face_match:card_result', 'Result') }}</div>
 						</div>
 						<div v-if="vm.faceMatchResultSummary.found" class="face-match-result-layout">
 							<div class="face-match-result-details">
@@ -119,6 +119,7 @@
 			</div>
 		</section>
 		<section class="panel face-match-split-panel">
+			<div class="sm-section-title sm-section-title-block">{{ vm.$t('face_match:file_title', 'File') }}</div>
 			<div v-if="vm.faceMatchLoading" class="face-match-loading">
 				<span class="sm-loader"></span>
 				{{ vm.$t('face_match:loading', 'Loading data...') }}

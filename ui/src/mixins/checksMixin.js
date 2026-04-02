@@ -5,11 +5,13 @@ export default {
 			selectedChecksAction: 'findings',
 			checksSaveOnly: false,
 			checksAutoApplySuggestedNames: false,
+			checksAutoApplySuggestedDuplicates: false,
 			checksLoading: false,
 			checksEntries: [],
 			checksCurrentIndex: 0,
 			checksStatusMessage: '',
 			checksCurrentItem: null,
+			checksActionLocked: false,
 			checksProgress: {},
 			checksProgressTimer: null,
 			checksProgressRequestId: 0,
@@ -55,6 +57,7 @@ export default {
 			this.checksEntries = [];
 			this.checksCurrentIndex = 0;
 			this.checksCurrentItem = null;
+			this.checksActionLocked = false;
 			this.checksProgress = {};
 			this.checksStatusMessage = '';
 			this.checksLoading = false;
@@ -108,19 +111,42 @@ export default {
 		getChecksReplaceLeftIconUrl() {
 			return this.resolveLocalIconUrl('person_replace_left.png');
 		},
+		getChecksPositionRightIconUrl() {
+			return this.resolveLocalIconUrl('face_to_right.png');
+		},
+		getChecksPositionLeftIconUrl() {
+			return this.resolveLocalIconUrl('face_to_left.png');
+		},
 		canDeleteChecksFace(item, face) {
-			return !!(item && item.image_path && face && typeof face === 'object' && face.source_format);
+			return !this.checksActionLocked && !!(item && item.image_path && face && typeof face === 'object' && face.source_format);
 		},
 		isChecksNameConflict(item) {
 			return !!(item && item.review_type === 'name_conflicts');
 		},
+		isChecksPositionDeviation(item) {
+			return !!(item && item.review_type === 'position_deviations');
+		},
 		canReplaceChecksFaceName(item, face, newName) {
-			return this.isChecksNameConflict(item)
+			return !this.checksActionLocked
+				&& this.isChecksNameConflict(item)
 				&& !!(item && item.image_path)
 				&& !!(face && typeof face === 'object' && face.source_format)
 				&& !!String(newName || '').trim();
 		},
+		canReplaceChecksFacePosition(item, face, sourceFace) {
+			return !this.checksActionLocked
+				&& this.isChecksPositionDeviation(item)
+				&& !!(item && item.image_path)
+				&& !!(face && typeof face === 'object' && face.source_format)
+				&& !!(sourceFace && typeof sourceFace === 'object' && sourceFace.source_format);
+		},
 		getChecksReplaceRightTooltip(item) {
+			if (this.isChecksPositionDeviation(item)) {
+				return this.$t(
+					'checks:tooltip_replace_right_position',
+					'The face on the right takes the position from the left.'
+				);
+			}
 			const leftName = this.getChecksDisplayName(item && item.left_name);
 			const rightName = this.getChecksDisplayName(item && item.right_name);
 			return this.$t(
@@ -130,6 +156,12 @@ export default {
 			);
 		},
 		getChecksReplaceLeftTooltip(item) {
+			if (this.isChecksPositionDeviation(item)) {
+				return this.$t(
+					'checks:tooltip_replace_left_position',
+					'The face on the left takes the position from the right.'
+				);
+			}
 			const leftName = this.getChecksDisplayName(item && item.left_name);
 			const rightName = this.getChecksDisplayName(item && item.right_name);
 			return this.$t(
@@ -305,11 +337,14 @@ export default {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_item', {
 					entry,
 					auto_apply_suggested_names: this.checksAutoApplySuggestedNames,
+					auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
 				});
 				const root = this.getResponseData(data);
-				this.applyChecksFindingsUpdate(root.findings_update);
+				const findingsUpdated = this.applyChecksFindingsUpdate(root.findings_update);
+				const autoAppliedCount = Number(root && root.auto_applied_count || 0);
 				const item = root && root.item && typeof root.item === 'object' ? root.item : {};
 				if (Object.keys(item).length) {
+					this.checksActionLocked = false;
 					this.checksCurrentItem = item;
 					this.checksCurrentIndex = resolvedIndex;
 					this.checksStatusMessage = this.$t('checks:status_entry', 'Entry {current} of {total}.', {
@@ -321,8 +356,13 @@ export default {
 				if (!this.checksEntries.length) {
 					break;
 				}
+				if (findingsUpdated && (autoAppliedCount > 0 || !Object.keys(item).length)) {
+					resolvedIndex = Math.min(resolvedIndex, this.checksEntries.length - 1);
+					continue;
+				}
 				resolvedIndex += 1;
 			}
+			this.checksActionLocked = false;
 			this.checksCurrentItem = null;
 			this.checksCurrentIndex = Math.min(resolvedIndex, Math.max(this.checksEntries.length - 1, 0));
 			this.checksStatusMessage = this.$t('checks:status_empty', 'No matching entries found.');
@@ -348,6 +388,7 @@ export default {
 					save_only: this.checksSaveOnly,
 					resume_from_progress: resumeFromProgress,
 					auto_apply_suggested_names: this.checksAutoApplySuggestedNames,
+					auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
 				});
 				const progress = this.getResponseData(data);
 				this.applyChecksProgress(progress);
@@ -408,11 +449,13 @@ export default {
 			if (!this.canDeleteChecksFace(this.checksCurrentItem, face)) {
 				return;
 			}
+			this.checksActionLocked = true;
 			this.checksLoading = true;
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_delete_metadata_face', {
 					image_path: this.checksCurrentItem.image_path,
 					face,
+					review_type: this.checksCurrentItem.review_type,
 				});
 				const result = this.getResponseData(data);
 				if (result.warning) {
@@ -424,6 +467,7 @@ export default {
 					);
 					return;
 				}
+				this.applyChecksFindingsUpdate(result.findings_update);
 				this.checksStatusMessage = this.$t('checks:status_face_deleted', 'Face removed from metadata.');
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
 			} catch (err) {
@@ -436,6 +480,7 @@ export default {
 			if (!this.canReplaceChecksFaceName(this.checksCurrentItem, face, newName)) {
 				return;
 			}
+			this.checksActionLocked = true;
 			this.checksLoading = true;
 			let keepLoadingState = false;
 			try {
@@ -469,6 +514,50 @@ export default {
 				}
 				this.applyChecksFindingsUpdate(result.findings_update);
 				this.checksStatusMessage = this.$t('checks:status_face_name_replaced', 'Face name replaced in metadata.');
+				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
+					keepLoadingState = true;
+					await this.startChecksScan({ resumeFromProgress: true });
+					return;
+				}
+				if (!this.checksEntries.length) {
+					this.checksCurrentItem = null;
+					return;
+				}
+				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
+			} catch (err) {
+				this.checksStatusMessage = `Error: ${err.message}`;
+			} finally {
+				if (!keepLoadingState) {
+					this.checksLoading = false;
+				}
+			}
+		},
+		async replaceChecksMetadataFacePosition(face, sourceFace) {
+			if (!this.canReplaceChecksFacePosition(this.checksCurrentItem, face, sourceFace)) {
+				return;
+			}
+			this.checksActionLocked = true;
+			this.checksLoading = true;
+			let keepLoadingState = false;
+			try {
+				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_replace_metadata_face_position', {
+					image_path: this.checksCurrentItem.image_path,
+					face,
+					source_face: sourceFace,
+					review_type: this.checksCurrentItem.review_type,
+				});
+				const result = this.getResponseData(data);
+				if (result.warning) {
+					this.checksStatusMessage = this.$t(
+						result.warning,
+						result.warning === 'checks:warning_exiftool_required'
+							? 'This function requires ExifTool.'
+							: 'Face position could not be replaced in metadata.'
+					);
+					return;
+				}
+				this.applyChecksFindingsUpdate(result.findings_update);
+				this.checksStatusMessage = this.$t('checks:status_face_position_replaced', 'Face position replaced in metadata.');
 				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
 					keepLoadingState = true;
 					await this.startChecksScan({ resumeFromProgress: true });
@@ -529,7 +618,8 @@ export default {
 			return name || this.$t('face_match:unknown_name', '(unnamed)');
 		},
 		showChecksFaceName(item) {
-			return !!(item && item.review_type === 'name_conflicts');
+			const reviewType = String(item && item.review_type || '').trim().toLowerCase();
+			return reviewType === 'name_conflicts' || reviewType === 'duplicate_faces';
 		},
 		getChecksSourceModeLabel() {
 			if (this.selectedChecksAction === 'scan') {

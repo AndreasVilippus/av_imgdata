@@ -38,11 +38,23 @@ export default {
 		this.getStatus({ auto: true });
 		this.fetchFileAnalysisProgress();
 		this.fetchExiftoolStatus();
+		window.addEventListener('focus', this.handleStatusVisibilityRefresh);
+		document.addEventListener('visibilitychange', this.handleStatusVisibilityRefresh);
 	},
 	beforeDestroy() {
 		this.stopFileAnalysisProgressPolling();
+		window.removeEventListener('focus', this.handleStatusVisibilityRefresh);
+		document.removeEventListener('visibilitychange', this.handleStatusVisibilityRefresh);
 	},
 	methods: {
+		handleStatusVisibilityRefresh() {
+			if (document.visibilityState && document.visibilityState !== 'visible') {
+				return;
+			}
+			this.getStatus({ auto: true });
+			this.refreshFileAnalysisSessionState();
+			this.fetchExiftoolStatus();
+		},
 		async refreshFileAnalysisSessionState() {
 			await this.fetchFileAnalysisProgress();
 			const progress = this.fileAnalysisProgress && typeof this.fileAnalysisProgress === 'object'
@@ -65,7 +77,12 @@ export default {
 					this.stopFileAnalysisProgressPolling();
 				}
 			} catch (err) {
-				this.stopFileAnalysisProgressPolling();
+				const progress = this.fileAnalysisProgress && typeof this.fileAnalysisProgress === 'object'
+					? this.fileAnalysisProgress
+					: {};
+				if (!progress.running) {
+					this.stopFileAnalysisProgressPolling();
+				}
 			}
 		},
 		async fetchExiftoolStatus() {

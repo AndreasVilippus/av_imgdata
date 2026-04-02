@@ -23,10 +23,19 @@ class ConfigService:
             },
             "files": {
                 "USE_EXIFTOOL": False,
+                "CHECK_EXIFTOOL_UPDATES": True,
                 "USE_EXIFTOOL_FOR_SIDECARS": False,
                 "PREFER_EXIFTOOL_FOR_CONTEXT": False,
                 "PATHEXIFTOOL": "exiftool",
+                "IMAGE_EXTENSIONS_NATIVE_ONLY": False,
                 "IMAGE_EXTENSIONS": ["jpg", "jpeg", "tif", "tiff", "png", "heic", "heif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "rw2", "raf", "pef"],
+                "EXIFTOOL_IMAGE_EXTENSIONS": [],
+                "SIDECAR_LOOKUP_VARIANTS": [
+                    "same_dir_stem",
+                    "same_dir_filename",
+                    "xmp_dir_stem",
+                    "xmp_dir_filename",
+                ],
             },
             "metadata": {
                 "SCHEMAS": {

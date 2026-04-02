@@ -1,0 +1,27 @@
+#!/bin/sh
+
+PACKAGE="AV_ImgData"
+
+find_bundled_exiftool() {
+    for root in \
+        "${SYNOPKG_PKGVAR:-}" \
+        "/var/packages/${PACKAGE}/var" \
+        "/var/packages/${PACKAGE}/target/var" \
+        "/volume1/@appdata/${PACKAGE}"
+    do
+        [ -n "$root" ] || continue
+        [ -d "$root/exiftool" ] || continue
+        find "$root/exiftool" -maxdepth 2 -type f -path "*/Image-ExifTool-*/exiftool" 2>/dev/null | sort | tail -n 1
+        return 0
+    done
+    return 1
+}
+
+EXIFTOOL_BIN="$(find_bundled_exiftool)"
+
+if [ -n "$EXIFTOOL_BIN" ] && [ -x "$EXIFTOOL_BIN" ]; then
+    exec "$EXIFTOOL_BIN" "$@"
+fi
+
+echo "Bundled ExifTool not found." >&2
+exit 127

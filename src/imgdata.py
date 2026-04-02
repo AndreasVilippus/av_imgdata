@@ -101,6 +101,9 @@ class ImgDataService:
     def exiftool_status(self) -> Dict[str, Any]:
         return self.exiftool.getStatus()
 
+    def exiftool_extensions(self) -> Dict[str, Any]:
+        return self.exiftool.getSupportedReadableExtensions()
+
     def install_exiftool(self) -> Dict[str, Any]:
         return self.exiftool.installLatest()
 
@@ -110,14 +113,16 @@ class ImgDataService:
     def _readImageMetadata(self, image_path: str) -> MetadataPayload:
         config = self.config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
         use_exiftool_for_sidecars = bool(files_config.get("USE_EXIFTOOL_FOR_SIDECARS", False))
         prefer_exiftool_for_context = bool(files_config.get("PREFER_EXIFTOOL_FOR_CONTEXT", False))
+        exiftool_available = use_exiftool and self.exiftool_handler.isAvailable()
 
         xmp_path = self.files.findXmpForImage(image_path)
-        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path and use_exiftool_for_sidecars else self.files.loadXmpFromFile(xmp_path)
+        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path and use_exiftool_for_sidecars and exiftool_available else self.files.loadXmpFromFile(xmp_path)
         xmp_source = "xmp_file" if xmp_content else ""
 
-        if not xmp_content:
+        if not xmp_content and exiftool_available:
             xmp_content = self.exiftool_handler.loadEmbeddedXmp(image_path)
             xmp_source = "embedded_xmp_exiftool" if xmp_content else ""
 
@@ -125,7 +130,7 @@ class ImgDataService:
             xmp_content = self.files.loadXmpFromImageParsed(image_path)
             xmp_source = "embedded_xmp_parsed" if xmp_content else ""
 
-        if prefer_exiftool_for_context and self.exiftool_handler.isEnabled() and self.exiftool_handler.isAvailable():
+        if prefer_exiftool_for_context and exiftool_available:
             image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
             image_orientation = self.exiftool_handler.readImageOrientation(image_path)
             if not image_dimensions.get("width") or not image_dimensions.get("height"):
@@ -135,9 +140,9 @@ class ImgDataService:
         else:
             image_dimensions = self.files.readImageDimensions(image_path)
             image_orientation = self.files.readJpegExifOrientation(image_path)
-            if (not image_dimensions.get("width") or not image_dimensions.get("height")) and self.exiftool_handler.isEnabled() and self.exiftool_handler.isAvailable():
+            if (not image_dimensions.get("width") or not image_dimensions.get("height")) and exiftool_available:
                 image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
-            if image_orientation is None and self.exiftool_handler.isEnabled() and self.exiftool_handler.isAvailable():
+            if image_orientation is None and exiftool_available:
                 image_orientation = self.exiftool_handler.readImageOrientation(image_path)
         schemas = self.files.configuredMetadataSchemas()
         return self.metadata_parser.parse(
@@ -368,6 +373,55 @@ class ImgDataService:
             if not ImgDataService._setExistingElementValueByLocalName(element, "Name", replacement_name):
                 element.set("{http://www.metadataworkinggroup.com/schemas/regions/}Name", replacement_name)
 
+    @staticmethod
+    def _formatMetadataFaceCoordinate(value: Any) -> str:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return "0"
+        formatted = f"{numeric:.6f}".rstrip("0").rstrip(".")
+        return formatted or "0"
+
+    @staticmethod
+    def _setMetadataFacePosition(element: ET.Element, source_format: str, new_face: MetadataFace) -> bool:
+        normalized_format = str(source_format or "").strip().upper()
+        x = ImgDataService._formatMetadataFaceCoordinate(new_face.x)
+        y = ImgDataService._formatMetadataFaceCoordinate(new_face.y)
+        w = ImgDataService._formatMetadataFaceCoordinate(new_face.w)
+        h = ImgDataService._formatMetadataFaceCoordinate(new_face.h)
+
+        if normalized_format == "ACD":
+            area = element.find("acdsee-rs:DLYArea", NS_ACD)
+            if area is None:
+                return False
+            updated = False
+            updated = ImgDataService._setExistingElementValueByLocalName(area, "x", x) or updated
+            updated = ImgDataService._setExistingElementValueByLocalName(area, "y", y) or updated
+            updated = ImgDataService._setExistingElementValueByLocalName(area, "w", w) or updated
+            updated = ImgDataService._setExistingElementValueByLocalName(area, "h", h) or updated
+            return updated
+
+        if normalized_format == "MICROSOFT":
+            rectangle = ",".join((x, y, w, h))
+            if ImgDataService._setExistingElementValueByLocalName(element, "Rectangle", rectangle):
+                return True
+            element.append(ET.Element(f"{{{NS_MICROSOFT['MPReg']}}}Rectangle"))
+            element[-1].text = rectangle
+            return True
+
+        if normalized_format == "MWG_REGIONS":
+            area = element.find("mwg-rs:Area", NS_MWG_REGIONS)
+            if area is None:
+                return False
+            updated = False
+            updated = ImgDataService._setExistingElementValueByLocalName(area, "x", x) or updated
+            updated = ImgDataService._setExistingElementValueByLocalName(area, "y", y) or updated
+            updated = ImgDataService._setExistingElementValueByLocalName(area, "w", w) or updated
+            updated = ImgDataService._setExistingElementValueByLocalName(area, "h", h) or updated
+            return updated
+
+        return False
+
     def replaceMetadataFaceName(self, *, image_path: str, face_data: Dict[str, Any], new_name: str) -> Dict[str, Any]:
         if not self.exiftool_handler.isAvailable():
             return {"updated": False, "warning": "checks:warning_exiftool_required"}
@@ -418,6 +472,62 @@ class ImgDataService:
         return {
             "updated": bool(written),
             "warning": "" if written else "checks:warning_face_replace_failed",
+            "target_path": xmp_path or image_path,
+            "used_sidecar": bool(xmp_path),
+        }
+
+    def replaceMetadataFacePosition(
+        self,
+        *,
+        image_path: str,
+        face_data: Dict[str, Any],
+        source_face_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not self.exiftool_handler.isAvailable():
+            return {"updated": False, "warning": "checks:warning_exiftool_required"}
+
+        payload = self._readImageMetadata(image_path)
+        if not payload.has_xmp:
+            return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
+
+        xmp_path = payload.xmp_path or ""
+        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
+        if not xmp_content:
+            return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
+
+        try:
+            root = ET.fromstring(xmp_content)
+        except ET.ParseError:
+            return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
+
+        target = MetadataFace.from_dict(face_data if isinstance(face_data, dict) else {})
+        source_face = MetadataFace.from_dict(source_face_data if isinstance(source_face_data, dict) else {})
+        source_format = str(target.source_format or "").strip().upper()
+        orientation = MetadataParser._extractXmpTiffOrientation(xmp_content)
+
+        if source_format == "ACD":
+            candidates = self._acdFaceElements(root, source="metadata")
+        elif source_format == "MICROSOFT":
+            candidates = self._microsoftFaceElements(root, source="metadata")
+        elif source_format == "MWG_REGIONS":
+            candidates = self._mwgFaceElements(root, source="metadata", orientation=orientation)
+        else:
+            candidates = []
+
+        updated = False
+        for candidate in candidates:
+            if not self._sameMetadataFaceCandidate(candidate["face"], target):
+                continue
+            updated = self._setMetadataFacePosition(candidate["element"], source_format, source_face)
+            break
+
+        if not updated:
+            return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
+
+        written = self.exiftool_handler.writeXmp(xmp_path or image_path, ET.tostring(root, encoding="unicode"))
+        return {
+            "updated": bool(written),
+            "warning": "" if written else "checks:warning_face_position_replace_failed",
             "target_path": xmp_path or image_path,
             "used_sidecar": bool(xmp_path),
         }
@@ -696,28 +806,30 @@ class ImgDataService:
     def refreshChecksFindingEntries(self, *, check_type: str) -> Dict[str, Any]:
         normalized_type = self._normalizeChecksType(check_type)
         findings = self.file_analysis.readCheckFindings(normalized_type)
-        if not isinstance(findings, dict) or (
-            not isinstance(findings.get("entries"), list)
-            and not isinstance(findings.get("paths"), list)
-        ):
+        if not isinstance(findings, dict) or not isinstance(findings.get("entries"), list):
             return self.getChecksFindingEntries(check_type=normalized_type)
 
         shared_folder = str(findings.get("shared_folder") or "")
         status = str(findings.get("status") or "finished")
         source_mode = str(findings.get("source_mode") or "findings")
         save_only = bool(findings.get("save_only"))
-        candidate_paths = self._getCheckFindingPaths(normalized_type)
+        stored_entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        candidate_paths: List[str] = []
+        seen_paths = set()
+        for entry in stored_entries:
+            if not isinstance(entry, dict):
+                continue
+            image_path = str(entry.get("image_path") or "").strip()
+            if not image_path or image_path in seen_paths:
+                continue
+            seen_paths.add(image_path)
+            candidate_paths.append(image_path)
 
         refreshed_entries: List[Dict[str, Any]] = []
-        seen_paths = set()
         for image_path in candidate_paths:
-            normalized_path = str(image_path or "").strip()
-            if not normalized_path or normalized_path in seen_paths:
-                continue
-            seen_paths.add(normalized_path)
             refreshed_entries.extend(
                 self._buildCheckEntriesForType(
-                    image_path=normalized_path,
+                    image_path=image_path,
                     review_type=normalized_type,
                 )
             )
@@ -779,8 +891,8 @@ class ImgDataService:
 
         left_state = str(item.get("left_state") or "").strip().lower()
         right_state = str(item.get("right_state") or "").strip().lower()
-        left_face = item.get("left_face")
-        right_face = item.get("right_face")
+        left_face = item.get("left_face_target") if isinstance(item.get("left_face_target"), dict) else item.get("left_face")
+        right_face = item.get("right_face_target") if isinstance(item.get("right_face_target"), dict) else item.get("right_face")
         left_name = str(item.get("left_name") or "").strip()
         right_name = str(item.get("right_name") or "").strip()
 
@@ -798,11 +910,35 @@ class ImgDataService:
             }
         return None
 
+    def _getSuggestedDuplicateFaceDeletion(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(item, dict) or str(item.get("review_type") or "").strip().lower() != "duplicate_faces":
+            return None
+
+        left_state = str(item.get("left_state") or "").strip().lower()
+        right_state = str(item.get("right_state") or "").strip().lower()
+        left_face = item.get("left_face_target") if isinstance(item.get("left_face_target"), dict) else item.get("left_face")
+        right_face = item.get("right_face_target") if isinstance(item.get("right_face_target"), dict) else item.get("right_face")
+
+        if left_state == "suggested" and right_state != "suggested" and isinstance(right_face, dict):
+            return {
+                "face": right_face,
+                "kept_side": "left",
+                "removed_side": "right",
+            }
+        if right_state == "suggested" and left_state != "suggested" and isinstance(left_face, dict):
+            return {
+                "face": left_face,
+                "kept_side": "right",
+                "removed_side": "left",
+            }
+        return None
+
     def _resolveChecksReviewEntry(
         self,
         *,
         entry: Dict[str, Any],
         auto_apply_suggested_names: bool = False,
+        auto_apply_suggested_duplicates: bool = False,
     ) -> Dict[str, Any]:
         normalized_entry = dict(entry or {})
         auto_applied_count = 0
@@ -821,6 +957,48 @@ class ImgDataService:
                 if auto_apply_suggested_names
                 else None
             )
+            delete_action = (
+                self._getSuggestedDuplicateFaceDeletion(item)
+                if auto_apply_suggested_duplicates
+                else None
+            )
+            if not action:
+                if not delete_action:
+                    return {
+                        "entry": normalized_entry,
+                        "item": item,
+                        "auto_applied_count": auto_applied_count,
+                    }
+            if delete_action:
+                result = self.deleteMetadataFace(
+                    image_path=str(item.get("image_path") or ""),
+                    face_data=delete_action["face"],
+                )
+                if not result.get("deleted"):
+                    return {
+                        "entry": normalized_entry,
+                        "item": item,
+                        "auto_applied_count": auto_applied_count,
+                        "auto_apply_warning": str(result.get("warning") or ""),
+                    }
+                auto_applied_count += 1
+                next_entry = next(
+                    iter(
+                        self._buildCheckEntriesForType(
+                            image_path=str(item.get("image_path") or ""),
+                            review_type=str(item.get("review_type") or ""),
+                        )
+                    ),
+                    None,
+                )
+                if not next_entry:
+                    return {
+                        "entry": None,
+                        "item": None,
+                        "auto_applied_count": auto_applied_count,
+                    }
+                normalized_entry = next_entry
+                continue
             if not action:
                 return {
                     "entry": normalized_entry,
@@ -1054,9 +1232,9 @@ class ImgDataService:
         shared_folder: str,
         status: str,
         finished: bool,
-        findings_by_type: Dict[str, List[str]],
+        findings_by_type: Dict[str, List[Any]],
     ) -> None:
-        for finding_type, paths in findings_by_type.items():
+        for finding_type, findings in findings_by_type.items():
             self._writeFileAnalysisCheckFindings(
                 finding_type=finding_type,
                 job_id=job_id,
@@ -1064,7 +1242,7 @@ class ImgDataService:
                 shared_folder=shared_folder,
                 status=status,
                 finished=finished,
-                findings=paths,
+                findings=findings,
             )
 
     def _writeFaceMatchFindings(
@@ -1354,7 +1532,9 @@ class ImgDataService:
             "image_path": image_path,
             "image_name": Path(image_path).name,
             "left_face": applied_face,
+            "left_face_target": self._faceSignature(review_face),
             "right_face": self._normalizedReviewFace(reference_face),
+            "right_face_target": self._faceSignature(reference_face),
             "left_alert_faces": [
                 normalize_xmp_face(face) for face in mwg_faces
                 if not self._isSameFace(face, review_face)
@@ -1464,7 +1644,9 @@ class ImgDataService:
             "left_format": str(left.source_format or ""),
             "right_format": str(right.source_format or ""),
             "left_face": self._normalizedReviewFace(left),
+            "left_face_target": self._faceSignature(left),
             "right_face": self._normalizedReviewFace(right),
+            "right_face_target": self._faceSignature(right),
             "left_state": left_state,
             "right_state": right_state,
             "left_alert_faces": [],
@@ -1566,7 +1748,9 @@ class ImgDataService:
             "left_format": str(left.source_format or ""),
             "right_format": str(right.source_format or ""),
             "left_face": self._normalizedReviewFace(left),
+            "left_face_target": self._faceSignature(left),
             "right_face": self._normalizedReviewFace(right),
+            "right_face_target": self._faceSignature(right),
             "left_alert_faces": [],
             "left_reference_faces": [],
             "right_alert_faces": [],
@@ -1629,7 +1813,9 @@ class ImgDataService:
             "left_format": str(left.source_format or ""),
             "right_format": str(right.source_format or ""),
             "left_face": self._normalizedReviewFace(left),
+            "left_face_target": self._faceSignature(left),
             "right_face": self._normalizedReviewFace(right),
+            "right_face_target": self._faceSignature(right),
             "left_state": left_state,
             "right_state": right_state,
             "left_alert_faces": [],
@@ -1637,26 +1823,6 @@ class ImgDataService:
             "right_alert_faces": [],
             "right_reference_faces": [],
         }
-
-    def _getCheckFindingPaths(self, finding_type: str) -> List[str]:
-        findings_payload = self.file_analysis.readCheckFindings(finding_type)
-        paths = findings_payload.get("paths") if isinstance(findings_payload.get("paths"), list) else []
-        normalized_paths = [str(path) for path in paths if isinstance(path, str) and path]
-        if normalized_paths:
-            return normalized_paths
-
-        entries = findings_payload.get("entries") if isinstance(findings_payload.get("entries"), list) else []
-        resolved_paths: List[str] = []
-        seen_paths = set()
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            image_path = str(entry.get("image_path") or "").strip()
-            if not image_path or image_path in seen_paths:
-                continue
-            seen_paths.add(image_path)
-            resolved_paths.append(image_path)
-        return resolved_paths
 
     def startChecksReview(
         self,
@@ -1669,6 +1835,7 @@ class ImgDataService:
         save_only: bool = False,
         resume_from_progress: bool = False,
         auto_apply_suggested_names: bool = False,
+        auto_apply_suggested_duplicates: bool = False,
     ) -> Dict[str, Any]:
         source_mode_normalized = str(source_mode or "findings").strip().lower()
         if source_mode_normalized not in {"findings", "scan"}:
@@ -1688,10 +1855,11 @@ class ImgDataService:
                 save_only=save_only,
                 resume_from_progress=resume_from_progress,
                 auto_apply_suggested_names=auto_apply_suggested_names,
+                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
             )
 
         if source_mode_normalized == "findings":
-            findings_payload = self.file_analysis.readCheckFindings(check_type_normalized)
+            findings_payload = self.getChecksFindingEntries(check_type=check_type_normalized)
             stored_entries = findings_payload.get("entries") if isinstance(findings_payload.get("entries"), list) else []
             if stored_entries:
                 entries = [entry for entry in stored_entries if isinstance(entry, dict)]
@@ -1702,15 +1870,21 @@ class ImgDataService:
                     "count": len(entries),
                     "entries": entries,
                 }
-            candidate_paths = self._getCheckFindingPaths(check_type_normalized)
-        else:
-            shared_folder = self.core.getSharedFolder(
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                folder_name="photo",
-            )
-            candidate_paths = self.files.listImageFiles(shared_folder) if shared_folder else []
+            return {
+                "check_type": check_type_normalized,
+                "source_mode": source_mode_normalized,
+                "save_only": bool(findings_payload.get("save_only")),
+                "count": 0,
+                "entries": [],
+            }
+
+        shared_folder = self.core.getSharedFolder(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            folder_name="photo",
+        )
+        candidate_paths = self.files.listImageFiles(shared_folder) if shared_folder else []
 
         entries: List[Dict[str, Any]] = []
         seen_paths = set()
@@ -1743,6 +1917,7 @@ class ImgDataService:
         save_only: bool = False,
         resume_from_progress: bool = False,
         auto_apply_suggested_names: bool = False,
+        auto_apply_suggested_duplicates: bool = False,
     ) -> Dict[str, Any]:
         check_type = self._normalizeChecksType(check_type)
         current = self.getChecksProgress(user_key, check_type)
@@ -1790,6 +1965,7 @@ class ImgDataService:
                 "check_type": check_type,
                 "save_only": save_only,
                 "auto_apply_suggested_names": auto_apply_suggested_names,
+                "auto_apply_suggested_duplicates": auto_apply_suggested_duplicates,
                 "resume_cursor": resume_cursor if resume_cursor else None,
             },
             daemon=True,
@@ -1808,6 +1984,7 @@ class ImgDataService:
         save_only: bool,
         resume_cursor: Optional[Dict[str, Any]] = None,
         auto_apply_suggested_names: bool = False,
+        auto_apply_suggested_duplicates: bool = False,
     ) -> None:
         try:
             result = self.searchNextChecksItem(
@@ -1818,6 +1995,7 @@ class ImgDataService:
                 save_only=save_only,
                 resume_cursor=resume_cursor,
                 auto_apply_suggested_names=auto_apply_suggested_names,
+                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
             )
             self._setChecksProgress(
                 user_key,
@@ -1870,6 +2048,7 @@ class ImgDataService:
         save_only: bool = False,
         resume_cursor: Optional[Dict[str, Any]] = None,
         auto_apply_suggested_names: bool = False,
+        auto_apply_suggested_duplicates: bool = False,
     ) -> Dict[str, Any]:
         shared_folder = self.core.getSharedFolder(
             user_key=user_key,
@@ -1942,6 +2121,7 @@ class ImgDataService:
             resolved = self._resolveChecksReviewEntry(
                 entry=entry,
                 auto_apply_suggested_names=auto_apply_suggested_names,
+                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
             )
             entry = resolved.get("entry")
             item = resolved.get("item")
@@ -2097,6 +2277,7 @@ class ImgDataService:
             resolved = self._resolveChecksReviewEntry(
                 entry=entry,
                 auto_apply_suggested_names=auto_apply_suggested_names,
+                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
             )
             entry = resolved.get("entry")
             item = resolved.get("item")
@@ -2231,29 +2412,20 @@ class ImgDataService:
         review_type = str(entry.get("review_type") or "").strip().lower()
         if not image_path or not review_type:
             return None
+        if review_type == "dimension_issues":
+            if not self._hasFaceSignature(entry.get("left_face_signature")):
+                return None
+        elif review_type in {"duplicate_faces", "position_deviations", "name_conflicts"}:
+            if not self._hasFaceSignature(entry.get("left_face_signature")) or not self._hasFaceSignature(entry.get("right_face_signature")):
+                return None
         analysis = self.analyzeImageFaceMetadata(image_path)
         if review_type == "dimension_issues":
             return self._buildDimensionMismatchReviewItem(image_path, analysis, entry)
         if review_type == "duplicate_faces":
-            if not self._hasFaceSignature(entry.get("left_face_signature")) or not self._hasFaceSignature(entry.get("right_face_signature")):
-                first_entry = next(iter(self._buildDuplicateFaceReviewEntries(image_path, analysis)), None)
-                if not first_entry:
-                    return None
-                entry = first_entry
             return self._buildDuplicateFaceReviewItem(image_path, analysis, entry)
         if review_type == "position_deviations":
-            if not self._hasFaceSignature(entry.get("left_face_signature")) or not self._hasFaceSignature(entry.get("right_face_signature")):
-                first_entry = next(iter(self._buildPositionDeviationReviewEntries(image_path, analysis)), None)
-                if not first_entry:
-                    return None
-                entry = first_entry
             return self._buildPositionDeviationReviewItem(image_path, analysis, entry)
         if review_type == "name_conflicts":
-            if not self._hasFaceSignature(entry.get("left_face_signature")) or not self._hasFaceSignature(entry.get("right_face_signature")):
-                first_entry = next(iter(self._buildNameConflictReviewEntries(image_path, analysis)), None)
-                if not first_entry:
-                    return None
-                entry = first_entry
             return self._buildNameConflictReviewItem(image_path, analysis, entry)
         return None
 
@@ -2376,7 +2548,7 @@ class ImgDataService:
             base_url=base_url,
             folder_name="photo",
         )
-        configured_extensions = self.files.configuredImageExtensions()
+        configured_extensions = self.files.effectiveImageExtensions()
         analysis_checks = self._configuredAnalysisChecks()
         extension_counts: Dict[str, int] = {ext: 0 for ext in configured_extensions}
         source_counts: Dict[str, int] = {}
@@ -2517,7 +2689,8 @@ class ImgDataService:
         )
 
         try:
-            for dirpath, _, filenames in os.walk(shared_folder):
+            for dirpath, dirnames, filenames in os.walk(shared_folder):
+                dirnames[:] = [dirname for dirname in dirnames if dirname != "@eaDir"]
                 directories_read += 1
                 self._setFileAnalysisProgress(
                     directories_read=directories_read,
@@ -2532,10 +2705,10 @@ class ImgDataService:
                         status="stopped",
                         finished=True,
                         findings_by_type={
-                            "dimension_issues": dimension_mismatch_paths,
-                            "duplicate_faces": duplicate_faces_paths,
-                            "position_deviations": position_deviation_paths,
-                            "name_conflicts": name_conflict_paths,
+                            "dimension_issues": dimension_mismatch_entries,
+                            "duplicate_faces": duplicate_face_entries,
+                            "position_deviations": position_deviation_entries,
+                            "name_conflicts": name_conflict_entries,
                         },
                     )
                     self._persistFileAnalysisResult(
@@ -2580,6 +2753,8 @@ class ImgDataService:
                     return
                 for filename in filenames:
                     current_path = str(Path(dirpath) / filename)
+                    if "@eaDir" in Path(current_path).parts:
+                        continue
                     files_seen_total += 1
                     extension = Path(filename).suffix.lower().lstrip(".")
                     if extension in extension_counts:
@@ -2601,10 +2776,10 @@ class ImgDataService:
                             status="stopped",
                             finished=True,
                             findings_by_type={
-                                "dimension_issues": dimension_mismatch_paths,
-                                "duplicate_faces": duplicate_faces_paths,
-                                "position_deviations": position_deviation_paths,
-                                "name_conflicts": name_conflict_paths,
+                                "dimension_issues": dimension_mismatch_entries,
+                                "duplicate_faces": duplicate_face_entries,
+                                "position_deviations": position_deviation_entries,
+                                "name_conflicts": name_conflict_entries,
                             },
                         )
                         self._persistFileAnalysisResult(
@@ -2696,10 +2871,10 @@ class ImgDataService:
                         status="stopped",
                         finished=True,
                         findings_by_type={
-                            "dimension_issues": dimension_mismatch_paths,
-                            "duplicate_faces": duplicate_faces_paths,
-                            "position_deviations": position_deviation_paths,
-                            "name_conflicts": name_conflict_paths,
+                            "dimension_issues": dimension_mismatch_entries,
+                            "duplicate_faces": duplicate_face_entries,
+                            "position_deviations": position_deviation_entries,
+                            "name_conflicts": name_conflict_entries,
                         },
                     )
                     self._persistFileAnalysisResult(
@@ -2973,10 +3148,10 @@ class ImgDataService:
                 status="failed",
                 finished=True,
                 findings_by_type={
-                    "dimension_issues": dimension_mismatch_paths,
-                    "duplicate_faces": duplicate_faces_paths,
-                    "position_deviations": position_deviation_paths,
-                    "name_conflicts": name_conflict_paths,
+                    "dimension_issues": dimension_mismatch_entries,
+                    "duplicate_faces": duplicate_face_entries,
+                    "position_deviations": position_deviation_entries,
+                    "name_conflicts": name_conflict_entries,
                 },
             )
             self._persistFileAnalysisResult(
