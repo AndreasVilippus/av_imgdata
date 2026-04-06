@@ -583,6 +583,18 @@
 	color: var(--sm-text);
 }
 
+.config-select {
+	width: 100%;
+	height: 32px;
+	border: 1px solid var(--sm-border);
+	border-radius: var(--sm-radius-1);
+	background: var(--sm-surface);
+	padding: 0 10px;
+	box-sizing: border-box;
+	font: inherit;
+	color: var(--sm-text);
+}
+
 .config-textarea {
 	width: 100%;
 	min-height: 120px;

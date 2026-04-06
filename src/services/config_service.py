@@ -21,6 +21,9 @@ class ConfigService:
             "photos": {
                 "MAX_PHOTOS_PERSONS": 5000,
             },
+            "face_match": {
+                "FILE_MATCH_SOURCE_SCOPE": "both",
+            },
             "files": {
                 "USE_EXIFTOOL": False,
                 "CHECK_EXIFTOOL_UPDATES": True,

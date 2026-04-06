@@ -224,6 +224,22 @@
 					</label>
 				</div>
 			</section>
+
+			<section class="config-card">
+				<div class="sm-section-title">{{ $t('config:section_face_match', 'Face matching') }}</div>
+				<div class="config-card-desc">{{ $t('config:section_face_match_desc', 'Configure where file-face searches should look for matching names.') }}</div>
+
+				<div class="config-form-grid">
+					<label class="config-field">
+						<span class="config-field-label">{{ $t('config:label_face_match_file_source_scope', 'Source scope for file-face search') }}</span>
+						<select v-model="configModel.face_match.FILE_MATCH_SOURCE_SCOPE" class="config-select" :disabled="saving">
+							<option value="both">{{ $t('config:option_face_match_scope_both', 'in both') }}</option>
+							<option value="photos">{{ $t('config:option_face_match_scope_photos', 'only in Photos') }}</option>
+							<option value="metadata">{{ $t('config:option_face_match_scope_metadata', 'only in metadata') }}</option>
+						</select>
+					</label>
+				</div>
+			</section>
 		</div>
 	</section>
 </template>
@@ -306,6 +322,9 @@ export default {
 				photos: {
 					MAX_PHOTOS_PERSONS: 5000,
 				},
+				face_match: {
+					FILE_MATCH_SOURCE_SCOPE: 'both',
+				},
 			};
 		},
 		getSynoToken() {
@@ -375,6 +394,7 @@ export default {
 			const review = (root.review && typeof root.review === 'object' && !Array.isArray(root.review)) ? root.review : {};
 			const reviewOptions = (review.OPTIONS && typeof review.OPTIONS === 'object' && !Array.isArray(review.OPTIONS)) ? review.OPTIONS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
+			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
 
 			const imageExtensions = this.normalizeImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
 			const exiftoolImageExtensions = this.normalizeImageExtensions(files.EXIFTOOL_IMAGE_EXTENSIONS, []);
@@ -431,6 +451,12 @@ export default {
 				photos: {
 					...photos,
 					MAX_PHOTOS_PERSONS: Math.max(1, Number(photos.MAX_PHOTOS_PERSONS) || defaults.photos.MAX_PHOTOS_PERSONS),
+				},
+				face_match: {
+					...faceMatch,
+					FILE_MATCH_SOURCE_SCOPE: ['both', 'photos', 'metadata'].includes(String(faceMatch.FILE_MATCH_SOURCE_SCOPE || '').trim().toLowerCase())
+						? String(faceMatch.FILE_MATCH_SOURCE_SCOPE || '').trim().toLowerCase()
+						: defaults.face_match.FILE_MATCH_SOURCE_SCOPE,
 				},
 			};
 		},

@@ -250,6 +250,7 @@ async def face_matching_action(request: Request):
     limit = body.get("limit", 100)
     offset = body.get("offset", 0)
     skip_face_ids = body.get("skip_face_ids") if isinstance(body.get("skip_face_ids"), list) else []
+    skip_targets = body.get("skip_targets") if isinstance(body.get("skip_targets"), list) else []
     try:
         limit = int(limit)
     except Exception:
@@ -259,13 +260,18 @@ async def face_matching_action(request: Request):
     except Exception:
         offset = 0
     normalized_skip_face_ids = []
+    normalized_skip_targets = []
     for face_id in skip_face_ids:
         try:
             normalized_skip_face_ids.append(int(face_id))
         except Exception:
             continue
+    for target in skip_targets:
+        normalized = str(target or "").strip()
+        if normalized:
+            normalized_skip_targets.append(normalized)
 
-    if action not in {"search_photo_face_in_file", "load_photo_face_match_findings"}:
+    if action not in {"search_photo_face_in_file", "search_file_face_in_sources", "load_photo_face_match_findings"}:
         return {
             "success": False,
             "error": {
@@ -276,14 +282,16 @@ async def face_matching_action(request: Request):
         }
 
     try:
-        if action == "search_photo_face_in_file":
+        if action in {"search_photo_face_in_file", "search_file_face_in_sources"}:
             face_matches = IMGDATA.startFaceMatchingDiscovery(
                 user_key=session_ctx["user_key"],
                 cookies=session_ctx["cookies"],
                 base_url=session_ctx["base_url"],
+                action=action,
                 limit=limit,
                 offset=offset,
                 skip_face_ids=normalized_skip_face_ids,
+                skip_targets=normalized_skip_targets,
                 auto=auto,
                 save_only=save_only,
                 resume_from_progress=resume_from_progress,
@@ -483,6 +491,61 @@ async def face_create_match(request: Request):
             "result": result,
             "findings_update": findings_update,
             "mapping_saved": mapping_saved if save_mapping else False,
+        },
+    }
+
+
+@router.post("/face_apply_metadata_match")
+async def face_apply_metadata_match(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    image_path = str(body.get("image_path") or "").strip()
+    metadata_face = body.get("metadata_face")
+    person_name = str(body.get("person_name") or "").strip()
+    if not image_path or not isinstance(metadata_face, dict) or not person_name:
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_face_apply_metadata_match_request",
+            },
+        }
+
+    try:
+        result = IMGDATA.replaceMetadataFaceName(
+            image_path=image_path,
+            face_data=metadata_face,
+            new_name=person_name,
+        )
+        findings_update = (
+            IMGDATA.removeFaceMatchFindingMetadataEntry(
+                image_path=image_path,
+                metadata_face=metadata_face,
+                increment_transferred_count=True,
+            )
+            if result.get("updated")
+            else None
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "face_apply_metadata_match_failed",
+                "details": str(exc),
+            },
+        }
+
+    return {
+        "success": True,
+        "data": {
+            "image_path": image_path,
+            "person_name": person_name,
+            "result": result,
+            "findings_update": findings_update,
         },
     }
 

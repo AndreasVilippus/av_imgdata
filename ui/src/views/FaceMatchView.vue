@@ -9,6 +9,7 @@
 				<div class="face-match-action-controls">
 					<select v-model="vm.selectedFaceMatchingAction" class="face-match-select" :disabled="vm.faceMatchLoading">
 						<option value="search_photo_face_in_file">{{ vm.$t('face_match:action_search_photo_face_in_file', 'search unknown Photos face in file') }}</option>
+						<option value="search_file_face_in_sources">{{ vm.$t('face_match:action_search_file_face_in_sources', 'search face from file') }}</option>
 						<option v-if="vm.hasFaceMatchStoredFindings" value="load_photo_face_match_findings">{{ vm.$t('face_match:action_load_photo_face_match_findings', 'load unknown Photos face from list') }}</option>
 					</select>
 					<div class="face-match-action-buttons">
@@ -35,7 +36,7 @@
 						<span class="face-match-switch-label">{{ vm.$t('face_match:switch_auto_assign', 'Assign all known') }}</span>
 					</label>
 					<label
-						v-if="vm.selectedFaceMatchingAction === 'search_photo_face_in_file'"
+						v-if="vm.selectedFaceMatchingAction === 'search_photo_face_in_file' || vm.selectedFaceMatchingAction === 'search_file_face_in_sources'"
 						class="face-match-switch"
 						:title="vm.$t('face_match:hint_save_only', 'Known persons are still assigned depending on the setting; otherwise matches are only listed for later.')"
 					>
@@ -55,9 +56,10 @@
 						</div>
 						<div class="face-match-status-message">{{ vm.faceMatchStatusMessage }}</div>
 						<div class="face-match-status-stats">
-							<span>{{ vm.$t('face_match:label_persons', 'Persons') }}: {{ vm.faceMatchDisplayedProgress.persons_read }}</span>
+							<span v-if="vm.showFaceMatchPersonsCounter">{{ vm.$t('face_match:label_persons', 'Persons') }}: {{ vm.faceMatchDisplayedProgress.persons_read }}</span>
 							<span>{{ vm.$t('face_match:label_images', 'Images') }}: {{ vm.faceMatchDisplayedProgress.images_read }}</span>
 							<span>{{ vm.$t('face_match:label_faces', 'Faces') }}: {{ vm.faceMatchDisplayedProgress.faces_read }}</span>
+							<span v-if="vm.showFaceMatchTargetFacesCounter">{{ vm.$t('face_match:label_target_faces', 'Unknown faces') }}: {{ vm.faceMatchDisplayedProgress.target_faces_read }}</span>
 							<span :title="vm.$t('face_match:label_metadata_hint', 'Read metadata')">{{ vm.$t('face_match:label_metadata', 'Metadata') }}: {{ vm.faceMatchDisplayedProgress.metadata_faces_read }}</span>
 							<span>{{ vm.$t('face_match:label_transferred', 'Transferred') }}: {{ vm.faceMatchDisplayedTransferredCount }}</span>
 						</div>
@@ -133,38 +135,38 @@
 					:aria-label="vm.faceMatchTransferTooltip"
 					@click.prevent="vm.handleFaceMatchAction"
 				>
-					<span v-if="vm.personDataToLeftIconUrl" class="face-match-icon-stack">
-						<img :src="vm.personDataToLeftIconUrl" alt="" class="face-match-icon-image" />
+					<span v-if="(vm.faceMatchActionMode === 'write_metadata' ? vm.personDataToRightIconUrl : vm.personDataToLeftIconUrl)" class="face-match-icon-stack">
+						<img :src="vm.faceMatchActionMode === 'write_metadata' ? vm.personDataToRightIconUrl : vm.personDataToLeftIconUrl" alt="" class="face-match-icon-image" />
 						<img v-if="vm.faceMatchActionMode === 'create' && vm.addIconUrl" :src="vm.addIconUrl" alt="" class="face-match-icon-overlay" />
 					</span>
 					<span v-else class="face-match-icon-fallback">{{ vm.faceMatchTransferTooltip }}</span>
 				</button>
 				<div class="face-match-col">
-					<h2>{{ vm.$t('face_match:photos_title', 'Photos') }}</h2>
-					<div v-if="vm.getFaceMatchThumbnailUrl(vm.faceMatchResult && vm.faceMatchResult.image)" class="face-match-thumbnail-wrap">
+					<h2>{{ vm.faceMatchLeftTitle }}</h2>
+					<div v-if="vm.getCurrentFaceMatchImageUrl()" class="face-match-thumbnail-wrap">
 						<template v-if="vm.isFaceOnlyPreview">
-							<div v-if="vm.getFaceMatchCropStyle(vm.faceMatchResult && vm.faceMatchResult.face)" class="face-match-crop-frame">
-								<img :src="vm.getFaceMatchThumbnailUrl(vm.faceMatchResult && vm.faceMatchResult.image)" :alt="vm.$t('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.faceMatchResult && vm.faceMatchResult.face)" />
+							<div v-if="vm.getFaceMatchCropStyle(vm.getLeftFaceMatchFace())" class="face-match-crop-frame">
+								<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$t('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.getLeftFaceMatchFace())" />
 							</div>
 						</template>
 						<div v-else class="face-match-preview">
-							<img :src="vm.getFaceMatchThumbnailUrl(vm.faceMatchResult && vm.faceMatchResult.image)" :alt="vm.$t('face_match:thumbnail_alt', 'Thumbnail')" class="face-match-thumbnail" />
-							<div v-for="(maskStyle, index) in vm.getFaceMatchMaskStyles(vm.faceMatchResult && vm.faceMatchResult.face)" :key="`photo-mask-${index}`" class="face-match-mask" :style="maskStyle"></div>
-							<div v-if="vm.getFaceMatchBoxStyle(vm.faceMatchResult && vm.faceMatchResult.face)" class="face-match-bbox" :style="vm.getFaceMatchBoxStyle(vm.faceMatchResult && vm.faceMatchResult.face)"></div>
+							<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$t('face_match:thumbnail_alt', 'Thumbnail')" class="face-match-thumbnail" />
+							<div v-for="(maskStyle, index) in vm.getFaceMatchMaskStyles(vm.getLeftFaceMatchFace())" :key="`photo-mask-${index}`" class="face-match-mask" :style="maskStyle"></div>
+							<div v-if="vm.getFaceMatchBoxStyle(vm.getLeftFaceMatchFace())" class="face-match-bbox" :style="vm.getFaceMatchBoxStyle(vm.getLeftFaceMatchFace())"></div>
 						</div>
 					</div>
 					<div v-else class="face-match-empty">{{ vm.$t('face_match:empty_no_thumbnail', 'No thumbnail found yet.') }}</div>
 				</div>
 				<div class="face-match-col">
-					<h2>{{ vm.faceMatchFileTitle }}</h2>
-					<div v-if="vm.getFaceMatchThumbnailUrl(vm.faceMatchResult && vm.faceMatchResult.image)" class="face-match-thumbnail-wrap">
+					<h2>{{ vm.faceMatchRightTitle }}</h2>
+					<div v-if="vm.getCurrentFaceMatchImageUrl()" class="face-match-thumbnail-wrap">
 						<template v-if="vm.isFaceOnlyPreview">
 							<div v-if="vm.getFaceMatchCropStyle(vm.getRightFaceMatchFace())" class="face-match-crop-frame">
-								<img :src="vm.getFaceMatchThumbnailUrl(vm.faceMatchResult && vm.faceMatchResult.image)" :alt="vm.$t('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.getRightFaceMatchFace())" />
+								<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$t('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.getRightFaceMatchFace())" />
 							</div>
 						</template>
 						<div v-else class="face-match-preview">
-							<img :src="vm.getFaceMatchThumbnailUrl(vm.faceMatchResult && vm.faceMatchResult.image)" :alt="vm.$t('face_match:thumbnail_alt', 'Thumbnail')" class="face-match-thumbnail" />
+							<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$t('face_match:thumbnail_alt', 'Thumbnail')" class="face-match-thumbnail" />
 							<div v-for="(maskStyle, index) in vm.getFaceMatchMaskStyles(vm.getRightFaceMatchFace())" :key="`metadata-mask-${index}`" class="face-match-mask" :style="maskStyle"></div>
 							<div v-if="vm.getFaceMatchBoxStyle(vm.getRightFaceMatchFace())" class="face-match-bbox" :style="vm.getFaceMatchBoxStyle(vm.getRightFaceMatchFace())"></div>
 						</div>
