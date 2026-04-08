@@ -13,6 +13,7 @@ export default {
 			faceMatchAutoAssignKnown: false,
 			faceMatchSaveOnly: false,
 			faceMatchTransferredCount: 0,
+			faceMatchTransferredBaseCount: 0,
 			faceMatchEditableName: '',
 			faceMatchInitialEditableName: '',
 			faceMatchSelectedPerson: null,
@@ -50,10 +51,15 @@ export default {
 		},
 		faceMatchDisplayedTransferredCount() {
 			const progressCount = Number(this.faceMatchProgress && this.faceMatchProgress.transferred_count);
-			if (Number.isFinite(progressCount) && progressCount > 0) {
-				return progressCount;
+			const localCount = Number(this.faceMatchTransferredCount) || 0;
+			const baseCount = Number(this.faceMatchTransferredBaseCount) || 0;
+			if (!Number.isFinite(progressCount) || progressCount <= 0) {
+				return localCount;
 			}
-			return this.faceMatchTransferredCount;
+			if (baseCount > 0) {
+				return Math.max(localCount, baseCount + progressCount);
+			}
+			return Math.max(localCount, progressCount);
 		},
 		faceMatchDisplayedProgress() {
 			const fields = ['persons_read', 'images_read', 'faces_read', 'target_faces_read', 'metadata_faces_read'];
@@ -75,9 +81,33 @@ export default {
 				? this.faceMatchProgress
 				: null;
 			if (progress && progress.message_key) {
+				const messageKey = String(progress.message_key);
+				const persistentMessages = new Set([
+					'face_match:progress_stopping',
+					'face_match:progress_finished',
+					'face_match:progress_shared_folder_missing',
+					'face_match:progress_stopped',
+					'face_match:progress_findings_empty',
+					'face_match:progress_findings_saved',
+					'face_match:progress_auto_assign_complete',
+					'face_match:progress_auto_metadata_assign_complete',
+					'face_match:progress_auth_required',
+					'face_match:progress_failed',
+					'face_match:result_none',
+					'face_match:result_no_match',
+					'face_match:result_named_match',
+					'face_match:result_named_match_with_id',
+					'face_match:result_named_source_match',
+					'face_match:result_named_source_match_with_id',
+					'face_match:status_list_entry',
+					'face_match:status_findings_empty',
+				]);
+				if (this.faceMatchLoading && !persistentMessages.has(messageKey)) {
+					return this.$t('face_match:status_search_running', 'Search running...');
+				}
 				return this.$t(
-					progress.message_key,
-					progress.message || progress.message_key,
+					messageKey,
+					progress.message || messageKey,
 					progress.message_params && typeof progress.message_params === 'object'
 						? progress.message_params
 						: null
@@ -770,6 +800,18 @@ export default {
 			}
 			return nextTargets;
 		},
+		syncFaceMatchTransferredCountFromProgress(progress) {
+			const progressCount = Number(progress && progress.transferred_count);
+			if (!Number.isFinite(progressCount) || progressCount <= 0) {
+				return;
+			}
+			const localCount = Number(this.faceMatchTransferredCount) || 0;
+			const baseCount = Number(this.faceMatchTransferredBaseCount) || 0;
+			const totalCount = baseCount > 0
+				? Math.max(localCount, baseCount + progressCount)
+				: Math.max(localCount, progressCount);
+			this.faceMatchTransferredCount = totalCount;
+		},
 		async fetchFaceMatchingProgress() {
 			const requestId = this.faceMatchProgressRequestId + 1;
 			this.faceMatchProgressRequestId = requestId;
@@ -795,6 +837,7 @@ export default {
 				}
 				const progress = this.getResponseData(data);
 				this.faceMatchProgress = progress;
+				this.syncFaceMatchTransferredCountFromProgress(progress);
 				const result = progress && typeof progress.result === 'object' ? progress.result : null;
 				if (result && Object.keys(result).length) {
 					this.faceMatchResult = result;
@@ -1078,10 +1121,12 @@ export default {
 				this.faceMatchSkippedFaceIds = [];
 				this.faceMatchSkippedTargets = [];
 				this.faceMatchTransferredCount = 0;
+				this.faceMatchTransferredBaseCount = 0;
 				this.faceMatchProgressBase = {};
 				this.resetFaceMatchFindingsReview();
 			} else {
 				this.captureFaceMatchProgressBase();
+				this.faceMatchTransferredBaseCount = resumeFromProgress ? 0 : this.faceMatchTransferredCount;
 				const resumeCursor = this.faceMatchProgress && typeof this.faceMatchProgress.resume_cursor === 'object'
 					? this.faceMatchProgress.resume_cursor
 					: null;
@@ -1110,9 +1155,11 @@ export default {
 				images_read: 0,
 				faces_read: 0,
 				metadata_faces_read: 0,
+				transferred_count: 0,
 			} : {
 				...(this.faceMatchProgress || {}),
 				message: this.$t('face_match:status_starting', 'Search starting...'),
+				transferred_count: 0,
 			};
 			this.faceMatchResult = null;
 			this.resetFaceMatchSelectionState();
@@ -1172,8 +1219,7 @@ export default {
 					this.startFaceMatchProgressPolling();
 				}
 				await this.fetchFaceMatchFindingsStatus();
-				const transferredCount = Number((result && result.transferred_count) || faceMatches.transferred_count) || 0;
-				this.faceMatchTransferredCount += transferredCount;
+				this.syncFaceMatchTransferredCountFromProgress(faceMatches);
 				this.output = JSON.stringify(data, null, 2);
 			} catch (err) {
 				this.faceMatchResult = null;

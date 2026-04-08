@@ -106,39 +106,6 @@
 						</div>
 					</div>
 				</div>
-				<div class="sm-status-card">
-					<div class="sm-status-head">
-						<div class="sm-section-title">{{ vm.$t('status:exiftool_title', 'ExifTool') }}</div>
-					</div>
-					<div class="sm-kv-list">
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$t('status:exiftool_found', 'Found') }}</div>
-							<div class="sm-kv-value">{{ vm.hasLocalExiftool ? vm.$t('status:yes', 'Yes') : vm.$t('status:no', 'No') }}</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$t('status:exiftool_configured_path', 'Configured path') }}</div>
-							<div class="sm-kv-value">{{ vm.exiftoolStatus.configured_path || vm.$t('status:not_available', 'Not available') }}</div>
-						</div>
-						<template v-if="vm.hasLocalExiftool">
-							<div class="sm-kv-row">
-								<div class="sm-kv-key">{{ vm.$t('status:exiftool_local_version', 'Local version') }}</div>
-								<div class="sm-kv-value">{{ vm.exiftoolStatus.local && vm.exiftoolStatus.local.version || vm.$t('status:not_available', 'Not available') }}</div>
-							</div>
-							<div class="sm-kv-row">
-								<div class="sm-kv-key">{{ vm.$t('status:exiftool_latest_version', 'Latest official version') }}</div>
-								<div class="sm-kv-value">{{ vm.exiftoolStatus.online && vm.exiftoolStatus.online.latest_version || vm.$t('status:not_available', 'Not available') }}</div>
-							</div>
-							<div class="sm-kv-row">
-								<div class="sm-kv-key">{{ vm.$t('status:exiftool_update_available', 'Update available') }}</div>
-								<div class="sm-kv-value">{{ vm.exiftoolStatus.update_available ? vm.$t('status:yes', 'Yes') : vm.$t('status:no', 'No') }}</div>
-							</div>
-							<div class="sm-kv-row">
-								<div class="sm-kv-key">{{ vm.$t('status:exiftool_resolved_path', 'Resolved path') }}</div>
-								<div class="sm-kv-value">{{ vm.exiftoolStatus.local && vm.exiftoolStatus.local.resolved_path || vm.$t('status:not_available', 'Not available') }}</div>
-							</div>
-						</template>
-					</div>
-				</div>
 			</div>
 		</section>
 	</div>

@@ -4,7 +4,7 @@
 			<div class="sm-section-title">{{ $t('config:title', 'Configuration') }}</div>
 		</div>
 
-		<div class="config-actions">
+		<div class="config-actions config-actions-right">
 			<v-button @click="loadConfig" :disabled="loading || saving" style="width: 160px;">
 				{{ $t('config:button_reload', 'Reload') }}
 			</v-button>
@@ -92,101 +92,6 @@
 			</section>
 
 			<section class="config-card">
-				<div class="sm-section-title">{{ $t('config:section_exiftool', 'ExifTool') }}</div>
-				<div class="config-card-desc">{{ $t('config:section_exiftool_desc', 'Settings for optional ExifTool usage when reading embedded XMP metadata.') }}</div>
-
-				<div class="config-form-grid">
-					<label class="config-checkbox">
-						<input v-model="configModel.files.USE_EXIFTOOL" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_use_exiftool', 'Use ExifTool for embedded XMP') }}</span>
-					</label>
-
-					<label class="config-checkbox">
-						<input v-model="configModel.files.CHECK_EXIFTOOL_UPDATES" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_check_exiftool_updates', 'Check for newer ExifTool versions') }}</span>
-					</label>
-
-					<template v-if="configModel.files.USE_EXIFTOOL">
-						<label
-							class="config-checkbox"
-							:title="$t('config:hint_image_extensions_native_only', 'If enabled, the native image extension list is only used by native readers. ExifTool uses its own extension list instead.')"
-						>
-							<input
-								v-model="configModel.files.IMAGE_EXTENSIONS_NATIVE_ONLY"
-								type="checkbox"
-								:disabled="saving"
-							/>
-							<span>{{ $t('config:label_image_extensions_native_only', 'Use native extension list only for native readers') }}</span>
-						</label>
-
-						<label
-							class="config-checkbox"
-							:title="$t('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.')"
-						>
-							<input
-								v-model="configModel.files.USE_EXIFTOOL_FOR_SIDECARS"
-								type="checkbox"
-								:disabled="saving"
-							/>
-							<span>{{ $t('config:label_use_exiftool_for_sidecars', 'Use ExifTool for XMP sidecars') }}</span>
-						</label>
-
-						<label
-							class="config-checkbox"
-							:title="$t('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.')"
-						>
-							<input
-								v-model="configModel.files.PREFER_EXIFTOOL_FOR_CONTEXT"
-								type="checkbox"
-								:disabled="saving"
-							/>
-							<span>{{ $t('config:label_prefer_exiftool_for_context', 'Prefer ExifTool for metadata context') }}</span>
-						</label>
-
-						<label class="config-field">
-							<span class="config-field-label">{{ $t('config:label_exiftool_image_extensions', 'ExifTool file extensions for metadata scan') }}</span>
-							<textarea
-								v-model="exiftoolImageExtensionsInput"
-								class="config-textarea"
-								:disabled="saving || exiftoolExtensionsLoading"
-								:placeholder="$t('config:placeholder_exiftool_image_extensions', 'Leave empty to use all readable extensions reported by ExifTool.')"
-							></textarea>
-							<span class="config-card-desc">
-								{{ $t('config:hint_exiftool_image_extensions', 'When the field is empty, all readable ExifTool extensions are queried automatically.') }}
-							</span>
-							<div class="config-inline-actions">
-								<v-button
-									@click="loadExiftoolExtensions"
-									:disabled="saving || exiftoolExtensionsLoading"
-									style="width: 220px;"
-								>
-									{{ exiftoolExtensionsLoading ? $t('config:button_exiftool_extensions_loading', 'Loading ExifTool extensions...') : $t('config:button_exiftool_extensions_load', 'Load all ExifTool extensions') }}
-								</v-button>
-							</div>
-						</label>
-					</template>
-				</div>
-
-				<div v-if="exiftoolStatus.online && exiftoolStatus.online.unix_download_url" class="config-card-desc">
-					{{ $t('config:exiftool_download_source', 'Latest ExifTool package will be downloaded from: {url}', { url: exiftoolStatus.online.unix_download_url }) }}
-				</div>
-
-				<div class="config-actions config-actions-right">
-					<v-button @click="installExiftool" :disabled="loading || saving || exiftoolInstalling" style="width: 220px;">
-						{{ exiftoolInstalling ? $t('config:button_exiftool_installing', 'Installing ExifTool...') : $t('config:button_exiftool_install', 'Download and install ExifTool') }}
-					</v-button>
-					<v-button
-						v-if="hasBundledExiftool"
-						@click="removeExiftool"
-						:disabled="loading || saving || exiftoolInstalling || exiftoolRemoving"
-						style="width: 220px;"
-					>
-						{{ exiftoolRemoving ? $t('config:button_exiftool_removing', 'Removing ExifTool...') : $t('config:button_exiftool_remove', 'Remove ExifTool') }}
-					</v-button>
-				</div>
-			</section>
-
-			<section class="config-card">
 				<div class="sm-section-title">{{ $t('config:section_analysis', 'Analysis') }}</div>
 				<div class="config-card-desc">{{ $t('config:section_analysis_desc', 'Select which checks should be performed during analysis runs.') }}</div>
 
@@ -255,20 +160,9 @@ export default {
 			configPath: '',
 			configModel: this.createDefaultConfig(),
 			imageExtensionsInput: '',
-			exiftoolImageExtensionsInput: '',
-			exiftoolStatus: {},
-			exiftoolInstalling: false,
-			exiftoolRemoving: false,
-			exiftoolExtensionsLoading: false,
 		};
 	},
 	computed: {
-		hasBundledExiftool() {
-			const resolvedPath = this.exiftoolStatus && this.exiftoolStatus.local && this.exiftoolStatus.local.resolved_path
-				? String(this.exiftoolStatus.local.resolved_path)
-				: '';
-			return resolvedPath.includes('/var/packages/AV_ImgData/') || resolvedPath.includes('/volume') && resolvedPath.includes('/AV_ImgData/');
-		},
 		sidecarLookupOptions() {
 			return [
 				{ value: 'same_dir_stem', label: this.$t('config:label_sidecar_variant_same_dir_stem', 'Same folder: image.xmp') },
@@ -280,7 +174,6 @@ export default {
 	},
 	mounted() {
 		this.loadConfig();
-		this.loadExiftoolStatus();
 	},
 	methods: {
 		escapeRegExp(value) {
@@ -351,9 +244,6 @@ export default {
 		},
 		formatImageExtensions(value) {
 			return this.normalizeImageExtensions(value).join(', ');
-		},
-		formatImageExtensionsMultiline(value) {
-			return this.normalizeImageExtensions(value, []).join(',\n');
 		},
 		collectDsmCookies() {
 			return {
@@ -461,9 +351,21 @@ export default {
 			};
 		},
 		applyDefaults() {
+			const exiftoolFiles = {
+				USE_EXIFTOOL: this.configModel.files.USE_EXIFTOOL,
+				CHECK_EXIFTOOL_UPDATES: this.configModel.files.CHECK_EXIFTOOL_UPDATES,
+				USE_EXIFTOOL_FOR_SIDECARS: this.configModel.files.USE_EXIFTOOL_FOR_SIDECARS,
+				PREFER_EXIFTOOL_FOR_CONTEXT: this.configModel.files.PREFER_EXIFTOOL_FOR_CONTEXT,
+				PATHEXIFTOOL: this.configModel.files.PATHEXIFTOOL,
+				IMAGE_EXTENSIONS_NATIVE_ONLY: this.configModel.files.IMAGE_EXTENSIONS_NATIVE_ONLY,
+				EXIFTOOL_IMAGE_EXTENSIONS: this.configModel.files.EXIFTOOL_IMAGE_EXTENSIONS,
+			};
 			this.configModel = this.createDefaultConfig();
+			this.configModel.files = {
+				...this.configModel.files,
+				...exiftoolFiles,
+			};
 			this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
-			this.exiftoolImageExtensionsInput = this.formatImageExtensionsMultiline(this.configModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 			this.message = this.$t('config:output_defaults_applied', 'Default values loaded into the editor.');
 		},
 		async loadConfig() {
@@ -474,7 +376,6 @@ export default {
 				this.configPath = (data && data.data && data.data.config_path) || '';
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
-				this.exiftoolImageExtensionsInput = this.formatImageExtensionsMultiline(this.configModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				this.message = '';
 			} catch (err) {
 				this.message = `Error: ${err.message}`;
@@ -494,10 +395,6 @@ export default {
 							this.imageExtensionsInput,
 							this.createDefaultConfig().files.IMAGE_EXTENSIONS
 						),
-						EXIFTOOL_IMAGE_EXTENSIONS: this.normalizeImageExtensions(
-							this.exiftoolImageExtensionsInput,
-							[]
-						),
 					},
 				};
 				const normalized = this.normalizeConfig(payloadConfig);
@@ -505,81 +402,11 @@ export default {
 				this.configPath = (data && data.data && data.data.config_path) || this.configPath;
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
-				this.exiftoolImageExtensionsInput = this.formatImageExtensionsMultiline(this.configModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
-				await this.loadExiftoolStatus();
 				this.message = this.$t('config:message_saved', 'Configuration saved.');
 			} catch (err) {
 				this.message = `Error: ${err.message}`;
 			} finally {
 				this.saving = false;
-			}
-		},
-		async loadExiftoolStatus() {
-			try {
-				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_status');
-				this.exiftoolStatus = (data && data.data && typeof data.data === 'object') ? data.data : {};
-			} catch (err) {
-				this.exiftoolStatus = {};
-			}
-		},
-		async loadExiftoolExtensions() {
-			this.exiftoolExtensionsLoading = true;
-			this.message = '';
-			try {
-				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_extensions');
-				const extensions = data && data.data && Array.isArray(data.data.extensions) ? data.data.extensions : [];
-				this.exiftoolImageExtensionsInput = this.formatImageExtensionsMultiline(extensions);
-				this.message = this.$t('config:message_exiftool_extensions_loaded', 'ExifTool extensions loaded into the editor.');
-			} catch (err) {
-				this.message = `Error: ${err.message}`;
-			} finally {
-				this.exiftoolExtensionsLoading = false;
-			}
-		},
-		async installExiftool() {
-			this.exiftoolInstalling = true;
-			this.message = '';
-			try {
-				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_install');
-				const installedPath = data && data.data && data.data.installed_path ? data.data.installed_path : '';
-				if (installedPath) {
-					this.configModel.files.PATHEXIFTOOL = installedPath;
-					this.configModel.files.USE_EXIFTOOL = true;
-				}
-				await this.loadExiftoolStatus();
-				this.message = this.$t('config:message_exiftool_installed', 'ExifTool downloaded and installed.');
-			} catch (err) {
-				const detail = String(err.message || '');
-				if (detail.includes('perl_not_available')) {
-					this.message = this.$t(
-						'config:error_exiftool_perl_required',
-						'ExifTool cannot be installed because Perl is not available. Please install the Synology Perl package first.'
-					);
-				} else if (detail.includes('installed_exiftool_smoke_test_failed')) {
-					this.message = this.$t(
-						'config:error_exiftool_smoke_test_failed',
-						'ExifTool was downloaded, but the installation test failed. ExifTool remains disabled.'
-					);
-				} else {
-					this.message = `Error: ${detail}`;
-				}
-			} finally {
-				this.exiftoolInstalling = false;
-			}
-		},
-		async removeExiftool() {
-			this.exiftoolRemoving = true;
-			this.message = '';
-			try {
-				await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_remove');
-				this.configModel.files.PATHEXIFTOOL = 'exiftool';
-				this.configModel.files.USE_EXIFTOOL = false;
-				await this.loadExiftoolStatus();
-				this.message = this.$t('config:message_exiftool_removed', 'ExifTool installation removed.');
-			} catch (err) {
-				this.message = `Error: ${err.message}`;
-			} finally {
-				this.exiftoolRemoving = false;
 			}
 		},
 	},

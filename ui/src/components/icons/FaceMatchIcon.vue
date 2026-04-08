@@ -1,22 +1,22 @@
 <template>
 	<svg
 		class="sm-nav-svg"
-		viewBox="0 0 32 32"
+		viewBox="0 0 128 128"
 		aria-hidden="true"
 		focusable="false"
 	>
 		<g
 			fill="none"
 			stroke="currentColor"
-			stroke-width="2"
+			stroke-width="6"
 			stroke-linecap="round"
 			stroke-linejoin="round"
 		>
-			<rect x="7" y="6" width="18" height="20" rx="3" />
-			<circle cx="13" cy="14" r="1" />
-			<circle cx="19" cy="14" r="1" />
-			<path d="M12 18c1.5 2 6.5 2 8 0" />
-			<path d="M21 22l2 2 4-4" />
+			<circle cx="64" cy="56" r="28"></circle>
+			<circle cx="54" cy="52" r="2"></circle>
+			<circle cx="74" cy="52" r="2"></circle>
+			<path d="M54 68 Q64 76 74 68"></path>
+			<path d="M84 84 L94 94 L110 76"></path>
 		</g>
 	</svg>
 </template>

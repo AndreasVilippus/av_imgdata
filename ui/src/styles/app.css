@@ -75,6 +75,11 @@
 	margin-bottom: 4px;
 }
 
+.sm-nav-separator {
+	border-top: 1px solid var(--sm-border-soft);
+	margin: 8px 8px;
+}
+
 .sm-nav-item {
 	border: 1px solid transparent;
 	border-radius: var(--sm-radius-1);
@@ -108,13 +113,18 @@
 	border-color: rgba(5, 127, 235, 0.24);
 }
 
+.sm-nav-sub-item {
+	padding-left: 42px;
+	font-size: var(--sm-font-xs);
+}
+
 .sm-nav-icon {
-	width: 16px;
-	height: 16px;
+	width: 22px;
+	height: 22px;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	flex: 0 0 16px;
+	flex: 0 0 22px;
 	color: #73839a;
 }
 

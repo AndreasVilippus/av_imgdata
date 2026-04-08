@@ -17,6 +17,12 @@ SESSION_MANAGER = SessionManager(verify_ssl=DSM_INTERNAL_VERIFY_SSL, timeout=20)
 IMGDATA = ImgDataService(SESSION_MANAGER)
 
 
+def _configured_max_photos_persons() -> int:
+    config = IMGDATA.getRuntimeConfig()
+    photos = config.get("photos", {}) if isinstance(config.get("photos"), dict) else {}
+    return max(1, int(photos["MAX_PHOTOS_PERSONS"]))
+
+
 @router.get("/ping")
 async def ping():
     return {
@@ -247,14 +253,15 @@ async def face_matching_action(request: Request):
     auto = bool(body.get("auto"))
     save_only = bool(body.get("save_only"))
     resume_from_progress = bool(body.get("resume_from_progress"))
-    limit = body.get("limit", 100)
+    default_limit = _configured_max_photos_persons()
+    limit = body.get("limit", default_limit)
     offset = body.get("offset", 0)
     skip_face_ids = body.get("skip_face_ids") if isinstance(body.get("skip_face_ids"), list) else []
     skip_targets = body.get("skip_targets") if isinstance(body.get("skip_targets"), list) else []
     try:
         limit = int(limit)
     except Exception:
-        limit = 100
+        limit = default_limit
     try:
         offset = int(offset)
     except Exception:

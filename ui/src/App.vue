@@ -9,7 +9,15 @@
 						<status-view v-if="selectedOption === 'status'" :vm="this" />
 						<face-match-view v-if="selectedOption === 'face_match'" :vm="this" />
 						<checks-view v-if="selectedOption === 'checks'" :vm="this" />
+						<placeholder-view
+							v-if="selectedOption === 'cleanup'"
+							:title="$t('nav:cleanup', 'Cleanup')"
+						/>
 						<configuration-view v-if="selectedOption === 'configuration'" />
+						<external-libraries-view
+							v-if="selectedOption === 'external_libraries_exiftool'"
+							:vm="this"
+						/>
 					</main>
 				</div>
 			</div>
@@ -20,20 +28,25 @@
 <script>
 import AppSidebarNav from './components/AppSidebarNav.vue';
 import checksMixin from './mixins/checksMixin';
+import externalLibrariesMixin from './mixins/externalLibrariesMixin';
 import faceMatchMixin from './mixins/faceMatchMixin';
 import statusMixin from './mixins/statusMixin';
 import ChecksView from './views/ChecksView.vue';
 import ConfigurationView from './views/ConfigurationView.vue';
+import ExternalLibrariesView from './views/ExternalLibrariesView.vue';
 import FaceMatchView from './views/FaceMatchView.vue';
+import PlaceholderView from './views/PlaceholderView.vue';
 import StatusView from './views/StatusView.vue';
 
 export default {
-	mixins: [statusMixin, checksMixin, faceMatchMixin],
+	mixins: [statusMixin, checksMixin, faceMatchMixin, externalLibrariesMixin],
 	components: {
 		AppSidebarNav,
 		ChecksView,
 		ConfigurationView,
+		ExternalLibrariesView,
 		FaceMatchView,
+		PlaceholderView,
 		StatusView,
 	},
 	data() {
@@ -56,19 +69,22 @@ export default {
 			return `/webman/3rdparty/AV_ImgData/images/${filename}`;
 		},
 		selectContent(option) {
-			this.selectedOption = option;
-			if (option === 'status' && !this.statusLoaded && !this.statusLoading) {
+			const selectedOption = option === 'external_libraries' ? 'external_libraries_exiftool' : option;
+			this.selectedOption = selectedOption;
+			if (selectedOption === 'status' && !this.statusLoaded && !this.statusLoading) {
 				this.getStatus({ auto: true });
 			}
-			if (option === 'status') {
+			if (selectedOption === 'status') {
 				this.refreshFileAnalysisSessionState();
-				this.fetchExiftoolStatus();
 			}
-			if (option === 'face_match') {
+			if (selectedOption === 'face_match') {
 				this.refreshFaceMatchSessionState();
 			}
-			if (option === 'checks') {
+			if (selectedOption === 'checks') {
 				this.refreshChecksSessionState();
+			}
+			if (selectedOption === 'external_libraries_exiftool') {
+				this.loadExternalLibrariesConfig();
 			}
 		},
 		readCookie(name) {

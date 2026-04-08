@@ -12,16 +12,15 @@
 			stroke-linecap="round"
 			stroke-linejoin="round"
 		>
-			<rect x="28" y="24" width="60" height="80" rx="6"></rect>
-			<path d="M40 44 H76"></path>
-			<path d="M40 58 H70"></path>
-			<path d="M44 78 L56 90 L80 64"></path>
+			<path d="M24 44 L64 24 L104 44 L64 64 Z"></path>
+			<path d="M24 44 V84 L64 104 V64"></path>
+			<path d="M104 44 V84 L64 104"></path>
 		</g>
 	</svg>
 </template>
 
 <script>
 export default {
-	name: 'ChecksIcon',
+	name: 'ExternalLibrariesIcon',
 };
 </script>
