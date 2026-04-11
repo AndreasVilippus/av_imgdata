@@ -14,6 +14,7 @@ class FileAnalysisService:
         "position_deviations": "position_deviations.json",
         "name_conflicts": "name_conflicts.json",
         "face_match": "face_match.json",
+        "face_match_candidates": "face_match_candidates.json",
     }
 
     def __init__(self, result_path: Optional[str] = None):

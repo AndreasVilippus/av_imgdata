@@ -72,3 +72,29 @@ def from_xmp(face_dict) -> BoundingBox:
         x2=center_x + (width / 2),
         y2=center_y + (height / 2),
     )
+
+
+def to_display_face(face_like) -> dict:
+    face_dict = _as_face_dict(face_like)
+    if face_dict.get("display_normalized"):
+        return dict(face_dict)
+
+    if str(face_dict.get("source_format") or "") in {"MWG_REGIONS", "MICROSOFT"}:
+        face_dict = normalize_xmp_face(face_dict)
+    else:
+        face_dict = dict(face_dict)
+
+    center_x = face_dict.get("x")
+    center_y = face_dict.get("y")
+    width = face_dict.get("w")
+    height = face_dict.get("h")
+    if all(value is not None for value in (center_x, center_y, width, height)):
+        face_dict["bbox"] = {
+            "x1": center_x - (width / 2),
+            "y1": center_y - (height / 2),
+            "x2": center_x + (width / 2),
+            "y2": center_y + (height / 2),
+        }
+
+    face_dict["display_normalized"] = True
+    return face_dict

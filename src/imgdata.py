@@ -17,7 +17,7 @@ from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
 from models.photos_face import PhotosFace
 from parser.metadata_parser import MetadataParser, NS_ACD, NS_MICROSOFT, NS_MWG_REGIONS
-from services.bbox_normalizer import from_photos, from_xmp, normalize_xmp_face
+from services.bbox_normalizer import from_photos, from_xmp, to_display_face
 from services.config_service import ConfigService
 from services.exiftool_service import ExifToolService
 from services.face_matcher import FaceMatcher
@@ -110,7 +110,7 @@ class ImgDataService:
     def remove_exiftool(self) -> Dict[str, Any]:
         return self.exiftool.removeInstalled()
 
-    def _readImageMetadata(self, image_path: str) -> MetadataPayload:
+    def _readImageMetadata(self, image_path: str, *, include_unnamed_acd: bool = False) -> MetadataPayload:
         config = self.config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
         use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
@@ -155,6 +155,7 @@ class ImgDataService:
             use_acd=schemas["ACD"],
             use_microsoft=schemas["MICROSOFT"],
             use_mwg_regions=schemas["MWG_REGIONS"],
+            include_unnamed_acd=include_unnamed_acd,
         )
 
     def analyzeImageFaceMetadata(self, image_path: str) -> Dict[str, Any]:
@@ -274,10 +275,10 @@ class ImgDataService:
                 x, y, width, height = [float(value.strip()) for value in rectangle.split(",")]
             except (TypeError, ValueError):
                 continue
-            face = MetadataFace.from_center_box(
+            face = MetadataFace.from_top_left_box(
                 name=name,
-                x=x,
-                y=y,
+                left=x,
+                top=y,
                 w=width,
                 h=height,
                 source=source,
@@ -385,10 +386,10 @@ class ImgDataService:
     @staticmethod
     def _setMetadataFacePosition(element: ET.Element, source_format: str, new_face: MetadataFace) -> bool:
         normalized_format = str(source_format or "").strip().upper()
-        x = ImgDataService._formatMetadataFaceCoordinate(new_face.x)
-        y = ImgDataService._formatMetadataFaceCoordinate(new_face.y)
         w = ImgDataService._formatMetadataFaceCoordinate(new_face.w)
         h = ImgDataService._formatMetadataFaceCoordinate(new_face.h)
+        x = ImgDataService._formatMetadataFaceCoordinate(new_face.x)
+        y = ImgDataService._formatMetadataFaceCoordinate(new_face.y)
 
         if normalized_format == "ACD":
             area = element.find("acdsee-rs:DLYArea", NS_ACD)
@@ -402,7 +403,9 @@ class ImgDataService:
             return updated
 
         if normalized_format == "MICROSOFT":
-            rectangle = ",".join((x, y, w, h))
+            left = ImgDataService._formatMetadataFaceCoordinate(new_face.x - (new_face.w / 2))
+            top = ImgDataService._formatMetadataFaceCoordinate(new_face.y - (new_face.h / 2))
+            rectangle = ",".join((left, top, w, h))
             if ImgDataService._setExistingElementValueByLocalName(element, "Rectangle", rectangle):
                 return True
             element.append(ET.Element(f"{{{NS_MICROSOFT['MPReg']}}}Rectangle"))
@@ -1375,7 +1378,7 @@ class ImgDataService:
             image_path = str(resolved.get("image_path") or "").strip()
             metadata_face = resolved.get("metadata_face")
             if image_path and isinstance(metadata_face, dict) and not str(resolved.get("source_name") or "").strip():
-                payload = self._readImageMetadata(image_path)
+                payload = self._readImageMetadata(image_path, include_unnamed_acd=True)
                 target_face = self._findFaceBySignature(payload.faces, metadata_face)
                 if not target_face or str(target_face.name or "").strip():
                     resolved["matched_person"] = None
@@ -1608,7 +1611,7 @@ class ImgDataService:
             source_candidates.append({
                 **match,
                 "source_type": "photos",
-                "source_face": {
+                "source_face": to_display_face({
                     "name": str(matched_photo.get("face_name") or ""),
                     "x": (matched_bbox.x1 + matched_bbox.x2) / 2,
                     "y": (matched_bbox.y1 + matched_bbox.y2) / 2,
@@ -1616,7 +1619,7 @@ class ImgDataService:
                     "h": matched_bbox.y2 - matched_bbox.y1,
                     "source": "photos",
                     "source_format": "PHOTOS",
-                },
+                }),
                 "matched_person": matched_photo.get("person"),
                 "image": matched_photo.get("image"),
             })
@@ -1640,7 +1643,7 @@ class ImgDataService:
             source_candidates.append({
                 **match,
                 "source_type": "metadata",
-                "source_face": matched_metadata.to_dict(),
+                "source_face": to_display_face(matched_metadata),
                 "matched_person": None,
                 "image": None,
             })
@@ -1672,7 +1675,7 @@ class ImgDataService:
             "source_face": source_face,
             "source_name": source_name,
             "source_type": str(matched.get("source_type") or ""),
-            "metadata_face": target_face.to_dict(),
+            "metadata_face": to_display_face(target_face),
             "image_path": image_path,
             "match": matched,
             "matched_person": matched_person,
@@ -1716,7 +1719,7 @@ class ImgDataService:
             metadata_face = entry.get("metadata_face")
             if not image_path or not isinstance(metadata_face, dict):
                 return False
-            payload = self._readImageMetadata(image_path)
+            payload = self._readImageMetadata(image_path, include_unnamed_acd=True)
             existing = self._findFaceBySignature(payload.faces, metadata_face)
             return bool(existing and not str(existing.name or "").strip())
         image = entry.get("image")
@@ -1754,19 +1757,6 @@ class ImgDataService:
             return None
         named = [face for face in mwg_faces if str(face.name or "").strip()]
         return named[0] if named else mwg_faces[0]
-
-    @staticmethod
-    def _normalizedReviewFace(face: Any) -> Dict[str, Any]:
-        if isinstance(face, MetadataFace):
-            face_data = face.to_dict()
-        elif isinstance(face, dict):
-            face_data = dict(face)
-        else:
-            return {}
-
-        if str(face_data.get("source_format") or "") == "MWG_REGIONS":
-            return normalize_xmp_face(face_data)
-        return face_data
 
     @staticmethod
     def _isSameFace(left: Any, right: Any) -> bool:
@@ -1866,7 +1856,7 @@ class ImgDataService:
 
         review_face = self._findFaceBySignature(mwg_faces, (entry or {}).get("left_face_signature") or {})
         review_face = review_face or self._pickReviewFace(mwg_faces) or mwg_faces[0]
-        applied_face = normalize_xmp_face(review_face)
+        applied_face = to_display_face(review_face)
         reference_face = self._findBestReferenceFace(review_face, reference_faces) or review_face
 
         return {
@@ -1875,13 +1865,13 @@ class ImgDataService:
             "image_name": Path(image_path).name,
             "left_face": applied_face,
             "left_face_target": self._faceSignature(review_face),
-            "right_face": self._normalizedReviewFace(reference_face),
+            "right_face": to_display_face(reference_face),
             "right_face_target": self._faceSignature(reference_face),
             "left_alert_faces": [
-                normalize_xmp_face(face) for face in mwg_faces
+                to_display_face(face) for face in mwg_faces
                 if not self._isSameFace(face, review_face)
             ],
-            "left_reference_faces": [self._normalizedReviewFace(face) for face in reference_faces],
+            "left_reference_faces": [to_display_face(face) for face in reference_faces],
             "right_alert_faces": [],
             "right_reference_faces": [],
             "face_name": str(review_face.name or ""),
@@ -1897,11 +1887,17 @@ class ImgDataService:
 
     def _findBestReferenceFace(self, review_face: MetadataFace, candidates: List[MetadataFace]) -> Optional[MetadataFace]:
         review_name = str(review_face.name or "").strip().casefold()
+        prioritized_candidates = candidates
         if review_name:
             same_name = [face for face in candidates if str(face.name or "").strip().casefold() == review_name]
             if same_name:
-                return same_name[0]
-        return candidates[0] if candidates else None
+                prioritized_candidates = same_name
+
+        for preferred_format in ("ACD", "PHOTOS", "MICROSOFT"):
+            for face in prioritized_candidates:
+                if str(face.source_format or "").strip().upper() == preferred_format:
+                    return face
+        return prioritized_candidates[0] if prioritized_candidates else None
 
     def _configuredReviewOptions(self) -> Dict[str, bool]:
         config = self.config.readMergedConfig()
@@ -1969,12 +1965,22 @@ class ImgDataService:
         left_state = "alert"
         right_state = "alert"
         if review_options.get("DUPLICATE_FACE_SUGGESTIONS", True):
-            left_matches = self._countDuplicateSuggestionMatches(left, faces)
-            right_matches = self._countDuplicateSuggestionMatches(right, faces)
+            left_matches, left_safe_matches = self._duplicateSuggestionSupportStats(left, faces)
+            right_matches, right_safe_matches = self._duplicateSuggestionSupportStats(right, faces)
             if left_matches > right_matches:
                 left_state = "suggested"
             elif right_matches > left_matches:
                 right_state = "suggested"
+            elif left_safe_matches > right_safe_matches:
+                left_state = "suggested"
+            elif right_safe_matches > left_safe_matches:
+                right_state = "suggested"
+        left_state, right_state = self._applyOrientationRiskSuggestion(
+            left_state=left_state,
+            right_state=right_state,
+            left_face=left,
+            right_face=right,
+        )
 
         return {
             "review_type": "duplicate_faces",
@@ -1985,9 +1991,9 @@ class ImgDataService:
             "right_name": str(right.name or ""),
             "left_format": str(left.source_format or ""),
             "right_format": str(right.source_format or ""),
-            "left_face": self._normalizedReviewFace(left),
+            "left_face": to_display_face(left),
             "left_face_target": self._faceSignature(left),
-            "right_face": self._normalizedReviewFace(right),
+            "right_face": to_display_face(right),
             "right_face_target": self._faceSignature(right),
             "left_state": left_state,
             "right_state": right_state,
@@ -1997,23 +2003,54 @@ class ImgDataService:
             "right_reference_faces": [],
         }
 
-    def _countDuplicateSuggestionMatches(self, candidate: MetadataFace, faces: List[MetadataFace]) -> int:
+    def _duplicateSuggestionSupportStats(self, candidate: MetadataFace, faces: List[MetadataFace]) -> Tuple[int, int]:
         candidate_name = str(candidate.name or "").strip().casefold()
         candidate_format = str(candidate.source_format or "").strip().upper()
         if not candidate_name or not candidate_format:
-            return 0
+            return 0, 0
 
-        normalized_candidate = self._normalizedReviewFace(candidate)
+        normalized_candidate = to_display_face(candidate)
         matches = 0
+        safe_matches = 0
         for face in faces:
             face_name = str(face.name or "").strip().casefold()
             face_format = str(face.source_format or "").strip().upper()
             if face_name != candidate_name or face_format == candidate_format:
                 continue
-            normalized_face = self._normalizedReviewFace(face)
+            normalized_face = to_display_face(face)
             if self.files._boxesOverlapStrongly(normalized_candidate, normalized_face):
                 matches += 1
-        return matches
+                if not self._faceHasOrientationRisk(face):
+                    safe_matches += 1
+        return matches, safe_matches
+
+    @staticmethod
+    def _faceHasOrientationRisk(face: Optional[MetadataFace]) -> bool:
+        if not isinstance(face, MetadataFace):
+            return False
+        source_format = str(face.source_format or "").strip().upper()
+        if source_format not in {"MWG_REGIONS", "MICROSOFT"}:
+            return False
+        return face.orientation not in (None, 1)
+
+    def _applyOrientationRiskSuggestion(
+        self,
+        *,
+        left_state: str,
+        right_state: str,
+        left_face: Optional[MetadataFace],
+        right_face: Optional[MetadataFace],
+    ) -> Tuple[str, str]:
+        if left_state == "suggested" or right_state == "suggested":
+            return left_state, right_state
+
+        left_risk = self._faceHasOrientationRisk(left_face)
+        right_risk = self._faceHasOrientationRisk(right_face)
+        if left_risk == right_risk:
+            return left_state, right_state
+        if left_risk:
+            return left_state, "suggested"
+        return "suggested", right_state
 
     def _getNameConflictSuggestionStates(self, left_name: str, right_name: str) -> Tuple[str, str]:
         left_state = "alert"
@@ -2048,13 +2085,13 @@ class ImgDataService:
             left_format = str(left.source_format or "").strip().upper()
             if not left_name or not left_format:
                 continue
-            normalized_left = self._normalizedReviewFace(left)
+            normalized_left = to_display_face(left)
             for right in faces[index + 1:]:
                 right_name = str(right.name or "").strip().casefold()
                 right_format = str(right.source_format or "").strip().upper()
                 if left_name != right_name or left_format == right_format:
                     continue
-                normalized_right = self._normalizedReviewFace(right)
+                normalized_right = to_display_face(right)
                 if self.files._boxesOverlapStrongly(normalized_left, normalized_right):
                     continue
                 entries.append(
@@ -2080,6 +2117,12 @@ class ImgDataService:
         right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
         if not left or not right:
             return None
+        left_state, right_state = self._applyOrientationRiskSuggestion(
+            left_state="alert",
+            right_state="alert",
+            left_face=left,
+            right_face=right,
+        )
         return {
             "review_type": "position_deviations",
             "image_path": image_path,
@@ -2089,10 +2132,12 @@ class ImgDataService:
             "right_name": str(right.name or ""),
             "left_format": str(left.source_format or ""),
             "right_format": str(right.source_format or ""),
-            "left_face": self._normalizedReviewFace(left),
+            "left_face": to_display_face(left),
             "left_face_target": self._faceSignature(left),
-            "right_face": self._normalizedReviewFace(right),
+            "right_face": to_display_face(right),
             "right_face_target": self._faceSignature(right),
+            "left_state": left_state,
+            "right_state": right_state,
             "left_alert_faces": [],
             "left_reference_faces": [],
             "right_alert_faces": [],
@@ -2111,12 +2156,12 @@ class ImgDataService:
             left_name = str(left.name or "").strip()
             if not left_name:
                 continue
-            normalized_left = self._normalizedReviewFace(left)
+            normalized_left = to_display_face(left)
             for right in faces[index + 1:]:
                 right_name = str(right.name or "").strip()
                 if not right_name or left_name.casefold() == right_name.casefold():
                     continue
-                normalized_right = self._normalizedReviewFace(right)
+                normalized_right = to_display_face(right)
                 if not self.files._boxesOverlapStrongly(normalized_left, normalized_right):
                     continue
                 entries.append(
@@ -2145,6 +2190,12 @@ class ImgDataService:
         left_name = str(left.name or "")
         right_name = str(right.name or "")
         left_state, right_state = self._getNameConflictSuggestionStates(left_name, right_name)
+        left_state, right_state = self._applyOrientationRiskSuggestion(
+            left_state=left_state,
+            right_state=right_state,
+            left_face=left,
+            right_face=right,
+        )
         return {
             "review_type": "name_conflicts",
             "image_path": image_path,
@@ -2154,9 +2205,9 @@ class ImgDataService:
             "right_name": right_name,
             "left_format": str(left.source_format or ""),
             "right_format": str(right.source_format or ""),
-            "left_face": self._normalizedReviewFace(left),
+            "left_face": to_display_face(left),
             "left_face_target": self._faceSignature(left),
-            "right_face": self._normalizedReviewFace(right),
+            "right_face": to_display_face(right),
             "right_face_target": self._faceSignature(right),
             "left_state": left_state,
             "right_state": right_state,
@@ -3301,7 +3352,7 @@ class ImgDataService:
                     self._file_analysis_thread = None
                     return
 
-                metadata_payload = self._readImageMetadata(image_path)
+                metadata_payload = self._readImageMetadata(image_path, include_unnamed_acd=True)
                 analysis = self.files.analyzeMetadata(metadata_payload)
                 reverse_face_match_entries.extend(
                     self._buildReverseFaceMatchCandidateEntry(image_path=image_path, metadata_face=face)

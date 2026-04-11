@@ -757,6 +757,10 @@
 	color: var(--sm-text-muted);
 }
 
+.panel-content-start {
+	margin-top: 12px;
+}
+
 .action-row {
 	display: flex;
 	gap: var(--sm-space-2);

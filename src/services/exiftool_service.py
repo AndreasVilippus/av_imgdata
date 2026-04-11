@@ -18,7 +18,8 @@ class ExifToolService:
     HISTORY_URL = "https://exiftool.org/history.html"
     INSTALL_URL = "https://exiftool.org/install.html"
     INDEX_URL = "https://exiftool.org/index.html"
-    PACKAGE_WRAPPER_PATH = "/var/packages/AV_ImgData/target/usr/bin/exiftool"
+    PACKAGE_TARGET_EXIFTOOL_PATH = "/var/packages/AV_ImgData/target/usr/bin/exiftool"
+    PACKAGE_TARGET_LIB_PATH = "/var/packages/AV_ImgData/target/usr/bin/lib"
 
     def __init__(self, config_service: Optional[ConfigService] = None):
         self._config = config_service or ConfigService()
@@ -29,6 +30,8 @@ class ExifToolService:
         configured_path = str(files_config.get("PATHEXIFTOOL", "exiftool") or "exiftool").strip() or "exiftool"
         use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
         check_updates = bool(files_config.get("CHECK_EXIFTOOL_UPDATES", True))
+        bundled_install_root = self._packageVarInstallRoot()
+        last_download_url = str(files_config.get("EXIFTOOL_DOWNLOAD_URL", "") or "").strip()
 
         local_info = self._detectLocalExifTool(configured_path)
         online_info = self._fetchLatestOfficialInfo() if check_updates else {
@@ -48,6 +51,10 @@ class ExifToolService:
             "configured_path": configured_path,
             "use_exiftool": use_exiftool,
             "check_updates": check_updates,
+            "last_download_url": last_download_url,
+            "bundled_install_root": str(bundled_install_root),
+            "bundled_install_exists": bundled_install_root.exists(),
+            "bundled_target_path": str(self._packageTargetExecutablePath()),
             "local": local_info,
             "online": online_info,
             "perl": perl_info,
@@ -100,8 +107,7 @@ class ExifToolService:
                 "online": online,
             }
 
-        package_var = Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
-        install_root = package_var / "exiftool"
+        install_root = self._packageVarInstallRoot()
         archive_path = install_root / package_name
         extracted_root = install_root / f"Image-ExifTool-{latest_version}"
 
@@ -135,10 +141,34 @@ class ExifToolService:
                 "perl": perl_info,
             }
 
+        target_executable = self._packageTargetExecutablePath()
+        try:
+            self._installPackageTargetExecutable(executable_path, extracted_root / "lib")
+        except OSError:
+            return {
+                "success": False,
+                "message": "installed_exiftool_target_copy_failed",
+                "download_url": download_url,
+                "installed_path": str(executable_path),
+                "target_path": str(target_executable),
+                "perl": perl_info,
+            }
+        target_version = self._readExifToolVersion(str(target_executable))
+        if not target_version:
+            return {
+                "success": False,
+                "message": "installed_exiftool_target_smoke_test_failed",
+                "download_url": download_url,
+                "installed_path": str(executable_path),
+                "target_path": str(target_executable),
+                "perl": perl_info,
+            }
+
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
-        files_config["PATHEXIFTOOL"] = self.PACKAGE_WRAPPER_PATH
+        files_config["PATHEXIFTOOL"] = str(target_executable)
         files_config["USE_EXIFTOOL"] = True
+        files_config["EXIFTOOL_DOWNLOAD_URL"] = download_url
         config["files"] = files_config
         self._config.writeConfig(config)
 
@@ -149,16 +179,21 @@ class ExifToolService:
             "version": installed_version,
             "archive_path": str(archive_path),
             "installed_path": str(executable_path),
-            "configured_path": self.PACKAGE_WRAPPER_PATH,
+            "target_path": str(target_executable),
+            "configured_path": str(target_executable),
             "perl": perl_info,
             "online": online,
         }
 
     def removeInstalled(self) -> Dict[str, Any]:
-        package_var = Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
-        install_root = package_var / "exiftool"
+        install_root = self._packageVarInstallRoot()
         if install_root.exists():
             shutil.rmtree(install_root)
+        target_executable = self._packageTargetExecutablePath()
+        target_executable.unlink(missing_ok=True)
+        target_lib = self._packageTargetLibPath()
+        if target_lib.exists():
+            shutil.rmtree(target_lib)
 
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
@@ -171,7 +206,37 @@ class ExifToolService:
             "success": True,
             "message": "exiftool_removed",
             "removed_root": str(install_root),
+            "removed_target_path": str(target_executable),
+            "removed_target_lib_path": str(target_lib),
         }
+
+    @classmethod
+    def _packageVarInstallRoot(cls) -> Path:
+        package_var = Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
+        return package_var / "exiftool"
+
+    @classmethod
+    def _packageTargetExecutablePath(cls) -> Path:
+        package_dest = Path(os.getenv("SYNOPKG_PKGDEST", "/var/packages/AV_ImgData/target"))
+        return package_dest / "usr/bin/exiftool"
+
+    @classmethod
+    def _packageTargetLibPath(cls) -> Path:
+        package_dest = Path(os.getenv("SYNOPKG_PKGDEST", "/var/packages/AV_ImgData/target"))
+        return package_dest / "usr/bin/lib"
+
+    @staticmethod
+    def _installPackageTargetExecutable(executable_path: Path, lib_path: Optional[Path] = None) -> None:
+        target_path = ExifToolService._packageTargetExecutablePath()
+        target_lib_path = ExifToolService._packageTargetLibPath()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.unlink(missing_ok=True)
+        if target_lib_path.exists():
+            shutil.rmtree(target_lib_path)
+        shutil.copy2(executable_path, target_path)
+        target_path.chmod(0o755)
+        if lib_path and lib_path.exists():
+            shutil.copytree(lib_path, target_lib_path)
 
     def _detectLocalExifTool(self, configured_path: str) -> Dict[str, Any]:
         resolved_path, found_via = self._resolveExecutable(configured_path)
@@ -196,8 +261,8 @@ class ExifToolService:
             "kind": kind,
         }
 
-    @staticmethod
-    def _resolveExecutable(configured_path: str) -> Tuple[str, str]:
+    @classmethod
+    def _resolveExecutable(cls, configured_path: str) -> Tuple[str, str]:
         candidate = str(configured_path or "").strip()
         if not candidate:
             candidate = "exiftool"
@@ -214,7 +279,7 @@ class ExifToolService:
             "/usr/bin/exiftool",
             "/usr/local/bin/exiftool",
             "/opt/bin/exiftool",
-            self.PACKAGE_WRAPPER_PATH,
+            cls.PACKAGE_TARGET_EXIFTOOL_PATH,
             "/var/packages/ExifTool/target/bin/exiftool",
         ]
         for path in common_paths:

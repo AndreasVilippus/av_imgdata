@@ -3,11 +3,15 @@ include /env.mak
 
 SUBDIR=ui
 
-.PHONY: all clean install $(SUBDIR)
+.PHONY: all clean clean_python_artifacts install $(SUBDIR)
 
 all: $(SUBDIR)
 
-clean: $(SUBDIR)
+clean: clean_python_artifacts $(SUBDIR)
+
+clean_python_artifacts:
+	find app src -type d -name '__pycache__' -prune -exec rm -rf {} +
+	find app src -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
 $(SUBDIR):
 	@echo "===>" $@

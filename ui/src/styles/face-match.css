@@ -16,7 +16,6 @@
 }
 
 .face-match-top-layout {
-	margin-top: 12px;
 	display: grid;
 	grid-template-columns: max-content minmax(0, 1fr);
 	align-items: start;

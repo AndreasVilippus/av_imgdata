@@ -3,7 +3,6 @@ export default {
 		return {
 			faceMatchLoading: false,
 			faceMatchProgress: {},
-			faceMatchProgressBase: {},
 			faceMatchProgressTimer: null,
 			faceMatchProgressRequestId: 0,
 			faceMatchResult: null,
@@ -14,6 +13,13 @@ export default {
 			faceMatchSaveOnly: false,
 			faceMatchTransferredCount: 0,
 			faceMatchTransferredBaseCount: 0,
+			faceMatchProgressBase: {
+				persons_read: 0,
+				images_read: 0,
+				faces_read: 0,
+				target_faces_read: 0,
+				metadata_faces_read: 0,
+			},
 			faceMatchEditableName: '',
 			faceMatchInitialEditableName: '',
 			faceMatchSelectedPerson: null,
@@ -66,12 +72,30 @@ export default {
 			return fields.reduce((acc, field) => {
 				const baseValue = Number(this.faceMatchProgressBase && this.faceMatchProgressBase[field]) || 0;
 				const currentValue = Number(this.faceMatchProgress && this.faceMatchProgress[field]) || 0;
-				acc[field] = baseValue + currentValue;
+				acc[field] = Math.max(0, baseValue + currentValue);
 				return acc;
 			}, {});
 		},
 		showFaceMatchPersonsCounter() {
 			return this.faceMatchCurrentAction !== 'search_file_face_in_sources';
+		},
+		faceMatchFacesLabel() {
+			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+				return this.$t('face_match:label_source_faces', 'Source faces');
+			}
+			return this.$t('face_match:label_faces', 'Faces');
+		},
+		faceMatchMetadataLabel() {
+			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+				return this.$t('face_match:label_metadata_faces', 'Metadata faces');
+			}
+			return this.$t('face_match:label_metadata', 'Metadata');
+		},
+		faceMatchMetadataHint() {
+			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+				return this.$t('face_match:label_metadata_faces_hint', 'Read face metadata from the scanned files');
+			}
+			return this.$t('face_match:label_metadata_hint', 'Read metadata');
 		},
 		showFaceMatchTargetFacesCounter() {
 			return this.faceMatchCurrentAction === 'search_file_face_in_sources';
@@ -403,6 +427,11 @@ export default {
 				return null;
 			}
 
+			const normalized = this.normalizeFaceMatchFace(face);
+			if (normalized) {
+				return normalized;
+			}
+
 			if (face.bbox) {
 				const topLeft = face.bbox.top_left;
 				const bottomRight = face.bbox.bottom_right;
@@ -442,6 +471,60 @@ export default {
 			return {
 				left: centerX - (width / 2),
 				top: centerY - (height / 2),
+				width,
+				height,
+			};
+		},
+		normalizeFaceMatchFace(face) {
+			if (face && face.display_normalized) {
+				return null;
+			}
+			const sourceFormat = String(face && face.source_format || '').trim().toUpperCase();
+			const orientation = Number(face && face.orientation || 1);
+			if (!['MWG_REGIONS', 'MICROSOFT'].includes(sourceFormat) || !Number.isFinite(orientation) || orientation === 1) {
+				return null;
+			}
+
+			const centerX = Number(face.x);
+			const centerY = Number(face.y);
+			let width = Number(face.w);
+			let height = Number(face.h);
+			if (![centerX, centerY, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+				return null;
+			}
+
+			let normalizedX = centerX;
+			let normalizedY = centerY;
+			if (orientation === 2) {
+				normalizedX = 1 - centerX;
+			} else if (orientation === 3) {
+				normalizedX = 1 - centerX;
+				normalizedY = 1 - centerY;
+			} else if (orientation === 4) {
+				normalizedY = 1 - centerY;
+			} else if (orientation === 5) {
+				normalizedX = centerY;
+				normalizedY = centerX;
+				[width, height] = [height, width];
+			} else if (orientation === 6) {
+				normalizedX = 1 - centerY;
+				normalizedY = centerX;
+				[width, height] = [height, width];
+			} else if (orientation === 7) {
+				normalizedX = 1 - centerY;
+				normalizedY = 1 - centerX;
+				[width, height] = [height, width];
+			} else if (orientation === 8) {
+				normalizedX = centerY;
+				normalizedY = 1 - centerX;
+				[width, height] = [height, width];
+			} else {
+				return null;
+			}
+
+			return {
+				left: normalizedX - (width / 2),
+				top: normalizedY - (height / 2),
 				width,
 				height,
 			};
@@ -592,9 +675,6 @@ export default {
 				return false;
 			}
 			return this.normalizeFaceMatchName(this.faceMatchEditableName) === this.normalizeFaceMatchName(person.name);
-		},
-		captureFaceMatchProgressBase() {
-			this.faceMatchProgressBase = { ...this.faceMatchDisplayedProgress };
 		},
 		syncFaceMatchEditableName() {
 			const sourceName = this.getFaceMatchEditableNameDefault();
@@ -1122,10 +1202,18 @@ export default {
 				this.faceMatchSkippedTargets = [];
 				this.faceMatchTransferredCount = 0;
 				this.faceMatchTransferredBaseCount = 0;
-				this.faceMatchProgressBase = {};
+				this.faceMatchProgressBase = {
+					persons_read: 0,
+					images_read: 0,
+					faces_read: 0,
+					target_faces_read: 0,
+					metadata_faces_read: 0,
+				};
 				this.resetFaceMatchFindingsReview();
 			} else {
-				this.captureFaceMatchProgressBase();
+				this.faceMatchProgressBase = {
+					...this.faceMatchDisplayedProgress,
+				};
 				this.faceMatchTransferredBaseCount = resumeFromProgress ? 0 : this.faceMatchTransferredCount;
 				const resumeCursor = this.faceMatchProgress && typeof this.faceMatchProgress.resume_cursor === 'object'
 					? this.faceMatchProgress.resume_cursor
@@ -1154,11 +1242,17 @@ export default {
 				persons_read: 0,
 				images_read: 0,
 				faces_read: 0,
+				target_faces_read: 0,
 				metadata_faces_read: 0,
 				transferred_count: 0,
 			} : {
 				...(this.faceMatchProgress || {}),
 				message: this.$t('face_match:status_starting', 'Search starting...'),
+				persons_read: 0,
+				images_read: 0,
+				faces_read: 0,
+				target_faces_read: 0,
+				metadata_faces_read: 0,
 				transferred_count: 0,
 			};
 			this.faceMatchResult = null;

@@ -48,6 +48,32 @@ class MetadataFace(FileFace):
         )
 
     @classmethod
+    def from_top_left_box(
+        cls,
+        *,
+        name: str,
+        left: float,
+        top: float,
+        w: float,
+        h: float,
+        source: str,
+        source_format: str,
+        focus_usage: str = "",
+        orientation: Optional[int] = None,
+    ) -> "MetadataFace":
+        return cls.from_center_box(
+            name=name,
+            x=left + (w / 2),
+            y=top + (h / 2),
+            w=w,
+            h=h,
+            source=source,
+            source_format=source_format,
+            focus_usage=focus_usage,
+            orientation=orientation,
+        )
+
+    @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MetadataFace":
         return cls.from_center_box(
             name=str(data.get("name") or ""),

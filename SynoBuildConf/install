@@ -13,11 +13,14 @@ create_install() {
 
 	# clear destination directory
 	rm -rf $package_tgz_dir && mkdir -p $package_tgz_dir
+	make clean_python_artifacts
 
 	# install needed file into PKG_DIR on NAS
 	cp -av src $package_tgz_dir
 	cp -av app $package_tgz_dir
 	cp -av conf $package_tgz_dir
+	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type d -name '__pycache__' -prune -exec rm -rf {} +
+	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 	make install DESTDIR="$package_tgz_dir" INSTALLDIR="$package_tgz_dir"
 	# Fail fast if UI entrypoint didn't get packaged
 	if [ ! -f "$package_tgz_dir/ui/index.cgi" ]; then
@@ -35,7 +38,7 @@ create_spk() {
 	# copy scripts, conf and optional files
 	cp -av scripts $PKG_DIR/scripts
 	cp -av conf $PKG_DIR
-	#cp -av LICENSE $PKG_DIR
+	cp -av LICENSE $PKG_DIR/LICENSE
 	cp -av ui/PACKAGE_ICON.png  $PKG_DIR/PACKAGE_ICON.PNG
 	cp -av ui/PACKAGE_ICON_256.png $PKG_DIR/PACKAGE_ICON_256.PNG
 

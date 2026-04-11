@@ -41,6 +41,7 @@ class MetadataParser:
         use_acd: bool = True,
         use_microsoft: bool = True,
         use_mwg_regions: bool = True,
+        include_unnamed_acd: bool = False,
     ) -> MetadataPayload:
         faces: List[MetadataFace] = []
         mwg_context: Dict[str, Any] = {
@@ -50,7 +51,13 @@ class MetadataParser:
 
         if xmp_content:
             if use_acd:
-                faces.extend(self._parseAcdFaces(xmp_content, source=xmp_source or "metadata"))
+                faces.extend(
+                    self._parseAcdFaces(
+                        xmp_content,
+                        source=xmp_source or "metadata",
+                        filter_unknown=not include_unnamed_acd,
+                    )
+                )
             if use_microsoft:
                 faces.extend(self._parseMicrosoftFaces(xmp_content, source=xmp_source or "metadata"))
             if use_mwg_regions:
@@ -63,7 +70,7 @@ class MetadataParser:
 
         if image_orientation not in (None, 1):
             for face in faces:
-                if face.source_format == "MWG_REGIONS":
+                if face.source_format in {"MWG_REGIONS", "MICROSOFT"}:
                     face.orientation = image_orientation
 
         applied_dimensions = mwg_context.get("mwg_applied_to_dimensions") if isinstance(mwg_context.get("mwg_applied_to_dimensions"), dict) else {}
@@ -312,10 +319,10 @@ class MetadataParser:
                 continue
 
             persons.append(
-                MetadataFace.from_center_box(
+                MetadataFace.from_top_left_box(
                     name=name,
-                    x=x,
-                    y=y,
+                    left=x,
+                    top=y,
                     w=width,
                     h=height,
                     source=source,

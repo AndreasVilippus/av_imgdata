@@ -1,10 +1,10 @@
 <template>
 	<section class="panel">
 		<div class="panel-head">
-			<div class="sm-section-title">{{ vm.$t('nav:external_libraries', 'External libraries') }}</div>
+			<div class="sm-section-title">{{ panelTitle }}</div>
 		</div>
 
-		<div class="config-actions config-actions-right">
+		<div v-if="isExiftoolConfigView" class="config-actions config-actions-right">
 			<v-button @click="vm.loadExternalLibrariesConfig" :disabled="vm.externalLibrariesLoading || vm.externalLibrariesSaving" style="width: 160px;">
 				{{ vm.$t('config:button_reload', 'Reload') }}
 			</v-button>
@@ -24,7 +24,7 @@
 		</div>
 
 		<div v-else class="config-layout">
-			<section class="config-card">
+			<section v-if="isExternalLibrariesInfoView" class="config-card">
 				<div class="sm-section-title">{{ vm.$t('status:exiftool_title', 'ExifTool') }}</div>
 				<div class="sm-kv-list">
 					<div class="sm-kv-row">
@@ -56,12 +56,12 @@
 				</div>
 			</section>
 
-			<section class="config-card">
+			<section v-if="isExiftoolConfigView" class="config-card">
 				<div class="sm-section-title">{{ vm.$t('config:section_exiftool', 'ExifTool') }}</div>
 				<div class="config-card-desc">{{ vm.$t('config:section_exiftool_desc', 'Settings for optional ExifTool usage when reading embedded XMP metadata.') }}</div>
 
 				<div class="config-form-grid">
-					<label class="config-checkbox">
+					<label v-if="vm.hasUsableExiftool" class="config-checkbox">
 						<input
 							:checked="vm.externalLibrariesConfigModel.files.USE_EXIFTOOL"
 							type="checkbox"
@@ -146,8 +146,8 @@
 					</template>
 				</div>
 
-				<div v-if="vm.exiftoolStatus.online && vm.exiftoolStatus.online.unix_download_url" class="config-card-desc">
-					{{ vm.$t('config:exiftool_download_source', 'Latest ExifTool package will be downloaded from: {url}', { url: vm.exiftoolStatus.online.unix_download_url }) }}
+				<div v-if="vm.exiftoolDownloadSourceUrl" class="config-card-desc">
+					{{ vm.$t('config:exiftool_download_source', 'Latest ExifTool package will be downloaded from: {url}', { url: vm.exiftoolDownloadSourceUrl }) }}
 				</div>
 
 				<div class="config-actions config-actions-right">
@@ -172,9 +172,27 @@
 export default {
 	name: 'ExternalLibrariesView',
 	props: {
+		mode: {
+			type: String,
+			default: 'info',
+			validator: (value) => ['info', 'config'].includes(value),
+		},
 		vm: {
 			type: Object,
 			required: true,
+		},
+	},
+	computed: {
+		isExternalLibrariesInfoView() {
+			return this.mode === 'info';
+		},
+		isExiftoolConfigView() {
+			return this.mode === 'config';
+		},
+		panelTitle() {
+			return this.isExiftoolConfigView
+				? this.vm.$t('nav:exiftool', 'ExifTool')
+				: this.vm.$t('nav:external_libraries', 'External libraries');
 		},
 	},
 };

@@ -4,7 +4,7 @@
 			<div class="sm-section-title">{{ vm.$t('checks:title', 'Checks') }}</div>
 			<p>{{ vm.$t('checks:desc', 'Area for validation and review functions.') }}</p>
 		</div>
-		<div class="checks-actions">
+		<div class="checks-actions panel-content-start">
 			<select v-model="vm.selectedChecksType" class="face-match-select" :disabled="vm.checksLoading">
 				<option value="dimension_issues">{{ vm.$t('checks:type_dimension_issues', 'Dimension issues') }}</option>
 				<option value="duplicate_faces">{{ vm.$t('checks:type_duplicate_faces', 'Duplicate face markings') }}</option>

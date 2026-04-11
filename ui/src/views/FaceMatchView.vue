@@ -5,7 +5,7 @@
 				<div class="sm-section-title">{{ vm.$t('face_match:title', 'Face Matching') }}</div>
 				<p>{{ vm.$t('face_match:desc', 'Area for matching and file-processing actions.') }}</p>
 			</div>
-			<div class="face-match-top-layout">
+			<div class="face-match-top-layout panel-content-start">
 				<div class="face-match-action-controls">
 					<select v-model="vm.selectedFaceMatchingAction" class="face-match-select" :disabled="vm.faceMatchLoading">
 						<option value="search_photo_face_in_file">{{ vm.$t('face_match:action_search_photo_face_in_file', 'search unknown Photos face in file') }}</option>
@@ -58,9 +58,9 @@
 						<div class="face-match-status-stats">
 							<span v-if="vm.showFaceMatchPersonsCounter">{{ vm.$t('face_match:label_persons', 'Persons') }}: {{ vm.faceMatchDisplayedProgress.persons_read }}</span>
 							<span>{{ vm.$t('face_match:label_images', 'Images') }}: {{ vm.faceMatchDisplayedProgress.images_read }}</span>
-							<span>{{ vm.$t('face_match:label_faces', 'Faces') }}: {{ vm.faceMatchDisplayedProgress.faces_read }}</span>
+							<span>{{ vm.faceMatchFacesLabel }}: {{ vm.faceMatchDisplayedProgress.faces_read }}</span>
 							<span v-if="vm.showFaceMatchTargetFacesCounter">{{ vm.$t('face_match:label_target_faces', 'Unknown faces') }}: {{ vm.faceMatchDisplayedProgress.target_faces_read }}</span>
-							<span :title="vm.$t('face_match:label_metadata_hint', 'Read metadata')">{{ vm.$t('face_match:label_metadata', 'Metadata') }}: {{ vm.faceMatchDisplayedProgress.metadata_faces_read }}</span>
+							<span :title="vm.faceMatchMetadataHint">{{ vm.faceMatchMetadataLabel }}: {{ vm.faceMatchDisplayedProgress.metadata_faces_read }}</span>
 							<span>{{ vm.$t('face_match:label_transferred', 'Transferred') }}: {{ vm.faceMatchDisplayedTransferredCount }}</span>
 						</div>
 						<div class="face-match-status-context">

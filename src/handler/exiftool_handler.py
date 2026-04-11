@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-import shutil
 import subprocess
 import tempfile
-from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from services.config_service import ConfigService
+from services.exiftool_service import ExifToolService
 
 
 class ExifToolHandler:
@@ -23,30 +22,13 @@ class ExifToolHandler:
         return str(files_config.get("PATHEXIFTOOL", "exiftool") or "exiftool").strip() or "exiftool"
 
     def resolveExecutable(self) -> Tuple[str, str]:
-        candidate = self.configuredPath()
-        explicit = Path(candidate)
-        if explicit.is_absolute():
-            return (str(explicit), "configured_path") if explicit.exists() else ("", "")
-
-        found = shutil.which(candidate)
-        if found:
-            return found, "path_lookup"
-
-        common_paths = [
-            "/usr/bin/exiftool",
-            "/usr/local/bin/exiftool",
-            "/opt/bin/exiftool",
-            "/var/packages/AV_ImgData/target/usr/bin/exiftool",
-            "/var/packages/ExifTool/target/bin/exiftool",
-        ]
-        for path in common_paths:
-            if Path(path).exists():
-                return path, "common_path"
-        return "", ""
+        return ExifToolService._resolveExecutable(self.configuredPath())
 
     def isAvailable(self) -> bool:
         executable_path, _ = self.resolveExecutable()
-        return bool(executable_path)
+        if not executable_path:
+            return False
+        return bool(ExifToolService._readExifToolVersion(executable_path))
 
     def loadEmbeddedXmp(self, image_path: str) -> Optional[str]:
         executable_path, _ = self.resolveExecutable()
@@ -61,6 +43,8 @@ class ExifToolHandler:
                 check=False,
             )
         except (FileNotFoundError, OSError):
+            return None
+        if result.returncode != 0:
             return None
 
         xmp_content = result.stdout.strip()
@@ -80,6 +64,8 @@ class ExifToolHandler:
             )
         except (FileNotFoundError, OSError):
             return None
+        if result.returncode != 0:
+            return None
 
         xmp_content = result.stdout.strip()
         return xmp_content if xmp_content else None
@@ -97,6 +83,8 @@ class ExifToolHandler:
                 check=False,
             )
         except (FileNotFoundError, OSError):
+            return {"width": None, "height": None, "unit": "pixel"}
+        if result.returncode != 0:
             return {"width": None, "height": None, "unit": "pixel"}
 
         lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -124,6 +112,8 @@ class ExifToolHandler:
                 check=False,
             )
         except (FileNotFoundError, OSError):
+            return None
+        if result.returncode != 0:
             return None
 
         value = result.stdout.strip()

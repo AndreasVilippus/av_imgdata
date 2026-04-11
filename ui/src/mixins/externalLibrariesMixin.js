@@ -13,11 +13,30 @@ export default {
 		};
 	},
 	computed: {
+		hasUsableExiftool() {
+			return !!(this.exiftoolStatus && this.exiftoolStatus.local && this.exiftoolStatus.local.found);
+		},
 		hasBundledExiftool() {
 			const resolvedPath = this.exiftoolStatus && this.exiftoolStatus.local && this.exiftoolStatus.local.resolved_path
 				? String(this.exiftoolStatus.local.resolved_path)
 				: '';
-			return resolvedPath.includes('/var/packages/AV_ImgData/') || resolvedPath.includes('/volume') && resolvedPath.includes('/AV_ImgData/');
+			const configuredPath = this.exiftoolStatus && this.exiftoolStatus.configured_path
+				? String(this.exiftoolStatus.configured_path)
+				: '';
+			const bundledInstallExists = !!(this.exiftoolStatus && this.exiftoolStatus.bundled_install_exists);
+			const packagePath = resolvedPath || configuredPath;
+			return bundledInstallExists || packagePath.includes('/var/packages/AV_ImgData/') || packagePath.includes('/volume') && packagePath.includes('/AV_ImgData/');
+		},
+		exiftoolDownloadSourceUrl() {
+			const onlineUrl = this.exiftoolStatus && this.exiftoolStatus.online && this.exiftoolStatus.online.unix_download_url
+				? String(this.exiftoolStatus.online.unix_download_url)
+				: '';
+			if (onlineUrl) {
+				return onlineUrl;
+			}
+			return this.exiftoolStatus && this.exiftoolStatus.last_download_url
+				? String(this.exiftoolStatus.last_download_url)
+				: '';
 		},
 		externalLibrariesSidecarLookupOptions() {
 			return [
@@ -253,7 +272,7 @@ export default {
 			this.externalLibrariesMessage = '';
 			try {
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_install');
-				const installedPath = data && data.data && data.data.installed_path ? data.data.installed_path : '';
+				const installedPath = data && data.data && data.data.configured_path ? data.data.configured_path : '';
 				if (installedPath) {
 					this.externalLibrariesConfigModel.files.PATHEXIFTOOL = installedPath;
 					this.externalLibrariesConfigModel.files.USE_EXIFTOOL = true;

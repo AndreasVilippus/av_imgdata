@@ -44,7 +44,7 @@
 		<button
 			class="sm-nav-item"
 			:class="{ active: selectedOption === 'external_libraries' }"
-			@click="$emit('select', 'external_libraries_exiftool')"
+			@click="$emit('select', 'external_libraries')"
 		>
 			<ExternalLibrariesIcon class="sm-nav-icon" />
 			{{ $t('nav:external_libraries', 'External libraries') }}

@@ -757,6 +757,10 @@
 	color: var(--sm-text-muted);
 }
 
+.panel-content-start {
+	margin-top: 12px;
+}
+
 .action-row {
 	display: flex;
 	gap: var(--sm-space-2);
@@ -813,7 +817,6 @@
 }
 
 .face-match-top-layout {
-	margin-top: 12px;
 	display: grid;
 	grid-template-columns: max-content minmax(0, 1fr);
 	align-items: start;

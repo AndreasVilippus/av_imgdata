@@ -179,7 +179,7 @@ class FileHandler:
 
     @staticmethod
     def _normalizedFaceForComparison(face: Dict[str, Any]) -> Dict[str, Any]:
-        normalized = normalize_xmp_face(face) if str(face.get("source_format") or "") == "MWG_REGIONS" else dict(face)
+        normalized = normalize_xmp_face(face) if str(face.get("source_format") or "") in {"MWG_REGIONS", "MICROSOFT"} else dict(face)
         return {
             "name": str(normalized.get("name") or "").strip(),
             "source_format": str(normalized.get("source_format") or ""),

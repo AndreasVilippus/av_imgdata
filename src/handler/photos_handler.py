@@ -6,7 +6,6 @@ from api.session_manager import SessionManager
 from services.config_service import ConfigService
 
 DEFAULT_MAX_PHOTOS_PERSONS = ConfigService.defaultConfig()["photos"]["MAX_PHOTOS_PERSONS"]
-
 class PhotosHandler:
     """Photos/FotoTeam-specific DSM API access."""
 

@@ -15,8 +15,14 @@
 						/>
 						<configuration-view v-if="selectedOption === 'configuration'" />
 						<external-libraries-view
+							v-if="selectedOption === 'external_libraries'"
+							:vm="this"
+							mode="info"
+						/>
+						<external-libraries-view
 							v-if="selectedOption === 'external_libraries_exiftool'"
 							:vm="this"
+							mode="config"
 						/>
 					</main>
 				</div>
@@ -69,8 +75,8 @@ export default {
 			return `/webman/3rdparty/AV_ImgData/images/${filename}`;
 		},
 		selectContent(option) {
-			const selectedOption = option === 'external_libraries' ? 'external_libraries_exiftool' : option;
-			this.selectedOption = selectedOption;
+			this.selectedOption = option;
+			const selectedOption = this.selectedOption;
 			if (selectedOption === 'status' && !this.statusLoaded && !this.statusLoading) {
 				this.getStatus({ auto: true });
 			}
@@ -83,7 +89,7 @@ export default {
 			if (selectedOption === 'checks') {
 				this.refreshChecksSessionState();
 			}
-			if (selectedOption === 'external_libraries_exiftool') {
+			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool') {
 				this.loadExternalLibrariesConfig();
 			}
 		},
