@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import json
 import unicodedata
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from api.session_manager import SessionManager
 from services.config_service import ConfigService
 
 DEFAULT_MAX_PHOTOS_PERSONS = ConfigService.defaultConfig()["photos"]["MAX_PHOTOS_PERSONS"]
+
+
 class PhotosHandler:
     """Photos/FotoTeam-specific DSM API access."""
 
@@ -20,6 +23,40 @@ class PhotosHandler:
             return max(1, int(photos.get("MAX_PHOTOS_PERSONS", DEFAULT_MAX_PHOTOS_PERSONS)))
         except (TypeError, ValueError):
             return DEFAULT_MAX_PHOTOS_PERSONS
+
+    def _face_match_person_sort_order(self) -> str:
+        config = self._config_service.readMergedConfig()
+        face_match = config.get("face_match", {}) if isinstance(config.get("face_match"), dict) else {}
+        normalized = str(face_match.get("PERSON_SORT_ORDER", "id_desc") or "").strip().lower()
+        return normalized if normalized in {"id_desc", "id_asc", "none"} else "id_desc"
+
+    @staticmethod
+    def _person_id_value(person: Dict[str, Any]) -> Optional[int]:
+        try:
+            return int(person.get("id"))
+        except (TypeError, ValueError):
+            return None
+
+    def sortPersonsForFaceMatch(self, persons: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        order = self._face_match_person_sort_order()
+        normalized = list(persons or [])
+        if order == "none":
+            return normalized
+        if order == "id_asc":
+            return sorted(
+                normalized,
+                key=lambda person: (
+                    self._person_id_value(person) is None,
+                    self._person_id_value(person) if self._person_id_value(person) is not None else 0,
+                ),
+            )
+        return sorted(
+            normalized,
+            key=lambda person: (
+                self._person_id_value(person) is None,
+                -(self._person_id_value(person) if self._person_id_value(person) is not None else 0),
+            ),
+        )
 
     @staticmethod
     def _filter_persons_by_name(persons: List[Dict[str, Any]], person_filter: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -293,7 +330,8 @@ class PhotosHandler:
         user_key: str,
         cookies: Dict[str, str],
         base_url: str,
-        person_id: int,
+        person_id: Optional[int] = None,
+        folder_id: Optional[int] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         offset: int = 0,
@@ -305,9 +343,12 @@ class PhotosHandler:
             "version": "4",
             "offset": str(offset),
             "limit": str(limit),
-            "person_id": str(person_id),
             "additional": additional or [],
         }
+        if person_id is not None:
+            params["person_id"] = str(person_id)
+        if folder_id is not None:
+            params["folder_id"] = str(folder_id)
         if start_time is not None:
             params["start_time"] = str(start_time)
         if end_time is not None:
@@ -430,6 +471,129 @@ class PhotosHandler:
         data = payload.get("data", {})
         return data if isinstance(data, dict) else {}
 
+    def listFotoTeamFolders(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        parent_id: Optional[int] = None,
+        offset: int = 0,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {
+            "method": "list",
+            "version": "2",
+            "offset": str(offset),
+            "limit": str(limit),
+        }
+        if parent_id is not None:
+            params["id"] = str(parent_id)
+        payload = self._session_manager.call_api(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            api="SYNO.FotoTeam.Browse.Folder",
+            params=params,
+        )
+        data = payload.get("data", {})
+        if not isinstance(data, dict):
+            return []
+        items = data.get("list", [])
+        return items if isinstance(items, list) else []
+
+    def findFotoTeamItemByPath(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        shared_folder: str,
+        image_path: str,
+        additional: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            relative_path = Path(str(image_path or "").strip()).relative_to(Path(str(shared_folder or "").strip()))
+        except Exception:
+            return None
+
+        relative_parent = relative_path.parent
+        if str(relative_parent) in ("", "."):
+            return None
+
+        folder_keys: List[str] = []
+        current_key = ""
+        for part in relative_parent.parts:
+            normalized_part = str(part or "").strip().strip("/")
+            if not normalized_part:
+                continue
+            current_key = f"{current_key}/{normalized_part}" if current_key else f"/{normalized_part}"
+            folder_keys.append(current_key)
+
+        if not folder_keys:
+            return None
+
+        current_parent_id: Optional[int] = None
+        current_folder: Optional[Dict[str, Any]] = None
+
+        for folder_key in folder_keys:
+            folders = self.listFotoTeamFolders(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                parent_id=current_parent_id,
+            )
+            next_folder = next(
+                (
+                    folder for folder in folders
+                    if isinstance(folder, dict) and str(folder.get("name") or "").strip() == folder_key
+                ),
+                None,
+            )
+            if not isinstance(next_folder, dict):
+                return None
+            current_folder = next_folder
+            try:
+                current_parent_id = int(next_folder.get("id"))
+            except (TypeError, ValueError):
+                return None
+
+        if current_parent_id is None:
+            return None
+
+        filename = relative_path.name
+        offset = 0
+        page_size = 200
+        while True:
+            items = self.listFotoTeamItems(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                folder_id=current_parent_id,
+                offset=offset,
+                limit=page_size,
+                additional=additional or ["thumbnail"],
+            )
+            if not items:
+                return None
+
+            matched_item = next(
+                (
+                    item for item in items
+                    if isinstance(item, dict) and str(item.get("filename") or "").strip() == filename
+                ),
+                None,
+            )
+            if isinstance(matched_item, dict):
+                if current_folder and "folder_id" not in matched_item:
+                    matched_item = dict(matched_item)
+                    matched_item["folder_id"] = current_parent_id
+                return matched_item
+
+            if len(items) < page_size:
+                return None
+            offset += page_size
+
     def assignFaceToPerson(
         self,
         *,
@@ -475,6 +639,49 @@ class PhotosHandler:
                 "version": "1",
                 "face_id": [int(face_id)],
                 "name": json.dumps(person_name),
+            },
+        )
+        data = payload.get("data", {})
+        return data if isinstance(data, dict) else {}
+
+    def addFaceToItem(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        id_item: int,
+        face_bbox: Dict[str, Any],
+        face_id_temp: Optional[str] = None,
+        person_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        top_left = face_bbox.get("top_left") if isinstance(face_bbox, dict) else None
+        bottom_right = face_bbox.get("bottom_right") if isinstance(face_bbox, dict) else None
+        face_payload: Dict[str, Any] = {
+            "face_bounding_box": {
+                "top_left": {
+                    "x": float((top_left or {}).get("x") or 0),
+                    "y": float((top_left or {}).get("y") or 0),
+                },
+                "bottom_right": {
+                    "x": float((bottom_right or {}).get("x") or 0),
+                    "y": float((bottom_right or {}).get("y") or 0),
+                },
+            },
+            "face_id_temp": str(face_id_temp or f"{id_item}-0"),
+        }
+        if person_id is not None:
+            face_payload["person_id"] = int(person_id)
+        payload = self._session_manager.call_api_post(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            api="SYNO.FotoTeam.Browse.Person",
+            params={
+                "method": "add_face",
+                "version": "3",
+                "id_item": int(id_item),
+                "face": [face_payload],
             },
         )
         data = payload.get("data", {})

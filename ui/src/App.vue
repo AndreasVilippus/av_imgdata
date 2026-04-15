@@ -9,10 +9,7 @@
 						<status-view v-if="selectedOption === 'status'" :vm="this" />
 						<face-match-view v-if="selectedOption === 'face_match'" :vm="this" />
 						<checks-view v-if="selectedOption === 'checks'" :vm="this" />
-						<placeholder-view
-							v-if="selectedOption === 'cleanup'"
-							:title="$t('nav:cleanup', 'Cleanup')"
-						/>
+						<cleanup-view v-if="selectedOption === 'cleanup'" :vm="this" />
 						<configuration-view v-if="selectedOption === 'configuration'" />
 						<external-libraries-view
 							v-if="selectedOption === 'external_libraries'"
@@ -34,25 +31,26 @@
 <script>
 import AppSidebarNav from './components/AppSidebarNav.vue';
 import checksMixin from './mixins/checksMixin';
+import cleanupMixin from './mixins/cleanupMixin';
 import externalLibrariesMixin from './mixins/externalLibrariesMixin';
 import faceMatchMixin from './mixins/faceMatchMixin';
 import statusMixin from './mixins/statusMixin';
 import ChecksView from './views/ChecksView.vue';
+import CleanupView from './views/CleanupView.vue';
 import ConfigurationView from './views/ConfigurationView.vue';
 import ExternalLibrariesView from './views/ExternalLibrariesView.vue';
 import FaceMatchView from './views/FaceMatchView.vue';
-import PlaceholderView from './views/PlaceholderView.vue';
 import StatusView from './views/StatusView.vue';
 
 export default {
-	mixins: [statusMixin, checksMixin, faceMatchMixin, externalLibrariesMixin],
+	mixins: [statusMixin, checksMixin, cleanupMixin, faceMatchMixin, externalLibrariesMixin],
 	components: {
 		AppSidebarNav,
 		ChecksView,
+		CleanupView,
 		ConfigurationView,
 		ExternalLibrariesView,
 		FaceMatchView,
-		PlaceholderView,
 		StatusView,
 	},
 	data() {
@@ -88,6 +86,9 @@ export default {
 			}
 			if (selectedOption === 'checks') {
 				this.refreshChecksSessionState();
+			}
+			if (selectedOption === 'cleanup') {
+				this.refreshCleanupSessionState();
 			}
 			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool') {
 				this.loadExternalLibrariesConfig();

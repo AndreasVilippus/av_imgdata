@@ -347,6 +347,7 @@
 }
 
 .face-match-thumbnail-wrap {
+	position: relative;
 	margin-top: 12px;
 	display: flex;
 	align-items: center;

@@ -10,6 +10,7 @@
 					<select v-model="vm.selectedFaceMatchingAction" class="face-match-select" :disabled="vm.faceMatchLoading">
 						<option value="search_photo_face_in_file">{{ vm.$t('face_match:action_search_photo_face_in_file', 'search unknown Photos face in file') }}</option>
 						<option value="search_file_face_in_sources">{{ vm.$t('face_match:action_search_file_face_in_sources', 'search face from file') }}</option>
+						<option value="mark_missing_photos_faces">{{ vm.$t('face_match:action_mark_missing_photos_faces', 'mark missing faces in Photos') }}</option>
 						<option v-if="vm.hasFaceMatchStoredFindings" value="load_photo_face_match_findings">{{ vm.$t('face_match:action_load_photo_face_match_findings', 'load unknown Photos face from list') }}</option>
 					</select>
 					<div class="face-match-action-buttons">
@@ -36,7 +37,7 @@
 						<span class="face-match-switch-label">{{ vm.$t('face_match:switch_auto_assign', 'Assign all known') }}</span>
 					</label>
 					<label
-						v-if="vm.selectedFaceMatchingAction === 'search_photo_face_in_file' || vm.selectedFaceMatchingAction === 'search_file_face_in_sources'"
+						v-if="vm.selectedFaceMatchingAction === 'search_photo_face_in_file' || vm.selectedFaceMatchingAction === 'search_file_face_in_sources' || vm.selectedFaceMatchingAction === 'mark_missing_photos_faces'"
 						class="face-match-switch"
 						:title="vm.$t('face_match:hint_save_only', 'Known persons are still assigned depending on the setting; otherwise matches are only listed for later.')"
 					>
@@ -55,6 +56,14 @@
 							</div>
 						</div>
 						<div class="face-match-status-message">{{ vm.faceMatchStatusMessage }}</div>
+						<div v-if="Number(vm.faceMatchProgress.persons_total) > 0 && !vm.faceMatchIsFileSourceAction" class="sm-status-progress">
+							<RatioProgress
+								:current="Number(vm.faceMatchProgress.persons_read) || 0"
+								:total="Number(vm.faceMatchProgress.persons_total) || 0"
+								:primary-text="`${Number(vm.faceMatchProgress.persons_read) || 0} ${vm.$t('face_match:label_persons', 'Persons')}`"
+								:secondary-text="`${Number(vm.faceMatchProgress.persons_total) || 0} ${vm.$t('face_match:label_persons', 'Persons')}`"
+							/>
+						</div>
 						<div class="face-match-status-stats">
 							<span v-if="vm.showFaceMatchPersonsCounter">{{ vm.$t('face_match:label_persons', 'Persons') }}: {{ vm.faceMatchDisplayedProgress.persons_read }}</span>
 							<span>{{ vm.$t('face_match:label_images', 'Images') }}: {{ vm.faceMatchDisplayedProgress.images_read }}</span>
@@ -137,7 +146,7 @@
 				>
 					<span v-if="(vm.faceMatchActionMode === 'write_metadata' ? vm.personDataToRightIconUrl : vm.personDataToLeftIconUrl)" class="face-match-icon-stack">
 						<img :src="vm.faceMatchActionMode === 'write_metadata' ? vm.personDataToRightIconUrl : vm.personDataToLeftIconUrl" alt="" class="face-match-icon-image" />
-						<img v-if="vm.faceMatchActionMode === 'create' && vm.addIconUrl" :src="vm.addIconUrl" alt="" class="face-match-icon-overlay" />
+						<img v-if="vm.faceMatchShouldShowAddOverlay && vm.addIconUrl" :src="vm.addIconUrl" alt="" class="face-match-icon-overlay" />
 					</span>
 					<span v-else class="face-match-icon-fallback">{{ vm.faceMatchTransferTooltip }}</span>
 				</button>
@@ -189,8 +198,13 @@
 </template>
 
 <script>
+import RatioProgress from '../components/RatioProgress.vue';
+
 export default {
 	name: 'FaceMatchView',
+	components: {
+		RatioProgress,
+	},
 	props: {
 		vm: {
 			type: Object,

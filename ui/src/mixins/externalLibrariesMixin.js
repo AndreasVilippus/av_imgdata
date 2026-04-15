@@ -56,7 +56,9 @@ export default {
 					USE_EXIFTOOL_FOR_SIDECARS: false,
 					PREFER_EXIFTOOL_FOR_CONTEXT: false,
 					PATHEXIFTOOL: 'exiftool',
-					IMAGE_EXTENSIONS_NATIVE_ONLY: false,
+					USE_MANUAL_PATHEXIFTOOL: false,
+					MANUAL_PATHEXIFTOOL: '',
+					IMAGE_EXTENSIONS_NATIVE_ONLY: true,
 					IMAGE_EXTENSIONS: ['jpg', 'jpeg', 'tif', 'tiff', 'png', 'heic', 'heif', 'dng', 'cr2', 'cr3', 'nef', 'nrw', 'arw', 'orf', 'rw2', 'raf', 'pef'],
 					EXIFTOOL_IMAGE_EXTENSIONS: [],
 					SIDECAR_LOOKUP_VARIANTS: ['same_dir_stem', 'same_dir_filename', 'xmp_dir_stem', 'xmp_dir_filename'],
@@ -86,6 +88,7 @@ export default {
 				},
 				face_match: {
 					FILE_MATCH_SOURCE_SCOPE: 'both',
+					PERSON_SORT_ORDER: 'id_desc',
 				},
 			};
 		},
@@ -149,6 +152,8 @@ export default {
 					USE_EXIFTOOL_FOR_SIDECARS: Boolean(files.USE_EXIFTOOL_FOR_SIDECARS ?? defaults.files.USE_EXIFTOOL_FOR_SIDECARS),
 					PREFER_EXIFTOOL_FOR_CONTEXT: Boolean(files.PREFER_EXIFTOOL_FOR_CONTEXT ?? defaults.files.PREFER_EXIFTOOL_FOR_CONTEXT),
 					PATHEXIFTOOL: String(files.PATHEXIFTOOL || defaults.files.PATHEXIFTOOL),
+					USE_MANUAL_PATHEXIFTOOL: Boolean(files.USE_MANUAL_PATHEXIFTOOL ?? defaults.files.USE_MANUAL_PATHEXIFTOOL),
+					MANUAL_PATHEXIFTOOL: String(files.MANUAL_PATHEXIFTOOL || defaults.files.MANUAL_PATHEXIFTOOL),
 					IMAGE_EXTENSIONS_NATIVE_ONLY: Boolean(files.IMAGE_EXTENSIONS_NATIVE_ONLY ?? defaults.files.IMAGE_EXTENSIONS_NATIVE_ONLY),
 					IMAGE_EXTENSIONS: imageExtensions,
 					EXIFTOOL_IMAGE_EXTENSIONS: exiftoolImageExtensions,
@@ -193,6 +198,9 @@ export default {
 					FILE_MATCH_SOURCE_SCOPE: ['both', 'photos', 'metadata'].includes(String(faceMatch.FILE_MATCH_SOURCE_SCOPE || '').trim().toLowerCase())
 						? String(faceMatch.FILE_MATCH_SOURCE_SCOPE || '').trim().toLowerCase()
 						: defaults.face_match.FILE_MATCH_SOURCE_SCOPE,
+					PERSON_SORT_ORDER: ['id_desc', 'id_asc', 'none'].includes(String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase())
+						? String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase()
+						: defaults.face_match.PERSON_SORT_ORDER,
 				},
 			};
 		},
@@ -207,6 +215,8 @@ export default {
 					USE_EXIFTOOL_FOR_SIDECARS: defaults.files.USE_EXIFTOOL_FOR_SIDECARS,
 					PREFER_EXIFTOOL_FOR_CONTEXT: defaults.files.PREFER_EXIFTOOL_FOR_CONTEXT,
 					PATHEXIFTOOL: defaults.files.PATHEXIFTOOL,
+					USE_MANUAL_PATHEXIFTOOL: defaults.files.USE_MANUAL_PATHEXIFTOOL,
+					MANUAL_PATHEXIFTOOL: defaults.files.MANUAL_PATHEXIFTOOL,
 					IMAGE_EXTENSIONS_NATIVE_ONLY: defaults.files.IMAGE_EXTENSIONS_NATIVE_ONLY,
 					EXIFTOOL_IMAGE_EXTENSIONS: defaults.files.EXIFTOOL_IMAGE_EXTENSIONS,
 				},
@@ -274,7 +284,9 @@ export default {
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_install');
 				const installedPath = data && data.data && data.data.configured_path ? data.data.configured_path : '';
 				if (installedPath) {
-					this.externalLibrariesConfigModel.files.PATHEXIFTOOL = installedPath;
+					if (!this.externalLibrariesConfigModel.files.USE_MANUAL_PATHEXIFTOOL) {
+						this.externalLibrariesConfigModel.files.PATHEXIFTOOL = installedPath;
+					}
 					this.externalLibrariesConfigModel.files.USE_EXIFTOOL = true;
 				}
 				await this.fetchExiftoolStatus();
@@ -303,8 +315,10 @@ export default {
 			this.externalLibrariesMessage = '';
 			try {
 				await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_remove');
-				this.externalLibrariesConfigModel.files.PATHEXIFTOOL = 'exiftool';
-				this.externalLibrariesConfigModel.files.USE_EXIFTOOL = false;
+				if (!this.externalLibrariesConfigModel.files.USE_MANUAL_PATHEXIFTOOL) {
+					this.externalLibrariesConfigModel.files.PATHEXIFTOOL = 'exiftool';
+					this.externalLibrariesConfigModel.files.USE_EXIFTOOL = false;
+				}
 				await this.fetchExiftoolStatus();
 				this.externalLibrariesMessage = this.$t('config:message_exiftool_removed', 'ExifTool installation removed.');
 			} catch (err) {

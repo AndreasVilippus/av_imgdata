@@ -12,7 +12,6 @@ export default {
 			faceMatchAutoAssignKnown: false,
 			faceMatchSaveOnly: false,
 			faceMatchTransferredCount: 0,
-			faceMatchTransferredBaseCount: 0,
 			faceMatchProgressBase: {
 				persons_read: 0,
 				images_read: 0,
@@ -43,6 +42,9 @@ export default {
 		};
 	},
 	computed: {
+		faceMatchIsFileSourceAction() {
+			return ['search_file_face_in_sources', 'mark_missing_photos_faces'].includes(this.faceMatchCurrentAction);
+		},
 		faceMatchCurrentAction() {
 			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
 				const entryAction = this.faceMatchResult && this.faceMatchResult.action;
@@ -58,12 +60,8 @@ export default {
 		faceMatchDisplayedTransferredCount() {
 			const progressCount = Number(this.faceMatchProgress && this.faceMatchProgress.transferred_count);
 			const localCount = Number(this.faceMatchTransferredCount) || 0;
-			const baseCount = Number(this.faceMatchTransferredBaseCount) || 0;
 			if (!Number.isFinite(progressCount) || progressCount <= 0) {
 				return localCount;
-			}
-			if (baseCount > 0) {
-				return Math.max(localCount, baseCount + progressCount);
 			}
 			return Math.max(localCount, progressCount);
 		},
@@ -77,28 +75,28 @@ export default {
 			}, {});
 		},
 		showFaceMatchPersonsCounter() {
-			return this.faceMatchCurrentAction !== 'search_file_face_in_sources';
+			return !this.faceMatchIsFileSourceAction;
 		},
 		faceMatchFacesLabel() {
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
 				return this.$t('face_match:label_source_faces', 'Source faces');
 			}
 			return this.$t('face_match:label_faces', 'Faces');
 		},
 		faceMatchMetadataLabel() {
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
 				return this.$t('face_match:label_metadata_faces', 'Metadata faces');
 			}
 			return this.$t('face_match:label_metadata', 'Metadata');
 		},
 		faceMatchMetadataHint() {
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
 				return this.$t('face_match:label_metadata_faces_hint', 'Read face metadata from the scanned files');
 			}
 			return this.$t('face_match:label_metadata_hint', 'Read metadata');
 		},
 		showFaceMatchTargetFacesCounter() {
-			return this.faceMatchCurrentAction === 'search_file_face_in_sources';
+			return this.faceMatchIsFileSourceAction;
 		},
 		faceMatchStatusMessage() {
 			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
@@ -169,7 +167,7 @@ export default {
 			if (this.faceMatchLoading) {
 				return { found: false, message: this.$t('face_match:result_none', 'No result yet.') };
 			}
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
 				const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
 				const sourceFace = this.faceMatchResult && (this.faceMatchResult.source_face || this.faceMatchResult.face);
 				const matchedPerson = this.faceMatchEffectivePerson;
@@ -214,6 +212,12 @@ export default {
 			return { found: false, message: this.$t('face_match:result_none', 'No result yet.') };
 		},
 		faceMatchTransferTooltip() {
+			if (this.faceMatchAddsNewPhotosFaces) {
+				if (this.faceMatchActionMode === 'create') {
+					return this.$t('face_match:transfer_tooltip_create_photos_face', 'Add face in Photos and create person from file');
+				}
+				return this.$t('face_match:transfer_tooltip_assign_photos_face', 'Add face in Photos and assign name from file');
+			}
 			if (this.faceMatchActionMode === 'write_metadata') {
 				return this.$t('face_match:transfer_tooltip_write_metadata', 'Apply name to metadata');
 			}
@@ -226,10 +230,23 @@ export default {
 			if (!this.faceMatchResultSummary.found) {
 				return '';
 			}
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
+				if (this.faceMatchAddsNewPhotosFaces) {
+					return this.faceMatchResultSummary.photosPersonId ? 'assign' : 'create';
+				}
 				return 'write_metadata';
 			}
 			return this.faceMatchResultSummary.photosPersonId ? 'assign' : 'create';
+		},
+		faceMatchAddsNewPhotosFaces() {
+			return !!(
+				this.faceMatchIsFileSourceAction
+				&& this.faceMatchResult
+				&& this.faceMatchResult.add_new_faces_to_photos
+			);
+		},
+		faceMatchShouldShowAddOverlay() {
+			return this.faceMatchAddsNewPhotosFaces || this.faceMatchActionMode === 'create';
 		},
 		faceMatchEffectivePerson() {
 			if (this.faceMatchSelectedPerson && this.faceMatchEditableNameMatchesPerson(this.faceMatchSelectedPerson)) {
@@ -242,7 +259,7 @@ export default {
 			return null;
 		},
 		faceMatchFileTitle() {
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
 				return this.$t('face_match:file_title', 'File');
 			}
 			const matchedPerson = this.faceMatchEffectivePerson;
@@ -259,7 +276,7 @@ export default {
 			return (Number(this.faceMatchFindingsStatus && this.faceMatchFindingsStatus.count) || 0) > 0;
 		},
 		faceMatchLeftTitle() {
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
 				return this.$t('face_match:label_source', 'Source');
 			}
 			return this.$t('face_match:photos_title', 'Photos');
@@ -276,7 +293,7 @@ export default {
 	},
 	watch: {
 		selectedFaceMatchingAction(nextAction) {
-			if (nextAction !== 'search_photo_face_in_file' && nextAction !== 'search_file_face_in_sources') {
+			if (!['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces'].includes(nextAction)) {
 				this.faceMatchSaveOnly = false;
 			}
 		},
@@ -602,7 +619,7 @@ export default {
 			if (!this.faceMatchResult) {
 				return null;
 			}
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
 				return this.faceMatchResult.metadata_face || null;
 			}
 			if (!this.faceMatchResult.match) {
@@ -614,7 +631,7 @@ export default {
 			if (!this.faceMatchResult) {
 				return null;
 			}
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
 				return this.faceMatchResult.source_face || this.faceMatchResult.face || null;
 			}
 			return this.faceMatchResult.face || null;
@@ -658,7 +675,7 @@ export default {
 			return Number.isFinite(Number(faceId)) ? Number(faceId) : null;
 		},
 		getFaceMatchEditableNameDefault() {
-			if (this.faceMatchCurrentAction === 'search_file_face_in_sources') {
+			if (this.faceMatchIsFileSourceAction) {
 				const sourceFace = this.faceMatchResult && (this.faceMatchResult.source_face || this.faceMatchResult.face);
 				const sourceName = sourceFace && sourceFace.name ? String(sourceFace.name).trim() : '';
 				return sourceName || '';
@@ -886,11 +903,7 @@ export default {
 				return;
 			}
 			const localCount = Number(this.faceMatchTransferredCount) || 0;
-			const baseCount = Number(this.faceMatchTransferredBaseCount) || 0;
-			const totalCount = baseCount > 0
-				? Math.max(localCount, baseCount + progressCount)
-				: Math.max(localCount, progressCount);
-			this.faceMatchTransferredCount = totalCount;
+			this.faceMatchTransferredCount = Math.max(localCount, progressCount);
 		},
 		async fetchFaceMatchingProgress() {
 			const requestId = this.faceMatchProgressRequestId + 1;
@@ -958,7 +971,7 @@ export default {
 				await this.loadFaceMatchFindingAtIndex(this.faceMatchFindingIndex + 1);
 				return;
 			}
-			if (this.selectedFaceMatchingAction === 'search_file_face_in_sources') {
+			if (['search_file_face_in_sources', 'mark_missing_photos_faces'].includes(this.selectedFaceMatchingAction)) {
 				this.faceMatchSkippedTargets = this.buildNextSkippedTargets();
 			} else {
 				this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
@@ -1008,9 +1021,12 @@ export default {
 			await this.assignFaceMatchToPerson();
 		},
 		async createFaceMatchPerson() {
-			const faceId = this.faceMatchResult && this.faceMatchResult.face && this.faceMatchResult.face.face_id;
 			const personName = (this.faceMatchEditableName || this.getFaceMatchEditableNameDefault()).trim();
-			if (!faceId || !personName) {
+			const isMetadataPhotosCreate = this.faceMatchAddsNewPhotosFaces;
+			const faceId = this.faceMatchResult && this.faceMatchResult.face && this.faceMatchResult.face.face_id;
+			const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
+			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
+			if ((!isMetadataPhotosCreate && !faceId) || !personName || (isMetadataPhotosCreate && (!metadataFace || !imagePath))) {
 				this.output = this.$t('face_match:error_missing_face_or_name', 'Error: Missing face ID or person name.');
 				return;
 			}
@@ -1032,23 +1048,30 @@ export default {
 					throw new Error(this.$t('face_match:error_missing_synotoken', 'SYNO.SDS.Session.SynoToken is empty'));
 				}
 
-				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/face_create_match', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': synoToken,
-					},
-					body: JSON.stringify({
-						face_id: faceId,
-						person_name: personName,
-						save_mapping: mappingPreference.saveMapping,
-						source_name: mappingPreference.sourceName,
-						kk_message,
-						synoToken,
-						cookies,
-					}),
-				});
+				const resp = await fetch(
+					isMetadataPhotosCreate
+						? '/webman/3rdparty/AV_ImgData/index.cgi/api/face_create_metadata_match'
+						: '/webman/3rdparty/AV_ImgData/index.cgi/api/face_create_match',
+					{
+						method: 'POST',
+						credentials: 'include',
+						headers: {
+							'Content-Type': 'application/json',
+							'X-SYNO-TOKEN': synoToken,
+						},
+						body: JSON.stringify({
+							face_id: faceId,
+							image_path: imagePath,
+							metadata_face: metadataFace,
+							person_name: personName,
+							save_mapping: mappingPreference.saveMapping,
+							source_name: mappingPreference.sourceName,
+							kk_message,
+							synoToken,
+							cookies,
+						}),
+					}
+				);
 
 				const data = await resp.json().catch(() => ({}));
 				if (!resp.ok || data.success === false) {
@@ -1061,7 +1084,11 @@ export default {
 					await this.advanceFaceMatchFindingsAfterTransfer(data);
 				} else {
 					this.faceMatchTransferredCount += 1;
-					this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
+					if (isMetadataPhotosCreate) {
+						this.faceMatchSkippedTargets = this.buildNextSkippedTargets();
+					} else {
+						this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
+					}
 					await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
 				}
 			} catch (err) {
@@ -1070,9 +1097,12 @@ export default {
 		},
 		async assignFaceMatchToPerson() {
 			const matchedPersonId = this.faceMatchEffectivePerson && this.faceMatchEffectivePerson.id;
+			const isMetadataPhotosAssign = this.faceMatchAddsNewPhotosFaces;
 			const faceId = this.faceMatchResult && this.faceMatchResult.face && this.faceMatchResult.face.face_id;
+			const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
+			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
 			const matchedPersonName = (this.faceMatchEditableName || '').trim();
-			if (!matchedPersonId || !faceId || !matchedPersonName) {
+			if (!matchedPersonId || (!isMetadataPhotosAssign && !faceId) || !matchedPersonName || (isMetadataPhotosAssign && (!metadataFace || !imagePath))) {
 				this.output = this.$t('face_match:error_missing_known_person', 'Error: Missing known person ID, face ID, or person name.');
 				return;
 			}
@@ -1094,24 +1124,31 @@ export default {
 					throw new Error(this.$t('face_match:error_missing_synotoken', 'SYNO.SDS.Session.SynoToken is empty'));
 				}
 
-				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/face_assign_match', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': synoToken,
-					},
-					body: JSON.stringify({
-						face_id: faceId,
-						person_id: matchedPersonId,
-						person_name: matchedPersonName,
-						save_mapping: mappingPreference.saveMapping,
-						source_name: mappingPreference.sourceName,
-						kk_message,
-						synoToken,
-						cookies,
-					}),
-				});
+				const resp = await fetch(
+					isMetadataPhotosAssign
+						? '/webman/3rdparty/AV_ImgData/index.cgi/api/face_assign_metadata_match'
+						: '/webman/3rdparty/AV_ImgData/index.cgi/api/face_assign_match',
+					{
+						method: 'POST',
+						credentials: 'include',
+						headers: {
+							'Content-Type': 'application/json',
+							'X-SYNO-TOKEN': synoToken,
+						},
+						body: JSON.stringify({
+							face_id: faceId,
+							image_path: imagePath,
+							metadata_face: metadataFace,
+							person_id: matchedPersonId,
+							person_name: matchedPersonName,
+							save_mapping: mappingPreference.saveMapping,
+							source_name: mappingPreference.sourceName,
+							kk_message,
+							synoToken,
+							cookies,
+						}),
+					}
+				);
 
 				const data = await resp.json().catch(() => ({}));
 				if (!resp.ok || data.success === false) {
@@ -1124,7 +1161,11 @@ export default {
 					await this.advanceFaceMatchFindingsAfterTransfer(data);
 				} else {
 					this.faceMatchTransferredCount += 1;
-					this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
+					if (isMetadataPhotosAssign) {
+						this.faceMatchSkippedTargets = this.buildNextSkippedTargets();
+					} else {
+						this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
+					}
 					await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
 				}
 			} catch (err) {
@@ -1201,7 +1242,6 @@ export default {
 				this.faceMatchSkippedFaceIds = [];
 				this.faceMatchSkippedTargets = [];
 				this.faceMatchTransferredCount = 0;
-				this.faceMatchTransferredBaseCount = 0;
 				this.faceMatchProgressBase = {
 					persons_read: 0,
 					images_read: 0,
@@ -1214,7 +1254,6 @@ export default {
 				this.faceMatchProgressBase = {
 					...this.faceMatchDisplayedProgress,
 				};
-				this.faceMatchTransferredBaseCount = resumeFromProgress ? 0 : this.faceMatchTransferredCount;
 				const resumeCursor = this.faceMatchProgress && typeof this.faceMatchProgress.resume_cursor === 'object'
 					? this.faceMatchProgress.resume_cursor
 					: null;

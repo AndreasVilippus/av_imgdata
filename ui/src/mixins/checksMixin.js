@@ -15,6 +15,7 @@ export default {
 			checksProgress: {},
 			checksProgressTimer: null,
 			checksProgressRequestId: 0,
+			checksSessionSyncing: false,
 		};
 	},
 	computed: {
@@ -38,12 +39,12 @@ export default {
 			if (nextAction !== 'scan') {
 				this.checksSaveOnly = false;
 			}
-			if (!this.checksLoading) {
+			if (!this.checksLoading && !this.checksSessionSyncing) {
 				this.resetChecksUiState();
 			}
 		},
 		selectedChecksType() {
-			if (!this.checksLoading) {
+			if (!this.checksLoading && !this.checksSessionSyncing) {
 				this.resetChecksUiState();
 			}
 		},
@@ -140,6 +141,45 @@ export default {
 				&& !!(face && typeof face === 'object' && face.source_format)
 				&& !!(sourceFace && typeof sourceFace === 'object' && sourceFace.source_format);
 		},
+		showChecksPopup(message) {
+			if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+				window.alert(message);
+			}
+		},
+		getChecksWarningPopupMessage(result) {
+			const warning = String(result && result.warning || '').trim();
+			if (warning === 'checks:warning_exiftool_required') {
+				return this.$t(
+					'checks:popup_exiftool_required',
+					'ExifTool is missing, but required for this action. Please configure or install ExifTool first.'
+				);
+			}
+			const details = result && typeof result.details === 'object' ? result.details : null;
+			const stderr = String(details && details.stderr || '').trim();
+			const stdout = String(details && details.stdout || '').trim();
+			const errorCode = String(details && details.error || '').trim();
+			const returncode = Number(details && details.returncode);
+			if (stderr || stdout || errorCode) {
+				const parts = [];
+				if (errorCode) {
+					parts.push(this.$t('checks:popup_error_code', 'Error code: {code}', { code: errorCode }));
+				}
+				if (Number.isFinite(returncode)) {
+					parts.push(this.$t('checks:popup_return_code', 'Return code: {code}', { code: returncode }));
+				}
+				if (stderr) {
+					parts.push(this.$t('checks:popup_error_stderr', 'Error output:\n{output}', { output: stderr }));
+				} else if (stdout) {
+					parts.push(this.$t('checks:popup_error_stdout', 'Command output:\n{output}', { output: stdout }));
+				}
+				return this.$t(
+					'checks:popup_action_failed_details',
+					'The metadata action failed.\n\n{details}',
+					{ details: parts.join('\n\n') }
+				);
+			}
+			return '';
+		},
 		getChecksReplaceRightTooltip(item) {
 			if (this.isChecksPositionDeviation(item)) {
 				return this.$t(
@@ -210,17 +250,24 @@ export default {
 			const progress = await this.fetchChecksProgress({ applyFinishedState: false });
 			const matchesCurrentSelection = !!(
 				progress
-				&& progress.running
 				&& String(progress.source_mode || '').trim().toLowerCase() === 'scan'
 				&& String(progress.check_type || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase()
-				&& this.selectedChecksAction === 'scan'
 			);
-			if (matchesCurrentSelection) {
+			if (matchesCurrentSelection && progress.running) {
+				this.checksSessionSyncing = true;
+				try {
+					if (this.selectedChecksAction !== 'scan') {
+						this.selectedChecksAction = 'scan';
+					}
+				} finally {
+					this.checksSessionSyncing = false;
+				}
 				this.checksLoading = true;
 				this.startChecksProgressPolling();
 				return;
 			}
-			this.resetChecksUiState();
+			this.checksLoading = false;
+			this.stopChecksProgressPolling();
 		},
 		applyChecksProgress(progress) {
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
@@ -347,10 +394,6 @@ export default {
 					this.checksActionLocked = false;
 					this.checksCurrentItem = item;
 					this.checksCurrentIndex = resolvedIndex;
-					this.checksStatusMessage = this.$t('checks:status_entry', 'Entry {current} of {total}.', {
-						current: this.checksCurrentIndex + 1,
-						total: this.checksEntries.length,
-					});
 					return;
 				}
 				if (!this.checksEntries.length) {
@@ -465,6 +508,10 @@ export default {
 							? 'This function requires ExifTool.'
 							: 'Face could not be deleted from metadata.'
 					);
+					const popupMessage = this.getChecksWarningPopupMessage(result);
+					if (popupMessage) {
+						this.showChecksPopup(popupMessage);
+					}
 					return;
 				}
 				this.applyChecksFindingsUpdate(result.findings_update);
@@ -510,6 +557,10 @@ export default {
 							? 'This function requires ExifTool.'
 							: 'Face name could not be replaced in metadata.'
 					);
+					const popupMessage = this.getChecksWarningPopupMessage(result);
+					if (popupMessage) {
+						this.showChecksPopup(popupMessage);
+					}
 					return;
 				}
 				this.applyChecksFindingsUpdate(result.findings_update);
@@ -554,6 +605,10 @@ export default {
 							? 'This function requires ExifTool.'
 							: 'Face position could not be replaced in metadata.'
 					);
+					const popupMessage = this.getChecksWarningPopupMessage(result);
+					if (popupMessage) {
+						this.showChecksPopup(popupMessage);
+					}
 					return;
 				}
 				this.applyChecksFindingsUpdate(result.findings_update);

@@ -64,7 +64,7 @@ class FileHandler:
     def imageExtensionsNativeOnly(self) -> bool:
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
-        return bool(files_config.get("IMAGE_EXTENSIONS_NATIVE_ONLY", False))
+        return bool(files_config.get("IMAGE_EXTENSIONS_NATIVE_ONLY", True))
 
     def useExifToolExtensionsForDiscovery(self) -> bool:
         config = self._config.readMergedConfig()

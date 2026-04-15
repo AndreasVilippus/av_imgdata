@@ -60,6 +60,39 @@ def normalize_xmp_face(face_dict) -> dict:
     return normalized
 
 
+def denormalize_xmp_face(face_dict) -> dict:
+    face_dict = _as_face_dict(face_dict)
+    center_x = face_dict["x"]
+    center_y = face_dict["y"]
+    width = face_dict["w"]
+    height = face_dict["h"]
+
+    orientation = int(face_dict.get("orientation") or 1)
+    if orientation == 2:
+        center_x = 1 - center_x
+    elif orientation == 3:
+        center_x = 1 - center_x
+        center_y = 1 - center_y
+    elif orientation == 4:
+        center_y = 1 - center_y
+    elif orientation == 5:
+        center_x, center_y, width, height = center_y, center_x, height, width
+    elif orientation == 6:
+        center_x, center_y, width, height = center_y, 1 - center_x, height, width
+    elif orientation == 7:
+        center_x, center_y, width, height = 1 - center_y, 1 - center_x, height, width
+    elif orientation == 8:
+        center_x, center_y, width, height = 1 - center_y, center_x, height, width
+
+    denormalized = dict(face_dict)
+    denormalized["x"] = center_x
+    denormalized["y"] = center_y
+    denormalized["w"] = width
+    denormalized["h"] = height
+    denormalized["orientation"] = orientation
+    return denormalized
+
+
 def from_xmp(face_dict) -> BoundingBox:
     normalized = normalize_xmp_face(face_dict)
     center_x = normalized["x"]

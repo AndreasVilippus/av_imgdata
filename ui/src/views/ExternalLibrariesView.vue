@@ -2,6 +2,7 @@
 	<section class="panel">
 		<div class="panel-head">
 			<div class="sm-section-title">{{ panelTitle }}</div>
+			<p v-if="panelDescription">{{ panelDescription }}</p>
 		</div>
 
 		<div v-if="isExiftoolConfigView" class="config-actions config-actions-right">
@@ -57,9 +58,6 @@
 			</section>
 
 			<section v-if="isExiftoolConfigView" class="config-card">
-				<div class="sm-section-title">{{ vm.$t('config:section_exiftool', 'ExifTool') }}</div>
-				<div class="config-card-desc">{{ vm.$t('config:section_exiftool_desc', 'Settings for optional ExifTool usage when reading embedded XMP metadata.') }}</div>
-
 				<div class="config-form-grid">
 					<label v-if="vm.hasUsableExiftool" class="config-checkbox">
 						<input
@@ -82,9 +80,37 @@
 					</label>
 
 					<template v-if="vm.externalLibrariesConfigModel.files.USE_EXIFTOOL">
+						<label class="config-checkbox">
+							<input
+								:checked="vm.externalLibrariesConfigModel.files.USE_MANUAL_PATHEXIFTOOL"
+								type="checkbox"
+								:disabled="vm.externalLibrariesSaving"
+								@change="vm.setExternalLibrariesFileConfigValue('USE_MANUAL_PATHEXIFTOOL', $event.target.checked)"
+							/>
+							<span>{{ vm.$t('config:label_use_manual_exiftool_path', 'Use manual path to ExifTool') }}</span>
+						</label>
+
+						<label
+							v-if="vm.externalLibrariesConfigModel.files.USE_MANUAL_PATHEXIFTOOL"
+							class="config-field"
+						>
+							<span class="config-field-label">{{ vm.$t('config:label_manual_exiftool_path', 'Path to ExifTool') }}</span>
+							<input
+								:value="vm.externalLibrariesConfigModel.files.MANUAL_PATHEXIFTOOL"
+								type="text"
+								class="config-input"
+								:disabled="vm.externalLibrariesSaving"
+								:placeholder="vm.$t('config:placeholder_manual_exiftool_path', '/usr/local/bin/exiftool')"
+								@input="vm.setExternalLibrariesFileConfigValue('MANUAL_PATHEXIFTOOL', $event.target.value)"
+							/>
+							<span class="config-card-desc">
+								{{ vm.$t('config:hint_manual_exiftool_path', 'When enabled, this path is used instead of the bundled ExifTool path and is not changed by install or remove actions.') }}
+							</span>
+						</label>
+
 						<label
 							class="config-checkbox"
-							:title="vm.$t('config:hint_image_extensions_native_only', 'If enabled, the native image extension list is only used by native readers. ExifTool uses its own extension list instead.')"
+							:title="vm.$t('config:hint_image_extensions_native_only', 'If enabled, the file extension list for metadata scanning is only used by native readers. ExifTool uses its own extension list instead.')"
 						>
 							<input
 								:checked="vm.externalLibrariesConfigModel.files.IMAGE_EXTENSIONS_NATIVE_ONLY"
@@ -92,7 +118,7 @@
 								:disabled="vm.externalLibrariesSaving"
 								@change="vm.setExternalLibrariesFileConfigValue('IMAGE_EXTENSIONS_NATIVE_ONLY', $event.target.checked)"
 							/>
-							<span>{{ vm.$t('config:label_image_extensions_native_only', 'Use native extension list only for native readers') }}</span>
+							<span>{{ vm.$t('config:label_image_extensions_native_only', 'Use metadata scan file extensions only for native readers') }}</span>
 						</label>
 
 						<label
@@ -193,6 +219,9 @@ export default {
 			return this.isExiftoolConfigView
 				? this.vm.$t('nav:exiftool', 'ExifTool')
 				: this.vm.$t('nav:external_libraries', 'External libraries');
+		},
+		panelDescription() {
+			return this.vm.$t('config:section_exiftool_desc', 'Settings for optional ExifTool usage when reading embedded XMP metadata.');
 		},
 	},
 };

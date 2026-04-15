@@ -278,7 +278,7 @@ async def face_matching_action(request: Request):
         if normalized:
             normalized_skip_targets.append(normalized)
 
-    if action not in {"search_photo_face_in_file", "search_file_face_in_sources", "load_photo_face_match_findings"}:
+    if action not in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "load_photo_face_match_findings"}:
         return {
             "success": False,
             "error": {
@@ -289,7 +289,7 @@ async def face_matching_action(request: Request):
         }
 
     try:
-        if action in {"search_photo_face_in_file", "search_file_face_in_sources"}:
+        if action in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces"}:
             face_matches = IMGDATA.startFaceMatchingDiscovery(
                 user_key=session_ctx["user_key"],
                 cookies=session_ctx["cookies"],
@@ -557,6 +557,172 @@ async def face_apply_metadata_match(request: Request):
     }
 
 
+@router.post("/face_assign_metadata_match")
+async def face_assign_metadata_match(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    image_path = str(body.get("image_path") or "").strip()
+    metadata_face = body.get("metadata_face")
+    person_id = body.get("person_id")
+    person_name = str(body.get("person_name") or "").strip()
+    save_mapping = bool(body.get("save_mapping"))
+    source_name = body.get("source_name")
+    if not image_path or not isinstance(metadata_face, dict) or not person_name:
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_face_assign_metadata_match_request",
+            },
+        }
+    try:
+        person_id = int(person_id)
+    except Exception:
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_person_id",
+            },
+        }
+
+    try:
+        add_result = IMGDATA.addMatchedMetadataFaceToPhotos(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+            image_path=image_path,
+            metadata_face=metadata_face,
+            person_id=person_id,
+        )
+        face_id = add_result.get("face_id")
+        if face_id is None:
+            raise ValueError("photos_face_create_failed")
+        assign_result = IMGDATA.assignMatchedFaceToKnownPerson(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+            face_id=int(face_id),
+            person_id=person_id,
+            person_name=person_name,
+        )
+        findings_update = IMGDATA.removeFaceMatchFindingMetadataEntry(
+            image_path=image_path,
+            metadata_face=metadata_face,
+            increment_transferred_count=True,
+        )
+        mapping_saved = False
+        if save_mapping and isinstance(source_name, str) and source_name.strip():
+            mapping_saved = IMGDATA.saveNameMapping(
+                source_name=source_name.strip(),
+                target_name=person_name,
+            )
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return _session_exception_response(exc, bootstrap_message="face_assign_metadata_match_bootstrap_required")
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "face_assign_metadata_match_failed",
+                "details": str(exc),
+            },
+        }
+
+    return {
+        "success": True,
+        "data": {
+            "image_path": image_path,
+            "person_id": person_id,
+            "person_name": person_name,
+            "face_id": int(face_id),
+            "add_result": add_result,
+            "assign_result": assign_result,
+            "findings_update": findings_update,
+            "mapping_saved": mapping_saved if save_mapping else False,
+        },
+    }
+
+
+@router.post("/face_create_metadata_match")
+async def face_create_metadata_match(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    image_path = str(body.get("image_path") or "").strip()
+    metadata_face = body.get("metadata_face")
+    person_name = str(body.get("person_name") or "").strip()
+    save_mapping = bool(body.get("save_mapping"))
+    source_name = body.get("source_name")
+    if not image_path or not isinstance(metadata_face, dict) or not person_name:
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_face_create_metadata_match_request",
+            },
+        }
+
+    try:
+        add_result = IMGDATA.addMatchedMetadataFaceToPhotos(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+            image_path=image_path,
+            metadata_face=metadata_face,
+        )
+        face_id = add_result.get("face_id")
+        if face_id is None:
+            raise ValueError("photos_face_create_failed")
+        create_result = IMGDATA.createMatchedFaceAsPerson(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+            face_id=int(face_id),
+            person_name=person_name,
+        )
+        findings_update = IMGDATA.removeFaceMatchFindingMetadataEntry(
+            image_path=image_path,
+            metadata_face=metadata_face,
+            increment_transferred_count=True,
+        )
+        mapping_saved = False
+        if save_mapping and isinstance(source_name, str) and source_name.strip():
+            mapping_saved = IMGDATA.saveNameMapping(
+                source_name=source_name.strip(),
+                target_name=person_name,
+            )
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return _session_exception_response(exc, bootstrap_message="face_create_metadata_match_bootstrap_required")
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "face_create_metadata_match_failed",
+                "details": str(exc),
+            },
+        }
+
+    return {
+        "success": True,
+        "data": {
+            "image_path": image_path,
+            "person_name": person_name,
+            "face_id": int(face_id),
+            "add_result": add_result,
+            "create_result": create_result,
+            "findings_update": findings_update,
+            "mapping_saved": mapping_saved if save_mapping else False,
+        },
+    }
+
+
 @router.post("/face_person_suggest")
 async def face_person_suggest(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
@@ -787,6 +953,72 @@ async def checks_stop(request: Request):
         "success": True,
         "data": IMGDATA.requestStopChecks(session_ctx["user_key"], str(check_type or "dimension_issues")),
     }
+
+
+@router.post("/cleanup_start")
+async def cleanup_start(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+
+    body = await _read_request_body(request)
+    action = body.get("action", "normalize_names")
+    targets = body.get("targets", [])
+
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: IMGDATA.startCleanupRun(
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+                action=str(action or "normalize_names"),
+                targets=targets if isinstance(targets, list) else [],
+            ),
+        )
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        error_payload = _session_exception_response(exc, bootstrap_message="cleanup_start_bootstrap_required")
+        return JSONResponse(error_payload)
+    except Exception as exc:
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "cleanup_start_failed",
+                "details": str(exc),
+            },
+        })
+
+    return JSONResponse({"success": True, "data": result})
+
+
+@router.post("/cleanup_progress")
+async def cleanup_progress(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+
+    body = await _read_request_body(request)
+    action = body.get("action", "normalize_names")
+    return JSONResponse({
+        "success": True,
+        "data": IMGDATA.getCleanupProgress(session_ctx["user_key"], str(action or "normalize_names")),
+    })
+
+
+@router.post("/cleanup_stop")
+async def cleanup_stop(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+
+    body = await _read_request_body(request)
+    action = body.get("action", "normalize_names")
+    return JSONResponse({
+        "success": True,
+        "data": IMGDATA.requestStopCleanup(session_ctx["user_key"], str(action or "normalize_names")),
+    })
 
 
 @router.post("/checks_delete_metadata_face")

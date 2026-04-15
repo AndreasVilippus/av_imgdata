@@ -24,14 +24,25 @@ class ExifToolService:
     def __init__(self, config_service: Optional[ConfigService] = None):
         self._config = config_service or ConfigService()
 
+    @staticmethod
+    def _configuredPathFromFilesConfig(files_config: Dict[str, Any]) -> str:
+        config = files_config if isinstance(files_config, dict) else {}
+        use_manual_path = bool(config.get("USE_MANUAL_PATHEXIFTOOL", False))
+        manual_path = str(config.get("MANUAL_PATHEXIFTOOL", "") or "").strip()
+        if use_manual_path and manual_path:
+            return manual_path
+        return str(config.get("PATHEXIFTOOL", "exiftool") or "exiftool").strip() or "exiftool"
+
     def getStatus(self) -> Dict[str, Any]:
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
-        configured_path = str(files_config.get("PATHEXIFTOOL", "exiftool") or "exiftool").strip() or "exiftool"
+        configured_path = self._configuredPathFromFilesConfig(files_config)
         use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
         check_updates = bool(files_config.get("CHECK_EXIFTOOL_UPDATES", True))
         bundled_install_root = self._packageVarInstallRoot()
         last_download_url = str(files_config.get("EXIFTOOL_DOWNLOAD_URL", "") or "").strip()
+        manual_path = str(files_config.get("MANUAL_PATHEXIFTOOL", "") or "").strip()
+        use_manual_path = bool(files_config.get("USE_MANUAL_PATHEXIFTOOL", False))
 
         local_info = self._detectLocalExifTool(configured_path)
         online_info = self._fetchLatestOfficialInfo() if check_updates else {
@@ -49,6 +60,8 @@ class ExifToolService:
 
         return {
             "configured_path": configured_path,
+            "manual_configured_path": manual_path,
+            "use_manual_configured_path": use_manual_path,
             "use_exiftool": use_exiftool,
             "check_updates": check_updates,
             "last_download_url": last_download_url,
@@ -65,7 +78,7 @@ class ExifToolService:
     def getSupportedReadableExtensions(self) -> Dict[str, Any]:
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
-        configured_path = str(files_config.get("PATHEXIFTOOL", "exiftool") or "exiftool").strip() or "exiftool"
+        configured_path = self._configuredPathFromFilesConfig(files_config)
         local_info = self._detectLocalExifTool(configured_path)
         executable_path = str(local_info.get("resolved_path") or "").strip()
         if not executable_path:
@@ -166,7 +179,8 @@ class ExifToolService:
 
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
-        files_config["PATHEXIFTOOL"] = str(target_executable)
+        if not bool(files_config.get("USE_MANUAL_PATHEXIFTOOL", False)):
+            files_config["PATHEXIFTOOL"] = str(target_executable)
         files_config["USE_EXIFTOOL"] = True
         files_config["EXIFTOOL_DOWNLOAD_URL"] = download_url
         config["files"] = files_config
@@ -197,8 +211,10 @@ class ExifToolService:
 
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
-        files_config["PATHEXIFTOOL"] = "exiftool"
-        files_config["USE_EXIFTOOL"] = False
+        manual_path_active = bool(files_config.get("USE_MANUAL_PATHEXIFTOOL", False)) and bool(str(files_config.get("MANUAL_PATHEXIFTOOL", "") or "").strip())
+        if not bool(files_config.get("USE_MANUAL_PATHEXIFTOOL", False)):
+            files_config["PATHEXIFTOOL"] = "exiftool"
+        files_config["USE_EXIFTOOL"] = True if manual_path_active else False
         config["files"] = files_config
         self._config.writeConfig(config)
 
@@ -434,7 +450,7 @@ class ExifToolService:
 
     @staticmethod
     def _fetchText(url: str) -> str:
-        request = Request(url, headers={"User-Agent": "AV_ImgData/0.6.1"})
+        request = Request(url, headers={"User-Agent": "AV_ImgData/0.7.0"})
         try:
             with urlopen(request, timeout=8) as response:
                 return response.read().decode("utf-8", errors="replace")
@@ -443,7 +459,7 @@ class ExifToolService:
 
     @staticmethod
     def _downloadFile(url: str, target_path: Path) -> None:
-        request = Request(url, headers={"User-Agent": "AV_ImgData/0.6.1"})
+        request = Request(url, headers={"User-Agent": "AV_ImgData/0.7.0"})
         with urlopen(request, timeout=30) as response:
             target_path.write_bytes(response.read())
 

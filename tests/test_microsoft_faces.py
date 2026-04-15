@@ -19,7 +19,7 @@ XMP_MICROSOFT = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
     <MPRI:Regions>
      <rdf:Bag>
       <rdf:li
-       MPReg:PersonDisplayName="Andreas Schulz"
+       MPReg:PersonDisplayName="Person Legacy"
        MPReg:Rectangle="0.192515, 0.341564, 0.109954, 0.146605"/>
      </rdf:Bag>
     </MPRI:Regions>

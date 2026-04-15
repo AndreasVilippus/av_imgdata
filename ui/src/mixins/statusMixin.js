@@ -150,8 +150,6 @@ export default {
 		},
 		getFileAnalysisStatusMessage(progress) {
 			const current = progress && typeof progress === 'object' ? progress : {};
-			const analyzed = Number(current.files_analyzed) || 0;
-			const total = Number(current.files_matched_total) || 0;
 
 			if (current.stop_requested) {
 				return this.$t('status:analyze_stopping', 'Stopping file analysis...');
@@ -160,32 +158,16 @@ export default {
 				return this.$t('status:progress_discovery_running', 'Scanning files...');
 			}
 			if (current.running && current.phase === 'analysis') {
-				return this.$t(
-					'status:progress_analysis_running',
-					'Analyzing face metadata... {current} of {total} files analyzed.',
-					{ current: analyzed, total }
-				);
+				return this.$t('status:progress_analysis_running', 'Analyzing face metadata...');
 			}
 			if (current.status === 'stopped' && current.phase === 'discovery') {
-				return this.$t(
-					'status:progress_discovery_stopped',
-					'Discovery stopped. 0 of {total} files analyzed.',
-					{ total }
-				);
+				return this.$t('status:progress_discovery_stopped', 'Discovery stopped.');
 			}
 			if (current.status === 'stopped' && current.phase === 'analysis') {
-				return this.$t(
-					'status:progress_analysis_stopped',
-					'Analysis stopped. {current} of {total} files analyzed.',
-					{ current: analyzed, total }
-				);
+				return this.$t('status:progress_analysis_stopped', 'Analysis stopped.');
 			}
 			if (current.status === 'finished' && current.phase === 'analysis') {
-				return this.$t(
-					'status:progress_analysis_finished',
-					'Analysis finished. {current} of {total} files analyzed.',
-					{ current: analyzed, total }
-				);
+				return this.$t('status:progress_analysis_finished', 'Analysis finished.');
 			}
 			if (current.status === 'failed' && !current.shared_folder) {
 				return this.$t('status:progress_shared_folder_missing', 'Shared folder not found.');

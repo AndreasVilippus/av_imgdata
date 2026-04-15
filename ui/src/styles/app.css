@@ -439,10 +439,24 @@
 
 .checks-actions {
 	display: flex;
+	flex-direction: column;
+	gap: var(--sm-space-2);
+	margin-bottom: var(--sm-space-4);
+}
+
+.checks-actions-row {
+	display: flex;
 	flex-wrap: wrap;
 	gap: var(--sm-space-2);
 	align-items: center;
-	margin-bottom: var(--sm-space-4);
+}
+
+.checks-actions-row-selects .face-match-select {
+	flex: 1 1 240px;
+}
+
+.checks-actions-row-buttons {
+	justify-content: flex-end;
 }
 
 .checks-split {
@@ -482,7 +496,7 @@
 
 .checks-delete-button {
 	position: absolute;
-	top: -10px;
+	top: 8px;
 	z-index: 4;
 	width: var(--sm-icon-compact-w);
 	height: var(--sm-icon-compact-h);
@@ -491,11 +505,11 @@
 }
 
 .checks-delete-button-left {
-	left: -18px;
+	left: 8px;
 }
 
 .checks-delete-button-right {
-	right: -18px;
+	right: 8px;
 }
 
 .checks-delete-button .face-match-icon-stack {
@@ -623,6 +637,7 @@
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--sm-space-2);
+	justify-content: flex-end;
 }
 
 .config-checkbox {
@@ -706,11 +721,72 @@
 	min-width: 0;
 }
 
+.sm-progress-overview-card,
 .sm-person-usage-wrapper {
-	max-width: 250px;
 	min-width: 0;
 }
 
+.sm-progress-overview-card {
+	display: flex;
+	align-items: center;
+	background: var(--sm-bg);
+	border-radius: var(--sm-radius-1);
+	padding: 10px 14px;
+	min-height: 64px;
+	width: 100%;
+	box-sizing: border-box;
+	overflow: hidden;
+}
+
+.sm-progress-overview-icon-wrap {
+	width: 64px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.sm-progress-overview-icon {
+	height: 32px;
+	object-fit: contain;
+}
+
+.sm-progress-overview-table {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 14px;
+}
+
+.sm-progress-overview-desc {
+	min-width: 132px;
+}
+
+.sm-progress-overview-title {
+	font-size: 13px;
+	line-height: 24px;
+	color: var(--sm-text);
+}
+
+.sm-progress-overview-count {
+	font-size: 13px;
+	line-height: 24px;
+	color: rgba(65, 75, 85, 0.7);
+}
+
+.sm-progress-overview-usage-container {
+	flex: 1;
+	min-width: 0;
+}
+
+.sm-progress-overview-status {
+	margin-top: 8px;
+	font-size: 13px;
+	line-height: 20px;
+	color: rgba(65, 75, 85, 0.7);
+}
+
+.sm-ratio-progress-bg,
 .sm-person-usage-bg {
 	width: 100%;
 	height: 8px;
@@ -719,12 +795,14 @@
 	overflow: hidden;
 }
 
+.sm-ratio-progress-bar,
 .sm-person-usage-bar {
 	height: 100%;
 	background: var(--sm-blue);
 	border-radius: 999px;
 }
 
+.sm-ratio-progress-text,
 .sm-person-usage-text {
 	margin-top: 8px;
 	font-size: 13px;
@@ -734,13 +812,21 @@
 	overflow-wrap: anywhere;
 }
 
+.sm-ratio-progress-primary,
 .sm-person-usage-known {
 	color: var(--sm-blue);
 }
 
+.sm-ratio-progress-secondary,
+.sm-ratio-progress-sep,
 .sm-person-usage-sep,
 .sm-person-usage-unknown {
 	color: rgba(65, 75, 85, 0.7);
+}
+
+.sm-status-progress {
+	margin-top: 10px;
+	width: 100%;
 }
 
 .panel-head h1 {

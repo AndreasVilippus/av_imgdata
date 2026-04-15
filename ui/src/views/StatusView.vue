@@ -17,14 +17,12 @@
 					</div>
 					<div class="sm-overview-person-usage-container">
 						<div class="sm-person-usage-wrapper">
-							<div class="sm-person-usage-bg">
-								<div class="sm-person-usage-bar" :style="{ width: vm.knownRatioPercent + '%' }"></div>
-							</div>
-							<div class="sm-person-usage-text">
-								<span class="sm-person-usage-known">{{ vm.persons.known }} {{ vm.$t('status:known_suffix', 'Persons') }}</span>
-								<span class="sm-person-usage-sep"> | </span>
-								<span class="sm-person-usage-unknown">{{ vm.persons.unknown }} {{ vm.$t('status:unknown_suffix', 'unknown persons') }}</span>
-							</div>
+							<RatioProgress
+								:current="vm.persons.known"
+								:total="vm.persons.total"
+								:primary-text="`${vm.persons.known} ${vm.$t('status:known_suffix', 'Persons')}`"
+								:secondary-text="`${vm.persons.unknown} ${vm.$t('status:unknown_suffix', 'unknown persons')}`"
+							/>
 							<div class="sm-overview-person-mappings" :title="vm.$t('status:name_mappings_hint', 'Names that are replaced by others')">{{ vm.$t('status:name_mappings', 'Name mappings') }}: {{ vm.persons.mappings }}</div>
 						</div>
 					</div>
@@ -33,11 +31,19 @@
 		</section>
 		<section class="panel">
 			<div class="sm-section-title sm-section-title-block">{{ vm.$t('status:files_title', 'Files') }}</div>
-			<div class="sm-system-card">
-				<div class="sm-system-row">
-					<div class="sm-system-label">{{ vm.$t('status:files_desc', 'Analyze image files and sidecars for face metadata formats.') }}</div>
-					<div class="sm-system-value">{{ vm.getFileAnalysisStatusMessage(vm.fileAnalysisProgress) }}</div>
-				</div>
+			<div class="panel-head panel-content-start">
+				<p>{{ vm.$t('status:files_desc', 'Analyze image files and sidecars for face metadata formats.') }}</p>
+			</div>
+			<div v-if="Number(vm.fileAnalysisProgress.analysis_progress && vm.fileAnalysisProgress.analysis_progress.total) > 0" class="sm-status-progress">
+				<ProgressOverviewCard
+					:title="vm.$t('status:files_matched', 'Matching files')"
+					:count="Number(vm.fileAnalysisProgress.files_matched_total) || 0"
+					:current="Number(vm.fileAnalysisProgress.analysis_progress && vm.fileAnalysisProgress.analysis_progress.current) || 0"
+					:total="Number(vm.fileAnalysisProgress.analysis_progress && vm.fileAnalysisProgress.analysis_progress.total) || 0"
+					:primary-label="vm.$t('status:files_analyzed', 'Analyzed')"
+					:secondary-label="vm.$t('status:files_to_analyze', 'to analyze')"
+					:status-text="vm.getFileAnalysisStatusMessage(vm.fileAnalysisProgress)"
+				/>
 			</div>
 			<div class="sm-files-result-details">
 				<div><strong>{{ vm.$t('status:last_run', 'Last run') }}:</strong> {{ vm.formatAnalysisTimestamp(vm.fileAnalysisProgress.finished_at || vm.fileAnalysisProgress.started_at) }}</div>
@@ -112,8 +118,15 @@
 </template>
 
 <script>
+import ProgressOverviewCard from '../components/ProgressOverviewCard.vue';
+import RatioProgress from '../components/RatioProgress.vue';
+
 export default {
 	name: 'StatusView',
+	components: {
+		ProgressOverviewCard,
+		RatioProgress,
+	},
 	props: {
 		vm: {
 			type: Object,

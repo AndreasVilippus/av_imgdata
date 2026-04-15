@@ -5,50 +5,56 @@
 			<p>{{ vm.$t('checks:desc', 'Area for validation and review functions.') }}</p>
 		</div>
 		<div class="checks-actions panel-content-start">
-			<select v-model="vm.selectedChecksType" class="face-match-select" :disabled="vm.checksLoading">
-				<option value="dimension_issues">{{ vm.$t('checks:type_dimension_issues', 'Dimension issues') }}</option>
-				<option value="duplicate_faces">{{ vm.$t('checks:type_duplicate_faces', 'Duplicate face markings') }}</option>
-				<option value="position_deviations">{{ vm.$t('checks:type_position_deviations', 'Deviating face positions') }}</option>
-				<option value="name_conflicts">{{ vm.$t('checks:type_name_conflicts', 'Name conflicts') }}</option>
-			</select>
-			<select v-model="vm.selectedChecksAction" class="face-match-select" :disabled="vm.checksLoading">
-				<option value="findings">{{ vm.$t('checks:action_findings', 'Use analysis findings') }}</option>
-				<option value="scan">{{ vm.$t('checks:action_scan', 'Run check scan') }}</option>
-			</select>
-			<label
-				v-if="vm.selectedChecksAction === 'scan'"
-				class="face-match-switch"
-				:title="vm.$t('checks:hint_save_only', 'Findings are only stored in the findings list and not shown directly during the scan.')"
-			>
-				<input v-model="vm.checksSaveOnly" type="checkbox" :disabled="vm.checksLoading" />
-				<span class="face-match-switch-slider"></span>
-				<span class="face-match-switch-label">{{ vm.$t('checks:switch_save_only', 'Save findings only') }}</span>
-			</label>
-			<label
-				v-if="vm.selectedChecksType === 'name_conflicts'"
-				class="face-match-switch"
-				:title="vm.$t('checks:hint_auto_apply_suggested_names', 'Suggested target names from stored name mappings are applied automatically.')"
-			>
-				<input v-model="vm.checksAutoApplySuggestedNames" type="checkbox" :disabled="vm.checksLoading" />
-				<span class="face-match-switch-slider"></span>
-				<span class="face-match-switch-label">{{ vm.$t('checks:switch_auto_apply_suggested_names', 'Apply suggested names automatically') }}</span>
-			</label>
-			<label
-				v-if="vm.selectedChecksType === 'duplicate_faces'"
-				class="face-match-switch"
-				:title="vm.$t('checks:hint_auto_apply_suggested_duplicates', 'If a clear recommendation exists, the alternative face marking is removed automatically.')"
-			>
-				<input v-model="vm.checksAutoApplySuggestedDuplicates" type="checkbox" :disabled="vm.checksLoading" />
-				<span class="face-match-switch-slider"></span>
-				<span class="face-match-switch-label">{{ vm.$t('checks:switch_auto_apply_suggested_duplicates', 'Keep suggested face automatically') }}</span>
-			</label>
-			<div class="face-match-action-buttons">
-				<v-button @click="vm.startChecksReview" style="width: 160px;">
-					{{ vm.checksPrimaryButtonLabel }}
-				</v-button>
-				<v-button v-if="vm.hasNextChecksItem" @click="vm.nextChecksReview" :disabled="vm.checksLoading" style="width: 160px;">
-					{{ vm.$t('checks:button_next', 'Next') }}
-				</v-button>
+			<div class="checks-actions-row checks-actions-row-selects">
+				<select v-model="vm.selectedChecksType" class="face-match-select" :disabled="vm.checksLoading">
+					<option value="dimension_issues">{{ vm.$t('checks:type_dimension_issues', 'Dimension issues') }}</option>
+					<option value="duplicate_faces">{{ vm.$t('checks:type_duplicate_faces', 'Duplicate face markings') }}</option>
+					<option value="position_deviations">{{ vm.$t('checks:type_position_deviations', 'Deviating face positions') }}</option>
+					<option value="name_conflicts">{{ vm.$t('checks:type_name_conflicts', 'Name conflicts') }}</option>
+				</select>
+				<select v-model="vm.selectedChecksAction" class="face-match-select" :disabled="vm.checksLoading">
+					<option value="findings">{{ vm.$t('checks:action_findings', 'Use analysis findings') }}</option>
+					<option value="scan">{{ vm.$t('checks:action_scan', 'Run check scan') }}</option>
+				</select>
+			</div>
+			<div class="checks-actions-row checks-actions-row-switches">
+				<label
+					v-if="vm.selectedChecksAction === 'scan'"
+					class="face-match-switch"
+					:title="vm.$t('checks:hint_save_only', 'Findings are only stored in the findings list and not shown directly during the scan.')"
+				>
+					<input v-model="vm.checksSaveOnly" type="checkbox" :disabled="vm.checksLoading" />
+					<span class="face-match-switch-slider"></span>
+					<span class="face-match-switch-label">{{ vm.$t('checks:switch_save_only', 'Save findings only') }}</span>
+				</label>
+				<label
+					v-if="vm.selectedChecksType === 'name_conflicts'"
+					class="face-match-switch"
+					:title="vm.$t('checks:hint_auto_apply_suggested_names', 'Suggested target names from stored name mappings are applied automatically.')"
+				>
+					<input v-model="vm.checksAutoApplySuggestedNames" type="checkbox" :disabled="vm.checksLoading" />
+					<span class="face-match-switch-slider"></span>
+					<span class="face-match-switch-label">{{ vm.$t('checks:switch_auto_apply_suggested_names', 'Apply suggested names automatically') }}</span>
+				</label>
+				<label
+					v-if="vm.selectedChecksType === 'duplicate_faces'"
+					class="face-match-switch"
+					:title="vm.$t('checks:hint_auto_apply_suggested_duplicates', 'If a clear recommendation exists, the alternative face marking is removed automatically.')"
+				>
+					<input v-model="vm.checksAutoApplySuggestedDuplicates" type="checkbox" :disabled="vm.checksLoading" />
+					<span class="face-match-switch-slider"></span>
+					<span class="face-match-switch-label">{{ vm.$t('checks:switch_auto_apply_suggested_duplicates', 'Keep suggested face automatically') }}</span>
+				</label>
+			</div>
+			<div class="checks-actions-row checks-actions-row-buttons">
+				<div class="face-match-action-buttons">
+					<v-button @click="vm.startChecksReview" style="width: 160px;">
+						{{ vm.checksPrimaryButtonLabel }}
+					</v-button>
+					<v-button v-if="vm.hasNextChecksItem" @click="vm.nextChecksReview" :disabled="vm.checksLoading" style="width: 160px;">
+						{{ vm.$t('checks:button_next', 'Next') }}
+					</v-button>
+				</div>
 			</div>
 		</div>
 		<div class="face-match-status-card face-match-status-card-action">
@@ -56,9 +62,26 @@
 				<div class="sm-section-title">{{ vm.$t('checks:status_title', 'Status') }}</div>
 			</div>
 			<div class="face-match-status-message">{{ vm.checksStatusMessage }}</div>
+			<div v-if="Number(vm.checksProgress.total_files) > 0" class="sm-status-progress">
+				<RatioProgress
+					:current="Number(vm.checksProgress.files_scanned) || 0"
+					:total="Number(vm.checksProgress.total_files) || 0"
+					:primary-text="`${Number(vm.checksProgress.files_scanned) || 0} ${vm.$t('checks:label_scanned', 'Scanned:').replace(':', '')}`"
+					:secondary-text="`${Number(vm.checksProgress.total_files) || 0} ${vm.$t('status:files_matched', 'Matching files')}`"
+					:tooltip="`${Number(vm.checksProgress.files_scanned) || 0} / ${Number(vm.checksProgress.total_files) || 0}`"
+				/>
+			</div>
+			<div v-if="vm.selectedChecksAction !== 'scan' && vm.checksEntries.length > 0" class="sm-status-progress">
+				<RatioProgress
+					:current="vm.checksCurrentIndex + 1"
+					:total="vm.checksEntries.length"
+					:primary-text="`${vm.checksCurrentIndex + 1} ${vm.$t('checks:label_index', 'Entry:').replace(':', '')}`"
+					:secondary-text="`${vm.checksEntries.length} ${vm.$t('checks:label_list_entries', 'Entries')}`"
+					:tooltip="`${vm.checksCurrentIndex + 1} / ${vm.checksEntries.length}`"
+				/>
+			</div>
 			<div v-if="vm.selectedChecksAction === 'scan' && !vm.checksCurrentItem" class="face-match-status-stats">
 				<div><strong>{{ vm.$t('checks:label_source_mode', 'Mode:') }}</strong> {{ vm.getChecksSourceModeLabel() }}</div>
-				<div><strong>{{ vm.$t('checks:label_scanned', 'Scanned:') }}</strong> {{ vm.checksProgress.files_scanned || 0 }} / {{ vm.checksProgress.total_files || 0 }}</div>
 				<div><strong>{{ vm.$t('checks:label_findings_count', 'Findings:') }}</strong> {{ vm.checksProgress.findings_count || 0 }}</div>
 			</div>
 			<div v-if="vm.checksCurrentItem" class="face-match-status-stats">
@@ -66,8 +89,6 @@
 				<div><strong>{{ vm.$t('checks:label_file', 'File:') }}</strong> {{ vm.checksCurrentItem.image_name }}</div>
 				<div><strong>{{ vm.$t('checks:label_face_name', 'Face:') }}</strong> {{ vm.checksCurrentItem.face_name || vm.$t('face_match:unknown_name', '(unnamed)') }}</div>
 				<div><strong>{{ vm.$t('checks:label_pair', 'Pair:') }}</strong> {{ vm.getChecksPairLabel(vm.checksCurrentItem) }}</div>
-				<div v-if="vm.selectedChecksAction !== 'scan'"><strong>{{ vm.$t('checks:label_index', 'Entry:') }}</strong> {{ vm.checksCurrentIndex + 1 }} / {{ vm.checksEntries.length }}</div>
-				<div v-else><strong>{{ vm.$t('checks:label_scanned', 'Scanned:') }}</strong> {{ vm.checksProgress.files_scanned || 0 }} / {{ vm.checksProgress.total_files || 0 }}</div>
 				<div v-if="vm.selectedChecksAction === 'scan'"><strong>{{ vm.$t('checks:label_findings_count', 'Findings:') }}</strong> {{ vm.checksProgress.findings_count || 0 }}</div>
 			</div>
 		</div>
@@ -82,7 +103,8 @@
 					:disabled="vm.checksLoading"
 					@click.prevent="vm.replaceChecksMetadataFaceName(vm.checksCurrentItem.right_face_target, vm.checksCurrentItem.left_name)"
 				>
-					<img :src="vm.getChecksReplaceRightIconUrl()" alt="" class="face-match-icon-image" />
+					<img v-if="vm.getChecksReplaceRightIconUrl()" :src="vm.getChecksReplaceRightIconUrl()" alt="" class="face-match-icon-image" />
+					<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_name_right', 'Name ->') }}</span>
 				</button>
 				<button
 					v-if="vm.isChecksNameConflict(vm.checksCurrentItem) && vm.canReplaceChecksFaceName(vm.checksCurrentItem, vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_name)"
@@ -93,7 +115,8 @@
 					:disabled="vm.checksLoading"
 					@click.prevent="vm.replaceChecksMetadataFaceName(vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_name)"
 				>
-					<img :src="vm.getChecksReplaceLeftIconUrl()" alt="" class="face-match-icon-image" />
+					<img v-if="vm.getChecksReplaceLeftIconUrl()" :src="vm.getChecksReplaceLeftIconUrl()" alt="" class="face-match-icon-image" />
+					<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_name_left', '<- Name') }}</span>
 				</button>
 				<button
 					v-if="vm.isChecksPositionDeviation(vm.checksCurrentItem) && vm.canReplaceChecksFacePosition(vm.checksCurrentItem, vm.checksCurrentItem.right_face_target, vm.checksCurrentItem.left_face)"
@@ -104,7 +127,8 @@
 					:disabled="vm.checksLoading"
 					@click.prevent="vm.replaceChecksMetadataFacePosition(vm.checksCurrentItem.right_face_target, vm.checksCurrentItem.left_face)"
 				>
-					<img :src="vm.getChecksPositionRightIconUrl()" alt="" class="face-match-icon-image" />
+					<img v-if="vm.getChecksPositionRightIconUrl()" :src="vm.getChecksPositionRightIconUrl()" alt="" class="face-match-icon-image" />
+					<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_position_right', 'Pos ->') }}</span>
 				</button>
 				<button
 					v-if="vm.isChecksPositionDeviation(vm.checksCurrentItem) && vm.canReplaceChecksFacePosition(vm.checksCurrentItem, vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_face)"
@@ -115,7 +139,8 @@
 					:disabled="vm.checksLoading"
 					@click.prevent="vm.replaceChecksMetadataFacePosition(vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_face)"
 				>
-					<img :src="vm.getChecksPositionLeftIconUrl()" alt="" class="face-match-icon-image" />
+					<img v-if="vm.getChecksPositionLeftIconUrl()" :src="vm.getChecksPositionLeftIconUrl()" alt="" class="face-match-icon-image" />
+					<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_position_left', '<- Pos') }}</span>
 				</button>
 			</div>
 			<div class="face-match-col">
@@ -124,21 +149,21 @@
 					{{ vm.getChecksDisplayName(vm.checksCurrentItem.left_name) }}
 				</div>
 				<div v-if="vm.getChecksImageUrl(vm.checksCurrentItem)" class="face-match-thumbnail-wrap">
+					<button
+						v-if="!vm.isChecksNameConflict(vm.checksCurrentItem) && vm.canDeleteChecksFace(vm.checksCurrentItem, vm.checksCurrentItem.left_face_target)"
+						type="button"
+						class="face-match-icon-button checks-delete-button checks-delete-button-right"
+						:title="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
+						:aria-label="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
+						:disabled="vm.checksLoading || vm.checksActionLocked"
+						@click.prevent="vm.deleteChecksMetadataFace(vm.checksCurrentItem.left_face_target)"
+					>
+						<span class="face-match-icon-stack">
+							<img :src="vm.getChecksDeleteFaceBaseIconUrl()" alt="" class="face-match-icon-image" />
+							<img :src="vm.getChecksDeleteFaceOverlayIconUrl()" alt="" class="face-match-icon-overlay" />
+						</span>
+					</button>
 					<div class="face-match-preview">
-						<button
-							v-if="!vm.isChecksNameConflict(vm.checksCurrentItem) && vm.canDeleteChecksFace(vm.checksCurrentItem, vm.checksCurrentItem.left_face_target)"
-							type="button"
-							class="face-match-icon-button checks-delete-button checks-delete-button-right"
-							:title="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
-							:aria-label="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
-							:disabled="vm.checksLoading || vm.checksActionLocked"
-							@click.prevent="vm.deleteChecksMetadataFace(vm.checksCurrentItem.left_face_target)"
-						>
-							<span class="face-match-icon-stack">
-								<img :src="vm.getChecksDeleteFaceBaseIconUrl()" alt="" class="face-match-icon-image" />
-								<img :src="vm.getChecksDeleteFaceOverlayIconUrl()" alt="" class="face-match-icon-overlay" />
-							</span>
-						</button>
 						<img
 							:src="vm.getChecksImageUrl(vm.checksCurrentItem)"
 							:alt="vm.$t('checks:image_alt', 'Check preview')"
@@ -177,21 +202,21 @@
 					{{ vm.getChecksDisplayName(vm.checksCurrentItem.right_name) }}
 				</div>
 				<div v-if="vm.getChecksImageUrl(vm.checksCurrentItem)" class="face-match-thumbnail-wrap">
+					<button
+						v-if="!vm.isChecksNameConflict(vm.checksCurrentItem) && vm.canDeleteChecksFace(vm.checksCurrentItem, vm.checksCurrentItem.right_face_target)"
+						type="button"
+						class="face-match-icon-button checks-delete-button checks-delete-button-left"
+						:title="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
+						:aria-label="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
+						:disabled="vm.checksLoading || vm.checksActionLocked"
+						@click.prevent="vm.deleteChecksMetadataFace(vm.checksCurrentItem.right_face_target)"
+					>
+						<span class="face-match-icon-stack">
+							<img :src="vm.getChecksDeleteFaceBaseIconUrl()" alt="" class="face-match-icon-image" />
+							<img :src="vm.getChecksDeleteFaceOverlayIconUrl()" alt="" class="face-match-icon-overlay" />
+						</span>
+					</button>
 					<div class="face-match-preview">
-						<button
-							v-if="!vm.isChecksNameConflict(vm.checksCurrentItem) && vm.canDeleteChecksFace(vm.checksCurrentItem, vm.checksCurrentItem.right_face_target)"
-							type="button"
-							class="face-match-icon-button checks-delete-button checks-delete-button-left"
-							:title="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
-							:aria-label="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
-							:disabled="vm.checksLoading || vm.checksActionLocked"
-							@click.prevent="vm.deleteChecksMetadataFace(vm.checksCurrentItem.right_face_target)"
-						>
-							<span class="face-match-icon-stack">
-								<img :src="vm.getChecksDeleteFaceBaseIconUrl()" alt="" class="face-match-icon-image" />
-								<img :src="vm.getChecksDeleteFaceOverlayIconUrl()" alt="" class="face-match-icon-overlay" />
-							</span>
-						</button>
 						<img
 							:src="vm.getChecksImageUrl(vm.checksCurrentItem)"
 							:alt="vm.$t('checks:image_alt', 'Check preview')"
@@ -239,8 +264,13 @@
 </template>
 
 <script>
+import RatioProgress from '../components/RatioProgress.vue';
+
 export default {
 	name: 'ChecksView',
+	components: {
+		RatioProgress,
+	},
 	props: {
 		vm: {
 			type: Object,

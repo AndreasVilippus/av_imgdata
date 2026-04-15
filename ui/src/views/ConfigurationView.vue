@@ -119,18 +119,6 @@
 			</section>
 
 			<section class="config-card">
-				<div class="sm-section-title">{{ $t('config:section_review', 'Review') }}</div>
-				<div class="config-card-desc">{{ $t('config:section_review_desc', 'Select optional support behavior for the checks view.') }}</div>
-
-				<div class="config-form-grid">
-					<label class="config-checkbox">
-						<input v-model="configModel.review.OPTIONS.DUPLICATE_FACE_SUGGESTIONS" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_review_duplicate_face_suggestions', 'Suggest likely valid duplicate face markings') }}</span>
-					</label>
-				</div>
-			</section>
-
-			<section class="config-card">
 				<div class="sm-section-title">{{ $t('config:section_face_match', 'Face matching') }}</div>
 				<div class="config-card-desc">{{ $t('config:section_face_match_desc', 'Configure where file-face searches should look for matching names.') }}</div>
 
@@ -142,6 +130,28 @@
 							<option value="photos">{{ $t('config:option_face_match_scope_photos', 'only in Photos') }}</option>
 							<option value="metadata">{{ $t('config:option_face_match_scope_metadata', 'only in metadata') }}</option>
 						</select>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $t('config:label_face_match_person_sort_order', 'Person sort order for face matching') }}</span>
+						<select v-model="configModel.face_match.PERSON_SORT_ORDER" class="config-select" :disabled="saving">
+							<option value="id_desc">{{ $t('config:option_face_match_person_sort_id_desc', 'ID descending') }}</option>
+							<option value="id_asc">{{ $t('config:option_face_match_person_sort_id_asc', 'ID ascending') }}</option>
+							<option value="none">{{ $t('config:option_face_match_person_sort_none', 'No sorting') }}</option>
+						</select>
+					</label>
+
+				</div>
+			</section>
+
+			<section class="config-card">
+				<div class="sm-section-title">{{ $t('config:section_review', 'Review') }}</div>
+				<div class="config-card-desc">{{ $t('config:section_review_desc', 'Select optional support behavior for the checks view.') }}</div>
+
+				<div class="config-form-grid">
+					<label class="config-checkbox">
+						<input v-model="configModel.review.OPTIONS.DUPLICATE_FACE_SUGGESTIONS" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_review_duplicate_face_suggestions', 'Suggest likely valid duplicate face markings') }}</span>
 					</label>
 				</div>
 			</section>
@@ -187,7 +197,9 @@ export default {
 					USE_EXIFTOOL_FOR_SIDECARS: false,
 					PREFER_EXIFTOOL_FOR_CONTEXT: false,
 					PATHEXIFTOOL: 'exiftool',
-					IMAGE_EXTENSIONS_NATIVE_ONLY: false,
+					USE_MANUAL_PATHEXIFTOOL: false,
+					MANUAL_PATHEXIFTOOL: '',
+					IMAGE_EXTENSIONS_NATIVE_ONLY: true,
 					IMAGE_EXTENSIONS: ['jpg', 'jpeg', 'tif', 'tiff', 'png', 'heic', 'heif', 'dng', 'cr2', 'cr3', 'nef', 'nrw', 'arw', 'orf', 'rw2', 'raf', 'pef'],
 					EXIFTOOL_IMAGE_EXTENSIONS: [],
 					SIDECAR_LOOKUP_VARIANTS: ['same_dir_stem', 'same_dir_filename', 'xmp_dir_stem', 'xmp_dir_filename'],
@@ -217,6 +229,7 @@ export default {
 				},
 				face_match: {
 					FILE_MATCH_SOURCE_SCOPE: 'both',
+					PERSON_SORT_ORDER: 'id_desc',
 				},
 			};
 		},
@@ -303,6 +316,8 @@ export default {
 					USE_EXIFTOOL_FOR_SIDECARS: Boolean(files.USE_EXIFTOOL_FOR_SIDECARS ?? defaults.files.USE_EXIFTOOL_FOR_SIDECARS),
 					PREFER_EXIFTOOL_FOR_CONTEXT: Boolean(files.PREFER_EXIFTOOL_FOR_CONTEXT ?? defaults.files.PREFER_EXIFTOOL_FOR_CONTEXT),
 					PATHEXIFTOOL: String(files.PATHEXIFTOOL || defaults.files.PATHEXIFTOOL),
+					USE_MANUAL_PATHEXIFTOOL: Boolean(files.USE_MANUAL_PATHEXIFTOOL ?? defaults.files.USE_MANUAL_PATHEXIFTOOL),
+					MANUAL_PATHEXIFTOOL: String(files.MANUAL_PATHEXIFTOOL || defaults.files.MANUAL_PATHEXIFTOOL),
 					IMAGE_EXTENSIONS_NATIVE_ONLY: Boolean(files.IMAGE_EXTENSIONS_NATIVE_ONLY ?? defaults.files.IMAGE_EXTENSIONS_NATIVE_ONLY),
 					IMAGE_EXTENSIONS: imageExtensions,
 					EXIFTOOL_IMAGE_EXTENSIONS: exiftoolImageExtensions,
@@ -347,6 +362,9 @@ export default {
 					FILE_MATCH_SOURCE_SCOPE: ['both', 'photos', 'metadata'].includes(String(faceMatch.FILE_MATCH_SOURCE_SCOPE || '').trim().toLowerCase())
 						? String(faceMatch.FILE_MATCH_SOURCE_SCOPE || '').trim().toLowerCase()
 						: defaults.face_match.FILE_MATCH_SOURCE_SCOPE,
+					PERSON_SORT_ORDER: ['id_desc', 'id_asc', 'none'].includes(String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase())
+						? String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase()
+						: defaults.face_match.PERSON_SORT_ORDER,
 				},
 			};
 		},
@@ -357,6 +375,8 @@ export default {
 				USE_EXIFTOOL_FOR_SIDECARS: this.configModel.files.USE_EXIFTOOL_FOR_SIDECARS,
 				PREFER_EXIFTOOL_FOR_CONTEXT: this.configModel.files.PREFER_EXIFTOOL_FOR_CONTEXT,
 				PATHEXIFTOOL: this.configModel.files.PATHEXIFTOOL,
+				USE_MANUAL_PATHEXIFTOOL: this.configModel.files.USE_MANUAL_PATHEXIFTOOL,
+				MANUAL_PATHEXIFTOOL: this.configModel.files.MANUAL_PATHEXIFTOOL,
 				IMAGE_EXTENSIONS_NATIVE_ONLY: this.configModel.files.IMAGE_EXTENSIONS_NATIVE_ONLY,
 				EXIFTOOL_IMAGE_EXTENSIONS: this.configModel.files.EXIFTOOL_IMAGE_EXTENSIONS,
 			};

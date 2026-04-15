@@ -20,7 +20,7 @@ class ExifToolHandler:
     def configuredPath(self) -> str:
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
-        return str(files_config.get("PATHEXIFTOOL", "exiftool") or "exiftool").strip() or "exiftool"
+        return ExifToolService._configuredPathFromFilesConfig(files_config)
 
     def resolveExecutable(self) -> Tuple[str, str]:
         return ExifToolService._resolveExecutable(self.configuredPath())
@@ -126,13 +126,26 @@ class ExifToolHandler:
             return None
 
     def writeXmp(self, target_path: str, xmp_content: str) -> bool:
+        return bool(self.writeXmpDetailed(target_path, xmp_content).get("updated"))
+
+    def writeXmpDetailed(self, target_path: str, xmp_content: str) -> Dict[str, Any]:
         executable_path, _ = self.resolveExecutable()
         if not executable_path or not target_path or not xmp_content:
-            return False
+            return {
+                "updated": False,
+                "error": "invalid_write_request",
+                "target_path": target_path,
+                "executable_path": executable_path,
+            }
 
         packet_content = str(xmp_content or "").strip()
         if not packet_content:
-            return False
+            return {
+                "updated": False,
+                "error": "empty_xmp_content",
+                "target_path": target_path,
+                "executable_path": executable_path,
+            }
         if "<?xpacket" not in packet_content:
             packet_content = (
                 "<?xpacket begin='\ufeff' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
@@ -152,21 +165,51 @@ class ExifToolHandler:
                 check=False,
             )
         except (FileNotFoundError, OSError):
-            return False
+            return {
+                "updated": False,
+                "error": "exiftool_execution_failed",
+                "target_path": target_path,
+                "executable_path": executable_path,
+            }
         finally:
             if temp_path:
                 Path(temp_path).unlink(missing_ok=True)
 
-        if result.returncode != 0:
-            return False
-
         stdout = str(result.stdout or "")
         stderr = str(result.stderr or "")
         combined_output = f"{stdout}\n{stderr}".lower()
+        details = {
+            "target_path": target_path,
+            "executable_path": executable_path,
+            "returncode": int(result.returncode),
+            "stdout": stdout.strip(),
+            "stderr": stderr.strip(),
+        }
+
+        if result.returncode != 0:
+            return {
+                "updated": False,
+                "error": "exiftool_write_failed",
+                **details,
+            }
         if "0 image files updated" in combined_output or "0 image files created" in combined_output:
-            return False
+            return {
+                "updated": False,
+                "error": "no_image_files_updated",
+                **details,
+            }
         if "1 image files updated" in combined_output or "1 image files created" in combined_output:
-            return True
+            return {
+                "updated": True,
+                **details,
+            }
         if "1 image files unchanged" in combined_output:
-            return True
-        return True
+            return {
+                "updated": True,
+                "unchanged": True,
+                **details,
+            }
+        return {
+            "updated": True,
+            **details,
+        }

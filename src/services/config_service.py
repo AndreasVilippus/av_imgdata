@@ -23,6 +23,7 @@ class ConfigService:
             },
             "face_match": {
                 "FILE_MATCH_SOURCE_SCOPE": "both",
+                "PERSON_SORT_ORDER": "id_desc",
             },
             "files": {
                 "USE_EXIFTOOL": False,
@@ -30,7 +31,9 @@ class ConfigService:
                 "USE_EXIFTOOL_FOR_SIDECARS": False,
                 "PREFER_EXIFTOOL_FOR_CONTEXT": False,
                 "PATHEXIFTOOL": "exiftool",
-                "IMAGE_EXTENSIONS_NATIVE_ONLY": False,
+                "USE_MANUAL_PATHEXIFTOOL": False,
+                "MANUAL_PATHEXIFTOOL": "",
+                "IMAGE_EXTENSIONS_NATIVE_ONLY": True,
                 "IMAGE_EXTENSIONS": ["jpg", "jpeg", "tif", "tiff", "png", "heic", "heif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "rw2", "raf", "pef"],
                 "EXIFTOOL_IMAGE_EXTENSIONS": [],
                 "SIDECAR_LOOKUP_VARIANTS": [
