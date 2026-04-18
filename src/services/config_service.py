@@ -54,8 +54,11 @@ class ConfigService:
                 "CHECKS": {
                     "DUPLICATE_FACES": True,
                     "POSITION_DEVIATIONS": True,
+                    "POSITION_DEVIATIONS_INCLUDE_PHOTOS": True,
                     "DIMENSION_ISSUES": True,
                     "NAME_CONFLICTS": True,
+                    "NAME_CONFLICTS_INCLUDE_PHOTOS": True,
+                    "SINGLE_SOURCE_OF_TRUTH": "",
                 },
             },
             "review": {

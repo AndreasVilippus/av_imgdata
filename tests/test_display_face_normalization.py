@@ -281,6 +281,155 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(result["face_id"], 107256)
         self.assertEqual(captured["person_id"], 91)
 
+    def test_cleanup_targets_exclude_photos(self):
+        self.assertEqual(
+            self.service._normalizeCleanupTargets(["PHOTOS", "ACD", "MICROSOFT", "MWG_REGIONS"]),
+            ["ACD", "MICROSOFT", "MWG_REGIONS"],
+        )
+
+    def test_cleanup_name_normalization_never_touches_photos_persons(self):
+        self.service.name_mappings.readNameMappings = lambda: [
+            {"source_name": "Person Legacy", "target_name": "Person Target"},
+        ]
+
+        calls = {"photos_list": 0, "metadata_normalize": 0}
+
+        def fail_if_photos_listed(**kwargs):
+            calls["photos_list"] += 1
+            raise AssertionError("Photos cleanup path must not run")
+
+        self.service.photos.listFotoTeamPersonKnown = fail_if_photos_listed
+
+        def track_metadata_normalization(**kwargs):
+            calls["metadata_normalize"] += 1
+            return {"updated": False, "updated_faces": 0, "formats": {}}
+
+        self.service.normalizeMetadataFaceNamesFromMappings = track_metadata_normalization
+        self.service.exiftool_handler.isAvailable = lambda: True
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.files.listImageFiles = lambda base_path: []
+
+        self.service._runCleanupNameNormalization(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            action="normalize_names",
+            targets=["PHOTOS"],
+        )
+
+        progress = self.service.getCleanupProgress("user", "normalize_names")
+        self.assertFalse(progress.get("running"))
+        self.assertTrue(progress.get("finished"))
+        self.assertEqual(progress.get("targets"), [])
+        self.assertEqual(calls["photos_list"], 0)
+        self.assertEqual(calls["metadata_normalize"], 0)
+
+    def test_face_signature_keeps_photos_face_id(self):
+        photo_face = self.service._metadataFaceFromPhotoFace(
+            {
+                "face_id": 1234,
+                "person_id": 77,
+                "face_name": "Person Alpha",
+                "bbox": {
+                    "top_left": {"x": 0.1, "y": 0.2},
+                    "bottom_right": {"x": 0.3, "y": 0.4},
+                },
+            }
+        )
+
+        signature = self.service._faceSignature(photo_face)
+
+        self.assertEqual(signature["face_id"], 1234)
+        self.assertEqual(signature["person_id"], 77)
+
+    def test_get_cleanup_progress_clears_stale_running_state_without_worker(self):
+        written = {}
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+            "action": "normalize_names",
+            "running": True,
+            "finished": False,
+            "targets": ["ACD"],
+        }
+        self.service.file_analysis.writeRuntimeState = lambda state_type, state_key, payload: written.update({
+            "state_type": state_type,
+            "state_key": state_key,
+            "payload": dict(payload),
+        }) or True
+
+        progress = self.service.getCleanupProgress("user", "normalize_names")
+
+        self.assertFalse(progress.get("running"))
+        self.assertTrue(progress.get("finished"))
+        self.assertEqual(progress.get("message"), "Last cleanup job is no longer running.")
+        self.assertEqual(written.get("state_type"), "cleanup_progress")
+        self.assertEqual(written.get("state_key"), "user_normalize_names")
+        self.assertFalse(written.get("payload", {}).get("running"))
+
+    def test_replace_checks_face_name_reassigns_photos_face_using_name_mapping(self):
+        captured = {}
+
+        def fake_find_known_person(**kwargs):
+            captured["lookup_name"] = kwargs["name"]
+            return {"id": 91, "name": "Person Target"}
+
+        def fake_assign(**kwargs):
+            captured["assign"] = kwargs
+            return {"success": True}
+
+        self.service.name_mappings.findNameMapping = lambda name: {"source_name": "Alias Target", "target_name": "Person Target"} if name == "Alias Target" else None
+        self.service.photos.findKnownPersonByName = fake_find_known_person
+        self.service.photos.assignFaceToPerson = fake_assign
+
+        result = self.service.replaceChecksFaceName(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            image_path="/volume1/photo/tests/test.jpg",
+            face_data={
+                "face_id": 555,
+                "source": "photos",
+                "source_format": "PHOTOS",
+                "name": "Person Legacy",
+                "x": 0.5,
+                "y": 0.5,
+                "w": 0.2,
+                "h": 0.2,
+            },
+            new_name="Alias Target",
+        )
+
+        self.assertTrue(result["updated"])
+        self.assertEqual(captured["lookup_name"], "Person Target")
+        self.assertEqual(captured["assign"]["face_id"], 555)
+        self.assertEqual(captured["assign"]["person_id"], 91)
+        self.assertEqual(captured["assign"]["person_name"], "Person Target")
+
+    def test_replace_checks_face_name_reports_missing_target_person_for_photos(self):
+        self.service.name_mappings.findNameMapping = lambda name: None
+        self.service.photos.findKnownPersonByName = lambda **kwargs: None
+
+        result = self.service.replaceChecksFaceName(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            image_path="/volume1/photo/tests/test.jpg",
+            face_data={
+                "face_id": 555,
+                "source": "photos",
+                "source_format": "PHOTOS",
+                "name": "Person Legacy",
+                "x": 0.5,
+                "y": 0.5,
+                "w": 0.2,
+                "h": 0.2,
+            },
+            new_name="Missing Person",
+        )
+
+        self.assertFalse(result["updated"])
+        self.assertEqual(result["warning"], "checks:warning_target_person_not_found")
+        self.assertEqual(result["details"]["requested_name"], "Missing Person")
+
     def test_orientation_risk_fallback_prefers_non_risky_side(self):
         risky_face = MetadataFace.from_center_box(
             name="Person Alpha",
@@ -378,6 +527,50 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         self.assertEqual(item["left_state"], "alert")
         self.assertEqual(item["right_state"], "alert")
+
+    def test_position_deviation_review_item_prefers_configured_single_source_of_truth(self):
+        embedded_face = MetadataFace.from_center_box(
+            name="Person Alpha",
+            x=0.471405,
+            y=0.146553,
+            w=0.309028,
+            h=0.280852,
+            source="embedded_xmp_exiftool",
+            source_format="ACD",
+        )
+        sidecar_face = MetadataFace.from_center_box(
+            name="Person Alpha",
+            x=0.845282,
+            y=0.46201,
+            w=0.196691,
+            h=0.261438,
+            source="xmp_file",
+            source_format="MWG_REGIONS",
+        )
+        payload = MetadataPayload(image_path="dev/test.jpg", faces=[embedded_face, sidecar_face])
+        entry = self.service._buildCheckEntry(
+            review_type="position_deviations",
+            image_path="dev/test.jpg",
+            face_name="Person Alpha",
+            left_face=embedded_face,
+            right_face=sidecar_face,
+        )
+        self.service.config.readMergedConfig = lambda: {
+            "analysis": {
+                "CHECKS": {
+                    "SINGLE_SOURCE_OF_TRUTH": "metadata:mwg_regions:sidecar",
+                },
+            },
+        }
+
+        with patch.object(self.service, "_readImageMetadata", return_value=payload):
+            item = self.service._buildPositionDeviationReviewItem(
+                image_path="dev/test.jpg",
+                entry=entry,
+            )
+
+        self.assertEqual(item["left_state"], "alert")
+        self.assertEqual(item["right_state"], "suggested")
 
     def test_normalize_metadata_face_names_from_mappings_updates_selected_formats(self):
         payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
@@ -509,6 +702,128 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             left_face=larger_face,
             right_face=smaller_face,
             faces=[larger_face, smaller_face],
+        )
+
+        self.assertEqual((left_state, right_state), ("suggested", "alert"))
+
+    def test_duplicate_review_prefers_configured_single_source_of_truth(self):
+        embedded_face = MetadataFace.from_top_left_box(
+            name="Person Target",
+            left=0.2,
+            top=0.2,
+            w=0.3,
+            h=0.3,
+            source="embedded_xmp_exiftool",
+            source_format="ACD",
+        )
+        sidecar_face = MetadataFace.from_top_left_box(
+            name="Person Target",
+            left=0.25,
+            top=0.25,
+            w=0.1,
+            h=0.1,
+            source="xmp_file",
+            source_format="MICROSOFT",
+        )
+        payload = MetadataPayload(image_path="dev/test.jpg", faces=[embedded_face, sidecar_face])
+        entry = self.service._buildCheckEntry(
+            review_type="duplicate_faces",
+            image_path="dev/test.jpg",
+            face_name="Person Target",
+            left_face=embedded_face,
+            right_face=sidecar_face,
+        )
+        self.service.config.readMergedConfig = lambda: {
+            "analysis": {
+                "CHECKS": {
+                    "SINGLE_SOURCE_OF_TRUTH": "metadata:microsoft:sidecar",
+                },
+            },
+        }
+
+        with patch.object(self.service, "_readImageMetadata", return_value=payload):
+            item = self.service.getChecksReviewItem(
+                entry=entry,
+                user_key="user",
+                cookies={},
+                base_url="",
+                shared_folder="",
+            )
+
+        self.assertEqual(item["left_state"], "alert")
+        self.assertEqual(item["right_state"], "suggested")
+
+    def test_name_conflict_prefers_configured_single_source_of_truth_over_mapping(self):
+        photos_face = MetadataFace.from_center_box(
+            name="Person Alpha",
+            x=0.45,
+            y=0.45,
+            w=0.2,
+            h=0.2,
+            source="photos",
+            source_format="PHOTOS",
+        )
+        embedded_face = MetadataFace.from_center_box(
+            name="Person Beta",
+            x=0.45,
+            y=0.45,
+            w=0.2,
+            h=0.2,
+            source="embedded_xmp_exiftool",
+            source_format="ACD",
+        )
+        self.service.name_mappings.findNameMapping = lambda name: (
+            {"target_name": "Person Alpha"} if name == "Person Beta" else None
+        )
+        self.service.config.readMergedConfig = lambda: {
+            "analysis": {
+                "CHECKS": {
+                    "SINGLE_SOURCE_OF_TRUTH": "photos",
+                },
+            },
+        }
+
+        left_state, right_state = self.service._getNameConflictSuggestionStates(
+            "Person Alpha",
+            "Person Beta",
+            left_face=photos_face,
+            right_face=embedded_face,
+        )
+
+        self.assertEqual((left_state, right_state), ("suggested", "alert"))
+
+    def test_single_source_of_truth_can_match_specific_metadata_format_and_any_location(self):
+        embedded_microsoft = MetadataFace.from_center_box(
+            name="Person Alpha",
+            x=0.4,
+            y=0.4,
+            w=0.2,
+            h=0.2,
+            source="embedded_xmp_exiftool",
+            source_format="MICROSOFT",
+        )
+        sidecar_acd = MetadataFace.from_center_box(
+            name="Person Beta",
+            x=0.4,
+            y=0.4,
+            w=0.2,
+            h=0.2,
+            source="xmp_file",
+            source_format="ACD",
+        )
+        self.service.config.readMergedConfig = lambda: {
+            "analysis": {
+                "CHECKS": {
+                    "SINGLE_SOURCE_OF_TRUTH": "metadata:microsoft:any",
+                },
+            },
+        }
+
+        left_state, right_state = self.service._getNameConflictSuggestionStates(
+            "Person Alpha",
+            "Person Beta",
+            left_face=embedded_microsoft,
+            right_face=sidecar_acd,
         )
 
         self.assertEqual((left_state, right_state), ("suggested", "alert"))

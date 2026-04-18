@@ -107,6 +107,11 @@
 					</label>
 
 					<label class="config-checkbox">
+						<input v-model="configModel.analysis.CHECKS.POSITION_DEVIATIONS_INCLUDE_PHOTOS" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_check_position_deviations_include_photos', 'Include Photos face positions') }}</span>
+					</label>
+
+					<label class="config-checkbox">
 						<input v-model="configModel.analysis.CHECKS.DIMENSION_ISSUES" type="checkbox" :disabled="saving" />
 						<span>{{ $t('config:label_check_dimension_issues', 'Check for dimension issues') }}</span>
 					</label>
@@ -114,6 +119,26 @@
 					<label class="config-checkbox">
 						<input v-model="configModel.analysis.CHECKS.NAME_CONFLICTS" type="checkbox" :disabled="saving" />
 						<span>{{ $t('config:label_check_name_conflicts', 'Check for name conflicts') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input v-model="configModel.analysis.CHECKS.NAME_CONFLICTS_INCLUDE_PHOTOS" type="checkbox" :disabled="saving" />
+						<span>{{ $t('config:label_check_name_conflicts_include_photos', 'Include Photos person names') }}</span>
+					</label>
+
+					<label
+						class="config-field"
+						:title="$t('config:tooltip_check_single_source_of_truth', 'Automatically the value from this source is suggested for corrections.')"
+					>
+						<span class="config-field-label">{{ $t('config:label_check_single_source_of_truth', 'Single Source of Truth for checks') }}</span>
+						<select v-model="configModel.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH" class="config-select" :disabled="saving">
+							<option value="">{{ $t('config:option_check_single_source_of_truth_none', 'None') }}</option>
+							<option
+								v-for="option in checksSingleSourceOptions"
+								:key="option.value"
+								:value="option.value"
+							>{{ option.label }}</option>
+						</select>
 					</label>
 				</div>
 			</section>
@@ -181,6 +206,30 @@ export default {
 				{ value: 'xmp_dir_filename', label: this.$t('config:label_sidecar_variant_xmp_dir_filename', 'xmp subfolder: xmp/image.jpg.xmp') },
 			];
 		},
+		checksSingleSourceOptions() {
+			const options = [
+				{ value: 'photos', label: this.$t('config:option_check_single_source_of_truth_photos', 'Photos') },
+			];
+			const formatOptions = [
+				{ value: 'acd', label: 'ACD' },
+				{ value: 'microsoft', label: 'Microsoft' },
+				{ value: 'mwg_regions', label: 'MWG_REGIONS' },
+			];
+			const storageOptions = [
+				{ value: 'any', label: this.$t('config:option_check_single_source_location_any', 'egal') },
+				{ value: 'embedded', label: this.$t('config:option_check_single_source_location_embedded', 'eingebettet') },
+				{ value: 'sidecar', label: this.$t('config:option_check_single_source_location_sidecar', 'Sidecar') },
+			];
+			for (const format of formatOptions) {
+				for (const storage of storageOptions) {
+					options.push({
+						value: `metadata:${format.value}:${storage.value}`,
+						label: `${format.label} | ${storage.label}`,
+					});
+				}
+			}
+			return options;
+		},
 	},
 	mounted() {
 		this.loadConfig();
@@ -215,8 +264,11 @@ export default {
 					CHECKS: {
 						DUPLICATE_FACES: true,
 						POSITION_DEVIATIONS: true,
+						POSITION_DEVIATIONS_INCLUDE_PHOTOS: true,
 						DIMENSION_ISSUES: true,
 						NAME_CONFLICTS: true,
+						NAME_CONFLICTS_INCLUDE_PHOTOS: true,
+						SINGLE_SOURCE_OF_TRUTH: '',
 					},
 				},
 				review: {
@@ -254,6 +306,11 @@ export default {
 				.map((entry) => String(entry || '').trim())
 				.filter((entry, index, arr) => entry && allowed.includes(entry) && arr.indexOf(entry) === index);
 			return normalized.length ? normalized : [...fallback];
+		},
+		normalizeChecksSingleSourceOfTruth(value, fallback = '') {
+			const normalized = String(value || '').trim().toLowerCase();
+			const allowed = this.checksSingleSourceOptions.map((option) => option.value);
+			return allowed.includes(normalized) ? normalized : fallback;
 		},
 		formatImageExtensions(value) {
 			return this.normalizeImageExtensions(value).join(', ');
@@ -338,8 +395,14 @@ export default {
 						...checks,
 						DUPLICATE_FACES: Boolean(checks.DUPLICATE_FACES ?? defaults.analysis.CHECKS.DUPLICATE_FACES),
 						POSITION_DEVIATIONS: Boolean(checks.POSITION_DEVIATIONS ?? defaults.analysis.CHECKS.POSITION_DEVIATIONS),
+						POSITION_DEVIATIONS_INCLUDE_PHOTOS: Boolean(checks.POSITION_DEVIATIONS_INCLUDE_PHOTOS ?? defaults.analysis.CHECKS.POSITION_DEVIATIONS_INCLUDE_PHOTOS),
 						DIMENSION_ISSUES: Boolean(checks.DIMENSION_ISSUES ?? defaults.analysis.CHECKS.DIMENSION_ISSUES),
 						NAME_CONFLICTS: Boolean(checks.NAME_CONFLICTS ?? defaults.analysis.CHECKS.NAME_CONFLICTS),
+						NAME_CONFLICTS_INCLUDE_PHOTOS: Boolean(checks.NAME_CONFLICTS_INCLUDE_PHOTOS ?? defaults.analysis.CHECKS.NAME_CONFLICTS_INCLUDE_PHOTOS),
+						SINGLE_SOURCE_OF_TRUTH: this.normalizeChecksSingleSourceOfTruth(
+							checks.SINGLE_SOURCE_OF_TRUTH,
+							defaults.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH
+						),
 					},
 				},
 				review: {

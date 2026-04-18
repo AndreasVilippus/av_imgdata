@@ -185,7 +185,7 @@
 			</div>
 		</section>
 		<div v-if="vm.nameMappingConfirm.visible" class="sm-modal-backdrop">
-			<div class="sm-modal" role="dialog" aria-modal="true" aria-labelledby="name-mapping-confirm-title">
+			<div class="sm-modal sm-modal-centered" role="dialog" aria-modal="true" aria-labelledby="name-mapping-confirm-title">
 				<div id="name-mapping-confirm-title" class="sm-modal-title">{{ vm.$t('face_match:modal_mapping_title', 'Save name mapping') }}</div>
 				<div class="sm-modal-text">{{ vm.nameMappingConfirm.message }}</div>
 				<div class="sm-modal-actions">

@@ -886,6 +886,9 @@ async def checks_item(request: Request):
                 entry=entry,
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
             ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
@@ -912,6 +915,9 @@ async def checks_item(request: Request):
                 IMGDATA.refreshChecksFindingEntriesForImage(
                     check_type=str(entry.get("review_type") or ""),
                     image_path=str(entry.get("image_path") or ""),
+                    user_key=session_ctx["user_key"],
+                    cookies=session_ctx["cookies"],
+                    base_url=session_ctx["base_url"],
                 )
                 if (
                     str(entry.get("review_type") or "").strip()
@@ -1050,6 +1056,16 @@ async def checks_delete_metadata_face(request: Request):
             findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
                 check_type=review_type,
                 image_path=image_path,
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
+            IMGDATA.refreshChecksScanProgressForImage(
+                user_key=session_ctx["user_key"],
+                check_type=review_type,
+                image_path=image_path,
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
             )
     except Exception as exc:
         return JSONResponse({
@@ -1092,7 +1108,10 @@ async def checks_replace_metadata_face_name(request: Request):
         })
 
     try:
-        result = IMGDATA.replaceMetadataFaceName(
+        result = IMGDATA.replaceChecksFaceName(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
             image_path=image_path,
             face_data=face,
             new_name=new_name,
@@ -1108,6 +1127,16 @@ async def checks_replace_metadata_face_name(request: Request):
             findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
                 check_type="name_conflicts",
                 image_path=image_path,
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
+            IMGDATA.refreshChecksScanProgressForImage(
+                user_key=session_ctx["user_key"],
+                check_type="name_conflicts",
+                image_path=image_path,
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
             )
     except Exception as exc:
         return JSONResponse({
@@ -1160,6 +1189,16 @@ async def checks_replace_metadata_face_position(request: Request):
             findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
                 check_type=review_type,
                 image_path=image_path,
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
+            IMGDATA.refreshChecksScanProgressForImage(
+                user_key=session_ctx["user_key"],
+                check_type=review_type,
+                image_path=image_path,
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
             )
     except Exception as exc:
         return JSONResponse({
@@ -1167,6 +1206,84 @@ async def checks_replace_metadata_face_position(request: Request):
             "error": {
                 "code": 500,
                 "message": "checks_replace_metadata_face_position_failed",
+                "details": str(exc),
+            },
+        })
+
+    return JSONResponse({
+        "success": True,
+        "data": {
+            **result,
+            "findings_update": findings_update,
+        },
+    })
+
+
+@router.post("/checks_assign_face_person")
+async def checks_assign_face_person(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+
+    body = await _read_request_body(request)
+    image_path = str(body.get("image_path") or "").strip()
+    face = body.get("face")
+    review_type = str(body.get("review_type") or "").strip().lower()
+    person_name = str(body.get("person_name") or "").strip()
+    person_id = body.get("person_id")
+    if not image_path or not isinstance(face, dict) or not person_name:
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_checks_assign_face_person_request",
+            },
+        })
+    try:
+        person_id = int(person_id)
+    except Exception:
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_person_id",
+            },
+        })
+
+    try:
+        result = IMGDATA.assignChecksFaceToKnownPerson(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+            image_path=image_path,
+            face_data=face,
+            person_id=person_id,
+            person_name=person_name,
+        )
+        findings_update = None
+        if result.get("updated") and review_type:
+            findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
+                check_type=review_type,
+                image_path=image_path,
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
+            IMGDATA.refreshChecksScanProgressForImage(
+                user_key=session_ctx["user_key"],
+                check_type=review_type,
+                image_path=image_path,
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return _session_exception_response(exc, bootstrap_message="checks_assign_face_person_bootstrap_required")
+    except Exception as exc:
+        return JSONResponse({
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "checks_assign_face_person_failed",
                 "details": str(exc),
             },
         })

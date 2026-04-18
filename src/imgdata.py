@@ -863,7 +863,8 @@ class ImgDataService:
 
     @staticmethod
     def _normalizeCleanupTargets(targets: Any) -> List[str]:
-        allowed = {"PHOTOS", "ACD", "MICROSOFT", "MWG_REGIONS"}
+        # Cleanup name normalization must never rewrite or merge Photos persons.
+        allowed = {"ACD", "MICROSOFT", "MWG_REGIONS"}
         normalized: List[str] = []
         for item in list(targets or []):
             target = str(item or "").strip().upper()
@@ -881,7 +882,8 @@ class ImgDataService:
         current["action"] = normalized_action
         current["targets"] = self._normalizeCleanupTargets(current.get("targets"))
         worker = self._cleanup_threads.get(self._cleanupStateKey(user_key, normalized_action))
-        if current.get("running") and worker is not None and not worker.is_alive():
+        worker_alive = worker.is_alive() if worker is not None else False
+        if current.get("running") and not worker_alive:
             current["running"] = False
             current["finished"] = True
             if not current.get("message"):
@@ -968,6 +970,11 @@ class ImgDataService:
         image_path: str,
         review_type: str,
         analysis: Optional[Dict[str, Any]] = None,
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: str = "",
+        shared_folder: str = "",
+        photo_faces: Optional[List[MetadataFace]] = None,
     ) -> List[Dict[str, Any]]:
         normalized_type = str(review_type or "").strip().lower()
         if normalized_type == "dimension_issues":
@@ -976,9 +983,27 @@ class ImgDataService:
         if normalized_type == "duplicate_faces":
             return self._buildDuplicateFaceReviewEntries(image_path, analysis)
         if normalized_type == "position_deviations":
-            return self._buildPositionDeviationReviewEntries(image_path, analysis)
+            comparison_faces = photo_faces
+            if comparison_faces is None and self._configuredAnalysisChecks().get("POSITION_DEVIATIONS_INCLUDE_PHOTOS"):
+                comparison_faces = self._loadPhotoFacesForImage(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                    image_path=image_path,
+                )
+            return self._buildPositionDeviationReviewEntries(image_path, analysis, comparison_faces)
         if normalized_type == "name_conflicts":
-            return self._buildNameConflictReviewEntries(image_path, analysis)
+            comparison_faces = photo_faces
+            if comparison_faces is None and self._configuredAnalysisChecks().get("NAME_CONFLICTS_INCLUDE_PHOTOS"):
+                comparison_faces = self._loadPhotoFacesForImage(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                    image_path=image_path,
+                )
+            return self._buildNameConflictReviewEntries(image_path, analysis, comparison_faces)
         return []
 
     def _writeChecksFindings(
@@ -1020,7 +1045,15 @@ class ImgDataService:
             "entries": entries,
         }
 
-    def refreshChecksFindingEntries(self, *, check_type: str) -> Dict[str, Any]:
+    def refreshChecksFindingEntries(
+        self,
+        *,
+        check_type: str,
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: str = "",
+        shared_folder: str = "",
+    ) -> Dict[str, Any]:
         normalized_type = self._normalizeChecksType(check_type)
         findings = self.file_analysis.readCheckFindings(normalized_type)
         if not isinstance(findings, dict) or not isinstance(findings.get("entries"), list):
@@ -1048,6 +1081,10 @@ class ImgDataService:
                 self._buildCheckEntriesForType(
                     image_path=image_path,
                     review_type=normalized_type,
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
                 )
             )
 
@@ -1061,7 +1098,16 @@ class ImgDataService:
         )
         return self.getChecksFindingEntries(check_type=normalized_type)
 
-    def refreshChecksFindingEntriesForImage(self, *, check_type: str, image_path: str) -> Dict[str, Any]:
+    def refreshChecksFindingEntriesForImage(
+        self,
+        *,
+        check_type: str,
+        image_path: str,
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: str = "",
+        shared_folder: str = "",
+    ) -> Dict[str, Any]:
         normalized_type = self._normalizeChecksType(check_type)
         normalized_path = str(image_path or "").strip()
         if not normalized_path:
@@ -1075,6 +1121,10 @@ class ImgDataService:
         rebuilt_entries = self._buildCheckEntriesForType(
             image_path=normalized_path,
             review_type=normalized_type,
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            shared_folder=shared_folder,
         )
 
         updated_entries: List[Dict[str, Any]] = []
@@ -1101,6 +1151,79 @@ class ImgDataService:
             entries=updated_entries,
         )
         return self.getChecksFindingEntries(check_type=normalized_type)
+
+    def refreshChecksScanProgressForImage(
+        self,
+        *,
+        user_key: str,
+        check_type: str,
+        image_path: str,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: str = "",
+        shared_folder: str = "",
+    ) -> Dict[str, Any]:
+        normalized_type = self._normalizeChecksType(check_type)
+        normalized_path = str(image_path or "").strip()
+        if not normalized_path:
+            return self.getChecksProgress(user_key, normalized_type)
+
+        current = self.getChecksProgress(user_key, normalized_type)
+        if not isinstance(current, dict) or str(current.get("source_mode") or "").strip().lower() != "scan":
+            return current
+
+        resume_cursor = current.get("resume_cursor") if isinstance(current.get("resume_cursor"), dict) else {}
+        pending_entries = resume_cursor.get("pending_entries") if isinstance(resume_cursor.get("pending_entries"), list) else []
+        current_result = current.get("result") if isinstance(current.get("result"), dict) else {}
+        current_entry = current_result.get("entry") if isinstance(current_result.get("entry"), dict) else {}
+
+        old_image_entries_count = 0
+        if str(current_entry.get("image_path") or "").strip() == normalized_path:
+            old_image_entries_count += 1
+        for entry in pending_entries:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("image_path") or "").strip() == normalized_path:
+                old_image_entries_count += 1
+
+        rebuilt_entries = self._buildCheckEntriesForType(
+            image_path=normalized_path,
+            review_type=normalized_type,
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            shared_folder=shared_folder,
+        )
+
+        remaining_pending_entries: List[Dict[str, Any]] = []
+        for entry in pending_entries:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("image_path") or "").strip() == normalized_path:
+                continue
+            remaining_pending_entries.append(entry)
+        remaining_pending_entries = rebuilt_entries + remaining_pending_entries
+
+        findings_count = int(current.get("findings_count") or 0)
+        findings_count = max(0, findings_count - old_image_entries_count + len(rebuilt_entries))
+
+        updated_resume_cursor = self._buildChecksResumeCursor(
+            path_index=int(resume_cursor.get("path_index") or 0),
+            pending_entries=remaining_pending_entries,
+            source_mode=str(resume_cursor.get("source_mode") or "scan"),
+            check_type=str(resume_cursor.get("check_type") or normalized_type),
+            save_only=bool(resume_cursor.get("save_only", current.get("save_only"))),
+            findings_count=findings_count,
+        )
+
+        updated_progress = dict(current)
+        updated_progress.update({
+            "check_type": normalized_type,
+            "findings_count": findings_count,
+            "result": None,
+            "resume_cursor": updated_resume_cursor,
+        })
+        self._setChecksProgress(user_key, **updated_progress)
+        return self.getChecksProgress(user_key, normalized_type)
 
     def _getSuggestedNameConflictRename(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(item, dict) or str(item.get("review_type") or "").strip().lower() != "name_conflicts":
@@ -1156,12 +1279,22 @@ class ImgDataService:
         entry: Dict[str, Any],
         auto_apply_suggested_names: bool = False,
         auto_apply_suggested_duplicates: bool = False,
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: str = "",
+        shared_folder: str = "",
     ) -> Dict[str, Any]:
         normalized_entry = dict(entry or {})
         auto_applied_count = 0
 
         while True:
-            item = self.getChecksReviewItem(entry=normalized_entry)
+            item = self.getChecksReviewItem(
+                entry=normalized_entry,
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                shared_folder=shared_folder,
+            )
             if not item:
                 return {
                     "entry": None,
@@ -1204,6 +1337,10 @@ class ImgDataService:
                         self._buildCheckEntriesForType(
                             image_path=str(item.get("image_path") or ""),
                             review_type=str(item.get("review_type") or ""),
+                            user_key=user_key,
+                            cookies=cookies,
+                            base_url=base_url,
+                            shared_folder=shared_folder,
                         )
                     ),
                     None,
@@ -1242,6 +1379,10 @@ class ImgDataService:
                     self._buildCheckEntriesForType(
                         image_path=str(item.get("image_path") or ""),
                         review_type=str(item.get("review_type") or ""),
+                        user_key=user_key,
+                        cookies=cookies,
+                        base_url=base_url,
+                        shared_folder=shared_folder,
                     )
                 ),
                 None,
@@ -2047,16 +2188,28 @@ class ImgDataService:
             right = right.to_dict()
         if not isinstance(left, dict) or not isinstance(right, dict):
             return False
+        left_face_id = left.get("face_id")
+        right_face_id = right.get("face_id")
+        if left_face_id not in (None, "") and right_face_id not in (None, ""):
+            try:
+                return int(left_face_id) == int(right_face_id)
+            except (TypeError, ValueError):
+                return False
         keys = ("source_format", "source", "name", "x", "y", "w", "h", "orientation")
         return all(left.get(key) == right.get(key) for key in keys)
 
     @staticmethod
     def _faceSignature(face: Any) -> Dict[str, Any]:
         if isinstance(face, MetadataFace):
-            face = face.to_dict()
+            payload = face.to_dict()
+            for key in ("face_id", "person_id"):
+                value = getattr(face, key, None)
+                if value not in (None, ""):
+                    payload[key] = value
+            face = payload
         if not isinstance(face, dict):
             return {}
-        return {
+        payload = {
             "source_format": face.get("source_format"),
             "source": face.get("source"),
             "name": face.get("name"),
@@ -2066,6 +2219,11 @@ class ImgDataService:
             "h": face.get("h"),
             "orientation": face.get("orientation"),
         }
+        for key in ("face_id", "person_id"):
+            value = face.get(key)
+            if value not in (None, ""):
+                payload[key] = value
+        return payload
 
     def _findFaceBySignature(self, faces: List[MetadataFace], signature: Dict[str, Any]) -> Optional[MetadataFace]:
         if not isinstance(signature, dict):
@@ -2251,6 +2409,12 @@ class ImgDataService:
                 right_face=right,
                 faces=faces,
             )
+        left_state, right_state = self._applySingleSourceOfTruthSuggestion(
+            left_state=left_state,
+            right_state=right_state,
+            left_face=left,
+            right_face=right,
+        )
         left_state, right_state = self._applyOrientationRiskSuggestion(
             left_state=left_state,
             right_state=right_state,
@@ -2381,33 +2545,186 @@ class ImgDataService:
             return left_state, "suggested"
         return "suggested", right_state
 
-    def _getNameConflictSuggestionStates(self, left_name: str, right_name: str) -> Tuple[str, str]:
+    @staticmethod
+    def _faceMatchesSingleSourceOfTruth(face: Optional[MetadataFace], source_of_truth: str) -> bool:
+        if not isinstance(face, MetadataFace) or not source_of_truth:
+            return False
+        if source_of_truth == "photos":
+            return str(face.source_format or "").strip().upper() == "PHOTOS"
+        parts = source_of_truth.split(":")
+        if len(parts) != 3 or parts[0] != "metadata":
+            return False
+        requested_format = parts[1]
+        requested_location = parts[2]
+        face_format = str(face.source_format or "").strip().lower()
+        if face_format == "photos":
+            return False
+        source = str(face.source or "").strip().lower()
+        face_location = "sidecar" if source == "xmp_file" else "embedded"
+        format_matches = requested_format == "any" or face_format == requested_format
+        location_matches = requested_location == "any" or face_location == requested_location
+        return format_matches and location_matches
+
+    def _applySingleSourceOfTruthSuggestion(
+        self,
+        *,
+        left_state: str,
+        right_state: str,
+        left_face: Optional[MetadataFace],
+        right_face: Optional[MetadataFace],
+    ) -> Tuple[str, str]:
+        source_of_truth = str(self._configuredAnalysisChecks().get("SINGLE_SOURCE_OF_TRUTH") or "").strip().lower()
+        if not source_of_truth:
+            return left_state, right_state
+
+        left_matches = self._faceMatchesSingleSourceOfTruth(left_face, source_of_truth)
+        right_matches = self._faceMatchesSingleSourceOfTruth(right_face, source_of_truth)
+        if left_matches == right_matches:
+            return left_state, right_state
+        if left_matches:
+            return "suggested", "alert"
+        return "alert", "suggested"
+
+    def _getNameConflictSuggestionStates(
+        self,
+        left_name: str,
+        right_name: str,
+        *,
+        left_face: Optional[MetadataFace] = None,
+        right_face: Optional[MetadataFace] = None,
+    ) -> Tuple[str, str]:
         left_state = "alert"
         right_state = "alert"
 
         normalized_left = self.name_mappings._normalize_name_value(left_name)
         normalized_right = self.name_mappings._normalize_name_value(right_name)
         if not normalized_left or not normalized_right:
-            return left_state, right_state
+            return self._applySingleSourceOfTruthSuggestion(
+                left_state=left_state,
+                right_state=right_state,
+                left_face=left_face,
+                right_face=right_face,
+            )
 
         left_mapping = self.name_mappings.findNameMapping(left_name)
         if left_mapping and self.name_mappings._normalize_name_value(left_mapping.get("target_name")) == normalized_right:
             right_state = "suggested"
-            return left_state, right_state
+            return self._applySingleSourceOfTruthSuggestion(
+                left_state=left_state,
+                right_state=right_state,
+                left_face=left_face,
+                right_face=right_face,
+            )
 
         right_mapping = self.name_mappings.findNameMapping(right_name)
         if right_mapping and self.name_mappings._normalize_name_value(right_mapping.get("target_name")) == normalized_left:
             left_state = "suggested"
 
-        return left_state, right_state
+        return self._applySingleSourceOfTruthSuggestion(
+            left_state=left_state,
+            right_state=right_state,
+            left_face=left_face,
+            right_face=right_face,
+        )
+
+    @staticmethod
+    def _metadataFaceFromPhotoFace(face: Dict[str, Any]) -> Optional[MetadataFace]:
+        if not isinstance(face, dict):
+            return None
+        bbox = face.get("bbox") if isinstance(face.get("bbox"), dict) else {}
+        top_left = bbox.get("top_left") if isinstance(bbox.get("top_left"), dict) else {}
+        bottom_right = bbox.get("bottom_right") if isinstance(bbox.get("bottom_right"), dict) else {}
+        try:
+            left = float(top_left.get("x"))
+            top = float(top_left.get("y"))
+            right = float(bottom_right.get("x"))
+            bottom = float(bottom_right.get("y"))
+        except (TypeError, ValueError):
+            return None
+        width = right - left
+        height = bottom - top
+        if width <= 0 or height <= 0:
+            return None
+        normalized_face = MetadataFace.from_center_box(
+            name=str(face.get("face_name") or ""),
+            x=left + (width / 2),
+            y=top + (height / 2),
+            w=width,
+            h=height,
+            source="photos",
+            source_format="PHOTOS",
+        )
+        for key in ("face_id", "person_id"):
+            value = face.get(key)
+            if value not in (None, ""):
+                setattr(normalized_face, key, value)
+        return normalized_face
+
+    def _loadPhotoFacesForImage(
+        self,
+        *,
+        user_key: Optional[str],
+        cookies: Optional[Dict[str, str]],
+        base_url: str,
+        shared_folder: str,
+        image_path: str,
+    ) -> List[MetadataFace]:
+        normalized_path = str(image_path or "").strip()
+        if not user_key or not isinstance(cookies, dict) or not base_url or not normalized_path:
+            return []
+        resolved_shared_folder = str(shared_folder or "").strip()
+        if not resolved_shared_folder:
+            resolved_shared_folder = self.core.getSharedFolder(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                folder_name="photo",
+            )
+        if not resolved_shared_folder:
+            return []
+        try:
+            item = self.photos.findFotoTeamItemByPath(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                shared_folder=resolved_shared_folder,
+                image_path=normalized_path,
+                additional=["thumbnail"],
+            )
+            item_id = item.get("id") if isinstance(item, dict) else None
+            item_id_int = int(item_id)
+        except (TypeError, ValueError):
+            return []
+        except Exception:
+            return []
+
+        try:
+            raw_faces = self.photos.list_faceFotoTeamItems(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                id_item=item_id_int,
+            )
+        except Exception:
+            return []
+
+        normalized_faces: List[MetadataFace] = []
+        for face in raw_faces:
+            mapped = self._metadataFaceFromPhotoFace(face)
+            if mapped is not None:
+                normalized_faces.append(mapped)
+        return normalized_faces
 
     def _buildPositionDeviationReviewEntries(
         self,
         image_path: str,
         analysis: Optional[Dict[str, Any]] = None,
+        photo_faces: Optional[List[MetadataFace]] = None,
     ) -> List[Dict[str, Any]]:
         payload = self._readImageMetadata(image_path)
-        faces = payload.faces
+        faces = list(payload.faces)
+        if photo_faces:
+            faces.extend(photo_faces)
         entries: List[Dict[str, Any]] = []
         for index, left in enumerate(faces):
             left_name = str(left.name or "").strip().casefold()
@@ -2439,13 +2756,22 @@ class ImgDataService:
         image_path: str,
         analysis: Optional[Dict[str, Any]] = None,
         entry: Optional[Dict[str, Any]] = None,
+        photo_faces: Optional[List[MetadataFace]] = None,
     ) -> Optional[Dict[str, Any]]:
         payload = self._readImageMetadata(image_path)
-        faces = payload.faces
+        faces = list(payload.faces)
+        if photo_faces:
+            faces.extend(photo_faces)
         left = self._findFaceBySignature(faces, (entry or {}).get("left_face_signature") or {})
         right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
         if not left or not right:
             return None
+        left_state, right_state = self._applySingleSourceOfTruthSuggestion(
+            left_state="alert",
+            right_state="alert",
+            left_face=left,
+            right_face=right,
+        )
         return {
             "review_type": "position_deviations",
             "image_path": image_path,
@@ -2459,8 +2785,8 @@ class ImgDataService:
             "left_face_target": self._faceSignature(left),
             "right_face": to_display_face(right),
             "right_face_target": self._faceSignature(right),
-            "left_state": "alert",
-            "right_state": "alert",
+            "left_state": left_state,
+            "right_state": right_state,
             "left_alert_faces": [],
             "left_reference_faces": [],
             "right_alert_faces": [],
@@ -2471,9 +2797,12 @@ class ImgDataService:
         self,
         image_path: str,
         analysis: Optional[Dict[str, Any]] = None,
+        photo_faces: Optional[List[MetadataFace]] = None,
     ) -> List[Dict[str, Any]]:
         payload = self._readImageMetadata(image_path)
-        faces = payload.faces
+        faces = list(payload.faces)
+        if photo_faces:
+            faces.extend(photo_faces)
         entries: List[Dict[str, Any]] = []
         for index, left in enumerate(faces):
             left_name = str(left.name or "").strip()
@@ -2503,16 +2832,24 @@ class ImgDataService:
         image_path: str,
         analysis: Optional[Dict[str, Any]] = None,
         entry: Optional[Dict[str, Any]] = None,
+        photo_faces: Optional[List[MetadataFace]] = None,
     ) -> Optional[Dict[str, Any]]:
         payload = self._readImageMetadata(image_path)
-        faces = payload.faces
+        faces = list(payload.faces)
+        if photo_faces:
+            faces.extend(photo_faces)
         left = self._findFaceBySignature(faces, (entry or {}).get("left_face_signature") or {})
         right = self._findFaceBySignature(faces, (entry or {}).get("right_face_signature") or {})
         if not left or not right:
             return None
         left_name = str(left.name or "")
         right_name = str(right.name or "")
-        left_state, right_state = self._getNameConflictSuggestionStates(left_name, right_name)
+        left_state, right_state = self._getNameConflictSuggestionStates(
+            left_name,
+            right_name,
+            left_face=left,
+            right_face=right,
+        )
         left_state, right_state = self._applyOrientationRiskSuggestion(
             left_state=left_state,
             right_state=right_state,
@@ -2838,6 +3175,10 @@ class ImgDataService:
                 entry=entry,
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                shared_folder=shared_folder,
             )
             entry = resolved.get("entry")
             item = resolved.get("item")
@@ -2956,6 +3297,10 @@ class ImgDataService:
                 image_path=image_path,
                 review_type=check_type,
                 analysis=analysis,
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                shared_folder=shared_folder,
             )
             if not entries:
                 continue
@@ -2994,6 +3339,10 @@ class ImgDataService:
                 entry=entry,
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                shared_folder=shared_folder,
             )
             entry = resolved.get("entry")
             item = resolved.get("item")
@@ -3002,13 +3351,23 @@ class ImgDataService:
                 refreshed_entries = self._buildCheckEntriesForType(
                     image_path=image_path,
                     review_type=check_type,
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
                 )
                 findings_count = max(0, findings_count - auto_applied_count)
                 if not refreshed_entries:
                     continue
                 entry = refreshed_entries[0]
                 remaining_entries = refreshed_entries[1:]
-                item = self.getChecksReviewItem(entry=entry)
+                item = self.getChecksReviewItem(
+                    entry=entry,
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                )
             if resolved.get("auto_apply_warning"):
                 return {
                     "running": False,
@@ -3123,11 +3482,37 @@ class ImgDataService:
             "message_params": {"count": findings_count},
         }
 
-    def getChecksReviewItem(self, *, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def getChecksReviewItem(
+        self,
+        *,
+        entry: Dict[str, Any],
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: str = "",
+        shared_folder: str = "",
+    ) -> Optional[Dict[str, Any]]:
         image_path = str(entry.get("image_path") or "").strip()
         review_type = str(entry.get("review_type") or "").strip().lower()
         if not image_path or not review_type:
             return None
+        photo_faces: Optional[List[MetadataFace]] = None
+        analysis_checks = self._configuredAnalysisChecks()
+        if review_type == "position_deviations" and analysis_checks.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS"):
+            photo_faces = self._loadPhotoFacesForImage(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                shared_folder=shared_folder,
+                image_path=image_path,
+            )
+        elif review_type == "name_conflicts" and analysis_checks.get("NAME_CONFLICTS_INCLUDE_PHOTOS"):
+            photo_faces = self._loadPhotoFacesForImage(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                shared_folder=shared_folder,
+                image_path=image_path,
+            )
         if review_type == "dimension_issues":
             if not self._hasFaceSignature(entry.get("left_face_signature")):
                 return None
@@ -3140,9 +3525,9 @@ class ImgDataService:
         if review_type == "duplicate_faces":
             return self._buildDuplicateFaceReviewItem(image_path, analysis, entry)
         if review_type == "position_deviations":
-            return self._buildPositionDeviationReviewItem(image_path, analysis, entry)
+            return self._buildPositionDeviationReviewItem(image_path, analysis, entry, photo_faces)
         if review_type == "name_conflicts":
-            return self._buildNameConflictReviewItem(image_path, analysis, entry)
+            return self._buildNameConflictReviewItem(image_path, analysis, entry, photo_faces)
         return None
 
     @staticmethod
@@ -3238,15 +3623,34 @@ class ImgDataService:
             payload["error"] = error
         return payload
 
-    def _configuredAnalysisChecks(self) -> Dict[str, bool]:
+    @staticmethod
+    def _normalizeChecksSingleSourceOfTruth(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized == "photos":
+            return normalized
+        metadata_formats = {"acd", "microsoft", "mwg_regions"}
+        metadata_locations = {"any", "embedded", "sidecar"}
+        if normalized.startswith("metadata:"):
+            parts = normalized.split(":")
+            if len(parts) == 3 and parts[1] in metadata_formats and parts[2] in metadata_locations:
+                return normalized
+        return ""
+
+    def _configuredAnalysisChecks(self) -> Dict[str, Any]:
         config = self.config.readMergedConfig()
         analysis = config.get("analysis") if isinstance(config.get("analysis"), dict) else {}
         checks = analysis.get("CHECKS") if isinstance(analysis.get("CHECKS"), dict) else {}
+        defaults = ConfigService.defaultConfig()["analysis"]["CHECKS"]
         return {
-            "DUPLICATE_FACES": bool(checks.get("DUPLICATE_FACES", True)),
-            "POSITION_DEVIATIONS": bool(checks.get("POSITION_DEVIATIONS", True)),
-            "DIMENSION_ISSUES": bool(checks.get("DIMENSION_ISSUES", True)),
-            "NAME_CONFLICTS": bool(checks.get("NAME_CONFLICTS", True)),
+            "DUPLICATE_FACES": bool(checks.get("DUPLICATE_FACES", defaults["DUPLICATE_FACES"])),
+            "POSITION_DEVIATIONS": bool(checks.get("POSITION_DEVIATIONS", defaults["POSITION_DEVIATIONS"])),
+            "POSITION_DEVIATIONS_INCLUDE_PHOTOS": bool(checks.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS", defaults["POSITION_DEVIATIONS_INCLUDE_PHOTOS"])),
+            "DIMENSION_ISSUES": bool(checks.get("DIMENSION_ISSUES", defaults["DIMENSION_ISSUES"])),
+            "NAME_CONFLICTS": bool(checks.get("NAME_CONFLICTS", defaults["NAME_CONFLICTS"])),
+            "NAME_CONFLICTS_INCLUDE_PHOTOS": bool(checks.get("NAME_CONFLICTS_INCLUDE_PHOTOS", defaults["NAME_CONFLICTS_INCLUDE_PHOTOS"])),
+            "SINGLE_SOURCE_OF_TRUTH": self._normalizeChecksSingleSourceOfTruth(
+                checks.get("SINGLE_SOURCE_OF_TRUTH", defaults["SINGLE_SOURCE_OF_TRUTH"])
+            ),
         }
 
     def _runFileAnalysis(
@@ -3676,7 +4080,22 @@ class ImgDataService:
                     return
 
                 metadata_payload = self._readImageMetadata(image_path, include_unnamed_acd=True)
-                analysis = self.files.analyzeMetadata(metadata_payload)
+                include_photos_for_position_deviations = bool(analysis_checks.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS"))
+                include_photos_for_name_conflicts = bool(analysis_checks.get("NAME_CONFLICTS_INCLUDE_PHOTOS"))
+                include_photos_for_checks = include_photos_for_position_deviations or include_photos_for_name_conflicts
+                photo_faces = self._loadPhotoFacesForImage(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                    image_path=image_path,
+                ) if include_photos_for_checks else []
+                analysis = self.files.analyzeMetadata(
+                    metadata_payload,
+                    comparison_faces=[face.to_dict() for face in photo_faces],
+                    include_position_deviation_comparison_faces=include_photos_for_position_deviations,
+                    include_name_conflict_comparison_faces=include_photos_for_name_conflicts,
+                )
                 reverse_face_match_entries.extend(
                     self._buildReverseFaceMatchCandidateEntry(image_path=image_path, metadata_face=face)
                     for face in metadata_payload.faces
@@ -3703,12 +4122,12 @@ class ImgDataService:
                     files_with_face_position_deviations = (files_with_face_position_deviations or 0) + int(analysis.get("files_with_face_position_deviations") or 0)
                     if analysis.get("files_with_face_position_deviations"):
                         position_deviation_paths.append(image_path)
-                        position_deviation_entries.extend(self._buildPositionDeviationReviewEntries(image_path, analysis))
+                        position_deviation_entries.extend(self._buildPositionDeviationReviewEntries(image_path, analysis, photo_faces))
                 if analysis_checks["NAME_CONFLICTS"]:
                     files_with_name_conflicts = (files_with_name_conflicts or 0) + int(analysis.get("files_with_name_conflicts") or 0)
                     if analysis.get("files_with_name_conflicts"):
                         name_conflict_paths.append(image_path)
-                        name_conflict_entries.extend(self._buildNameConflictReviewEntries(image_path, analysis))
+                        name_conflict_entries.extend(self._buildNameConflictReviewEntries(image_path, analysis, photo_faces))
                 if analysis.get("files_with_mwg_dimension_mismatch"):
                     dimension_mismatch_paths.append(image_path)
                     review_entry = self._buildDimensionMismatchReviewEntry(image_path, analysis)
@@ -5796,7 +6215,7 @@ class ImgDataService:
         face_id: int,
         person_id: int,
         person_name: str,
-    ) -> Dict[str, Any]:
+        ) -> Dict[str, Any]:
         return self.photos.assignFaceToPerson(
             user_key=user_key,
             cookies=cookies,
@@ -5805,6 +6224,159 @@ class ImgDataService:
             person_id=person_id,
             person_name=person_name,
         )
+
+    def assignChecksFaceToKnownPerson(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        image_path: str,
+        face_data: Dict[str, Any],
+        person_id: int,
+        person_name: str,
+    ) -> Dict[str, Any]:
+        source_format = str(face_data.get("source_format") or "").strip().upper()
+        if source_format == "PHOTOS":
+            face_id = face_data.get("face_id")
+            if face_id is None:
+                raise ValueError("photos_face_id_missing")
+            return {
+                "updated": True,
+                "metadata_result": None,
+                "add_result": None,
+                "assign_result": self.assignMatchedFaceToKnownPerson(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    face_id=int(face_id),
+                    person_id=person_id,
+                    person_name=person_name,
+                ),
+            }
+
+        metadata_result = self.replaceMetadataFaceName(
+            image_path=image_path,
+            face_data=face_data,
+            new_name=person_name,
+        )
+        if not metadata_result.get("updated"):
+            return {
+                "updated": False,
+                "warning": metadata_result.get("warning"),
+                "metadata_result": metadata_result,
+                "add_result": None,
+                "assign_result": None,
+            }
+
+        add_result = self.addMatchedMetadataFaceToPhotos(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            image_path=image_path,
+            metadata_face=face_data,
+            person_id=person_id,
+        )
+        face_id = add_result.get("face_id")
+        if face_id is None:
+            raise ValueError("photos_face_create_failed")
+        assign_result = self.assignMatchedFaceToKnownPerson(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            face_id=int(face_id),
+            person_id=person_id,
+            person_name=person_name,
+        )
+        return {
+            "updated": True,
+            "warning": "",
+            "metadata_result": metadata_result,
+            "add_result": add_result,
+            "assign_result": assign_result,
+        }
+
+    def replaceChecksFaceName(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        image_path: str,
+        face_data: Dict[str, Any],
+        new_name: str,
+    ) -> Dict[str, Any]:
+        source_format = str(face_data.get("source_format") or "").strip().upper()
+        replacement_name = str(new_name or "").strip()
+        if source_format != "PHOTOS":
+            return self.replaceMetadataFaceName(
+                image_path=image_path,
+                face_data=face_data,
+                new_name=replacement_name,
+            )
+
+        face_id = face_data.get("face_id")
+        try:
+            face_id = int(face_id)
+        except (TypeError, ValueError):
+            return {
+                "updated": False,
+                "warning": "checks:warning_photos_face_id_missing",
+            }
+
+        lookup_name = replacement_name
+        mapped_assignment = self.name_mappings.findNameMapping(replacement_name)
+        if isinstance(mapped_assignment, dict):
+            mapped_target_name = str(mapped_assignment.get("target_name") or "").strip()
+            if mapped_target_name:
+                lookup_name = mapped_target_name
+
+        target_person = self.photos.findKnownPersonByName(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            name=lookup_name,
+        )
+        if not isinstance(target_person, dict):
+            return {
+                "updated": False,
+                "warning": "checks:warning_target_person_not_found",
+                "details": {
+                    "requested_name": replacement_name,
+                    "lookup_name": lookup_name,
+                },
+            }
+
+        try:
+            target_person_id = int(target_person.get("id"))
+        except (TypeError, ValueError):
+            return {
+                "updated": False,
+                "warning": "checks:warning_target_person_not_found",
+                "details": {
+                    "requested_name": replacement_name,
+                    "lookup_name": lookup_name,
+                },
+            }
+
+        assign_result = self.assignMatchedFaceToKnownPerson(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            face_id=face_id,
+            person_id=target_person_id,
+            person_name=str(target_person.get("name") or lookup_name),
+        )
+        return {
+            "updated": True,
+            "warning": "",
+            "assign_result": assign_result,
+            "target_person": {
+                "id": target_person_id,
+                "name": str(target_person.get("name") or ""),
+            },
+            "resolved_name": lookup_name,
+        }
 
     @staticmethod
     def _metadataFaceToPhotosBoundingBox(face: Dict[str, Any]) -> Dict[str, Dict[str, float]]:

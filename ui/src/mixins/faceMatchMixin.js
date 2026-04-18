@@ -38,6 +38,8 @@ export default {
 				visible: false,
 				message: '',
 				resolver: null,
+				context: '',
+				skipFuturePrompts: false,
 			},
 		};
 	},
@@ -812,26 +814,39 @@ export default {
 			if (this.faceMatchHasStoredNameMapping) {
 				return Promise.resolve({ saveMapping: false, sourceName });
 			}
-			return this.confirmFaceMatchNameMapping(sourceName, nextName).then((saveMapping) => ({ saveMapping, sourceName }));
+			return this.confirmFaceMatchNameMapping(sourceName, nextName).then((result) => ({
+				saveMapping: !!(result && result.saveMapping),
+				sourceName,
+			}));
 		},
-		confirmFaceMatchNameMapping(sourceName, targetName) {
+		confirmFaceMatchNameMapping(sourceName, targetName, options = {}) {
 			return new Promise((resolve) => {
+				const context = String(options && options.context || 'face_match').trim() || 'face_match';
 				this.nameMappingConfirm.visible = true;
 				this.nameMappingConfirm.message = this.$t(
 					'face_match:confirm_save_mapping',
 					'Should "{source}" always be mapped to "{target}"?',
 					{ source: sourceName, target: targetName }
 				);
+				this.nameMappingConfirm.context = context;
+				this.nameMappingConfirm.skipFuturePrompts = false;
 				this.nameMappingConfirm.resolver = resolve;
 			});
 		},
 		resolveNameMappingConfirm(value) {
 			const resolver = this.nameMappingConfirm.resolver;
+			const context = String(this.nameMappingConfirm.context || 'face_match').trim() || 'face_match';
+			const skipFuturePrompts = !!this.nameMappingConfirm.skipFuturePrompts;
 			this.nameMappingConfirm.visible = false;
 			this.nameMappingConfirm.message = '';
 			this.nameMappingConfirm.resolver = null;
+			this.nameMappingConfirm.context = '';
+			this.nameMappingConfirm.skipFuturePrompts = false;
 			if (typeof resolver === 'function') {
-				resolver(!!value);
+				resolver({
+					saveMapping: skipFuturePrompts && context === 'checks' ? false : !!value,
+					skipFuturePrompts: skipFuturePrompts && context === 'checks',
+				});
 			}
 		},
 		async advanceFaceMatchFindingsAfterTransfer(data) {

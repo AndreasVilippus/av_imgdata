@@ -3,7 +3,6 @@ export default {
 		return {
 			selectedCleanupAction: 'normalize_names',
 			cleanupTargets: {
-				PHOTOS: true,
 				ACD: true,
 				MICROSOFT: true,
 				MWG_REGIONS: true,
@@ -160,9 +159,6 @@ export default {
 		},
 		getCleanupTargetLabel(target) {
 			const key = String(target || '').trim().toUpperCase();
-			if (key === 'PHOTOS') {
-				return this.$t('cleanup:target_photos', 'Photos');
-			}
 			if (key === 'ACD') {
 				return this.$t('cleanup:target_acd', 'ACDSee');
 			}

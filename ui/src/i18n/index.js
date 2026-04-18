@@ -109,10 +109,20 @@ function parseStringsFile(content) {
 		) {
 			value = value.slice(1, -1);
 		}
-		messages[`${currentSection}:${key}`] = value.replace(/\\"/g, '"');
+		messages[`${currentSection}:${key}`] = decodeStringsValue(value);
 	}
 
 	return messages;
+}
+
+function decodeStringsValue(value) {
+	return String(value || '')
+		.replace(/\\\\/g, '\\')
+		.replace(/\\n/g, '\n')
+		.replace(/\\r/g, '\r')
+		.replace(/\\t/g, '\t')
+		.replace(/\\"/g, '"')
+		.replace(/\\'/g, "'");
 }
 
 async function loadLocaleMessages(locale) {

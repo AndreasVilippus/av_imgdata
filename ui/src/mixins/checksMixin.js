@@ -16,6 +16,11 @@ export default {
 			checksProgressTimer: null,
 			checksProgressRequestId: 0,
 			checksSessionSyncing: false,
+			checksSkipNameMappingConfirm: false,
+			checksDuplicateAssignments: {
+				left: this.createChecksDuplicateAssignmentState(),
+				right: this.createChecksDuplicateAssignmentState(),
+			},
 		};
 	},
 	computed: {
@@ -51,6 +56,7 @@ export default {
 	},
 	beforeDestroy() {
 		this.stopChecksProgressPolling();
+		this.resetChecksDuplicateAssignmentState();
 	},
 	methods: {
 		resetChecksUiState() {
@@ -62,6 +68,40 @@ export default {
 			this.checksProgress = {};
 			this.checksStatusMessage = '';
 			this.checksLoading = false;
+			this.checksSkipNameMappingConfirm = false;
+			this.resetChecksDuplicateAssignmentState();
+		},
+		createChecksDuplicateAssignmentState() {
+			return {
+				name: '',
+				selectedPerson: null,
+				suggestions: [],
+				suggestLoading: false,
+				showSuggestions: false,
+				suggestTimer: null,
+				suggestRequestId: 0,
+			};
+		},
+		resetChecksDuplicateAssignmentState() {
+			for (const side of ['left', 'right']) {
+				const current = this.checksDuplicateAssignments && this.checksDuplicateAssignments[side];
+				if (current && current.suggestTimer) {
+					window.clearTimeout(current.suggestTimer);
+				}
+			}
+			this.checksDuplicateAssignments = {
+				left: this.createChecksDuplicateAssignmentState(),
+				right: this.createChecksDuplicateAssignmentState(),
+			};
+		},
+		syncChecksDuplicateAssignmentState(item) {
+			if (!this.isChecksDuplicateFaces(item)) {
+				this.resetChecksDuplicateAssignmentState();
+				return;
+			}
+			this.resetChecksDuplicateAssignmentState();
+			this.checksDuplicateAssignments.left.name = String(item && item.left_name || '').trim();
+			this.checksDuplicateAssignments.right.name = String(item && item.right_name || '').trim();
 		},
 		async callChecksApi(apiPath, body = {}) {
 			await synocredential._instance.Resume();
@@ -118,8 +158,23 @@ export default {
 		getChecksPositionLeftIconUrl() {
 			return this.resolveLocalIconUrl('face_to_left.png');
 		},
+		getChecksSyncFaceBaseIconUrl() {
+			return this.resolveLocalIconUrl('person_known.png');
+		},
+		getChecksSyncFaceOverlayIconUrl() {
+			return this.resolveLocalIconUrl('sync_icon.png');
+		},
+		isChecksMetadataFace(face) {
+			const sourceFormat = String(face && face.source_format || '').trim().toUpperCase();
+			return ['ACD', 'MICROSOFT', 'MWG_REGIONS'].includes(sourceFormat);
+		},
 		canDeleteChecksFace(item, face) {
-			return !this.checksActionLocked && !!(item && item.image_path && face && typeof face === 'object' && face.source_format);
+			return !this.checksActionLocked
+				&& !!(item && item.image_path)
+				&& this.isChecksMetadataFace(face);
+		},
+		isChecksDuplicateFaces(item) {
+			return !!(item && item.review_type === 'duplicate_faces');
 		},
 		isChecksNameConflict(item) {
 			return !!(item && item.review_type === 'name_conflicts');
@@ -138,8 +193,98 @@ export default {
 			return !this.checksActionLocked
 				&& this.isChecksPositionDeviation(item)
 				&& !!(item && item.image_path)
-				&& !!(face && typeof face === 'object' && face.source_format)
+				&& this.isChecksMetadataFace(face)
 				&& !!(sourceFace && typeof sourceFace === 'object' && sourceFace.source_format);
+		},
+		getChecksDuplicateAssignment(side) {
+			return this.checksDuplicateAssignments && this.checksDuplicateAssignments[side]
+				? this.checksDuplicateAssignments[side]
+				: this.createChecksDuplicateAssignmentState();
+		},
+		handleChecksDuplicateNameFocus(side) {
+			const state = this.getChecksDuplicateAssignment(side);
+			if (state.suggestions.length) {
+				state.showSuggestions = true;
+			}
+		},
+		handleChecksDuplicateNameInput(side) {
+			const state = this.getChecksDuplicateAssignment(side);
+			const selectedPerson = state.selectedPerson;
+			if (selectedPerson && this.normalizeFaceMatchName(state.name) !== this.normalizeFaceMatchName(selectedPerson.name)) {
+				state.selectedPerson = null;
+			}
+			this.scheduleChecksDuplicateSuggestions(side);
+		},
+		scheduleChecksDuplicateSuggestions(side) {
+			const state = this.getChecksDuplicateAssignment(side);
+			if (state.suggestTimer) {
+				window.clearTimeout(state.suggestTimer);
+				state.suggestTimer = null;
+			}
+			const query = String(state.name || '').trim();
+			if (!query) {
+				state.suggestions = [];
+				state.showSuggestions = false;
+				state.suggestLoading = false;
+				return;
+			}
+			state.suggestTimer = window.setTimeout(() => {
+				this.fetchChecksDuplicateSuggestions(side, query);
+			}, 200);
+		},
+		async fetchChecksDuplicateSuggestions(side, query) {
+			const state = this.getChecksDuplicateAssignment(side);
+			const currentQuery = String(query || '').trim();
+			if (!currentQuery) {
+				state.suggestions = [];
+				state.showSuggestions = false;
+				state.suggestLoading = false;
+				return;
+			}
+			const requestId = state.suggestRequestId + 1;
+			state.suggestRequestId = requestId;
+			state.suggestLoading = true;
+			state.showSuggestions = true;
+			try {
+				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_person_suggest', {
+					name_prefix: currentQuery,
+					limit: 10,
+				});
+				if (state.suggestRequestId !== requestId) {
+					return;
+				}
+				const root = this.getResponseData(data);
+				state.suggestions = Array.isArray(root.list) ? root.list : [];
+				state.showSuggestions = state.suggestions.length > 0;
+			} catch (err) {
+				if (state.suggestRequestId !== requestId) {
+					return;
+				}
+				state.suggestions = [];
+				state.showSuggestions = false;
+			} finally {
+				if (state.suggestRequestId === requestId) {
+					state.suggestLoading = false;
+				}
+			}
+		},
+		selectChecksDuplicateSuggestion(side, person) {
+			if (!person || !person.id) {
+				return;
+			}
+			const state = this.getChecksDuplicateAssignment(side);
+			state.selectedPerson = person;
+			state.name = person.name || '';
+			state.suggestions = [];
+			state.showSuggestions = false;
+			state.suggestLoading = false;
+		},
+		canAssignChecksFaceToPerson(item, side) {
+			if (!this.isChecksDuplicateFaces(item) || this.checksActionLocked || this.checksLoading || !item || !item.image_path) {
+				return false;
+			}
+			const state = this.getChecksDuplicateAssignment(side);
+			return !!(state.selectedPerson && state.selectedPerson.id && String(state.name || '').trim());
 		},
 		showChecksPopup(message) {
 			if (typeof window !== 'undefined' && typeof window.alert === 'function') {
@@ -152,6 +297,14 @@ export default {
 				return this.$t(
 					'checks:popup_exiftool_required',
 					'ExifTool is missing, but required for this action. Please configure or install ExifTool first.'
+				);
+			}
+			if (warning === 'checks:warning_target_person_not_found') {
+				const details = result && typeof result.details === 'object' ? result.details : {};
+				return this.$t(
+					'checks:popup_target_person_not_found',
+					'No Photos person could be found for "{name}".',
+					{ name: details.requested_name || details.lookup_name || '' }
 				);
 			}
 			const details = result && typeof result.details === 'object' ? result.details : null;
@@ -278,8 +431,10 @@ export default {
 			const item = result && result.item && typeof result.item === 'object' ? result.item : null;
 			if (item && Object.keys(item).length) {
 				this.checksCurrentItem = item;
+				this.syncChecksDuplicateAssignmentState(item);
 			} else if (this.selectedChecksAction === 'scan') {
 				this.checksCurrentItem = null;
+				this.resetChecksDuplicateAssignmentState();
 			}
 			if (nextProgress.message_key || nextProgress.message) {
 				this.checksStatusMessage = this.$t(
@@ -371,6 +526,7 @@ export default {
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${err.message}`;
 			} finally {
+				this.checksActionLocked = false;
 				this.checksLoading = false;
 			}
 		},
@@ -394,6 +550,7 @@ export default {
 					this.checksActionLocked = false;
 					this.checksCurrentItem = item;
 					this.checksCurrentIndex = resolvedIndex;
+					this.syncChecksDuplicateAssignmentState(item);
 					return;
 				}
 				if (!this.checksEntries.length) {
@@ -407,6 +564,7 @@ export default {
 			}
 			this.checksActionLocked = false;
 			this.checksCurrentItem = null;
+			this.resetChecksDuplicateAssignmentState();
 			this.checksCurrentIndex = Math.min(resolvedIndex, Math.max(this.checksEntries.length - 1, 0));
 			this.checksStatusMessage = this.$t('checks:status_empty', 'No matching entries found.');
 		},
@@ -535,12 +693,18 @@ export default {
 				const targetName = String(newName || '').trim();
 				let saveMapping = false;
 				if (
+					!this.checksSkipNameMappingConfirm
+					&&
 					sourceName
 					&& targetName
 					&& this.normalizeFaceMatchName(sourceName) !== this.normalizeFaceMatchName(targetName)
 					&& !this.checksRenameUsesStoredMapping(this.checksCurrentItem, face, targetName)
 				) {
-					saveMapping = await this.confirmFaceMatchNameMapping(sourceName, targetName);
+					const mappingDecision = await this.confirmFaceMatchNameMapping(sourceName, targetName, { context: 'checks' });
+					saveMapping = !!(mappingDecision && mappingDecision.saveMapping);
+					if (mappingDecision && mappingDecision.skipFuturePrompts) {
+						this.checksSkipNameMappingConfirm = true;
+					}
 				}
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_replace_metadata_face_name', {
 					image_path: this.checksCurrentItem.image_path,
@@ -572,12 +736,14 @@ export default {
 				}
 				if (!this.checksEntries.length) {
 					this.checksCurrentItem = null;
+					this.resetChecksDuplicateAssignmentState();
 					return;
 				}
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${err.message}`;
 			} finally {
+				this.checksActionLocked = false;
 				if (!keepLoadingState) {
 					this.checksLoading = false;
 				}
@@ -620,12 +786,71 @@ export default {
 				}
 				if (!this.checksEntries.length) {
 					this.checksCurrentItem = null;
+					this.resetChecksDuplicateAssignmentState();
 					return;
 				}
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${err.message}`;
 			} finally {
+				this.checksActionLocked = false;
+				if (!keepLoadingState) {
+					this.checksLoading = false;
+				}
+			}
+		},
+		async assignChecksFaceToPerson(side) {
+			const item = this.checksCurrentItem;
+			if (!this.isChecksDuplicateFaces(item)) {
+				return;
+			}
+			const state = this.getChecksDuplicateAssignment(side);
+			const face = side === 'left' ? item.left_face_target : item.right_face_target;
+			if (!this.canAssignChecksFaceToPerson(item, side) || !face) {
+				return;
+			}
+			this.checksActionLocked = true;
+			this.checksLoading = true;
+			let keepLoadingState = false;
+			try {
+				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_assign_face_person', {
+					image_path: item.image_path,
+					face,
+					person_id: state.selectedPerson.id,
+					person_name: String(state.name || '').trim(),
+					review_type: item.review_type,
+				});
+				const result = this.getResponseData(data);
+				if (result.warning) {
+					this.checksStatusMessage = this.$t(
+						result.warning,
+						result.warning === 'checks:warning_exiftool_required'
+							? 'This function requires ExifTool.'
+							: 'Person could not be assigned.'
+					);
+					const popupMessage = this.getChecksWarningPopupMessage(result);
+					if (popupMessage) {
+						this.showChecksPopup(popupMessage);
+					}
+					return;
+				}
+				this.applyChecksFindingsUpdate(result.findings_update);
+				this.checksStatusMessage = this.$t('checks:status_face_person_assigned', 'Known person assigned.');
+				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
+					keepLoadingState = true;
+					await this.startChecksScan({ resumeFromProgress: true });
+					return;
+				}
+				if (!this.checksEntries.length) {
+					this.checksCurrentItem = null;
+					this.resetChecksDuplicateAssignmentState();
+					return;
+				}
+				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
+			} catch (err) {
+				this.checksStatusMessage = `Error: ${err.message}`;
+			} finally {
+				this.checksActionLocked = false;
 				if (!keepLoadingState) {
 					this.checksLoading = false;
 				}

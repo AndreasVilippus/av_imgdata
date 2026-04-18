@@ -11,7 +11,7 @@
 				</select>
 			</div>
 			<div class="checks-actions-row checks-actions-row-switches">
-				<label v-for="target in ['PHOTOS', 'ACD', 'MICROSOFT', 'MWG_REGIONS']" :key="`cleanup-target-${target}`" class="face-match-switch">
+				<label v-for="target in ['ACD', 'MICROSOFT', 'MWG_REGIONS']" :key="`cleanup-target-${target}`" class="face-match-switch">
 					<input v-model="vm.cleanupTargets[target]" type="checkbox" :disabled="vm.cleanupLoading" />
 					<span class="face-match-switch-slider"></span>
 					<span class="face-match-switch-label">{{ vm.getCleanupTargetLabel(target) }}</span>

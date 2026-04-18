@@ -74,8 +74,11 @@ export default {
 					CHECKS: {
 						DUPLICATE_FACES: true,
 						POSITION_DEVIATIONS: true,
+						POSITION_DEVIATIONS_INCLUDE_PHOTOS: true,
 						DIMENSION_ISSUES: true,
 						NAME_CONFLICTS: true,
+						NAME_CONFLICTS_INCLUDE_PHOTOS: true,
+						SINGLE_SOURCE_OF_TRUTH: '',
 					},
 				},
 				review: {
@@ -106,6 +109,21 @@ export default {
 				.map((entry) => String(entry || '').trim())
 				.filter((entry, index, arr) => entry && allowed.includes(entry) && arr.indexOf(entry) === index);
 			return normalized.length ? normalized : [...fallback];
+		},
+		normalizeExternalLibrariesChecksSingleSourceOfTruth(value, fallback = '') {
+			const normalized = String(value || '').trim().toLowerCase();
+			if (normalized === 'photos') {
+				return normalized;
+			}
+			const parts = normalized.split(':');
+			const metadataFormats = ['acd', 'microsoft', 'mwg_regions'];
+			const metadataLocations = ['any', 'embedded', 'sidecar'];
+			return (
+				parts.length === 3
+				&& parts[0] === 'metadata'
+				&& metadataFormats.includes(parts[1])
+				&& metadataLocations.includes(parts[2])
+			) ? normalized : fallback;
 		},
 		formatExternalLibrariesImageExtensionsMultiline(value) {
 			return this.normalizeExternalLibrariesImageExtensions(value, []).join(',\n');
@@ -174,8 +192,14 @@ export default {
 						...checks,
 						DUPLICATE_FACES: Boolean(checks.DUPLICATE_FACES ?? defaults.analysis.CHECKS.DUPLICATE_FACES),
 						POSITION_DEVIATIONS: Boolean(checks.POSITION_DEVIATIONS ?? defaults.analysis.CHECKS.POSITION_DEVIATIONS),
+						POSITION_DEVIATIONS_INCLUDE_PHOTOS: Boolean(checks.POSITION_DEVIATIONS_INCLUDE_PHOTOS ?? defaults.analysis.CHECKS.POSITION_DEVIATIONS_INCLUDE_PHOTOS),
 						DIMENSION_ISSUES: Boolean(checks.DIMENSION_ISSUES ?? defaults.analysis.CHECKS.DIMENSION_ISSUES),
 						NAME_CONFLICTS: Boolean(checks.NAME_CONFLICTS ?? defaults.analysis.CHECKS.NAME_CONFLICTS),
+						NAME_CONFLICTS_INCLUDE_PHOTOS: Boolean(checks.NAME_CONFLICTS_INCLUDE_PHOTOS ?? defaults.analysis.CHECKS.NAME_CONFLICTS_INCLUDE_PHOTOS),
+						SINGLE_SOURCE_OF_TRUTH: this.normalizeExternalLibrariesChecksSingleSourceOfTruth(
+							checks.SINGLE_SOURCE_OF_TRUTH,
+							defaults.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH
+						),
 					},
 				},
 				review: {

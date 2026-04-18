@@ -86,16 +86,26 @@ class FileHandler:
         normalized_supported = self._normalize_image_extensions(supported_extensions, [])
         return normalized_supported or native_extensions
 
-    def configuredAnalysisChecks(self) -> Dict[str, bool]:
+    def configuredAnalysisChecks(self) -> Dict[str, Any]:
         config = self._config.readMergedConfig()
         analysis_config = config.get("analysis") if isinstance(config.get("analysis"), dict) else {}
         checks_config = analysis_config.get("CHECKS") if isinstance(analysis_config.get("CHECKS"), dict) else {}
         defaults = ConfigService.defaultConfig()["analysis"]["CHECKS"]
+        single_source = str(checks_config.get("SINGLE_SOURCE_OF_TRUTH", defaults["SINGLE_SOURCE_OF_TRUTH"]) or "").strip().lower()
+        metadata_formats = {"acd", "microsoft", "mwg_regions"}
+        metadata_locations = {"any", "embedded", "sidecar"}
+        if single_source != "photos":
+            parts = single_source.split(":")
+            if not (len(parts) == 3 and parts[0] == "metadata" and parts[1] in metadata_formats and parts[2] in metadata_locations):
+                single_source = ""
         return {
             "DUPLICATE_FACES": bool(checks_config.get("DUPLICATE_FACES", defaults["DUPLICATE_FACES"])),
             "POSITION_DEVIATIONS": bool(checks_config.get("POSITION_DEVIATIONS", defaults["POSITION_DEVIATIONS"])),
+            "POSITION_DEVIATIONS_INCLUDE_PHOTOS": bool(checks_config.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS", defaults["POSITION_DEVIATIONS_INCLUDE_PHOTOS"])),
             "DIMENSION_ISSUES": bool(checks_config.get("DIMENSION_ISSUES", defaults["DIMENSION_ISSUES"])),
             "NAME_CONFLICTS": bool(checks_config.get("NAME_CONFLICTS", defaults["NAME_CONFLICTS"])),
+            "NAME_CONFLICTS_INCLUDE_PHOTOS": bool(checks_config.get("NAME_CONFLICTS_INCLUDE_PHOTOS", defaults["NAME_CONFLICTS_INCLUDE_PHOTOS"])),
+            "SINGLE_SOURCE_OF_TRUTH": single_source,
         }
 
     def configuredMetadataSchemas(self) -> Dict[str, bool]:
@@ -108,18 +118,34 @@ class FileHandler:
             "MWG_REGIONS": bool(schema_config.get("MWG_REGIONS", True)),
         }
 
-    def analyzeMetadata(self, metadata_payload: MetadataPayload) -> Dict[str, Any]:
+    def analyzeMetadata(
+        self,
+        metadata_payload: MetadataPayload,
+        comparison_faces: Optional[List[Dict[str, Any]]] = None,
+        include_position_deviation_comparison_faces: bool = False,
+        include_name_conflict_comparison_faces: bool = False,
+    ) -> Dict[str, Any]:
         metadata = metadata_payload.to_dict()
         analysis_checks = self.configuredAnalysisChecks()
         faces = metadata.get("faces") if isinstance(metadata.get("faces"), list) else []
+        normalized_comparison_faces = [
+            face for face in list(comparison_faces or [])
+            if isinstance(face, dict)
+        ]
         image_dimensions = metadata.get("image_dimensions") if isinstance(metadata.get("image_dimensions"), dict) else {}
         image_orientation = metadata.get("image_orientation")
         applied_dimensions = metadata.get("mwg_applied_to_dimensions") if isinstance(metadata.get("mwg_applied_to_dimensions"), dict) else {}
         displayed_image_dimensions = self._orientedImageDimensions(image_dimensions, image_orientation)
         mwg_matches = self._appliedDimensionsMatch(displayed_image_dimensions, applied_dimensions) if analysis_checks["DIMENSION_ISSUES"] else None
         duplicate_faces_count = self._countDuplicateNamedFacesPerFormat(faces) if analysis_checks["DUPLICATE_FACES"] else None
-        face_position_deviations_count = self._countCrossFormatPositionDeviations(faces) if analysis_checks["POSITION_DEVIATIONS"] else None
-        name_conflicts_count = self._countOverlappingNameConflicts(faces) if analysis_checks["NAME_CONFLICTS"] else None
+        position_deviation_faces = list(faces)
+        if include_position_deviation_comparison_faces:
+            position_deviation_faces.extend(normalized_comparison_faces)
+        face_position_deviations_count = self._countCrossFormatPositionDeviations(position_deviation_faces) if analysis_checks["POSITION_DEVIATIONS"] else None
+        name_conflict_faces = list(faces)
+        if include_name_conflict_comparison_faces:
+            name_conflict_faces.extend(normalized_comparison_faces)
+        name_conflicts_count = self._countOverlappingNameConflicts(name_conflict_faces) if analysis_checks["NAME_CONFLICTS"] else None
 
         named_faces = 0
         unnamed_faces = 0
