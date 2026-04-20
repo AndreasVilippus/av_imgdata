@@ -730,56 +730,28 @@ export default {
 				this.fetchFaceMatchSuggestions(query);
 			}, 200);
 		},
-		async fetchFaceMatchSuggestions(query) {
-			const currentQuery = String(query || '').trim();
-			if (!currentQuery) {
-				this.clearFaceMatchSuggestions();
-				return;
-			}
-			const requestId = this.faceMatchSuggestRequestId + 1;
-			this.faceMatchSuggestRequestId = requestId;
-			this.faceMatchPersonSuggestLoading = true;
-			this.faceMatchShowSuggestions = true;
-			try {
-				await synocredential._instance.Resume();
-
-				const remote = synocredential._instance.GetRemoteKey();
-				const params = synocredential._instance.GetResumeParams({}, remote) || {};
-				const kk_message = params.kk_message || '';
-				const synoToken = this.getSynoToken();
-				const cookies = this.collectDsmCookies();
-
-				if (!kk_message) {
-					throw new Error('kk_message could not be read from ResumeParams');
-				}
-				if (!synoToken) {
-					throw new Error('SYNO.SDS.Session.SynoToken is empty');
-				}
-
-				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/face_person_suggest', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': synoToken,
-					},
-					body: JSON.stringify({
-						name_prefix: currentQuery,
-						limit: 10,
-						kk_message,
-						synoToken,
-						cookies,
-					}),
-				});
-
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					const backendError = data.error || `HTTP ${resp.status}`;
-					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-				}
-				if (this.faceMatchSuggestRequestId !== requestId) {
+			async fetchFaceMatchSuggestions(query) {
+				const currentQuery = String(query || '').trim();
+				if (!currentQuery) {
+					this.clearFaceMatchSuggestions();
 					return;
-				}
+			}
+				const requestId = this.faceMatchSuggestRequestId + 1;
+				this.faceMatchSuggestRequestId = requestId;
+				this.faceMatchPersonSuggestLoading = true;
+				this.faceMatchShowSuggestions = true;
+				try {
+					const data = await this.callDsmApi(
+						'/webman/3rdparty/AV_ImgData/index.cgi/api/face_person_suggest',
+						{
+							name_prefix: currentQuery,
+							limit: 10,
+						},
+						{ requireResumeMessage: true }
+					);
+					if (this.faceMatchSuggestRequestId !== requestId) {
+						return;
+					}
 				const root = this.getResponseData(data);
 				this.faceMatchPersonSuggestions = Array.isArray(root.list) ? root.list : [];
 				this.faceMatchShowSuggestions = this.faceMatchPersonSuggestions.length > 0;
@@ -924,22 +896,7 @@ export default {
 			const requestId = this.faceMatchProgressRequestId + 1;
 			this.faceMatchProgressRequestId = requestId;
 			try {
-				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_progress', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': this.getSynoToken(),
-					},
-					body: JSON.stringify({
-						cookies: this.collectDsmCookies(),
-						synoToken: this.getSynoToken(),
-					}),
-				});
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					return;
-				}
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_progress');
 				if (this.faceMatchProgressRequestId !== requestId) {
 					return;
 				}
@@ -966,17 +923,12 @@ export default {
 			}
 		},
 		startFaceMatchProgressPolling() {
-			this.stopFaceMatchProgressPolling();
-			this.fetchFaceMatchingProgress();
-			this.faceMatchProgressTimer = window.setInterval(() => {
+			this.startNamedPolling('faceMatchProgressTimer', () => {
 				this.fetchFaceMatchingProgress();
-			}, 1000);
+			});
 		},
 		stopFaceMatchProgressPolling() {
-			if (this.faceMatchProgressTimer) {
-				window.clearInterval(this.faceMatchProgressTimer);
-				this.faceMatchProgressTimer = null;
-			}
+			this.stopNamedPolling('faceMatchProgressTimer');
 		},
 		async loadNextFaceMatch() {
 			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
@@ -1005,19 +957,7 @@ export default {
 		},
 		async stopFaceMatchingAction() {
 			try {
-				const synoToken = this.getSynoToken();
-				await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_stop', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': synoToken,
-					},
-					body: JSON.stringify({
-						cookies: this.collectDsmCookies(),
-						synoToken,
-					}),
-				});
+				await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_stop');
 			} catch (err) {
 				// Best effort.
 			}
@@ -1048,52 +988,20 @@ export default {
 			const mappingPreference = await this.resolveFaceMatchNameMappingPreference(personName);
 
 			try {
-				await synocredential._instance.Resume();
-
-				const remote = synocredential._instance.GetRemoteKey();
-				const params = synocredential._instance.GetResumeParams({}, remote) || {};
-				const kk_message = params.kk_message || '';
-				const synoToken = this.getSynoToken();
-				const cookies = this.collectDsmCookies();
-
-				if (!kk_message) {
-					throw new Error(this.$t('face_match:error_missing_resume_message', 'kk_message could not be read from ResumeParams'));
-				}
-				if (!synoToken) {
-					throw new Error(this.$t('face_match:error_missing_synotoken', 'SYNO.SDS.Session.SynoToken is empty'));
-				}
-
-				const resp = await fetch(
+				const data = await this.callDsmApi(
 					isMetadataPhotosCreate
 						? '/webman/3rdparty/AV_ImgData/index.cgi/api/face_create_metadata_match'
 						: '/webman/3rdparty/AV_ImgData/index.cgi/api/face_create_match',
 					{
-						method: 'POST',
-						credentials: 'include',
-						headers: {
-							'Content-Type': 'application/json',
-							'X-SYNO-TOKEN': synoToken,
-						},
-						body: JSON.stringify({
-							face_id: faceId,
-							image_path: imagePath,
-							metadata_face: metadataFace,
-							person_name: personName,
-							save_mapping: mappingPreference.saveMapping,
-							source_name: mappingPreference.sourceName,
-							kk_message,
-							synoToken,
-							cookies,
-						}),
-					}
+						face_id: faceId,
+						image_path: imagePath,
+						metadata_face: metadataFace,
+						person_name: personName,
+						save_mapping: mappingPreference.saveMapping,
+						source_name: mappingPreference.sourceName,
+					},
+					{ requireResumeMessage: true }
 				);
-
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					const backendError = data.error || `HTTP ${resp.status}`;
-					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-				}
-
 				this.output = JSON.stringify(data, null, 2);
 				if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
 					await this.advanceFaceMatchFindingsAfterTransfer(data);
@@ -1124,53 +1032,21 @@ export default {
 			const mappingPreference = await this.resolveFaceMatchNameMappingPreference(matchedPersonName);
 
 			try {
-				await synocredential._instance.Resume();
-
-				const remote = synocredential._instance.GetRemoteKey();
-				const params = synocredential._instance.GetResumeParams({}, remote) || {};
-				const kk_message = params.kk_message || '';
-				const synoToken = this.getSynoToken();
-				const cookies = this.collectDsmCookies();
-
-				if (!kk_message) {
-					throw new Error(this.$t('face_match:error_missing_resume_message', 'kk_message could not be read from ResumeParams'));
-				}
-				if (!synoToken) {
-					throw new Error(this.$t('face_match:error_missing_synotoken', 'SYNO.SDS.Session.SynoToken is empty'));
-				}
-
-				const resp = await fetch(
+				const data = await this.callDsmApi(
 					isMetadataPhotosAssign
 						? '/webman/3rdparty/AV_ImgData/index.cgi/api/face_assign_metadata_match'
 						: '/webman/3rdparty/AV_ImgData/index.cgi/api/face_assign_match',
 					{
-						method: 'POST',
-						credentials: 'include',
-						headers: {
-							'Content-Type': 'application/json',
-							'X-SYNO-TOKEN': synoToken,
-						},
-						body: JSON.stringify({
-							face_id: faceId,
-							image_path: imagePath,
-							metadata_face: metadataFace,
-							person_id: matchedPersonId,
-							person_name: matchedPersonName,
-							save_mapping: mappingPreference.saveMapping,
-							source_name: mappingPreference.sourceName,
-							kk_message,
-							synoToken,
-							cookies,
-						}),
-					}
+						face_id: faceId,
+						image_path: imagePath,
+						metadata_face: metadataFace,
+						person_id: matchedPersonId,
+						person_name: matchedPersonName,
+						save_mapping: mappingPreference.saveMapping,
+						source_name: mappingPreference.sourceName,
+					},
+					{ requireResumeMessage: true }
 				);
-
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					const backendError = data.error || `HTTP ${resp.status}`;
-					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-				}
-
 				this.output = JSON.stringify(data, null, 2);
 				if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
 					await this.advanceFaceMatchFindingsAfterTransfer(data);
@@ -1196,28 +1072,11 @@ export default {
 				return;
 			}
 			try {
-				const synoToken = this.getSynoToken();
-				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/face_apply_metadata_match', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': synoToken,
-					},
-					body: JSON.stringify({
-						image_path: imagePath,
-						metadata_face: metadataFace,
-						person_name: personName,
-						synoToken,
-						cookies: this.collectDsmCookies(),
-					}),
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_apply_metadata_match', {
+					image_path: imagePath,
+					metadata_face: metadataFace,
+					person_name: personName,
 				});
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					const backendError = data.error || `HTTP ${resp.status}`;
-					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-				}
-
 				this.output = JSON.stringify(data, null, 2);
 				if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
 					await this.loadStoredFaceMatchFindings();
@@ -1313,49 +1172,16 @@ export default {
 			this.resetFaceMatchSelectionState();
 			this.startFaceMatchProgressPolling();
 			this.output = this.$t('face_match:output_start_action', 'Starting action: {action}', { action: this.selectedFaceMatchingAction });
-			try {
-				await synocredential._instance.Resume();
-
-				const remote = synocredential._instance.GetRemoteKey();
-				const params = synocredential._instance.GetResumeParams({}, remote) || {};
-				const kk_message = params.kk_message || '';
-				const synoToken = (SYNO && SYNO.SDS && SYNO.SDS.Session && SYNO.SDS.Session.SynoToken) || '';
-				const cookies = this.collectDsmCookies();
-
-				if (!kk_message) {
-					throw new Error(this.$t('face_match:error_missing_resume_message', 'kk_message could not be read from ResumeParams'));
-				}
-				if (!synoToken) {
-					throw new Error(this.$t('face_match:error_missing_synotoken', 'SYNO.SDS.Session.SynoToken is empty'));
-				}
-
-				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': synoToken,
-					},
-					body: JSON.stringify({
+				try {
+					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
 						action: this.selectedFaceMatchingAction,
 						auto: this.faceMatchAutoAssignKnown,
 						save_only: this.faceMatchSaveOnly,
 						resume_from_progress: resumeFromProgress,
 						skip_face_ids: this.faceMatchSkippedFaceIds,
 						skip_targets: this.faceMatchSkippedTargets,
-						kk_message,
-						synoToken,
-						cookies,
-					}),
-				});
-
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					const backendError = data.error || `HTTP ${resp.status}`;
-					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-				}
-
-				const faceMatches = this.getResponseDataObject(data, 'face_matches');
+					}, { requireResumeMessage: true });
+					const faceMatches = this.getResponseDataObject(data, 'face_matches');
 				this.faceMatchProgress = faceMatches;
 				const result = faceMatches && typeof faceMatches.result === 'object' ? faceMatches.result : null;
 				if (result && Object.keys(result).length) {

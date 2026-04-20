@@ -1,3 +1,5 @@
+import asyncio
+import json
 import os
 import sys
 import unittest
@@ -5,6 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath("src"))
 
+from api import imgdata_api
 from api.session_manager import SessionManager
 from imgdata import ImgDataService
 from models.metadata_face import MetadataFace
@@ -399,6 +402,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         )
 
         self.assertTrue(result["updated"])
+        self.assertEqual(result["operation"], "photos_assign")
         self.assertEqual(captured["lookup_name"], "Person Target")
         self.assertEqual(captured["assign"]["face_id"], 555)
         self.assertEqual(captured["assign"]["person_id"], 91)
@@ -429,6 +433,160 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertFalse(result["updated"])
         self.assertEqual(result["warning"], "checks:warning_target_person_not_found")
         self.assertEqual(result["details"]["requested_name"], "Missing Person")
+
+    def test_replace_checks_face_name_marks_metadata_write_operation(self):
+        self.service.replaceMetadataFaceName = lambda **kwargs: {
+            "updated": True,
+            "warning": "",
+            "target_path": kwargs["image_path"],
+        }
+
+        result = self.service.replaceChecksFaceName(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            image_path="/volume1/photo/tests/test.jpg",
+            face_data={
+                "source": "metadata",
+                "source_format": "ACD",
+                "name": "Person Legacy",
+                "x": 0.5,
+                "y": 0.5,
+                "w": 0.2,
+                "h": 0.2,
+            },
+            new_name="Person Target",
+        )
+
+        self.assertTrue(result["updated"])
+        self.assertEqual(result["operation"], "metadata_write")
+
+    def test_search_next_checks_item_save_only_applies_suggested_name_changes(self):
+        captured = {}
+
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._getChecksCandidatePaths = lambda **kwargs: ["/volume1/photo/tests/test.jpg"]
+        self.service.analyzeImageFaceMetadata = lambda image_path: {}
+        self.service._buildCheckEntriesForType = lambda **kwargs: [
+            {"review_type": "name_conflicts", "image_path": kwargs["image_path"], "entry_id": "remaining"}
+        ] if captured.get("refreshed") else [
+            {"review_type": "name_conflicts", "image_path": kwargs["image_path"], "entry_id": "initial"}
+        ]
+        self.service._resolveChecksReviewEntry = lambda **kwargs: captured.update({
+            "entry": kwargs["entry"],
+            "auto_apply_suggested_names": kwargs["auto_apply_suggested_names"],
+            "auto_apply_suggested_duplicates": kwargs["auto_apply_suggested_duplicates"],
+            "refreshed": True,
+        }) or {
+            "entry": None,
+            "item": None,
+            "auto_applied_count": 1,
+        }
+        self.service._writeChecksFindings = lambda **kwargs: captured.update({"saved_findings": kwargs}) or True
+
+        result = self.service.searchNextChecksItem(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            check_type="name_conflicts",
+            save_only=True,
+            auto_apply_suggested_names=True,
+        )
+
+        self.assertTrue(captured["auto_apply_suggested_names"])
+        self.assertFalse(captured["auto_apply_suggested_duplicates"])
+        self.assertEqual(result["save_only"], True)
+        self.assertEqual(result["findings_count"], 1)
+        self.assertEqual(captured["saved_findings"]["entries"][0]["entry_id"], "remaining")
+
+    def test_search_next_checks_item_save_only_applies_suggested_duplicate_changes(self):
+        captured = {}
+
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._getChecksCandidatePaths = lambda **kwargs: ["/volume1/photo/tests/test.jpg"]
+        self.service.analyzeImageFaceMetadata = lambda image_path: {}
+        self.service._buildCheckEntriesForType = lambda **kwargs: [] if captured.get("resolved") else [
+            {"review_type": "duplicate_faces", "image_path": kwargs["image_path"], "entry_id": "initial"}
+        ]
+        self.service._resolveChecksReviewEntry = lambda **kwargs: captured.update({
+            "auto_apply_suggested_names": kwargs["auto_apply_suggested_names"],
+            "auto_apply_suggested_duplicates": kwargs["auto_apply_suggested_duplicates"],
+            "resolved": True,
+        }) or {
+            "entry": None,
+            "item": None,
+            "auto_applied_count": 1,
+        }
+        self.service._writeChecksFindings = lambda **kwargs: captured.update({"saved_findings": kwargs}) or True
+
+        result = self.service.searchNextChecksItem(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            check_type="duplicate_faces",
+            save_only=True,
+            auto_apply_suggested_duplicates=True,
+        )
+
+        self.assertFalse(captured["auto_apply_suggested_names"])
+        self.assertTrue(captured["auto_apply_suggested_duplicates"])
+        self.assertEqual(result["save_only"], True)
+        self.assertEqual(result["findings_count"], 0)
+        self.assertEqual(captured["saved_findings"]["entries"], [])
+
+    def test_resolve_checks_review_entry_auto_applies_suggested_photos_name_change(self):
+        item = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "left_name": "Person Target",
+            "right_name": "Person Legacy",
+            "left_state": "suggested",
+            "right_state": "alert",
+            "left_face_target": {
+                "source": "embedded_xmp_exiftool",
+                "source_format": "ACD",
+                "name": "Person Target",
+                "x": 0.5,
+                "y": 0.5,
+                "w": 0.2,
+                "h": 0.2,
+            },
+            "right_face_target": {
+                "source": "photos",
+                "source_format": "PHOTOS",
+                "face_id": 77,
+                "name": "Person Legacy",
+                "x": 0.5,
+                "y": 0.5,
+                "w": 0.2,
+                "h": 0.2,
+            },
+        }
+        captured = {}
+
+        with patch.object(self.service, "getChecksReviewItem", side_effect=[item]), \
+             patch.object(self.service, "replaceChecksFaceName", side_effect=lambda **kwargs: captured.update(kwargs) or {
+                 "updated": True,
+                 "operation": "photos_assign",
+             }), \
+             patch.object(self.service, "_buildCheckEntriesForType", return_value=[]):
+            result = self.service._resolveChecksReviewEntry(
+                entry={"review_type": "name_conflicts", "image_path": "/volume1/photo/tests/test.jpg"},
+                auto_apply_suggested_names=True,
+                user_key="user",
+                cookies={"_SSID": "session"},
+                base_url="https://example.test",
+            )
+
+        self.assertIsNone(result["entry"])
+        self.assertIsNone(result["item"])
+        self.assertEqual(result["auto_applied_count"], 1)
+        self.assertEqual(captured["user_key"], "user")
+        self.assertEqual(captured["cookies"], {"_SSID": "session"})
+        self.assertEqual(captured["base_url"], "https://example.test")
+        self.assertEqual(captured["new_name"], "Person Target")
+        self.assertEqual(captured["face_data"]["source_format"], "PHOTOS")
+        self.assertEqual(captured["face_data"]["face_id"], 77)
 
     def test_orientation_risk_fallback_prefers_non_risky_side(self):
         risky_face = MetadataFace.from_center_box(
@@ -902,6 +1060,224 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         self.assertTrue(exists)
         self.assertEqual(captured_flags, [True])
+
+    def test_build_checks_scan_payload_keeps_resume_cursor_in_sync(self):
+        payload = self.service._buildChecksScanPayload(
+            check_type="name_conflicts",
+            save_only=False,
+            files_scanned=3,
+            total_files=10,
+            findings_count=4,
+            path_index=3,
+            pending_entries=[{"image_path": "photo/test.jpg"}],
+            current_path="photo/test.jpg",
+            result={"entry": {"image_path": "photo/test.jpg"}, "item": {"review_type": "name_conflicts"}},
+            message_key="checks:progress_result_found",
+            message="Check finding found.",
+            message_params={"count": 4},
+        )
+
+        self.assertEqual(payload["source_mode"], "scan")
+        self.assertEqual(payload["check_type"], "name_conflicts")
+        self.assertEqual(payload["findings_count"], 4)
+        self.assertEqual(payload["resume_cursor"]["path_index"], 3)
+        self.assertEqual(payload["resume_cursor"]["findings_count"], 4)
+        self.assertEqual(payload["resume_cursor"]["pending_entries"], [{"image_path": "photo/test.jpg"}])
+
+    def test_load_photo_faces_for_image_with_override_replaces_matching_face(self):
+        original_face = MetadataFace.from_center_box(
+            name="Person Legacy",
+            x=0.45,
+            y=0.45,
+            w=0.2,
+            h=0.2,
+            source="photos",
+            source_format="PHOTOS",
+        )
+        original_face.face_id = 77
+        original_face.person_id = 11
+        untouched_face = MetadataFace.from_center_box(
+            name="Person Other",
+            x=0.2,
+            y=0.2,
+            w=0.1,
+            h=0.1,
+            source="photos",
+            source_format="PHOTOS",
+        )
+        replacement_face_data = original_face.to_dict()
+        original_face_data = original_face.to_dict()
+        original_face_data["face_id"] = 77
+        original_face_data["person_id"] = 11
+        replacement_face_data["face_id"] = 77
+        replacement_face_data["name"] = "Person Current"
+        replacement_face_data["person_id"] = 42
+
+        with patch.object(self.service, "_loadPhotoFacesForImage", return_value=[original_face, untouched_face]):
+            faces = self.service._loadPhotoFacesForImageWithOverride(
+                user_key="user",
+                cookies={},
+                base_url="http://example.test",
+                shared_folder="photo",
+                image_path="photo/test.jpg",
+                original_face_data=original_face_data,
+                replacement_face_data=replacement_face_data,
+            )
+
+        self.assertEqual([face.name for face in faces], ["Person Current", "Person Other"])
+        self.assertEqual(self.service._faceSignature(faces[0]).get("face_id"), 77)
+        self.assertEqual(self.service._faceSignature(faces[0]).get("person_id"), 42)
+
+    def test_checks_replace_metadata_face_name_route_forwards_photos_override(self):
+        face = {
+            "name": "Person Legacy",
+            "x": 0.45,
+            "y": 0.45,
+            "w": 0.2,
+            "h": 0.2,
+            "source": "photos",
+            "source_format": "PHOTOS",
+            "face_id": 77,
+            "person_id": 11,
+        }
+
+        async def fake_prepare(_request):
+            return ({"user_key": "user", "cookies": {}, "base_url": "http://example.test"}, None)
+
+        async def fake_body(_request):
+            return {
+                "image_path": "photo/test.jpg",
+                "face": face,
+                "new_name": "Person Current",
+            }
+
+        with patch.object(imgdata_api, "_prepare_session_request", side_effect=fake_prepare), \
+             patch.object(imgdata_api, "_read_request_body", side_effect=fake_body), \
+             patch.object(imgdata_api.IMGDATA, "replaceChecksFaceName", return_value={
+                 "updated": True,
+                 "operation": "photos_assign",
+                 "resolved_name": "Person Current",
+                 "target_person": {"id": 42},
+             }), \
+             patch.object(imgdata_api, "_refresh_checks_mutation_state", return_value={"entries": []}) as refresh_mock:
+            response = asyncio.run(imgdata_api.checks_replace_metadata_face_name(None))
+
+        payload = json.loads(response.body)
+        self.assertTrue(payload["success"])
+        kwargs = refresh_mock.call_args.kwargs
+        self.assertEqual(kwargs["check_type"], "name_conflicts")
+        self.assertEqual(kwargs["image_path"], "photo/test.jpg")
+        self.assertEqual(kwargs["original_face_data"]["name"], "Person Legacy")
+        self.assertEqual(kwargs["replacement_face_data"]["name"], "Person Current")
+        self.assertEqual(kwargs["replacement_face_data"]["person_id"], 42)
+
+    def test_checks_replace_metadata_face_position_route_refreshes_without_override(self):
+        face = {
+            "name": "Person Legacy",
+            "x": 0.45,
+            "y": 0.45,
+            "w": 0.2,
+            "h": 0.2,
+            "source": "embedded_xmp_exiftool",
+            "source_format": "MICROSOFT",
+        }
+        source_face = {
+            "name": "Person Legacy",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0.2,
+            "h": 0.2,
+            "source": "photos",
+            "source_format": "PHOTOS",
+        }
+
+        async def fake_prepare(_request):
+            return ({"user_key": "user", "cookies": {}, "base_url": "http://example.test"}, None)
+
+        async def fake_body(_request):
+            return {
+                "image_path": "photo/test.jpg",
+                "face": face,
+                "source_face": source_face,
+                "review_type": "position_deviations",
+            }
+
+        with patch.object(imgdata_api, "_prepare_session_request", side_effect=fake_prepare), \
+             patch.object(imgdata_api, "_read_request_body", side_effect=fake_body), \
+             patch.object(imgdata_api.IMGDATA, "replaceMetadataFacePosition", return_value={"updated": True}), \
+             patch.object(imgdata_api, "_refresh_checks_mutation_state", return_value={"entries": []}) as refresh_mock:
+            response = asyncio.run(imgdata_api.checks_replace_metadata_face_position(None))
+
+        payload = json.loads(response.body)
+        self.assertTrue(payload["success"])
+        kwargs = refresh_mock.call_args.kwargs
+        self.assertEqual(kwargs["check_type"], "position_deviations")
+        self.assertEqual(kwargs["image_path"], "photo/test.jpg")
+        self.assertNotIn("original_face_data", kwargs)
+        self.assertNotIn("replacement_face_data", kwargs)
+
+    def test_checks_assign_face_person_route_forwards_photos_override(self):
+        face = {
+            "name": "Person Legacy",
+            "x": 0.45,
+            "y": 0.45,
+            "w": 0.2,
+            "h": 0.2,
+            "source": "photos",
+            "source_format": "PHOTOS",
+            "face_id": 77,
+            "person_id": 11,
+        }
+
+        async def fake_prepare(_request):
+            return ({"user_key": "user", "cookies": {}, "base_url": "http://example.test"}, None)
+
+        async def fake_body(_request):
+            return {
+                "image_path": "photo/test.jpg",
+                "face": face,
+                "review_type": "duplicate_faces",
+                "person_id": 42,
+                "person_name": "Person Current",
+            }
+
+        with patch.object(imgdata_api, "_prepare_session_request", side_effect=fake_prepare), \
+             patch.object(imgdata_api, "_read_request_body", side_effect=fake_body), \
+             patch.object(imgdata_api.IMGDATA, "assignChecksFaceToKnownPerson", return_value={"updated": True}), \
+             patch.object(imgdata_api, "_refresh_checks_mutation_state", return_value={"entries": []}) as refresh_mock:
+            response = asyncio.run(imgdata_api.checks_assign_face_person(None))
+
+        payload = json.loads(response.body)
+        self.assertTrue(payload["success"])
+        kwargs = refresh_mock.call_args.kwargs
+        self.assertEqual(kwargs["check_type"], "duplicate_faces")
+        self.assertEqual(kwargs["image_path"], "photo/test.jpg")
+        self.assertEqual(kwargs["original_face_data"]["person_id"], 11)
+        self.assertEqual(kwargs["replacement_face_data"]["name"], "Person Current")
+        self.assertEqual(kwargs["replacement_face_data"]["person_id"], 42)
+
+    def test_start_checks_review_findings_returns_only_stored_entries(self):
+        stored_entries = [
+            {"review_type": "name_conflicts", "image_path": "photo/a.jpg"},
+            {"review_type": "name_conflicts", "image_path": "photo/b.jpg"},
+        ]
+        with patch.object(self.service, "getChecksFindingEntries", return_value={
+            "save_only": True,
+            "entries": stored_entries,
+        }):
+            result = self.service.startChecksReview(
+                user_key="user",
+                cookies={},
+                base_url="http://example.test",
+                source_mode="findings",
+                check_type="name_conflicts",
+            )
+
+        self.assertEqual(result["check_type"], "name_conflicts")
+        self.assertEqual(result["source_mode"], "findings")
+        self.assertTrue(result["save_only"])
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["entries"], stored_entries)
 
 if __name__ == "__main__":
     unittest.main()

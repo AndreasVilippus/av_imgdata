@@ -59,7 +59,7 @@ export default {
 			output: '',
 		};
 	},
-	methods: {
+		methods: {
 		close() {
 			this.$refs.appWindow.close();
 		},
@@ -105,46 +105,108 @@ export default {
 			const root = this.getResponseData(data);
 			return (root && typeof root[key] === 'object' && root[key]) ? root[key] : {};
 		},
-		collectDsmCookies() {
-			return {
-				_SSID: this.readCookie('_SSID'),
-				id: this.readCookie('id'),
-				did: this.readCookie('did'),
-			};
+		getErrorMessage(err, fallback = 'Unknown error') {
+			if (err instanceof Error && err.message) {
+				return err.message;
+			}
+			if (err && typeof err.message === 'string' && err.message.trim()) {
+				return err.message.trim();
+			}
+			if (typeof err === 'string' && err.trim()) {
+				return err.trim();
+			}
+			if (err && typeof err === 'object') {
+				try {
+					const serialized = JSON.stringify(err);
+					if (serialized && serialized !== '{}') {
+						return serialized;
+					}
+				} catch (_ignored) {
+					// Fall back below.
+				}
+			}
+			return fallback;
 		},
-		async callFileAnalysisApi(apiPath, body = {}) {
-			await synocredential._instance.Resume();
+			collectDsmCookies() {
+				return {
+					_SSID: this.readCookie('_SSID'),
+					id: this.readCookie('id'),
+					did: this.readCookie('did'),
+				};
+			},
+			async getDsmRequestContext({ resume = true, requireResumeMessage = false } = {}) {
+				if (resume) {
+					await synocredential._instance.Resume();
+				}
+				const remote = synocredential._instance.GetRemoteKey();
+				const params = synocredential._instance.GetResumeParams({}, remote) || {};
+				const kk_message = params.kk_message || '';
+				const synoToken = this.getSynoToken();
+				const cookies = this.collectDsmCookies();
 
-			const remote = synocredential._instance.GetRemoteKey();
-			const params = synocredential._instance.GetResumeParams({}, remote) || {};
-			const kk_message = params.kk_message || '';
-			const synoToken = this.getSynoToken();
-			const cookies = this.collectDsmCookies();
+				if (requireResumeMessage && !kk_message) {
+					throw new Error(this.$t('face_match:error_missing_resume_message', 'kk_message could not be read from ResumeParams'));
+				}
+				if (!synoToken) {
+					throw new Error(this.$t('face_match:error_missing_synotoken', 'SYNO.SDS.Session.SynoToken is empty'));
+				}
 
-			const resp = await fetch(apiPath, {
-				method: 'POST',
-				credentials: 'include',
-				headers: {
-					'Content-Type': 'application/json',
-					'X-SYNO-TOKEN': synoToken,
-				},
-				body: JSON.stringify({
-					...body,
+				return {
 					kk_message,
 					synoToken,
 					cookies,
-				}),
-			});
-			const data = await resp.json().catch(() => ({}));
-			if (!resp.ok || data.success === false) {
-				const backendError = data.error || `HTTP ${resp.status}`;
-				throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-			}
-			return data;
-		},
-		formatCountSummary(counterMap) {
-			if (!counterMap || typeof counterMap !== 'object') {
-				return '-';
+				};
+			},
+			async callDsmApi(apiPath, body = {}, options = {}) {
+				const {
+					kk_message,
+					synoToken,
+					cookies,
+				} = await this.getDsmRequestContext(options);
+				const payload = {
+					...body,
+					synoToken,
+					cookies,
+				};
+				if (kk_message) {
+					payload.kk_message = kk_message;
+				}
+
+				const resp = await fetch(apiPath, {
+					method: 'POST',
+					credentials: 'include',
+					headers: {
+						'Content-Type': 'application/json',
+						'X-SYNO-TOKEN': synoToken,
+					},
+					body: JSON.stringify(payload),
+				});
+				const data = await resp.json().catch(() => ({}));
+				if (!resp.ok || data.success === false) {
+					const backendError = data.error || `HTTP ${resp.status}`;
+					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
+				}
+				return data;
+			},
+			async callFileAnalysisApi(apiPath, body = {}, options = {}) {
+				return this.callDsmApi(apiPath, body, options);
+			},
+			startNamedPolling(timerKey, callback, interval = 1000) {
+				this.stopNamedPolling(timerKey);
+				callback();
+				this[timerKey] = window.setInterval(() => {
+					callback();
+				}, interval);
+			},
+			stopNamedPolling(timerKey) {
+				if (this[timerKey]) {
+					window.clearInterval(this[timerKey]);
+					this[timerKey] = null;
+				}
+			},
+			formatCountSummary(counterMap) {
+				if (!counterMap || typeof counterMap !== 'object') {
+					return '-';
 			}
 			const entries = Object.entries(counterMap)
 				.filter(([, value]) => Number(value) > 0)

@@ -123,6 +123,40 @@ def _session_exception_response(
     }
 
 
+def _refresh_checks_mutation_state(
+    session_ctx: Dict[str, Any],
+    *,
+    check_type: str,
+    image_path: str,
+    original_face_data: Optional[Dict[str, Any]] = None,
+    replacement_face_data: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    normalized_type = str(check_type or "").strip().lower()
+    normalized_path = str(image_path or "").strip()
+    if not normalized_type or not normalized_path:
+        return None
+
+    findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
+        check_type=normalized_type,
+        image_path=normalized_path,
+        user_key=session_ctx["user_key"],
+        cookies=session_ctx["cookies"],
+        base_url=session_ctx["base_url"],
+        original_face_data=original_face_data,
+        replacement_face_data=replacement_face_data,
+    )
+    IMGDATA.refreshChecksScanProgressForImage(
+        user_key=session_ctx["user_key"],
+        check_type=normalized_type,
+        image_path=normalized_path,
+        cookies=session_ctx["cookies"],
+        base_url=session_ctx["base_url"],
+        original_face_data=original_face_data,
+        replacement_face_data=replacement_face_data,
+    )
+    return findings_update
+
+
 @router.post("/status")
 async def status(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
@@ -1053,19 +1087,10 @@ async def checks_delete_metadata_face(request: Request):
         findings_update = None
         review_type = str(body.get("review_type") or "").strip().lower()
         if result.get("deleted") and review_type:
-            findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
+            findings_update = _refresh_checks_mutation_state(
+                session_ctx,
                 check_type=review_type,
                 image_path=image_path,
-                user_key=session_ctx["user_key"],
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
-            )
-            IMGDATA.refreshChecksScanProgressForImage(
-                user_key=session_ctx["user_key"],
-                check_type=review_type,
-                image_path=image_path,
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
             )
     except Exception as exc:
         return JSONResponse({
@@ -1124,19 +1149,19 @@ async def checks_replace_metadata_face_name(request: Request):
                 target_name=new_name,
             )
         if result.get("updated"):
-            findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
+            replacement_face_data = None
+            if str(result.get("operation") or "").strip().lower() == "photos_assign":
+                replacement_face_data = dict(face)
+                replacement_face_data["name"] = str(result.get("resolved_name") or new_name)
+                target_person = result.get("target_person") if isinstance(result.get("target_person"), dict) else {}
+                if target_person.get("id") not in (None, ""):
+                    replacement_face_data["person_id"] = target_person.get("id")
+            findings_update = _refresh_checks_mutation_state(
+                session_ctx,
                 check_type="name_conflicts",
                 image_path=image_path,
-                user_key=session_ctx["user_key"],
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
-            )
-            IMGDATA.refreshChecksScanProgressForImage(
-                user_key=session_ctx["user_key"],
-                check_type="name_conflicts",
-                image_path=image_path,
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
+                original_face_data=face,
+                replacement_face_data=replacement_face_data,
             )
     except Exception as exc:
         return JSONResponse({
@@ -1186,19 +1211,10 @@ async def checks_replace_metadata_face_position(request: Request):
         )
         findings_update = None
         if result.get("updated") and review_type:
-            findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
+            findings_update = _refresh_checks_mutation_state(
+                session_ctx,
                 check_type=review_type,
                 image_path=image_path,
-                user_key=session_ctx["user_key"],
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
-            )
-            IMGDATA.refreshChecksScanProgressForImage(
-                user_key=session_ctx["user_key"],
-                check_type=review_type,
-                image_path=image_path,
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
             )
     except Exception as exc:
         return JSONResponse({
@@ -1262,19 +1278,17 @@ async def checks_assign_face_person(request: Request):
         )
         findings_update = None
         if result.get("updated") and review_type:
-            findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
+            replacement_face_data = None
+            if str(face.get("source_format") or "").strip().upper() == "PHOTOS":
+                replacement_face_data = dict(face)
+                replacement_face_data["name"] = person_name
+                replacement_face_data["person_id"] = person_id
+            findings_update = _refresh_checks_mutation_state(
+                session_ctx,
                 check_type=review_type,
                 image_path=image_path,
-                user_key=session_ctx["user_key"],
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
-            )
-            IMGDATA.refreshChecksScanProgressForImage(
-                user_key=session_ctx["user_key"],
-                check_type=review_type,
-                image_path=image_path,
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
+                original_face_data=face,
+                replacement_face_data=replacement_face_data,
             )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="checks_assign_face_person_bootstrap_required")

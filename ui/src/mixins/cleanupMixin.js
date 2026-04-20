@@ -31,36 +31,6 @@ export default {
 		this.stopCleanupProgressPolling();
 	},
 	methods: {
-		async callCleanupApi(apiPath, body = {}) {
-			await synocredential._instance.Resume();
-
-			const remote = synocredential._instance.GetRemoteKey();
-			const params = synocredential._instance.GetResumeParams({}, remote) || {};
-			const kk_message = params.kk_message || '';
-			const synoToken = this.getSynoToken();
-			const cookies = this.collectDsmCookies();
-
-			const resp = await fetch(apiPath, {
-				method: 'POST',
-				credentials: 'include',
-				headers: {
-					'Content-Type': 'application/json',
-					'X-SYNO-TOKEN': synoToken,
-				},
-				body: JSON.stringify({
-					...body,
-					kk_message,
-					synoToken,
-					cookies,
-				}),
-			});
-			const data = await resp.json().catch(() => ({}));
-			if (!resp.ok || data.success === false) {
-				const backendError = data.error || `HTTP ${resp.status}`;
-				throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-			}
-			return data;
-		},
 		applyCleanupProgress(progress) {
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
 			this.cleanupProgress = nextProgress;
@@ -78,7 +48,7 @@ export default {
 			const requestId = this.cleanupProgressRequestId + 1;
 			this.cleanupProgressRequestId = requestId;
 			try {
-				const data = await this.callCleanupApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
 					action: this.selectedCleanupAction,
 				});
 				if (this.cleanupProgressRequestId !== requestId) {
@@ -98,17 +68,12 @@ export default {
 			}
 		},
 		startCleanupProgressPolling() {
-			this.stopCleanupProgressPolling();
-			this.fetchCleanupProgress();
-			this.cleanupProgressTimer = window.setInterval(() => {
+			this.startNamedPolling('cleanupProgressTimer', () => {
 				this.fetchCleanupProgress();
-			}, 1000);
+			});
 		},
 		stopCleanupProgressPolling() {
-			if (this.cleanupProgressTimer) {
-				window.clearInterval(this.cleanupProgressTimer);
-				this.cleanupProgressTimer = null;
-			}
+			this.stopNamedPolling('cleanupProgressTimer');
 		},
 		async refreshCleanupSessionState() {
 			const progress = await this.fetchCleanupProgress();
@@ -130,7 +95,7 @@ export default {
 			this.cleanupLoading = true;
 			this.cleanupStatusMessage = this.$t('cleanup:status_preparing', 'Cleanup starts. Preparing run...');
 			try {
-				const data = await this.callCleanupApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_start', {
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_start', {
 					action: this.selectedCleanupAction,
 					targets: this.selectedCleanupTargets,
 				});
@@ -148,7 +113,7 @@ export default {
 		},
 		async stopCleanupRun() {
 			try {
-				await this.callCleanupApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_stop', {
+				await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_stop', {
 					action: this.selectedCleanupAction,
 				});
 			} catch (err) {

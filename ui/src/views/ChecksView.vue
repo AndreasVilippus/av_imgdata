@@ -21,7 +21,7 @@
 				<label
 					v-if="vm.selectedChecksAction === 'scan'"
 					class="face-match-switch"
-					:title="vm.$t('checks:hint_save_only', 'Findings are only stored in the findings list and not shown directly during the scan.')"
+					:title="vm.$t('checks:hint_save_only', 'Findings are only stored in the findings list and not shown directly during the scan. Automatic recommended solutions are still applied.')"
 				>
 					<input v-model="vm.checksSaveOnly" type="checkbox" :disabled="vm.checksLoading" />
 					<span class="face-match-switch-slider"></span>
@@ -117,226 +117,8 @@
 					<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_name_left', '<- Name') }}</span>
 				</button>
 			</div>
-			<div class="face-match-col">
-				<h2>{{ vm.getChecksLeftTitle(vm.checksCurrentItem) }}</h2>
-				<div v-if="vm.isChecksDuplicateFaces(vm.checksCurrentItem)" class="checks-face-name checks-face-name-input-wrap">
-					<label class="checks-face-name-field">
-						<input
-							v-model.trim="vm.checksDuplicateAssignments.left.name"
-							type="text"
-							class="face-match-result-name-input"
-							:placeholder="vm.$t('checks:name_placeholder', 'Name of the person')"
-							@input="vm.handleChecksDuplicateNameInput('left')"
-							@focus="vm.handleChecksDuplicateNameFocus('left')"
-						/>
-						<div v-if="vm.checksDuplicateAssignments.left.showSuggestions && (vm.checksDuplicateAssignments.left.suggestLoading || vm.checksDuplicateAssignments.left.suggestions.length)" class="face-match-suggest-list">
-							<div v-if="vm.checksDuplicateAssignments.left.suggestLoading" class="face-match-suggest-loading">
-								<span class="sm-loader"></span>
-								{{ vm.$t('face_match:suggest_loading', 'Loading suggestions...') }}
-							</div>
-							<button
-								v-for="person in vm.checksDuplicateAssignments.left.suggestions"
-								:key="`checks-left-person-suggest-${person.id}`"
-								type="button"
-								class="face-match-suggest-item"
-								@click="vm.selectChecksDuplicateSuggestion('left', person)"
-							>
-								<img :src="vm.getFaceMatchPersonPreviewUrl(person)" alt="" class="face-match-suggest-thumb" />
-								<span class="face-match-suggest-text">
-									<span class="face-match-suggest-name">{{ person.name || vm.$t('face_match:unknown_name', '(unnamed)') }}</span>
-									<span class="face-match-suggest-meta">{{ vm.$t('face_match:suggest_person_id', 'Photos Person-ID: {id}', { id: person.id }) }}</span>
-								</span>
-							</button>
-						</div>
-					</label>
-				</div>
-				<div v-else-if="vm.showChecksFaceName(vm.checksCurrentItem)" class="checks-face-name">
-					{{ vm.getChecksDisplayName(vm.checksCurrentItem.left_name) }}
-				</div>
-				<div v-if="vm.getChecksImageUrl(vm.checksCurrentItem)" class="face-match-thumbnail-wrap">
-					<button
-						v-if="!vm.isChecksNameConflict(vm.checksCurrentItem) && vm.canDeleteChecksFace(vm.checksCurrentItem, vm.checksCurrentItem.left_face_target)"
-						type="button"
-						class="face-match-icon-button checks-delete-button checks-delete-button-right"
-						:title="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
-						:aria-label="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
-						:disabled="vm.checksLoading || vm.checksActionLocked"
-						@click.prevent="vm.deleteChecksMetadataFace(vm.checksCurrentItem.left_face_target)"
-					>
-						<span class="face-match-icon-stack">
-							<img :src="vm.getChecksDeleteFaceBaseIconUrl()" alt="" class="face-match-icon-image" />
-							<img :src="vm.getChecksDeleteFaceOverlayIconUrl()" alt="" class="face-match-icon-overlay" />
-						</span>
-					</button>
-					<button
-						v-if="vm.isChecksDuplicateFaces(vm.checksCurrentItem)"
-						type="button"
-						class="face-match-icon-button checks-sync-button checks-sync-button-right"
-						:title="vm.$t('checks:tooltip_assign_known_person', 'Assign selected known person')"
-						:aria-label="vm.$t('checks:tooltip_assign_known_person', 'Assign selected known person')"
-						:disabled="!vm.canAssignChecksFaceToPerson(vm.checksCurrentItem, 'left')"
-						@click.prevent="vm.assignChecksFaceToPerson('left')"
-					>
-						<span class="face-match-icon-stack">
-							<img :src="vm.getChecksSyncFaceBaseIconUrl()" alt="" class="face-match-icon-image" />
-							<img :src="vm.getChecksSyncFaceOverlayIconUrl()" alt="" class="face-match-icon-overlay" />
-						</span>
-					</button>
-					<button
-						v-if="vm.isChecksPositionDeviation(vm.checksCurrentItem) && vm.canReplaceChecksFacePosition(vm.checksCurrentItem, vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_face)"
-						type="button"
-						class="face-match-icon-button checks-position-button checks-position-button-left"
-						:title="vm.getChecksReplaceLeftTooltip(vm.checksCurrentItem)"
-						:aria-label="vm.getChecksReplaceLeftTooltip(vm.checksCurrentItem)"
-						:disabled="vm.checksLoading"
-						@click.prevent="vm.replaceChecksMetadataFacePosition(vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_face)"
-					>
-						<img v-if="vm.getChecksPositionLeftIconUrl()" :src="vm.getChecksPositionLeftIconUrl()" alt="" class="face-match-icon-image" />
-						<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_position_left', '<- Pos') }}</span>
-					</button>
-					<div class="face-match-preview">
-						<img
-							:src="vm.getChecksImageUrl(vm.checksCurrentItem)"
-							:alt="vm.$t('checks:image_alt', 'Check preview')"
-							class="face-match-thumbnail"
-						/>
-						<div
-							v-for="(maskStyle, index) in vm.getFaceMatchMaskStyles(vm.checksCurrentItem.left_face)"
-							:key="`checks-left-mask-${index}`"
-							class="face-match-mask"
-							:style="maskStyle"
-						></div>
-						<div
-							v-for="(face, index) in vm.checksCurrentItem.left_reference_faces || []"
-							:key="`checks-left-reference-${index}`"
-							class="face-match-bbox"
-							:style="vm.getChecksReferenceBoxStyle(face)"
-						></div>
-						<div
-							v-for="(face, index) in vm.checksCurrentItem.left_alert_faces || []"
-							:key="`checks-left-alert-${index}`"
-							class="face-match-bbox"
-							:style="vm.getChecksAlertBoxStyle(face, vm.checksCurrentItem.left_face)"
-						></div>
-						<div
-							v-if="vm.getFaceMatchBoxStyle(vm.checksCurrentItem.left_face)"
-							class="face-match-bbox"
-							:style="vm.getChecksAlertBoxStyle(vm.checksCurrentItem.left_face, vm.checksCurrentItem.left_face, vm.checksCurrentItem.left_state || 'alert')"
-						></div>
-					</div>
-				</div>
-				<div v-else class="face-match-empty">{{ vm.$t('checks:empty_image', 'No preview available.') }}</div>
-			</div>
-			<div class="face-match-col">
-				<h2>{{ vm.getChecksRightTitle(vm.checksCurrentItem) }}</h2>
-				<div v-if="vm.isChecksDuplicateFaces(vm.checksCurrentItem)" class="checks-face-name checks-face-name-input-wrap">
-					<label class="checks-face-name-field">
-						<input
-							v-model.trim="vm.checksDuplicateAssignments.right.name"
-							type="text"
-							class="face-match-result-name-input"
-							:placeholder="vm.$t('checks:name_placeholder', 'Name of the person')"
-							@input="vm.handleChecksDuplicateNameInput('right')"
-							@focus="vm.handleChecksDuplicateNameFocus('right')"
-						/>
-						<div v-if="vm.checksDuplicateAssignments.right.showSuggestions && (vm.checksDuplicateAssignments.right.suggestLoading || vm.checksDuplicateAssignments.right.suggestions.length)" class="face-match-suggest-list">
-							<div v-if="vm.checksDuplicateAssignments.right.suggestLoading" class="face-match-suggest-loading">
-								<span class="sm-loader"></span>
-								{{ vm.$t('face_match:suggest_loading', 'Loading suggestions...') }}
-							</div>
-							<button
-								v-for="person in vm.checksDuplicateAssignments.right.suggestions"
-								:key="`checks-right-person-suggest-${person.id}`"
-								type="button"
-								class="face-match-suggest-item"
-								@click="vm.selectChecksDuplicateSuggestion('right', person)"
-							>
-								<img :src="vm.getFaceMatchPersonPreviewUrl(person)" alt="" class="face-match-suggest-thumb" />
-								<span class="face-match-suggest-text">
-									<span class="face-match-suggest-name">{{ person.name || vm.$t('face_match:unknown_name', '(unnamed)') }}</span>
-									<span class="face-match-suggest-meta">{{ vm.$t('face_match:suggest_person_id', 'Photos Person-ID: {id}', { id: person.id }) }}</span>
-								</span>
-							</button>
-						</div>
-					</label>
-				</div>
-				<div v-else-if="vm.showChecksFaceName(vm.checksCurrentItem)" class="checks-face-name">
-					{{ vm.getChecksDisplayName(vm.checksCurrentItem.right_name) }}
-				</div>
-				<div v-if="vm.getChecksImageUrl(vm.checksCurrentItem)" class="face-match-thumbnail-wrap">
-					<button
-						v-if="!vm.isChecksNameConflict(vm.checksCurrentItem) && vm.canDeleteChecksFace(vm.checksCurrentItem, vm.checksCurrentItem.right_face_target)"
-						type="button"
-						class="face-match-icon-button checks-delete-button checks-delete-button-left"
-						:title="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
-						:aria-label="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
-						:disabled="vm.checksLoading || vm.checksActionLocked"
-						@click.prevent="vm.deleteChecksMetadataFace(vm.checksCurrentItem.right_face_target)"
-					>
-						<span class="face-match-icon-stack">
-							<img :src="vm.getChecksDeleteFaceBaseIconUrl()" alt="" class="face-match-icon-image" />
-							<img :src="vm.getChecksDeleteFaceOverlayIconUrl()" alt="" class="face-match-icon-overlay" />
-						</span>
-					</button>
-					<button
-						v-if="vm.isChecksDuplicateFaces(vm.checksCurrentItem)"
-						type="button"
-						class="face-match-icon-button checks-sync-button checks-sync-button-left"
-						:title="vm.$t('checks:tooltip_assign_known_person', 'Assign selected known person')"
-						:aria-label="vm.$t('checks:tooltip_assign_known_person', 'Assign selected known person')"
-						:disabled="!vm.canAssignChecksFaceToPerson(vm.checksCurrentItem, 'right')"
-						@click.prevent="vm.assignChecksFaceToPerson('right')"
-					>
-						<span class="face-match-icon-stack">
-							<img :src="vm.getChecksSyncFaceBaseIconUrl()" alt="" class="face-match-icon-image" />
-							<img :src="vm.getChecksSyncFaceOverlayIconUrl()" alt="" class="face-match-icon-overlay" />
-						</span>
-					</button>
-					<button
-						v-if="vm.isChecksPositionDeviation(vm.checksCurrentItem) && vm.canReplaceChecksFacePosition(vm.checksCurrentItem, vm.checksCurrentItem.right_face_target, vm.checksCurrentItem.left_face)"
-						type="button"
-						class="face-match-icon-button checks-position-button checks-position-button-right"
-						:title="vm.getChecksReplaceRightTooltip(vm.checksCurrentItem)"
-						:aria-label="vm.getChecksReplaceRightTooltip(vm.checksCurrentItem)"
-						:disabled="vm.checksLoading"
-						@click.prevent="vm.replaceChecksMetadataFacePosition(vm.checksCurrentItem.right_face_target, vm.checksCurrentItem.left_face)"
-					>
-						<img v-if="vm.getChecksPositionRightIconUrl()" :src="vm.getChecksPositionRightIconUrl()" alt="" class="face-match-icon-image" />
-						<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_position_right', 'Pos ->') }}</span>
-					</button>
-					<div class="face-match-preview">
-						<img
-							:src="vm.getChecksImageUrl(vm.checksCurrentItem)"
-							:alt="vm.$t('checks:image_alt', 'Check preview')"
-							class="face-match-thumbnail"
-						/>
-						<div
-							v-for="(maskStyle, index) in vm.getFaceMatchMaskStyles(vm.checksCurrentItem.right_face)"
-							:key="`checks-right-mask-${index}`"
-							class="face-match-mask"
-							:style="maskStyle"
-						></div>
-						<div
-							v-for="(face, index) in vm.checksCurrentItem.right_reference_faces || []"
-							:key="`checks-right-reference-${index}`"
-							class="face-match-bbox"
-							:style="vm.getChecksReferenceBoxStyle(face)"
-						></div>
-						<div
-							v-for="(face, index) in vm.checksCurrentItem.right_alert_faces || []"
-							:key="`checks-right-alert-${index}`"
-							class="face-match-bbox"
-							:style="vm.getChecksAlertBoxStyle(face, vm.checksCurrentItem.right_face)"
-						></div>
-						<div
-							v-if="vm.getFaceMatchBoxStyle(vm.checksCurrentItem.right_face)"
-							class="face-match-bbox"
-							:style="vm.getChecksAlertBoxStyle(vm.checksCurrentItem.right_face, vm.checksCurrentItem.right_face, vm.checksCurrentItem.right_state || 'alert')"
-						></div>
-					</div>
-				</div>
-				<div v-else class="face-match-empty">{{ vm.$t('checks:empty_image', 'No preview available.') }}</div>
-			</div>
+			<ChecksFacePane :vm="vm" :item="vm.checksCurrentItem" side="left" />
+			<ChecksFacePane :vm="vm" :item="vm.checksCurrentItem" side="right" />
 		</div>
 		<div v-if="vm.nameMappingConfirm.visible" class="sm-modal-backdrop">
 			<div class="sm-modal sm-modal-centered" role="dialog" aria-modal="true" aria-labelledby="checks-name-mapping-confirm-title">
@@ -357,11 +139,13 @@
 </template>
 
 <script>
+import ChecksFacePane from '../components/ChecksFacePane.vue';
 import RatioProgress from '../components/RatioProgress.vue';
 
 export default {
 	name: 'ChecksView',
 	components: {
+		ChecksFacePane,
 		RatioProgress,
 	},
 	props: {

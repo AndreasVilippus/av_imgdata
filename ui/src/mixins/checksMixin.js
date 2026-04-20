@@ -24,8 +24,17 @@ export default {
 		};
 	},
 	computed: {
+		isChecksScanRunning() {
+			const progress = this.checksProgress && typeof this.checksProgress === 'object'
+				? this.checksProgress
+				: {};
+			return this.selectedChecksAction === 'scan'
+				&& !!progress.running
+				&& String(progress.source_mode || '').trim().toLowerCase() === 'scan'
+				&& String(progress.check_type || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase();
+		},
 		checksPrimaryButtonLabel() {
-			if (this.selectedChecksAction === 'scan' && this.checksLoading) {
+			if (this.isChecksScanRunning) {
 				return this.$t('checks:button_stop', 'Stop');
 			}
 			return this.checksLoading
@@ -103,35 +112,8 @@ export default {
 			this.checksDuplicateAssignments.left.name = String(item && item.left_name || '').trim();
 			this.checksDuplicateAssignments.right.name = String(item && item.right_name || '').trim();
 		},
-		async callChecksApi(apiPath, body = {}) {
-			await synocredential._instance.Resume();
-
-			const remote = synocredential._instance.GetRemoteKey();
-			const params = synocredential._instance.GetResumeParams({}, remote) || {};
-			const kk_message = params.kk_message || '';
-			const synoToken = this.getSynoToken();
-			const cookies = this.collectDsmCookies();
-
-			const resp = await fetch(apiPath, {
-				method: 'POST',
-				credentials: 'include',
-				headers: {
-					'Content-Type': 'application/json',
-					'X-SYNO-TOKEN': synoToken,
-				},
-				body: JSON.stringify({
-					...body,
-					kk_message,
-					synoToken,
-					cookies,
-				}),
-			});
-			const data = await resp.json().catch(() => ({}));
-			if (!resp.ok || data.success === false) {
-				const backendError = data.error || `HTTP ${resp.status}`;
-				throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
-			}
-			return data;
+		async callChecksApi(apiPath, body = {}, options = {}) {
+			return this.callDsmApi(apiPath, body, options);
 		},
 		getChecksImageUrl(item) {
 			const imagePath = item && item.image_path ? String(item.image_path).trim() : '';
@@ -167,6 +149,9 @@ export default {
 		isChecksMetadataFace(face) {
 			const sourceFormat = String(face && face.source_format || '').trim().toUpperCase();
 			return ['ACD', 'MICROSOFT', 'MWG_REGIONS'].includes(sourceFormat);
+		},
+		isChecksPhotosFace(face) {
+			return String(face && face.source_format || '').trim().toUpperCase() === 'PHOTOS';
 		},
 		canDeleteChecksFace(item, face) {
 			return !this.checksActionLocked
@@ -342,6 +327,14 @@ export default {
 			}
 			const leftName = this.getChecksDisplayName(item && item.left_name);
 			const rightName = this.getChecksDisplayName(item && item.right_name);
+			const rightFace = item && item.right_face_target;
+			if (this.isChecksPhotosFace(rightFace)) {
+				return this.$t(
+					'checks:tooltip_assign_right_name',
+					'The Photos face on the right is assigned to the person from the left: {from} -> {to}',
+					{ from: rightName, to: leftName }
+				);
+			}
 			return this.$t(
 				'checks:tooltip_replace_right_name',
 				'The face on the right gets the name from the left: {from} -> {to}',
@@ -357,6 +350,14 @@ export default {
 			}
 			const leftName = this.getChecksDisplayName(item && item.left_name);
 			const rightName = this.getChecksDisplayName(item && item.right_name);
+			const leftFace = item && item.left_face_target;
+			if (this.isChecksPhotosFace(leftFace)) {
+				return this.$t(
+					'checks:tooltip_assign_left_name',
+					'The Photos face on the left is assigned to the person from the right: {from} -> {to}',
+					{ from: leftName, to: rightName }
+				);
+			}
 			return this.$t(
 				'checks:tooltip_replace_left_name',
 				'The face on the left gets the name from the right: {from} -> {to}',
@@ -400,10 +401,13 @@ export default {
 			return true;
 		},
 		async refreshChecksSessionState() {
-			const progress = await this.fetchChecksProgress({ applyFinishedState: false });
+			const progress = await this.fetchChecksProgress({ applyFinishedState: true });
+			const hasProgress = !!(progress && Object.keys(progress).length);
+			if (!hasProgress) {
+				return;
+			}
 			const matchesCurrentSelection = !!(
-				progress
-				&& String(progress.source_mode || '').trim().toLowerCase() === 'scan'
+				String(progress.source_mode || '').trim().toLowerCase() === 'scan'
 				&& String(progress.check_type || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase()
 			);
 			if (matchesCurrentSelection && progress.running) {
@@ -419,8 +423,10 @@ export default {
 				this.startChecksProgressPolling();
 				return;
 			}
-			this.checksLoading = false;
-			this.stopChecksProgressPolling();
+			if (matchesCurrentSelection || !progress.running) {
+				this.checksLoading = false;
+				this.stopChecksProgressPolling();
+			}
 		},
 		applyChecksProgress(progress) {
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
@@ -450,23 +456,9 @@ export default {
 			const requestId = this.checksProgressRequestId + 1;
 			this.checksProgressRequestId = requestId;
 			try {
-				const resp = await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_progress', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': this.getSynoToken(),
-					},
-					body: JSON.stringify({
-						cookies: this.collectDsmCookies(),
-						synoToken: this.getSynoToken(),
-						check_type: this.selectedChecksType,
-					}),
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_progress', {
+					check_type: this.selectedChecksType,
 				});
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					return;
-				}
 				if (this.checksProgressRequestId !== requestId) {
 					return {};
 				}
@@ -480,24 +472,29 @@ export default {
 				}
 				return progress;
 			} catch (err) {
+				if (this.checksProgressRequestId !== requestId) {
+					return {};
+				}
+				const progress = this.checksProgress && typeof this.checksProgress === 'object'
+					? this.checksProgress
+					: {};
+				if (!progress.running) {
+					this.checksLoading = false;
+					this.stopChecksProgressPolling();
+				}
 				return {};
 			}
 		},
 		startChecksProgressPolling() {
-			this.stopChecksProgressPolling();
-			this.fetchChecksProgress();
-			this.checksProgressTimer = window.setInterval(() => {
+			this.startNamedPolling('checksProgressTimer', () => {
 				this.fetchChecksProgress();
-			}, 1000);
+			});
 		},
 		stopChecksProgressPolling() {
-			if (this.checksProgressTimer) {
-				window.clearInterval(this.checksProgressTimer);
-				this.checksProgressTimer = null;
-			}
+			this.stopNamedPolling('checksProgressTimer');
 		},
 		async startChecksReview() {
-			if (this.selectedChecksAction === 'scan' && this.checksLoading) {
+			if (this.isChecksScanRunning) {
 				await this.stopChecksScan();
 				return;
 			}
@@ -505,6 +502,14 @@ export default {
 				await this.startChecksScan();
 				return;
 			}
+			this.stopChecksProgressPolling();
+			this.checksProgressRequestId += 1;
+			this.checksProgress = {};
+			this.checksEntries = [];
+			this.checksCurrentIndex = 0;
+			this.checksCurrentItem = null;
+			this.checksActionLocked = false;
+			this.resetChecksDuplicateAssignmentState();
 			this.checksLoading = true;
 			this.checksStatusMessage = this.$t('checks:status_loading', 'Loading checks...');
 			try {
@@ -524,7 +529,7 @@ export default {
 					await this.loadChecksItemAtIndex(0);
 				}
 			} catch (err) {
-				this.checksStatusMessage = `Error: ${err.message}`;
+				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.checksActionLocked = false;
 				this.checksLoading = false;
@@ -602,23 +607,13 @@ export default {
 			} catch (err) {
 				this.checksLoading = false;
 				this.stopChecksProgressPolling();
-				this.checksStatusMessage = `Error: ${err.message}`;
+				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			}
 		},
 		async stopChecksScan() {
 			try {
-				await fetch('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_stop', {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': this.getSynoToken(),
-					},
-					body: JSON.stringify({
-						cookies: this.collectDsmCookies(),
-						synoToken: this.getSynoToken(),
-						check_type: this.selectedChecksType,
-					}),
+				await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_stop', {
+					check_type: this.selectedChecksType,
 				});
 			} catch (err) {
 				// Best effort.
@@ -641,7 +636,7 @@ export default {
 			try {
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex + 1);
 			} catch (err) {
-				this.checksStatusMessage = `Error: ${err.message}`;
+				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.checksLoading = false;
 			}
@@ -676,7 +671,7 @@ export default {
 				this.checksStatusMessage = this.$t('checks:status_face_deleted', 'Face removed from metadata.');
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
 			} catch (err) {
-				this.checksStatusMessage = `Error: ${err.message}`;
+				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.checksLoading = false;
 			}
@@ -728,7 +723,10 @@ export default {
 					return;
 				}
 				this.applyChecksFindingsUpdate(result.findings_update);
-				this.checksStatusMessage = this.$t('checks:status_face_name_replaced', 'Face name replaced in metadata.');
+				const operation = String(result.operation || '').trim().toLowerCase();
+				this.checksStatusMessage = operation === 'photos_assign'
+					? this.$t('checks:status_face_person_assigned', 'Photos face assigned to known person.')
+					: this.$t('checks:status_face_name_replaced', 'Face name replaced in metadata.');
 				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
 					keepLoadingState = true;
 					await this.startChecksScan({ resumeFromProgress: true });
@@ -741,7 +739,7 @@ export default {
 				}
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
 			} catch (err) {
-				this.checksStatusMessage = `Error: ${err.message}`;
+				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.checksActionLocked = false;
 				if (!keepLoadingState) {
@@ -791,7 +789,7 @@ export default {
 				}
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
 			} catch (err) {
-				this.checksStatusMessage = `Error: ${err.message}`;
+				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.checksActionLocked = false;
 				if (!keepLoadingState) {
@@ -848,7 +846,7 @@ export default {
 				}
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
 			} catch (err) {
-				this.checksStatusMessage = `Error: ${err.message}`;
+				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.checksActionLocked = false;
 				if (!keepLoadingState) {

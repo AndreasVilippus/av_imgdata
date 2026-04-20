@@ -964,6 +964,50 @@ class ImgDataService:
             "findings_count": max(0, int(findings_count)),
         }
 
+    def _buildChecksScanPayload(
+        self,
+        *,
+        check_type: str,
+        save_only: bool,
+        files_scanned: int,
+        total_files: int,
+        findings_count: int,
+        path_index: int,
+        pending_entries: Optional[List[Dict[str, Any]]] = None,
+        current_path: str = "",
+        result: Optional[Dict[str, Any]] = None,
+        message_key: str = "",
+        message: str = "",
+        message_params: Optional[Dict[str, Any]] = None,
+        running: bool = False,
+        finished: bool = True,
+        stop_requested: bool = False,
+    ) -> Dict[str, Any]:
+        return {
+            "running": running,
+            "finished": finished,
+            "stop_requested": stop_requested,
+            "source_mode": "scan",
+            "check_type": check_type,
+            "save_only": save_only,
+            "files_scanned": files_scanned,
+            "total_files": total_files,
+            "findings_count": findings_count,
+            "current_path": current_path,
+            "result": result,
+            "resume_cursor": self._buildChecksResumeCursor(
+                path_index=path_index,
+                pending_entries=pending_entries,
+                source_mode="scan",
+                check_type=check_type,
+                save_only=save_only,
+                findings_count=findings_count,
+            ),
+            "message_key": message_key,
+            "message": message,
+            "message_params": message_params or {},
+        }
+
     def _buildCheckEntriesForType(
         self,
         *,
@@ -1107,6 +1151,8 @@ class ImgDataService:
         cookies: Optional[Dict[str, str]] = None,
         base_url: str = "",
         shared_folder: str = "",
+        original_face_data: Optional[Dict[str, Any]] = None,
+        replacement_face_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         normalized_type = self._normalizeChecksType(check_type)
         normalized_path = str(image_path or "").strip()
@@ -1118,6 +1164,15 @@ class ImgDataService:
         if not existing_entries:
             return self.getChecksFindingEntries(check_type=normalized_type)
 
+        photo_faces = self._loadPhotoFacesForImageWithOverride(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            shared_folder=shared_folder,
+            image_path=normalized_path,
+            original_face_data=original_face_data,
+            replacement_face_data=replacement_face_data,
+        )
         rebuilt_entries = self._buildCheckEntriesForType(
             image_path=normalized_path,
             review_type=normalized_type,
@@ -1125,6 +1180,7 @@ class ImgDataService:
             cookies=cookies,
             base_url=base_url,
             shared_folder=shared_folder,
+            photo_faces=photo_faces,
         )
 
         updated_entries: List[Dict[str, Any]] = []
@@ -1161,6 +1217,8 @@ class ImgDataService:
         cookies: Optional[Dict[str, str]] = None,
         base_url: str = "",
         shared_folder: str = "",
+        original_face_data: Optional[Dict[str, Any]] = None,
+        replacement_face_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         normalized_type = self._normalizeChecksType(check_type)
         normalized_path = str(image_path or "").strip()
@@ -1185,6 +1243,15 @@ class ImgDataService:
             if str(entry.get("image_path") or "").strip() == normalized_path:
                 old_image_entries_count += 1
 
+        photo_faces = self._loadPhotoFacesForImageWithOverride(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            shared_folder=shared_folder,
+            image_path=normalized_path,
+            original_face_data=original_face_data,
+            replacement_face_data=replacement_face_data,
+        )
         rebuilt_entries = self._buildCheckEntriesForType(
             image_path=normalized_path,
             review_type=normalized_type,
@@ -1192,6 +1259,7 @@ class ImgDataService:
             cookies=cookies,
             base_url=base_url,
             shared_folder=shared_folder,
+            photo_faces=photo_faces,
         )
 
         remaining_pending_entries: List[Dict[str, Any]] = []
@@ -1360,7 +1428,10 @@ class ImgDataService:
                     "auto_applied_count": auto_applied_count,
                 }
 
-            result = self.replaceMetadataFaceName(
+            result = self.replaceChecksFaceName(
+                user_key=str(user_key or ""),
+                cookies=dict(cookies or {}),
+                base_url=base_url,
                 image_path=str(item.get("image_path") or ""),
                 face_data=action["face"],
                 new_name=str(action["new_name"] or ""),
@@ -2715,6 +2786,53 @@ class ImgDataService:
                 normalized_faces.append(mapped)
         return normalized_faces
 
+    def _loadPhotoFacesForImageWithOverride(
+        self,
+        *,
+        user_key: Optional[str],
+        cookies: Optional[Dict[str, str]],
+        base_url: str,
+        shared_folder: str,
+        image_path: str,
+        original_face_data: Optional[Dict[str, Any]] = None,
+        replacement_face_data: Optional[Dict[str, Any]] = None,
+    ) -> Optional[List[MetadataFace]]:
+        if not original_face_data or not replacement_face_data:
+            return None
+        if str(original_face_data.get("source_format") or "").strip().upper() != "PHOTOS":
+            return None
+
+        photo_faces = self._loadPhotoFacesForImage(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            shared_folder=shared_folder,
+            image_path=image_path,
+        )
+        replacement_face = MetadataFace.from_dict(replacement_face_data)
+        for key in ("face_id", "person_id"):
+            value = replacement_face_data.get(key)
+            if value not in (None, ""):
+                setattr(replacement_face, key, value)
+
+        original_signature = self._faceSignature(original_face_data)
+        index_to_replace = None
+        for index, face in enumerate(photo_faces):
+            if self._isSameFace(face, original_signature):
+                index_to_replace = index
+                break
+            face_signature = self._faceSignature(face)
+            geometry_keys = ("source_format", "source", "x", "y", "w", "h", "orientation")
+            if all(face_signature.get(key) == original_signature.get(key) for key in geometry_keys):
+                index_to_replace = index
+                break
+
+        if index_to_replace is None:
+            photo_faces.append(replacement_face)
+        else:
+            photo_faces[index_to_replace] = replacement_face
+        return photo_faces
+
     def _buildPositionDeviationReviewEntries(
         self,
         image_path: str,
@@ -2931,35 +3049,6 @@ class ImgDataService:
                 "entries": [],
             }
 
-        shared_folder = self.core.getSharedFolder(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            folder_name="photo",
-        )
-        candidate_paths = self.files.listImageFiles(shared_folder) if shared_folder else []
-
-        entries: List[Dict[str, Any]] = []
-        seen_paths = set()
-        for image_path in candidate_paths:
-            if image_path in seen_paths:
-                continue
-            seen_paths.add(image_path)
-            entries.append(
-                self._buildCheckEntry(
-                    review_type=check_type_normalized,
-                    image_path=image_path,
-                )
-            )
-
-        return {
-            "check_type": check_type_normalized,
-            "source_mode": source_mode_normalized,
-            "save_only": False,
-            "count": len(entries),
-            "entries": entries,
-        }
-
     def startChecksScanDiscovery(
         self,
         *,
@@ -3110,28 +3199,17 @@ class ImgDataService:
             folder_name="photo",
         )
         if not shared_folder:
-            return {
-                "running": False,
-                "finished": True,
-                "source_mode": "scan",
-                "check_type": check_type,
-                "save_only": save_only,
-                "message_key": "checks:progress_shared_folder_missing",
-                "message": "Shared folder could not be resolved.",
-                "message_params": {},
-                "result": None,
-                "files_scanned": 0,
-                "total_files": 0,
-                "findings_count": 0,
-                "resume_cursor": self._buildChecksResumeCursor(
-                    path_index=0,
-                    pending_entries=[],
-                    source_mode="scan",
-                    check_type=check_type,
-                    save_only=save_only,
-                    findings_count=0,
-                ),
-            }
+            return self._buildChecksScanPayload(
+                check_type=check_type,
+                save_only=save_only,
+                files_scanned=0,
+                total_files=0,
+                findings_count=0,
+                path_index=0,
+                pending_entries=[],
+                message_key="checks:progress_shared_folder_missing",
+                message="Shared folder could not be resolved.",
+            )
 
         path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
         pending_entries = resume_cursor.get("pending_entries") if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("pending_entries"), list) else []
@@ -3186,87 +3264,56 @@ class ImgDataService:
             if auto_applied_count:
                 findings_count = max(0, findings_count - auto_applied_count)
             if resolved.get("auto_apply_warning"):
-                return {
-                    "running": False,
-                    "finished": True,
-                    "stop_requested": False,
-                    "source_mode": "scan",
-                    "check_type": check_type,
-                    "save_only": save_only,
-                    "files_scanned": min(path_index, total_files),
-                    "total_files": total_files,
-                    "findings_count": findings_count,
-                    "current_path": str((entry or {}).get("image_path") or ""),
-                    "result": {"entry": entry, "item": item} if entry and item else None,
-                    "resume_cursor": self._buildChecksResumeCursor(
-                        path_index=path_index,
-                        pending_entries=remaining_entries,
-                        source_mode="scan",
-                        check_type=check_type,
-                        save_only=save_only,
-                        findings_count=findings_count,
-                    ),
-                    "message_key": str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
-                    "message": "Suggested name could not be applied automatically.",
-                    "message_params": {"count": findings_count},
-                }
+                return self._buildChecksScanPayload(
+                    check_type=check_type,
+                    save_only=save_only,
+                    files_scanned=min(path_index, total_files),
+                    total_files=total_files,
+                    findings_count=findings_count,
+                    path_index=path_index,
+                    pending_entries=remaining_entries,
+                    current_path=str((entry or {}).get("image_path") or ""),
+                    result={"entry": entry, "item": item} if entry and item else None,
+                    message_key=str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
+                    message="Suggested name could not be applied automatically.",
+                    message_params={"count": findings_count},
+                )
             if not entry or not item:
                 pending_entries = remaining_entries
             else:
-                return {
-                    "running": False,
-                    "finished": True,
-                    "stop_requested": False,
-                    "source_mode": "scan",
-                    "check_type": check_type,
-                    "save_only": save_only,
-                    "files_scanned": min(path_index, total_files),
-                    "total_files": total_files,
-                    "findings_count": max(findings_count, 1),
-                    "current_path": str(entry.get("image_path") or ""),
-                    "result": {
+                findings_count = max(findings_count, 1)
+                return self._buildChecksScanPayload(
+                    check_type=check_type,
+                    save_only=save_only,
+                    files_scanned=min(path_index, total_files),
+                    total_files=total_files,
+                    findings_count=findings_count,
+                    path_index=path_index,
+                    pending_entries=remaining_entries,
+                    current_path=str(entry.get("image_path") or ""),
+                    result={
                         "entry": entry,
                         "item": item,
                     },
-                    "resume_cursor": self._buildChecksResumeCursor(
-                        path_index=path_index,
-                        pending_entries=remaining_entries,
-                        source_mode="scan",
-                        check_type=check_type,
-                        save_only=save_only,
-                        findings_count=max(findings_count, 1),
-                    ),
-                    "message_key": "checks:progress_result_found",
-                    "message": "Check finding found.",
-                    "message_params": {"count": max(findings_count, 1)},
-                }
+                    message_key="checks:progress_result_found",
+                    message="Check finding found.",
+                    message_params={"count": findings_count},
+                )
 
         for index in range(max(0, path_index), total_files):
             if self._shouldStopChecks(user_key, check_type):
-                return {
-                    "running": False,
-                    "finished": True,
-                    "stop_requested": False,
-                    "source_mode": "scan",
-                    "check_type": check_type,
-                    "save_only": save_only,
-                    "files_scanned": index,
-                    "total_files": total_files,
-                    "findings_count": findings_count,
-                    "current_path": "",
-                    "result": None,
-                    "resume_cursor": self._buildChecksResumeCursor(
-                        path_index=index,
-                        pending_entries=[],
-                        source_mode="scan",
-                        check_type=check_type,
-                        save_only=save_only,
-                        findings_count=findings_count,
-                    ),
-                    "message_key": "checks:progress_stopped",
-                    "message": "Checks scan stopped.",
-                    "message_params": {"count": findings_count},
-                }
+                return self._buildChecksScanPayload(
+                    check_type=check_type,
+                    save_only=save_only,
+                    files_scanned=index,
+                    total_files=total_files,
+                    findings_count=findings_count,
+                    path_index=index,
+                    pending_entries=[],
+                    message_key="checks:progress_stopped",
+                    message="Checks scan stopped.",
+                    message_params={"count": findings_count},
+                )
             image_path = candidate_paths[index]
             scanned_count = index + 1
             self._setChecksProgressMessage(
@@ -3307,7 +3354,58 @@ class ImgDataService:
 
             findings_count += len(entries)
             if save_only:
-                saved_entries.extend(entries)
+                entry = entries[0]
+                resolved = self._resolveChecksReviewEntry(
+                    entry=entry,
+                    auto_apply_suggested_names=auto_apply_suggested_names,
+                    auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                )
+                auto_applied_count = int(resolved.get("auto_applied_count") or 0)
+                if auto_applied_count:
+                    findings_count = max(0, findings_count - auto_applied_count)
+                if resolved.get("auto_apply_warning"):
+                    return {
+                        "running": False,
+                        "finished": True,
+                        "stop_requested": False,
+                        "source_mode": "scan",
+                        "check_type": check_type,
+                        "save_only": True,
+                        "files_scanned": scanned_count,
+                        "total_files": total_files,
+                        "findings_count": findings_count,
+                        "current_path": image_path,
+                        "result": None,
+                        "resume_cursor": self._buildChecksResumeCursor(
+                            path_index=index + 1,
+                            pending_entries=[],
+                            source_mode="scan",
+                            check_type=check_type,
+                            save_only=True,
+                            findings_count=findings_count,
+                        ),
+                        "message_key": str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
+                        "message": "Suggested solution could not be applied automatically.",
+                        "message_params": {"count": findings_count},
+                    }
+
+                refreshed_entries = entries
+                if auto_applied_count:
+                    refreshed_entries = self._buildCheckEntriesForType(
+                        image_path=image_path,
+                        review_type=check_type,
+                        user_key=user_key,
+                        cookies=cookies,
+                        base_url=base_url,
+                        shared_folder=shared_folder,
+                    )
+
+                if refreshed_entries:
+                    saved_entries.extend(refreshed_entries)
                 self._setChecksProgressMessage(
                     user_key,
                     check_type,
@@ -3369,59 +3467,39 @@ class ImgDataService:
                     shared_folder=shared_folder,
                 )
             if resolved.get("auto_apply_warning"):
-                return {
-                    "running": False,
-                    "finished": True,
-                    "stop_requested": False,
-                    "source_mode": "scan",
-                    "check_type": check_type,
-                    "save_only": False,
-                    "files_scanned": scanned_count,
-                    "total_files": total_files,
-                    "findings_count": findings_count,
-                    "current_path": image_path,
-                    "result": {"entry": entry, "item": item} if entry and item else None,
-                    "resume_cursor": self._buildChecksResumeCursor(
-                        path_index=index + 1,
-                        pending_entries=remaining_entries,
-                        source_mode="scan",
-                        check_type=check_type,
-                        save_only=False,
-                        findings_count=findings_count,
-                    ),
-                    "message_key": str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
-                    "message": "Suggested name could not be applied automatically.",
-                    "message_params": {"count": findings_count},
-                }
+                return self._buildChecksScanPayload(
+                    check_type=check_type,
+                    save_only=False,
+                    files_scanned=scanned_count,
+                    total_files=total_files,
+                    findings_count=findings_count,
+                    path_index=index + 1,
+                    pending_entries=remaining_entries,
+                    current_path=image_path,
+                    result={"entry": entry, "item": item} if entry and item else None,
+                    message_key=str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
+                    message="Suggested name could not be applied automatically.",
+                    message_params={"count": findings_count},
+                )
             if not entry or not item:
                 continue
-            return {
-                "running": False,
-                "finished": True,
-                "stop_requested": False,
-                "source_mode": "scan",
-                "check_type": check_type,
-                "save_only": False,
-                "files_scanned": scanned_count,
-                "total_files": total_files,
-                "findings_count": findings_count,
-                "current_path": image_path,
-                "result": {
+            return self._buildChecksScanPayload(
+                check_type=check_type,
+                save_only=False,
+                files_scanned=scanned_count,
+                total_files=total_files,
+                findings_count=findings_count,
+                path_index=index + 1,
+                pending_entries=remaining_entries,
+                current_path=image_path,
+                result={
                     "entry": entry,
                     "item": item,
                 },
-                "resume_cursor": self._buildChecksResumeCursor(
-                    path_index=index + 1,
-                    pending_entries=remaining_entries,
-                    source_mode="scan",
-                    check_type=check_type,
-                    save_only=False,
-                    findings_count=findings_count,
-                ),
-                "message_key": "checks:progress_result_found",
-                "message": "Check finding found.",
-                "message_params": {"count": findings_count},
-            }
+                message_key="checks:progress_result_found",
+                message="Check finding found.",
+                message_params={"count": findings_count},
+            )
 
         if save_only:
             self._writeChecksFindings(
@@ -3432,55 +3510,31 @@ class ImgDataService:
                 save_only=True,
                 entries=saved_entries,
             )
-            return {
-                "running": False,
-                "finished": True,
-                "stop_requested": False,
-                "source_mode": "scan",
-                "check_type": check_type,
-                "save_only": True,
-                "files_scanned": total_files,
-                "total_files": total_files,
-                "findings_count": len(saved_entries),
-                "current_path": "",
-                "result": None,
-                "resume_cursor": self._buildChecksResumeCursor(
-                    path_index=total_files,
-                    pending_entries=[],
-                    source_mode="scan",
-                    check_type=check_type,
-                    save_only=True,
-                    findings_count=len(saved_entries),
-                ),
-                "message_key": "checks:progress_findings_saved" if saved_entries else "checks:progress_findings_empty",
-                "message": "Checks findings saved." if saved_entries else "No checks findings were saved.",
-                "message_params": {"count": len(saved_entries)},
-            }
-
-        return {
-            "running": False,
-            "finished": True,
-            "stop_requested": False,
-            "source_mode": "scan",
-            "check_type": check_type,
-            "save_only": False,
-            "files_scanned": total_files,
-            "total_files": total_files,
-            "findings_count": findings_count,
-            "current_path": "",
-            "result": None,
-            "resume_cursor": self._buildChecksResumeCursor(
+            return self._buildChecksScanPayload(
+                check_type=check_type,
+                save_only=True,
+                files_scanned=total_files,
+                total_files=total_files,
+                findings_count=len(saved_entries),
                 path_index=total_files,
                 pending_entries=[],
-                source_mode="scan",
-                check_type=check_type,
-                save_only=False,
-                findings_count=findings_count,
-            ),
-            "message_key": "checks:progress_finished_no_match",
-            "message": "No further checks findings found.",
-            "message_params": {"count": findings_count},
-        }
+                message_key="checks:progress_findings_saved" if saved_entries else "checks:progress_findings_empty",
+                message="Checks findings saved." if saved_entries else "No checks findings were saved.",
+                message_params={"count": len(saved_entries)},
+            )
+
+        return self._buildChecksScanPayload(
+            check_type=check_type,
+            save_only=False,
+            files_scanned=total_files,
+            total_files=total_files,
+            findings_count=findings_count,
+            path_index=total_files,
+            pending_entries=[],
+            message_key="checks:progress_finished_no_match",
+            message="No further checks findings found.",
+            message_params={"count": findings_count},
+        )
 
     def getChecksReviewItem(
         self,
@@ -6309,11 +6363,13 @@ class ImgDataService:
         source_format = str(face_data.get("source_format") or "").strip().upper()
         replacement_name = str(new_name or "").strip()
         if source_format != "PHOTOS":
-            return self.replaceMetadataFaceName(
+            result = self.replaceMetadataFaceName(
                 image_path=image_path,
                 face_data=face_data,
                 new_name=replacement_name,
             )
+            result["operation"] = "metadata_write"
+            return result
 
         face_id = face_data.get("face_id")
         try:
@@ -6370,6 +6426,7 @@ class ImgDataService:
         return {
             "updated": True,
             "warning": "",
+            "operation": "photos_assign",
             "assign_result": assign_result,
             "target_person": {
                 "id": target_person_id,

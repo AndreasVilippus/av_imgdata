@@ -46,7 +46,7 @@ export default {
 		window.removeEventListener('focus', this.handleStatusVisibilityRefresh);
 		document.removeEventListener('visibilitychange', this.handleStatusVisibilityRefresh);
 	},
-	methods: {
+		methods: {
 		handleStatusVisibilityRefresh() {
 			if (document.visibilityState && document.visibilityState !== 'visible') {
 				return;
@@ -106,17 +106,12 @@ export default {
 			return this.$t('status:not_available', 'Not available');
 		},
 		startFileAnalysisProgressPolling() {
-			this.stopFileAnalysisProgressPolling();
-			this.fetchFileAnalysisProgress();
-			this.fileAnalysisProgressTimer = window.setInterval(() => {
+			this.startNamedPolling('fileAnalysisProgressTimer', () => {
 				this.fetchFileAnalysisProgress();
-			}, 1000);
+			});
 		},
 		stopFileAnalysisProgressPolling() {
-			if (this.fileAnalysisProgressTimer) {
-				window.clearInterval(this.fileAnalysisProgressTimer);
-				this.fileAnalysisProgressTimer = null;
-			}
+			this.stopNamedPolling('fileAnalysisProgressTimer');
 		},
 		formatAnalysisCountSummary(counterMap, kind) {
 			if (!counterMap || typeof counterMap !== 'object') {
@@ -227,49 +222,16 @@ export default {
 				sharedFolder: String(systemSource.shared_folder || ''),
 			};
 		},
-		async callStatusApi(apiPath, { auto = false, updatePersons = true } = {}) {
-			this.statusLoading = true;
-			if (!auto) {
-				this.output = 'start synocredential resume flow...';
-			}
-			try {
-				await synocredential._instance.Resume();
-
-				const remote = synocredential._instance.GetRemoteKey();
-				const params = synocredential._instance.GetResumeParams({}, remote) || {};
-				const kk_message = params.kk_message || '';
-				const synoToken = (SYNO && SYNO.SDS && SYNO.SDS.Session && SYNO.SDS.Session.SynoToken) || '';
-				const cookies = this.collectDsmCookies();
-
-				if (!kk_message) {
-					throw new Error(this.$t('face_match:error_missing_resume_message', 'kk_message could not be read from ResumeParams'));
+			async callStatusApi(apiPath, { auto = false, updatePersons = true } = {}) {
+				this.statusLoading = true;
+				if (!auto) {
+					this.output = 'start synocredential resume flow...';
 				}
-				if (!synoToken) {
-					throw new Error(this.$t('face_match:error_missing_synotoken', 'SYNO.SDS.Session.SynoToken is empty'));
-				}
-
-				const resp = await fetch(apiPath, {
-					method: 'POST',
-					credentials: 'include',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-SYNO-TOKEN': synoToken,
-					},
-					body: JSON.stringify({
-						kk_message,
-						synoToken,
-						cookies,
-					}),
-				});
-
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || data.success === false) {
-					const backendError = data.error || `HTTP ${resp.status}`;
-					throw new Error(backendError);
-				}
-				if (updatePersons) {
-					this.persons = this.extractPersonsFromPayload(data);
-					this.system = this.extractSystemFromPayload(data);
+				try {
+					const data = await this.callDsmApi(apiPath, {}, { requireResumeMessage: true });
+					if (updatePersons) {
+						this.persons = this.extractPersonsFromPayload(data);
+						this.system = this.extractSystemFromPayload(data);
 					this.statusLoaded = true;
 				}
 				this.output = JSON.stringify(data, null, 2);
