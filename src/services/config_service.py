@@ -25,6 +25,16 @@ class ConfigService:
                 "FILE_MATCH_SOURCE_SCOPE": "both",
                 "PERSON_SORT_ORDER": "id_desc",
             },
+            "pip_packages": {
+                "INSIGHTFACE": {
+                    "ENABLED": False,
+                    "INSTALL_ON_START": True,
+                    "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
+                    "WHEELHOUSE_ENABLED": True,
+                    "WHEELHOUSE_MANIFEST_URL": "https://github.com/AndreasVilippus/av_imgdata-wheelhouse/releases/download/dsm7-x86_64-python38-2026.04.23/wheelhouse-manifest.json",
+                    "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
+                },
+            },
             "files": {
                 "USE_EXIFTOOL": False,
                 "CHECK_EXIFTOOL_UPDATES": True,
