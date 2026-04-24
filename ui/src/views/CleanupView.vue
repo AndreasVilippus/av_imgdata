@@ -33,23 +33,27 @@
 					{{ vm.$t('cleanup:card_running', 'Running') }}
 				</div>
 			</div>
-			<div class="face-match-status-message">{{ vm.cleanupStatusMessage }}</div>
+			<div class="face-match-status-message">{{ vm.getCleanupStatusHeadline() }}</div>
 			<div v-if="Number(vm.cleanupProgress.persons_total) > 0" class="sm-status-progress">
-				<RatioProgress
+				<ProgressOverviewCard
+					:title="vm.$t('cleanup:label_persons', 'Persons')"
+					:count="Number(vm.cleanupProgress.persons_total) || 0"
 					:current="Number(vm.cleanupProgress.persons_scanned) || 0"
 					:total="Number(vm.cleanupProgress.persons_total) || 0"
-					:primary-text="`${Number(vm.cleanupProgress.persons_scanned) || 0} ${vm.$t('cleanup:label_persons_scanned', 'Persons scanned')}`"
-					:secondary-text="`${Number(vm.cleanupProgress.persons_total) || 0} ${vm.$t('face_match:label_persons', 'Persons')}`"
-					:tooltip="`${Number(vm.cleanupProgress.persons_scanned) || 0} / ${Number(vm.cleanupProgress.persons_total) || 0}`"
+					:primary-label="vm.$t('cleanup:label_scanned', 'scanned')"
+					:secondary-label="vm.$t('cleanup:label_persons_remaining', 'remaining')"
+					:status-text="vm.getCleanupProgressStatus('persons')"
 				/>
 			</div>
 			<div v-if="Number(vm.cleanupProgress.total_files) > 0" class="sm-status-progress">
-				<RatioProgress
+				<ProgressOverviewCard
+					:title="vm.$t('cleanup:label_images', 'Images')"
+					:count="Number(vm.cleanupProgress.total_files) || 0"
 					:current="Number(vm.cleanupProgress.files_scanned) || 0"
 					:total="Number(vm.cleanupProgress.total_files) || 0"
-					:primary-text="`${Number(vm.cleanupProgress.files_scanned) || 0} ${vm.$t('cleanup:label_files_scanned', 'Files scanned')}`"
-					:secondary-text="`${Number(vm.cleanupProgress.total_files) || 0} ${vm.$t('status:files_matched', 'Matching files')}`"
-					:tooltip="`${Number(vm.cleanupProgress.files_scanned) || 0} / ${Number(vm.cleanupProgress.total_files) || 0}`"
+					:primary-label="vm.$t('cleanup:label_scanned', 'scanned')"
+					:secondary-label="vm.$t('cleanup:label_files_remaining', 'remaining')"
+					:status-text="vm.getCleanupProgressStatus('files')"
 				/>
 			</div>
 			<div class="face-match-status-stats">
@@ -71,12 +75,12 @@
 </template>
 
 <script>
-import RatioProgress from '../components/RatioProgress.vue';
+import ProgressOverviewCard from '../components/ProgressOverviewCard.vue';
 
 export default {
 	name: 'CleanupView',
 	components: {
-		RatioProgress,
+		ProgressOverviewCard,
 	},
 	props: {
 		vm: {

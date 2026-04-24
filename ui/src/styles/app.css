@@ -443,6 +443,10 @@
 	padding: 16px;
 }
 
+.panel + .panel {
+	margin-top: 12px;
+}
+
 .config-placeholder {
 	padding: 16px;
 	border: 1px dashed var(--sm-border);

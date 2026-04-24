@@ -53,11 +53,13 @@ export default {
 			if (nextAction !== 'scan') {
 				this.checksSaveOnly = false;
 			}
+			this.checksProgressRequestId += 1;
 			if (!this.checksLoading && !this.checksSessionSyncing) {
 				this.resetChecksUiState();
 			}
 		},
 		selectedChecksType() {
+			this.checksProgressRequestId += 1;
 			if (!this.checksLoading && !this.checksSessionSyncing) {
 				this.resetChecksUiState();
 			}
@@ -70,6 +72,7 @@ export default {
 	methods: {
 		resetChecksUiState() {
 			this.stopChecksProgressPolling();
+			this.checksProgressRequestId += 1;
 			this.checksEntries = [];
 			this.checksCurrentIndex = 0;
 			this.checksCurrentItem = null;
@@ -412,8 +415,15 @@ export default {
 			this.checksCurrentIndex = Math.min(this.checksCurrentIndex, this.checksEntries.length - 1);
 			return true;
 		},
+		matchesSelectedChecksType(value) {
+			return String(value || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase();
+		},
 		async refreshChecksSessionState() {
-			const progress = await this.fetchChecksProgress({ applyFinishedState: true });
+			const progress = await this.fetchChecksProgress({
+				applyFinishedState: true,
+				adoptResultItem: false,
+				loadResultItem: false,
+			});
 			const hasProgress = !!(progress && Object.keys(progress).length);
 			if (!hasProgress) {
 				return;
@@ -440,14 +450,23 @@ export default {
 				this.stopChecksProgressPolling();
 			}
 		},
-		applyChecksProgress(progress) {
+		applyChecksProgress(progress, { adoptResultItem = true } = {}) {
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
+			if (nextProgress.check_type && !this.matchesSelectedChecksType(nextProgress.check_type)) {
+				return;
+			}
 			this.checksProgress = nextProgress;
 			const result = nextProgress.result && typeof nextProgress.result === 'object'
 				? nextProgress.result
 				: null;
 			const item = result && result.item && typeof result.item === 'object' ? result.item : null;
-			if (item && Object.keys(item).length) {
+			if (
+				adoptResultItem
+				&&
+				item
+				&& Object.keys(item).length
+				&& this.matchesSelectedChecksType(item.review_type)
+			) {
 				this.checksCurrentItem = item;
 				this.syncChecksDuplicateAssignmentState(item);
 			} else if (this.selectedChecksAction === 'scan') {
@@ -464,7 +483,37 @@ export default {
 				);
 			}
 		},
-		async fetchChecksProgress({ applyFinishedState = true } = {}) {
+		async ensureChecksResultItemLoaded(progress) {
+			const nextProgress = progress && typeof progress === 'object' ? progress : {};
+			if (nextProgress.check_type && !this.matchesSelectedChecksType(nextProgress.check_type)) {
+				return;
+			}
+			const result = nextProgress.result && typeof nextProgress.result === 'object'
+				? nextProgress.result
+				: null;
+			const entry = result && result.entry && typeof result.entry === 'object'
+				? result.entry
+				: null;
+			const item = result && result.item && typeof result.item === 'object'
+				? result.item
+				: null;
+			if (!entry || !this.matchesSelectedChecksType(entry.review_type) || (item && Object.keys(item).length)) {
+				return;
+			}
+			const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_item', {
+				entry,
+				auto_apply_suggested_names: this.checksAutoApplySuggestedNames,
+				auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
+			});
+			const root = this.getResponseData(data);
+			this.applyChecksFindingsUpdate(root.findings_update);
+			const resolvedItem = root && root.item && typeof root.item === 'object' ? root.item : {};
+			if (Object.keys(resolvedItem).length && this.matchesSelectedChecksType(resolvedItem.review_type)) {
+				this.checksCurrentItem = resolvedItem;
+				this.syncChecksDuplicateAssignmentState(resolvedItem);
+			}
+		},
+		async fetchChecksProgress({ applyFinishedState = true, adoptResultItem = true, loadResultItem = true } = {}) {
 			const requestId = this.checksProgressRequestId + 1;
 			this.checksProgressRequestId = requestId;
 			try {
@@ -476,7 +525,10 @@ export default {
 				}
 				const progress = this.getResponseData(data);
 				if (progress.running || applyFinishedState) {
-					this.applyChecksProgress(progress);
+					this.applyChecksProgress(progress, { adoptResultItem });
+				}
+				if (!progress.running && loadResultItem) {
+					await this.ensureChecksResultItemLoaded(progress);
 				}
 				if (!progress.running) {
 					this.checksLoading = false;
@@ -504,6 +556,27 @@ export default {
 		},
 		stopChecksProgressPolling() {
 			this.stopNamedPolling('checksProgressTimer');
+		},
+		getChecksStatusHeadline() {
+			const progress = this.checksProgress && typeof this.checksProgress === 'object'
+				? this.checksProgress
+				: {};
+			const key = String(progress.message_key || '').trim();
+			const findingsText = `${this.$t('checks:label_findings_count', 'Findings:')} ${Number(progress.findings_count) || 0}`;
+			const withFindings = (text) => {
+				const normalized = String(text || '').trim();
+				return normalized ? `${normalized} | ${findingsText}` : findingsText;
+			};
+			if (key === 'checks:progress_scanning') {
+				return withFindings(this.$t('checks:progress_scanning_short', 'Scanning files...'));
+			}
+			if (key === 'checks:progress_result_found') {
+				return withFindings(this.$t('checks:progress_result_found_short', 'Check finding found.'));
+			}
+			if (key === 'checks:progress_findings_saved') {
+				return withFindings(this.$t('checks:progress_findings_saved_short', 'Findings list saved.'));
+			}
+			return withFindings(this.checksStatusMessage);
 		},
 		async startChecksReview() {
 			if (this.isChecksScanRunning) {
@@ -554,6 +627,10 @@ export default {
 				if (!entry) {
 					break;
 				}
+				if (!this.matchesSelectedChecksType(entry.review_type)) {
+					resolvedIndex += 1;
+					continue;
+				}
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_item', {
 					entry,
 					auto_apply_suggested_names: this.checksAutoApplySuggestedNames,
@@ -563,7 +640,7 @@ export default {
 				const findingsUpdated = this.applyChecksFindingsUpdate(root.findings_update);
 				const autoAppliedCount = Number(root && root.auto_applied_count || 0);
 				const item = root && root.item && typeof root.item === 'object' ? root.item : {};
-				if (Object.keys(item).length) {
+				if (Object.keys(item).length && this.matchesSelectedChecksType(item.review_type)) {
 					this.checksActionLocked = false;
 					this.checksCurrentItem = item;
 					this.checksCurrentIndex = resolvedIndex;
@@ -610,6 +687,9 @@ export default {
 				});
 				const progress = this.getResponseData(data);
 				this.applyChecksProgress(progress);
+				if (!progress.running) {
+					await this.ensureChecksResultItemLoaded(progress);
+				}
 				if (progress.running) {
 					this.startChecksProgressPolling();
 				} else {

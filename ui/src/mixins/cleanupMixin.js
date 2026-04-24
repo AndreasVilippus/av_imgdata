@@ -135,5 +135,43 @@ export default {
 			}
 			return key;
 		},
+		getCleanupStatusHeadline() {
+			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+				? this.cleanupProgress
+				: {};
+			const key = String(progress.message_key || '').trim();
+			if (key === 'cleanup:progress_checking_person') {
+				return this.$t('cleanup:progress_checking_person_short', 'Checking person...');
+			}
+			if (key === 'cleanup:progress_checking_file') {
+				return this.$t('cleanup:progress_checking_file_short', 'Checking file...');
+			}
+			return this.cleanupStatusMessage;
+		},
+		getCleanupProgressStatus(kind) {
+			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+				? this.cleanupProgress
+				: {};
+			const key = String(progress.message_key || '').trim();
+			const headline = this.getCleanupStatusHeadline();
+			if (kind === 'persons') {
+				if (key === 'cleanup:progress_checking_person') {
+					return headline;
+				}
+				if (!key && !(Number(progress.total_files) > 0)) {
+					return headline;
+				}
+				return '';
+			}
+			if (kind === 'files') {
+				if (key === 'cleanup:progress_checking_file') {
+					return headline;
+				}
+				if (key !== 'cleanup:progress_checking_person' && Number(progress.total_files) > 0) {
+					return headline;
+				}
+			}
+			return '';
+		},
 	},
 };
