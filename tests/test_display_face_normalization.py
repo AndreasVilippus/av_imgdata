@@ -8,7 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath("src"))
 
 from api import imgdata_api
-from api.session_manager import SessionManager
+from api.session_manager import SessionManager, SessionManagerError
 from imgdata import ImgDataService
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
@@ -533,6 +533,99 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(result["save_only"], True)
         self.assertEqual(result["findings_count"], 0)
         self.assertEqual(captured["saved_findings"]["entries"], [])
+
+    def test_run_checks_thread_preserves_latest_progress_on_session_error(self):
+        self.service._setChecksProgress(
+            "user",
+            check_type="name_conflicts",
+            source_mode="scan",
+            running=True,
+            finished=False,
+            stop_requested=False,
+            files_scanned=945,
+            total_files=40798,
+            findings_count=12,
+            current_path="/volume1/photo/tests/test.jpg",
+            resume_cursor={
+                "check_type": "name_conflicts",
+                "path_index": 944,
+                "pending_entries": [],
+                "save_only": False,
+                "source_mode": "scan",
+                "findings_count": 12,
+            },
+        )
+
+        self.service.searchNextChecksItem = lambda **kwargs: (_ for _ in ()).throw(
+            SessionManagerError({"error": "resume_failed"})
+        )
+
+        self.service._runChecksScan(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            check_type="name_conflicts",
+            save_only=False,
+        )
+
+        progress = self.service.getChecksProgress("user", "name_conflicts")
+        self.assertFalse(progress["running"])
+        self.assertFalse(progress["finished"])
+        self.assertEqual(progress["error"], "session manager error")
+        self.assertEqual(progress["files_scanned"], 945)
+        self.assertEqual(progress["findings_count"], 12)
+        self.assertEqual(progress["current_path"], "/volume1/photo/tests/test.jpg")
+        self.assertEqual(progress["resume_cursor"]["path_index"], 944)
+        self.assertEqual(progress["resume_cursor"]["findings_count"], 12)
+
+    def test_checks_replace_metadata_face_name_returns_success_when_refresh_fails(self):
+        async def run_test():
+            async def fake_prepare_session_request(request):
+                return {
+                    "user_key": "user",
+                    "cookies": {"_SSID": "sid"},
+                    "base_url": "https://example.test",
+                }, None
+
+            async def fake_read_request_body(request):
+                return {
+                    "image_path": "/volume1/photo/tests/test.jpg",
+                    "face": {
+                        "face_id": 77,
+                        "name": "Person Legacy",
+                        "source_format": "PHOTOS",
+                    },
+                    "new_name": "Person Target",
+                    "save_mapping": False,
+                    "source_name": "Person Legacy",
+                }
+
+            with patch.object(imgdata_api, "_prepare_session_request", fake_prepare_session_request), \
+                 patch.object(imgdata_api, "_read_request_body", fake_read_request_body), \
+                 patch.object(
+                     imgdata_api.IMGDATA,
+                     "replaceChecksFaceName",
+                     lambda **kwargs: {
+                         "updated": True,
+                         "warning": "",
+                         "operation": "photos_assign",
+                         "resolved_name": "Person Target",
+                         "target_person": {"id": 42, "name": "Person Target"},
+                     },
+                 ), \
+                 patch.object(
+                     imgdata_api,
+                     "_refresh_checks_mutation_state",
+                     side_effect=SessionManagerError({"error": "resume_failed"}),
+                 ):
+                response = await imgdata_api.checks_replace_metadata_face_name(object())
+                payload = json.loads(response.body.decode("utf-8"))
+                self.assertTrue(payload["success"])
+                self.assertTrue(payload["data"]["updated"])
+                self.assertIsNone(payload["data"]["findings_update"])
+                self.assertEqual(payload["data"]["refresh_error"]["message"], "session_manager_error")
+
+        asyncio.run(run_test())
 
     def test_resolve_checks_review_entry_auto_applies_suggested_photos_name_change(self):
         item = {

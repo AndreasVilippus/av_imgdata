@@ -391,6 +391,18 @@ export default {
 				return false;
 			}
 			this.checksEntries = findingsUpdate.entries;
+			const findingsCount = Number(
+				findingsUpdate.count !== undefined
+					? findingsUpdate.count
+					: findingsUpdate.entries.length
+			);
+			if (!this.checksProgress || typeof this.checksProgress !== 'object') {
+				this.checksProgress = {};
+			}
+			this.checksProgress = {
+				...this.checksProgress,
+				findings_count: Number.isFinite(findingsCount) ? findingsCount : findingsUpdate.entries.length,
+			};
 			if (!this.checksEntries.length) {
 				this.checksCurrentIndex = 0;
 				this.checksCurrentItem = null;
