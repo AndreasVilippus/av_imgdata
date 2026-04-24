@@ -56,6 +56,13 @@
 		>
 			{{ $t('nav:exiftool', 'ExifTool') }}
 		</button>
+		<button
+			class="sm-nav-item sm-nav-sub-item"
+			:class="{ active: selectedOption === 'external_libraries_pip_packages' }"
+			@click="$emit('select', 'external_libraries_pip_packages')"
+		>
+			{{ $t('nav:pip_packages', 'pip packages') }}
+		</button>
 	</aside>
 </template>
 

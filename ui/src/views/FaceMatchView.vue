@@ -11,8 +11,12 @@
 						<option value="search_photo_face_in_file">{{ vm.$t('face_match:action_search_photo_face_in_file', 'search unknown Photos face in file') }}</option>
 						<option value="search_file_face_in_sources">{{ vm.$t('face_match:action_search_file_face_in_sources', 'search face from file') }}</option>
 						<option value="mark_missing_photos_faces">{{ vm.$t('face_match:action_mark_missing_photos_faces', 'mark missing faces in Photos') }}</option>
+						<option value="search_missing_faces_insightface" :disabled="!vm.hasInsightFaceForFaceMatch">{{ vm.$t('face_match:action_search_missing_faces_insightface', 'search missing faces with InsightFace') }}</option>
 						<option v-if="vm.hasFaceMatchStoredFindings" value="load_photo_face_match_findings">{{ vm.$t('face_match:action_load_photo_face_match_findings', 'load unknown Photos face from list') }}</option>
 					</select>
+					<div v-if="!vm.hasInsightFaceForFaceMatch" class="config-card-desc">
+						{{ vm.$t('face_match:hint_insightface_unavailable', 'InsightFace search becomes available after the optional InsightFace package is installed.') }}
+					</div>
 					<div class="face-match-action-buttons">
 						<v-button @click="vm.handlePrimaryFaceMatchButton" style="width: 160px;">
 							{{ vm.faceMatchPrimaryButtonLabel }}
@@ -37,7 +41,7 @@
 						<span class="face-match-switch-label">{{ vm.$t('face_match:switch_auto_assign', 'Assign all known') }}</span>
 					</label>
 					<label
-						v-if="vm.selectedFaceMatchingAction === 'search_photo_face_in_file' || vm.selectedFaceMatchingAction === 'search_file_face_in_sources' || vm.selectedFaceMatchingAction === 'mark_missing_photos_faces'"
+						v-if="vm.faceMatchSupportsSaveOnly"
 						class="face-match-switch"
 						:title="vm.$t('face_match:hint_save_only', 'Known persons are still assigned depending on the setting; otherwise matches are only listed for later.')"
 					>

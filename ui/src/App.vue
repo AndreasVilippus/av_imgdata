@@ -21,6 +21,11 @@
 							:vm="this"
 							mode="config"
 						/>
+						<external-libraries-view
+							v-if="selectedOption === 'external_libraries_pip_packages'"
+							:vm="this"
+							mode="pip_packages"
+						/>
 					</main>
 				</div>
 			</div>
@@ -90,7 +95,7 @@ export default {
 			if (selectedOption === 'cleanup') {
 				this.refreshCleanupSessionState();
 			}
-			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool') {
+			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool' || selectedOption === 'external_libraries_pip_packages') {
 				this.loadExternalLibrariesConfig();
 			}
 		},

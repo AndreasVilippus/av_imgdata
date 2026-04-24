@@ -1,0 +1,6 @@
+insightface
+onnxruntime==1.16.3
+# Avoid newer wheels that install successfully on DSM/Python 3.8 but fail at import time with libxcb dependencies.
+opencv-python-headless==4.10.0.84
+# DSM 7.3 Python 3.8 is linked against OpenSSL 1.0.2; urllib3 v2 requires OpenSSL 1.1.1+.
+urllib3<2

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 import os
+import importlib
+import importlib.util
+import json
+import traceback
+from importlib import metadata as importlib_metadata
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime, timezone
@@ -20,6 +25,7 @@ from parser.metadata_parser import MetadataParser, NS_ACD, NS_MICROSOFT, NS_MWG_
 from services.bbox_normalizer import denormalize_xmp_face, from_photos, from_xmp, to_display_face
 from services.config_service import ConfigService
 from services.exiftool_service import ExifToolService
+from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
 from services.face_matcher import FaceMatcher, compute
 from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
@@ -680,6 +686,11 @@ class ImgDataService:
         }
         payload.update(updates)
         self._setFaceMatchingProgress(user_key, **payload)
+
+    @staticmethod
+    def _formatExceptionForProgress(exc: Exception) -> str:
+        detail = str(exc).strip()
+        return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
 
     def _buildFaceMatchResumeCursor(
         self,
@@ -1503,6 +1514,16 @@ class ImgDataService:
                     save_only=save_only,
                     resume_cursor=resume_cursor,
                 )
+            elif action == "search_missing_faces_insightface":
+                result = self.searchMissingPhotosFacesWithInsightFace(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    skip_targets=skip_targets,
+                    auto=auto,
+                    save_only=save_only,
+                    resume_cursor=resume_cursor,
+                )
             else:
                 result = self.searchPhotoFaceInFile(
                     user_key=user_key,
@@ -1546,6 +1567,7 @@ class ImgDataService:
                 ),
             )
         except Exception as exc:
+            error_message = self._formatExceptionForProgress(exc)
             self._setFaceMatchingProgressMessage(
                 user_key,
                 "face_match:progress_failed",
@@ -1554,7 +1576,8 @@ class ImgDataService:
                 finished=True,
                 paused=False,
                 auth_required=False,
-                error=str(exc),
+                error=error_message,
+                error_traceback="".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-4000:],
                 action=action,
                 auto=auto,
                 save_only=save_only,
@@ -1806,9 +1829,16 @@ class ImgDataService:
         normalized = self._normalizeFaceMatchEntry(entry)
         resolved = dict(normalized)
         action = str(resolved.get("action") or "search_photo_face_in_file").strip().lower()
-        if action in {"search_file_face_in_sources", "mark_missing_photos_faces"}:
+        if action in {"search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"}:
             image_path = str(resolved.get("image_path") or "").strip()
             metadata_face = resolved.get("metadata_face")
+            if action == "search_missing_faces_insightface":
+                resolved["source_name"] = str(resolved.get("source_name") or "").strip()
+                resolved["matched_person"] = None
+                resolved["matched_person_id"] = None
+                resolved["name_mapping"] = None
+                resolved["lookup_debug"] = {}
+                return resolved
             if action == "mark_missing_photos_faces":
                 source_name = str(resolved.get("source_name") or (metadata_face.get("name") if isinstance(metadata_face, dict) else "") or "").strip()
                 matched_person, mapped_assignment, lookup_debug = self._lookupMatchedPersonBySourceName(
@@ -2180,6 +2210,63 @@ class ImgDataService:
         ])
 
     @staticmethod
+    def _insightFaceDetectionToMetadataFace(detection: Dict[str, Any]) -> Optional[MetadataFace]:
+        if not isinstance(detection, dict):
+            return None
+        bbox = detection.get("bbox") if isinstance(detection.get("bbox"), dict) else {}
+        center = detection.get("center") if isinstance(detection.get("center"), dict) else {}
+        x1 = bbox.get("x1")
+        y1 = bbox.get("y1")
+        x2 = bbox.get("x2")
+        y2 = bbox.get("y2")
+        center_x = center.get("x")
+        center_y = center.get("y")
+        try:
+            x1 = float(x1)
+            y1 = float(y1)
+            x2 = float(x2)
+            y2 = float(y2)
+            center_x = float(center_x)
+            center_y = float(center_y)
+        except (TypeError, ValueError):
+            return None
+        width = x2 - x1
+        height = y2 - y1
+        if width <= 0 or height <= 0:
+            return None
+        return MetadataFace.from_center_box(
+            name="",
+            x=max(0.0, min(1.0, center_x)),
+            y=max(0.0, min(1.0, center_y)),
+            w=max(0.0, min(1.0, width)),
+            h=max(0.0, min(1.0, height)),
+            source="insightface",
+            source_format="INSIGHTFACE",
+        )
+
+    def _selectMissingPhotosFaceCandidate(
+        self,
+        *,
+        candidate_faces: List[MetadataFace],
+        existing_photos_faces: List[Dict[str, Any]],
+        require_name: bool,
+    ) -> Tuple[Optional[MetadataFace], Dict[str, int]]:
+        faces_by_format: Dict[str, int] = {}
+        for candidate_face in candidate_faces:
+            source_format = str(candidate_face.source_format or "").strip().upper()
+            if source_format:
+                faces_by_format[source_format] = faces_by_format.get(source_format, 0) + 1
+            if require_name and not str(candidate_face.name or "").strip():
+                continue
+            if self._findExistingPhotosFaceMatch(
+                metadata_face=candidate_face,
+                existing_faces=existing_photos_faces,
+            ) is not None:
+                continue
+            return candidate_face, faces_by_format
+        return None, faces_by_format
+
+    @staticmethod
     def _preferredFaceMatchCandidate(candidate: Dict[str, Any]) -> Tuple[float, int]:
         source_type = str(candidate.get("source_type") or "").strip().lower()
         return (
@@ -2207,6 +2294,26 @@ class ImgDataService:
             payload = self._readImageMetadata(image_path, include_unnamed_acd=True)
             existing = self._findFaceBySignature(payload.faces, metadata_face)
             return bool(existing and not str(existing.name or "").strip())
+        if action == "search_missing_faces_insightface":
+            image = entry.get("image")
+            metadata_face = entry.get("metadata_face")
+            if not isinstance(image, dict) or not isinstance(metadata_face, dict):
+                return True
+            try:
+                image_id = int(image.get("id"))
+            except (TypeError, ValueError):
+                return True
+            if image_id not in image_faces_cache:
+                image_faces_cache[image_id] = self.photos.list_faceFotoTeamItems(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    id_item=image_id,
+                )
+            return self._findExistingPhotosFaceMatch(
+                metadata_face=MetadataFace.from_dict(metadata_face),
+                existing_faces=image_faces_cache[image_id],
+            ) is None
         if action == "mark_missing_photos_faces":
             image_path = str(entry.get("image_path") or "").strip()
             metadata_face = entry.get("metadata_face")
@@ -5784,22 +5891,11 @@ class ImgDataService:
                     for face in photo_faces
                     if isinstance(face, dict) and isinstance(face.get("bbox"), dict)
                 ]
-                target_face = None
-                metadata_faces_by_format: Dict[str, int] = {}
-                for metadata_face in metadata_faces:
-                    source_format = str(metadata_face.source_format or "").strip().upper()
-                    if source_format:
-                        metadata_faces_by_format[source_format] = metadata_faces_by_format.get(source_format, 0) + 1
-                    if target_face is not None:
-                        continue
-                    if not str(metadata_face.name or "").strip():
-                        continue
-                    if self._findExistingPhotosFaceMatch(
-                        metadata_face=metadata_face,
-                        existing_faces=photo_faces,
-                    ) is not None:
-                        continue
-                    target_face = metadata_face
+                target_face, metadata_faces_by_format = self._selectMissingPhotosFaceCandidate(
+                    candidate_faces=metadata_faces,
+                    existing_photos_faces=photo_faces,
+                    require_name=True,
+                )
                 if target_face is None:
                     continue
 
@@ -5966,6 +6062,336 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action="mark_missing_photos_faces",
+                ),
+            )
+
+    def searchMissingPhotosFacesWithInsightFace(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        skip_targets: Optional[List[str]] = None,
+        auto: bool = False,
+        save_only: bool = False,
+        resume_cursor: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        last_keepalive_at = monotonic()
+        saved_entries: List[Dict[str, Any]] = []
+        transferred_count = int(resume_cursor.get("transferred_count") or 0) if isinstance(resume_cursor, dict) else 0
+        skip_target_tokens = [str(value) for value in (skip_targets or []) if str(value or "").strip()]
+        if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("skip_targets"), list):
+            for token in resume_cursor.get("skip_targets") or []:
+                normalized = str(token or "").strip()
+                if normalized and normalized not in skip_target_tokens:
+                    skip_target_tokens.append(normalized)
+
+        persons_read = 0
+        images_read = 0
+        faces_read = 0
+        target_faces_read = 0
+        metadata_faces_read = 0
+        final_message_key = "face_match:progress_finished"
+        final_message_params: Dict[str, Any] = {}
+        action = "search_missing_faces_insightface"
+
+        self._setFaceMatchingProgressMessage(
+            user_key,
+            "face_match:status_starting",
+            running=True,
+            stop_requested=False,
+            action=action,
+            persons_read=0,
+            images_read=0,
+            faces_read=0,
+            target_faces_read=0,
+            current_person_id=None,
+            current_image_id=None,
+            current_face_id=None,
+            metadata_faces_read=0,
+            transferred_count=transferred_count,
+            resume_cursor=self._buildFaceMatchResumeCursor(
+                skip_face_ids=[],
+                skip_targets=skip_target_tokens,
+                transferred_count=transferred_count,
+                auto=auto,
+                save_only=save_only,
+                action=action,
+            ),
+        )
+
+        try:
+            if not self.pipPackagesStatus().get("packages", {}).get("INSIGHTFACE", {}).get("installed"):
+                final_message_key = "face_match:progress_insightface_missing"
+                return {
+                    "searched": False,
+                    "error": "insightface_not_installed",
+                    "transferred_count": transferred_count,
+                    "auto": auto,
+                    "save_only": save_only,
+                }
+
+            shared_folder = self.core.getSharedFolder(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                folder_name="photo",
+            )
+            if not shared_folder:
+                final_message_key = "face_match:progress_shared_folder_missing"
+                return {
+                    "searched": False,
+                    "error": "shared_folder_not_found",
+                }
+
+            detector = InsightFaceDetector()
+            self._setFaceMatchingProgressMessage(
+                user_key,
+                "face_match:progress_listing_files",
+                message_params={"path": shared_folder},
+                persons_read=persons_read,
+                images_read=images_read,
+                faces_read=faces_read,
+                target_faces_read=target_faces_read,
+                metadata_faces_read=metadata_faces_read,
+                transferred_count=transferred_count,
+                resume_cursor=self._buildFaceMatchResumeCursor(
+                    skip_face_ids=[],
+                    skip_targets=skip_target_tokens,
+                    transferred_count=transferred_count,
+                    auto=auto,
+                    save_only=save_only,
+                    action=action,
+                ),
+            )
+            candidate_paths = self.files.listImageFiles(shared_folder)
+            self._setFaceMatchingProgressMessage(
+                user_key,
+                "face_match:progress_files_listed",
+                message_params={"count": len(candidate_paths)},
+                total_images=len(candidate_paths),
+            )
+
+            for image_path in candidate_paths:
+                last_keepalive_at = self._refreshFaceMatchingSessionIfNeeded(
+                    user_key=user_key,
+                    base_url=base_url,
+                    last_keepalive_at=last_keepalive_at,
+                )
+                if self._shouldStopFaceMatching(user_key):
+                    final_message_key = "face_match:progress_stopped"
+                    return {
+                        "searched": False,
+                        "stopped": True,
+                        "transferred_count": transferred_count,
+                        "auto": auto,
+                        "resume_cursor": self._buildFaceMatchResumeCursor(
+                            skip_face_ids=[],
+                            skip_targets=skip_target_tokens,
+                            transferred_count=transferred_count,
+                            auto=auto,
+                            save_only=save_only,
+                            action=action,
+                        ),
+                    }
+
+                images_read += 1
+                self._setFaceMatchingProgressMessage(
+                    user_key,
+                    "face_match:progress_checking_file",
+                    message_params={"count": images_read, "total": len(candidate_paths)},
+                    images_read=images_read,
+                    faces_read=faces_read,
+                    target_faces_read=target_faces_read,
+                    metadata_faces_read=metadata_faces_read,
+                    resume_cursor=self._buildFaceMatchResumeCursor(
+                        skip_face_ids=[],
+                        skip_targets=skip_target_tokens,
+                        transferred_count=transferred_count,
+                        auto=auto,
+                        save_only=save_only,
+                        action=action,
+                    ),
+                )
+
+                detected_faces = [
+                    face for face in (
+                        self._insightFaceDetectionToMetadataFace(detection)
+                        for detection in detector.detect(Path(image_path))
+                    )
+                    if face is not None
+                ]
+                metadata_faces_read += len(detected_faces)
+                self._setFaceMatchingProgressMessage(
+                    user_key,
+                    "face_match:progress_checking_insightface",
+                    message_params={"count": images_read, "faces": len(detected_faces)},
+                    images_read=images_read,
+                    faces_read=faces_read,
+                    target_faces_read=target_faces_read,
+                    metadata_faces_read=metadata_faces_read,
+                    resume_cursor=self._buildFaceMatchResumeCursor(
+                        skip_face_ids=[],
+                        skip_targets=skip_target_tokens,
+                        transferred_count=transferred_count,
+                        auto=auto,
+                        save_only=save_only,
+                        action=action,
+                    ),
+                )
+                if not detected_faces:
+                    continue
+
+                item = self.photos.findFotoTeamItemByPath(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                    image_path=image_path,
+                    additional=["thumbnail"],
+                )
+                item_id = item.get("id") if isinstance(item, dict) else None
+                if item_id is None:
+                    continue
+                try:
+                    item_id_int = int(item_id)
+                except (TypeError, ValueError):
+                    continue
+
+                photo_faces = self.photos.list_faceFotoTeamItems(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    id_item=item_id_int,
+                )
+                faces_read += len(photo_faces)
+                target_face, faces_by_format = self._selectMissingPhotosFaceCandidate(
+                    candidate_faces=detected_faces,
+                    existing_photos_faces=photo_faces,
+                    require_name=False,
+                )
+                self._setFaceMatchingProgress(
+                    user_key,
+                    images_read=images_read,
+                    faces_read=faces_read,
+                    target_faces_read=target_faces_read,
+                    metadata_faces_read=metadata_faces_read,
+                    current_image_id=item_id_int,
+                )
+                if target_face is None:
+                    continue
+
+                target_faces_read += 1
+                target_token = self._faceMatchTargetToken(image_path=image_path, face=target_face)
+                if target_token in skip_target_tokens:
+                    continue
+
+                result_entry = {
+                    "action": action,
+                    "searched": True,
+                    "person": None,
+                    "image": item if isinstance(item, dict) else None,
+                    "face": to_display_face(target_face),
+                    "source_face": to_display_face(target_face),
+                    "source_name": "",
+                    "source_type": "insightface_detection",
+                    "metadata_face": to_display_face(target_face),
+                    "image_path": image_path,
+                    "match": {
+                        "source_type": "insightface_detection",
+                        "source": target_face.source,
+                        "source_format": target_face.source_format,
+                        "file_name": "",
+                        "iou": 1.0,
+                        "photos_faces_count": len(photo_faces),
+                        "metadata_faces_by_format": faces_by_format,
+                    },
+                    "matched_person": None,
+                    "matched_person_id": None,
+                    "name_mapping": None,
+                    "lookup_debug": {},
+                    "add_new_faces_to_photos": True,
+                    "transferred_count": transferred_count,
+                    "auto": auto,
+                    "resume_cursor": self._buildFaceMatchResumeCursor(
+                        skip_face_ids=[],
+                        skip_targets=skip_target_tokens + [target_token],
+                        transferred_count=transferred_count,
+                        auto=auto,
+                        save_only=save_only,
+                        action=action,
+                    ),
+                }
+
+                if save_only:
+                    saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
+                    skip_target_tokens.append(target_token)
+                    continue
+                return result_entry
+
+            final_message_key = "face_match:result_no_match"
+            if save_only:
+                final_message_key = "face_match:progress_findings_saved" if saved_entries else "face_match:progress_findings_empty"
+                final_message_params = {"count": len(saved_entries)}
+                self._writeFaceMatchFindings(
+                    status="finished",
+                    shared_folder=shared_folder,
+                    action=action,
+                    auto=auto,
+                    save_only=save_only,
+                    transferred_count=transferred_count,
+                    entries=saved_entries,
+                )
+            return {
+                "searched": True,
+                "person": None,
+                "image": None,
+                "face": None,
+                "metadata_face": None,
+                "image_path": None,
+                "transferred_count": transferred_count,
+                "auto": auto,
+                "save_only": save_only,
+                "findings_count": len(saved_entries),
+                "resume_cursor": self._buildFaceMatchResumeCursor(
+                    skip_face_ids=[],
+                    skip_targets=skip_target_tokens,
+                    transferred_count=transferred_count,
+                    auto=auto,
+                    save_only=save_only,
+                    action=action,
+                ),
+            }
+        except FaceDetectorUnavailable as exc:
+            final_message_key = "face_match:progress_insightface_unavailable"
+            final_message_params = {"error": str(exc)}
+            return {
+                "searched": False,
+                "error": str(exc),
+                "transferred_count": transferred_count,
+                "auto": auto,
+                "save_only": save_only,
+            }
+        finally:
+            self._setFaceMatchingProgressMessage(
+                user_key,
+                final_message_key,
+                message_params=final_message_params,
+                running=False,
+                stop_requested=False,
+                persons_read=persons_read,
+                images_read=images_read,
+                faces_read=faces_read,
+                target_faces_read=target_faces_read,
+                metadata_faces_read=metadata_faces_read,
+                transferred_count=transferred_count,
+                resume_cursor=self._buildFaceMatchResumeCursor(
+                    skip_face_ids=[],
+                    skip_targets=skip_target_tokens,
+                    transferred_count=transferred_count,
+                    auto=auto,
+                    save_only=save_only,
+                    action=action,
                 ),
             )
 
@@ -7111,3 +7537,96 @@ class ImgDataService:
 
     def saveRuntimeConfig(self, config: Dict[str, Any]) -> bool:
         return self.config.writeConfig(config)
+
+    def pipPackagesStatus(self) -> Dict[str, Any]:
+        config = self.config.readMergedConfig()
+        configured_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
+        status_file = self.config._config_path.parent / "pip_packages_status.json"
+        try:
+            install_status_payload = json.loads(status_file.read_text(encoding="utf-8"))
+        except Exception:
+            install_status_payload = {}
+        install_status_packages = (
+            install_status_payload.get("packages")
+            if isinstance(install_status_payload, dict) and isinstance(install_status_payload.get("packages"), dict)
+            else {}
+        )
+        package_specs = {
+            "INSIGHTFACE": {
+                "label": "InsightFace",
+                "requirements_file": "requirements-optional-insightface.txt",
+                "modules": [
+                    {"package": "insightface", "module": "insightface.app"},
+                    {"package": "onnxruntime", "module": "onnxruntime"},
+                    {"package": "opencv-python-headless", "module": "cv2"},
+                ],
+                "conflicts": ["opencv-python", "opencv-contrib-python", "opencv-contrib-python-headless"],
+            },
+        }
+        result: Dict[str, Any] = {}
+        for key, spec in package_specs.items():
+            configured = configured_packages.get(key) if isinstance(configured_packages.get(key), dict) else {}
+            modules: List[Dict[str, Any]] = []
+            installed = True
+            for module_spec in spec["modules"]:
+                package_name = str(module_spec["package"])
+                module_name = str(module_spec["module"])
+                import_error = ""
+                found = False
+                version = ""
+                try:
+                    version = importlib_metadata.version(package_name)
+                except Exception:
+                    version = ""
+                spec_found = False
+                try:
+                    spec_found = importlib.util.find_spec(module_name) is not None
+                except Exception as exc:
+                    import_error = str(exc)
+                if spec_found:
+                    try:
+                        importlib.import_module(module_name)
+                        found = True
+                    except importlib_metadata.PackageNotFoundError:
+                        version = ""
+                    except Exception as exc:
+                        import_error = str(exc)
+                installed = installed and found
+                module_status = {
+                    "package": package_name,
+                    "module": module_name,
+                    "installed": found,
+                    "version": version,
+                }
+                if import_error:
+                    module_status["import_error"] = import_error
+                modules.append(module_status)
+            result[key] = {
+                "label": spec["label"],
+                "enabled": bool(configured.get("ENABLED", False)),
+                "install_on_start": bool(configured.get("INSTALL_ON_START", True)),
+                "requirements_file": str(configured.get("REQUIREMENTS_FILE") or spec["requirements_file"]),
+                "wheelhouse_enabled": bool(configured.get("WHEELHOUSE_ENABLED", False)),
+                "wheelhouse_manifest_url": str(configured.get("WHEELHOUSE_MANIFEST_URL") or "").strip(),
+                "wheelhouse_target": str(configured.get("WHEELHOUSE_TARGET") or "").strip(),
+                "installed": installed,
+                "install_status": install_status_packages.get(key) if isinstance(install_status_packages.get(key), dict) else {},
+                "modules": modules,
+                "conflicts": [
+                    {"package": package_name, "version": version}
+                    for package_name in spec.get("conflicts", [])
+                    for version in [self._installedPythonPackageVersion(str(package_name))]
+                    if version
+                ],
+            }
+        return {
+            "packages": result,
+            "status_file": str(status_file),
+        }
+
+    @staticmethod
+    def _installedPythonPackageVersion(package_name: str) -> str:
+        try:
+            return importlib_metadata.version(package_name)
+        except Exception:
+            return ""

@@ -10,6 +10,8 @@ export default {
 			exiftoolInstalling: false,
 			exiftoolRemoving: false,
 			exiftoolExtensionsLoading: false,
+			pipPackagesStatus: {},
+			pipPackagesStatusLoading: false,
 		};
 	},
 	computed: {
@@ -45,6 +47,12 @@ export default {
 				{ value: 'xmp_dir_stem', label: this.$t('config:label_sidecar_variant_xmp_dir_stem', 'xmp subfolder: xmp/image.xmp') },
 				{ value: 'xmp_dir_filename', label: this.$t('config:label_sidecar_variant_xmp_dir_filename', 'xmp subfolder: xmp/image.jpg.xmp') },
 			];
+		},
+		insightFacePipPackageStatus() {
+			const packages = this.pipPackagesStatus && typeof this.pipPackagesStatus.packages === 'object'
+				? this.pipPackagesStatus.packages
+				: {};
+			return packages.INSIGHTFACE && typeof packages.INSIGHTFACE === 'object' ? packages.INSIGHTFACE : {};
 		},
 	},
 	methods: {
@@ -93,6 +101,16 @@ export default {
 					FILE_MATCH_SOURCE_SCOPE: 'both',
 					PERSON_SORT_ORDER: 'id_desc',
 				},
+				pip_packages: {
+					INSIGHTFACE: {
+						ENABLED: false,
+						INSTALL_ON_START: true,
+						REQUIREMENTS_FILE: 'requirements-optional-insightface.txt',
+						WHEELHOUSE_ENABLED: false,
+						WHEELHOUSE_MANIFEST_URL: '',
+						WHEELHOUSE_TARGET: '',
+					},
+				},
 			};
 		},
 		normalizeExternalLibrariesImageExtensions(value, fallback = []) {
@@ -137,6 +155,46 @@ export default {
 				},
 			};
 		},
+		setExternalLibrariesPipPackageConfigValue(packageKey, key, value) {
+			const pipPackages = this.externalLibrariesConfigModel.pip_packages || {};
+			const packageConfig = pipPackages[packageKey] || {};
+			this.externalLibrariesConfigModel = {
+				...this.externalLibrariesConfigModel,
+				pip_packages: {
+					...pipPackages,
+					[packageKey]: {
+						...packageConfig,
+						[key]: value,
+					},
+				},
+			};
+		},
+		getPipPackageInstallStatusLabel(installStatus) {
+			const status = String(installStatus && installStatus.status || '').trim().toLowerCase();
+			if (!status) {
+				return this.$t('status:not_available', 'Not available');
+			}
+			if (status === 'success') {
+				return this.$t('config:pip_install_status_success', 'Last installation completed.');
+			}
+			if (status === 'failed') {
+				return this.$t('config:pip_install_status_failed', 'Last installation failed.');
+			}
+			return status;
+		},
+		getPipPackageModuleStatusLabel(moduleStatus) {
+			if (!moduleStatus || typeof moduleStatus !== 'object') {
+				return this.$t('status:not_available', 'Not available');
+			}
+			if (moduleStatus.installed) {
+				return moduleStatus.version || this.$t('status:installed', 'Installed');
+			}
+			const importError = String(moduleStatus.import_error || '').trim();
+			if (importError) {
+				return `${this.$t('status:not_installed', 'Not installed')}: ${importError}`;
+			}
+			return this.$t('status:not_installed', 'Not installed');
+		},
 		setExiftoolImageExtensionsInput(value) {
 			this.exiftoolImageExtensionsInput = String(value || '');
 		},
@@ -152,6 +210,8 @@ export default {
 			const reviewOptions = (review.OPTIONS && typeof review.OPTIONS === 'object' && !Array.isArray(review.OPTIONS)) ? review.OPTIONS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
+			const pipPackages = (root.pip_packages && typeof root.pip_packages === 'object' && !Array.isArray(root.pip_packages)) ? root.pip_packages : {};
+			const insightFace = (pipPackages.INSIGHTFACE && typeof pipPackages.INSIGHTFACE === 'object' && !Array.isArray(pipPackages.INSIGHTFACE)) ? pipPackages.INSIGHTFACE : {};
 
 			const imageExtensions = this.normalizeExternalLibrariesImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
 			const exiftoolImageExtensions = this.normalizeExternalLibrariesImageExtensions(files.EXIFTOOL_IMAGE_EXTENSIONS, []);
@@ -226,6 +286,18 @@ export default {
 						? String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase()
 						: defaults.face_match.PERSON_SORT_ORDER,
 				},
+				pip_packages: {
+					...pipPackages,
+					INSIGHTFACE: {
+						...insightFace,
+						ENABLED: Boolean(insightFace.ENABLED ?? defaults.pip_packages.INSIGHTFACE.ENABLED),
+						INSTALL_ON_START: Boolean(insightFace.INSTALL_ON_START ?? defaults.pip_packages.INSIGHTFACE.INSTALL_ON_START),
+						REQUIREMENTS_FILE: String(insightFace.REQUIREMENTS_FILE || defaults.pip_packages.INSIGHTFACE.REQUIREMENTS_FILE),
+						WHEELHOUSE_ENABLED: Boolean(insightFace.WHEELHOUSE_ENABLED ?? defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_ENABLED),
+						WHEELHOUSE_MANIFEST_URL: String(insightFace.WHEELHOUSE_MANIFEST_URL || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_MANIFEST_URL),
+						WHEELHOUSE_TARGET: String(insightFace.WHEELHOUSE_TARGET || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_TARGET),
+					},
+				},
 			};
 		},
 		applyExternalLibrariesDefaults() {
@@ -244,6 +316,12 @@ export default {
 					IMAGE_EXTENSIONS_NATIVE_ONLY: defaults.files.IMAGE_EXTENSIONS_NATIVE_ONLY,
 					EXIFTOOL_IMAGE_EXTENSIONS: defaults.files.EXIFTOOL_IMAGE_EXTENSIONS,
 				},
+				pip_packages: {
+					...this.externalLibrariesConfigModel.pip_packages,
+					INSIGHTFACE: {
+						...defaults.pip_packages.INSIGHTFACE,
+					},
+				},
 			});
 			this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 			this.externalLibrariesMessage = this.$t('config:output_defaults_applied', 'Default values loaded into the editor.');
@@ -257,10 +335,22 @@ export default {
 				this.externalLibrariesConfigModel = this.normalizeExternalLibrariesConfig(data && data.data && data.data.config);
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
+				await this.fetchPipPackagesStatus();
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
 				this.externalLibrariesLoading = false;
+			}
+		},
+		async fetchPipPackagesStatus() {
+			this.pipPackagesStatusLoading = true;
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status');
+				this.pipPackagesStatus = this.getResponseData(data);
+			} catch (err) {
+				this.pipPackagesStatus = {};
+			} finally {
+				this.pipPackagesStatusLoading = false;
 			}
 		},
 		async saveExternalLibrariesConfig() {
@@ -280,6 +370,7 @@ export default {
 				this.externalLibrariesConfigModel = this.normalizeExternalLibrariesConfig(data && data.data && data.data.config);
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
+				await this.fetchPipPackagesStatus();
 				this.externalLibrariesMessage = this.$t('config:message_saved', 'Configuration saved.');
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;

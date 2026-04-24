@@ -1,0 +1,2 @@
+# Avoid newer wheels that install successfully on DSM/Python 3.8 but fail at import time with libxcb dependencies.
+opencv-python-headless==4.10.0.84

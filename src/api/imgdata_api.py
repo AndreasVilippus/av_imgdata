@@ -198,6 +198,18 @@ async def exiftool_status(request: Request):
     }
 
 
+@router.post("/pip_packages_status")
+async def pip_packages_status(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    return {
+        "success": True,
+        "data": IMGDATA.pipPackagesStatus(),
+    }
+
+
 @router.post("/exiftool_extensions")
 async def exiftool_extensions(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
@@ -312,7 +324,7 @@ async def face_matching_action(request: Request):
         if normalized:
             normalized_skip_targets.append(normalized)
 
-    if action not in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "load_photo_face_match_findings"}:
+    if action not in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface", "load_photo_face_match_findings"}:
         return {
             "success": False,
             "error": {
@@ -323,7 +335,7 @@ async def face_matching_action(request: Request):
         }
 
     try:
-        if action in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces"}:
+        if action in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"}:
             face_matches = IMGDATA.startFaceMatchingDiscovery(
                 user_key=session_ctx["user_key"],
                 cookies=session_ctx["cookies"],

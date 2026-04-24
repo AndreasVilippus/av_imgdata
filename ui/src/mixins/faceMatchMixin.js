@@ -45,7 +45,13 @@ export default {
 	},
 	computed: {
 		faceMatchIsFileSourceAction() {
-			return ['search_file_face_in_sources', 'mark_missing_photos_faces'].includes(this.faceMatchCurrentAction);
+			return ['search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(this.faceMatchCurrentAction);
+		},
+		faceMatchSupportsSaveOnly() {
+			return ['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(this.selectedFaceMatchingAction);
+		},
+		hasInsightFaceForFaceMatch() {
+			return !!(this.insightFacePipPackageStatus && this.insightFacePipPackageStatus.installed);
 		},
 		faceMatchCurrentAction() {
 			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
@@ -117,6 +123,8 @@ export default {
 					'face_match:progress_auto_metadata_assign_complete',
 					'face_match:progress_auth_required',
 					'face_match:progress_failed',
+					'face_match:progress_insightface_missing',
+					'face_match:progress_insightface_unavailable',
 					'face_match:result_none',
 					'face_match:result_no_match',
 					'face_match:result_named_match',
@@ -295,7 +303,7 @@ export default {
 	},
 	watch: {
 		selectedFaceMatchingAction(nextAction) {
-			if (!['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces'].includes(nextAction)) {
+			if (!['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(nextAction)) {
 				this.faceMatchSaveOnly = false;
 			}
 		},
@@ -317,6 +325,9 @@ export default {
 	methods: {
 		async refreshFaceMatchSessionState() {
 			await this.fetchFaceMatchFindingsStatus();
+			if (typeof this.fetchPipPackagesStatus === 'function') {
+				await this.fetchPipPackagesStatus();
+			}
 			await this.fetchFaceMatchingProgress();
 			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
 				? this.faceMatchProgress
@@ -419,6 +430,9 @@ export default {
 			if (normalized === 'metadata') {
 				return this.$t('face_match:source_metadata', 'Metadata');
 			}
+			if (normalized === 'insightface') {
+				return this.$t('face_match:source_insightface', 'InsightFace');
+			}
 			return String(source || '')
 				.replace(/[_-]+/g, ' ')
 				.replace(/\s+/g, ' ')
@@ -438,6 +452,9 @@ export default {
 			}
 			if (normalized === 'MWG_REGIONS') {
 				return this.$t('face_match:format_mwg_regions', 'MWG face regions');
+			}
+			if (normalized === 'INSIGHTFACE') {
+				return this.$t('face_match:format_insightface', 'InsightFace detection');
 			}
 			return String(format);
 		},
@@ -938,7 +955,7 @@ export default {
 				await this.loadFaceMatchFindingAtIndex(this.faceMatchFindingIndex + 1);
 				return;
 			}
-			if (['search_file_face_in_sources', 'mark_missing_photos_faces'].includes(this.selectedFaceMatchingAction)) {
+			if (['search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(this.selectedFaceMatchingAction)) {
 				this.faceMatchSkippedTargets = this.buildNextSkippedTargets();
 			} else {
 				this.faceMatchSkippedFaceIds = this.buildNextSkippedFaceIds();
@@ -1108,6 +1125,16 @@ export default {
 				} finally {
 					this.faceMatchLoading = false;
 				}
+				return;
+			}
+			if (this.selectedFaceMatchingAction === 'search_missing_faces_insightface' && !this.hasInsightFaceForFaceMatch) {
+				this.faceMatchProgress = {
+					...(this.faceMatchProgress || {}),
+					message_key: 'face_match:progress_insightface_missing',
+					message: this.$t('face_match:progress_insightface_missing', 'InsightFace is not installed.'),
+				};
+				this.faceMatchResult = null;
+				this.resetFaceMatchSelectionState();
 				return;
 			}
 			const resetSkippedFaceIds = options.resetSkippedFaceIds !== false;

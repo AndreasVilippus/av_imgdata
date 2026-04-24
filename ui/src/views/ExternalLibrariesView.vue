@@ -5,7 +5,7 @@
 			<p v-if="panelDescription">{{ panelDescription }}</p>
 		</div>
 
-		<div v-if="isExiftoolConfigView" class="config-actions config-actions-right">
+		<div v-if="isEditableConfigView" class="config-actions config-actions-right">
 			<v-button @click="vm.loadExternalLibrariesConfig" :disabled="vm.externalLibrariesLoading || vm.externalLibrariesSaving" style="width: 160px;">
 				{{ vm.$t('config:button_reload', 'Reload') }}
 			</v-button>
@@ -54,6 +54,52 @@
 							<div class="sm-kv-value">{{ vm.exiftoolStatus.local && vm.exiftoolStatus.local.resolved_path || vm.$t('status:not_available', 'Not available') }}</div>
 						</div>
 					</template>
+				</div>
+			</section>
+
+			<section v-if="isExternalLibrariesInfoView" class="config-card">
+				<div class="sm-section-title">{{ vm.$t('nav:pip_packages', 'pip packages') }}</div>
+				<div class="sm-kv-list">
+					<div class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$t('config:label_pip_package_status', 'InsightFace status') }}</div>
+						<div class="sm-kv-value">
+							{{ vm.insightFacePipPackageStatus.installed ? vm.$t('status:installed', 'Installed') : vm.$t('status:not_installed', 'Not installed') }}
+						</div>
+					</div>
+					<div class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$t('config:label_pip_package_enabled', 'Enabled in config') }}</div>
+						<div class="sm-kv-value">
+							{{ vm.insightFacePipPackageStatus.enabled ? vm.$t('status:yes', 'Yes') : vm.$t('status:no', 'No') }}
+						</div>
+					</div>
+					<div class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$t('config:label_pip_last_install_status', 'Last install status') }}</div>
+						<div class="sm-kv-value">
+							{{ vm.getPipPackageInstallStatusLabel(vm.insightFacePipPackageStatus.install_status) }}
+						</div>
+					</div>
+					<div v-if="vm.insightFacePipPackageStatus.install_status && vm.insightFacePipPackageStatus.install_status.message" class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$t('config:label_pip_last_install_message', 'Last install message') }}</div>
+						<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.install_status.message }}</div>
+					</div>
+					<template v-if="Array.isArray(vm.insightFacePipPackageStatus.modules)">
+						<div
+							v-for="moduleStatus in vm.insightFacePipPackageStatus.modules"
+							:key="moduleStatus.package"
+							class="sm-kv-row"
+						>
+							<div class="sm-kv-key">{{ moduleStatus.package }}</div>
+							<div class="sm-kv-value">
+								{{ vm.getPipPackageModuleStatusLabel(moduleStatus) }}
+							</div>
+						</div>
+					</template>
+					<div v-if="Array.isArray(vm.insightFacePipPackageStatus.conflicts) && vm.insightFacePipPackageStatus.conflicts.length" class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$t('config:label_pip_conflicts', 'Package conflicts') }}</div>
+						<div class="sm-kv-value">
+							{{ vm.insightFacePipPackageStatus.conflicts.map((item) => `${item.package} ${item.version}`).join(', ') }}
+						</div>
+					</div>
 				</div>
 			</section>
 
@@ -190,6 +236,157 @@
 					</v-button>
 				</div>
 			</section>
+
+			<section v-if="isPipPackagesConfigView" class="config-card">
+				<div class="config-form-grid">
+					<div class="config-card-desc">
+						{{ vm.$t('config:pip_packages_restart_hint', 'Enabled optional pip packages are installed during the next package start. Core packages remain required for startup; optional package installation failures are logged but do not block the package start.') }}
+					</div>
+
+					<div class="sm-kv-list">
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_pip_package_status', 'InsightFace status') }}</div>
+							<div class="sm-kv-value">
+								{{ vm.insightFacePipPackageStatus.installed ? vm.$t('status:installed', 'Installed') : vm.$t('status:not_installed', 'Not installed') }}
+							</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_pip_package_enabled', 'Enabled in config') }}</div>
+							<div class="sm-kv-value">
+								{{ vm.insightFacePipPackageStatus.enabled ? vm.$t('status:yes', 'Yes') : vm.$t('status:no', 'No') }}
+							</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_pip_package_requirements', 'Requirements') }}</div>
+							<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.requirements_file || '-' }}</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_pip_wheelhouse_enabled', 'Wheelhouse download') }}</div>
+							<div class="sm-kv-value">
+								{{ vm.insightFacePipPackageStatus.wheelhouse_enabled ? vm.$t('status:yes', 'Yes') : vm.$t('status:no', 'No') }}
+							</div>
+						</div>
+						<div v-if="vm.insightFacePipPackageStatus.wheelhouse_manifest_url" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_pip_wheelhouse_manifest_url', 'Wheelhouse manifest URL') }}</div>
+							<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.wheelhouse_manifest_url }}</div>
+						</div>
+						<div v-if="vm.insightFacePipPackageStatus.wheelhouse_target" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_pip_wheelhouse_target', 'Wheelhouse target') }}</div>
+							<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.wheelhouse_target }}</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_pip_last_install_status', 'Last install status') }}</div>
+							<div class="sm-kv-value">
+								{{ vm.getPipPackageInstallStatusLabel(vm.insightFacePipPackageStatus.install_status) }}
+							</div>
+						</div>
+						<div v-if="vm.insightFacePipPackageStatus.install_status && vm.insightFacePipPackageStatus.install_status.message" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_pip_last_install_message', 'Last install message') }}</div>
+							<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.install_status.message }}</div>
+						</div>
+						<template v-if="Array.isArray(vm.insightFacePipPackageStatus.modules)">
+							<div
+								v-for="moduleStatus in vm.insightFacePipPackageStatus.modules"
+								:key="moduleStatus.package"
+								class="sm-kv-row"
+							>
+								<div class="sm-kv-key">{{ moduleStatus.package }}</div>
+								<div class="sm-kv-value">
+									{{ vm.getPipPackageModuleStatusLabel(moduleStatus) }}
+								</div>
+							</div>
+						</template>
+						<div v-if="Array.isArray(vm.insightFacePipPackageStatus.conflicts) && vm.insightFacePipPackageStatus.conflicts.length" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_pip_conflicts', 'Package conflicts') }}</div>
+							<div class="sm-kv-value">
+								{{ vm.insightFacePipPackageStatus.conflicts.map((item) => `${item.package} ${item.version}`).join(', ') }}
+							</div>
+						</div>
+					</div>
+
+					<div class="config-actions config-actions-right">
+						<v-button @click="vm.fetchPipPackagesStatus" :disabled="vm.pipPackagesStatusLoading" style="width: 220px;">
+							{{ vm.pipPackagesStatusLoading ? vm.$t('config:button_pip_status_loading', 'Checking pip packages...') : vm.$t('config:button_pip_status_refresh', 'Refresh package status') }}
+						</v-button>
+					</div>
+
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving"
+							@change="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'ENABLED', $event.target.checked)"
+						/>
+						<span>{{ vm.$t('config:label_enable_insightface_package', 'Install InsightFace package on package start') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.INSTALL_ON_START"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
+							@change="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'INSTALL_ON_START', $event.target.checked)"
+						/>
+						<span>{{ vm.$t('config:label_pip_install_on_start', 'Install or update during package start') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_ENABLED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
+							@change="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'WHEELHOUSE_ENABLED', $event.target.checked)"
+						/>
+						<span>{{ vm.$t('config:label_pip_wheelhouse_enabled', 'Use external wheelhouse download') }}</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$t('config:label_pip_requirements_file', 'Requirements file') }}</span>
+						<input
+							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.REQUIREMENTS_FILE"
+							type="text"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving"
+							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'REQUIREMENTS_FILE', $event.target.value)"
+						/>
+						<span class="config-card-desc">
+							{{ vm.$t('config:hint_pip_requirements_file', 'The file is resolved below the package src directory. Keep optional packages separate from core requirements so the package can still start if optional installation fails.') }}
+						</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$t('config:label_pip_wheelhouse_manifest_url', 'Wheelhouse manifest URL') }}</span>
+						<input
+							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_MANIFEST_URL"
+							type="text"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_ENABLED"
+							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'WHEELHOUSE_MANIFEST_URL', $event.target.value)"
+						/>
+						<span class="config-card-desc">
+							{{ vm.$t('config:hint_pip_wheelhouse_manifest_url', 'Points to the wheelhouse-manifest.json of a compatible release. All wheel files listed in the manifest are downloaded, verified via SHA256 and then installed locally without source builds.') }}
+						</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$t('config:label_pip_wheelhouse_target', 'Wheelhouse target') }}</span>
+						<input
+							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_TARGET"
+							type="text"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_ENABLED"
+							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'WHEELHOUSE_TARGET', $event.target.value)"
+						/>
+						<span class="config-card-desc">
+							{{ vm.$t('config:hint_pip_wheelhouse_target', 'Must match the manifest target exactly, for example dsm7-x86_64-python38.') }}
+						</span>
+					</label>
+
+					<div class="config-card-desc">
+						{{ vm.$t('config:pip_packages_insightface_license_hint', 'InsightFace code and model files have separate licensing considerations. No models are shipped or downloaded automatically by AV ImgData.') }}
+					</div>
+				</div>
+			</section>
 		</div>
 	</section>
 </template>
@@ -201,7 +398,7 @@ export default {
 		mode: {
 			type: String,
 			default: 'info',
-			validator: (value) => ['info', 'config'].includes(value),
+			validator: (value) => ['info', 'config', 'pip_packages'].includes(value),
 		},
 		vm: {
 			type: Object,
@@ -215,12 +412,25 @@ export default {
 		isExiftoolConfigView() {
 			return this.mode === 'config';
 		},
+		isPipPackagesConfigView() {
+			return this.mode === 'pip_packages';
+		},
+		isEditableConfigView() {
+			return this.isExiftoolConfigView || this.isPipPackagesConfigView;
+		},
 		panelTitle() {
-			return this.isExiftoolConfigView
-				? this.vm.$t('nav:exiftool', 'ExifTool')
-				: this.vm.$t('nav:external_libraries', 'External libraries');
+			if (this.isExiftoolConfigView) {
+				return this.vm.$t('nav:exiftool', 'ExifTool');
+			}
+			if (this.isPipPackagesConfigView) {
+				return this.vm.$t('nav:pip_packages', 'pip packages');
+			}
+			return this.vm.$t('nav:external_libraries', 'External libraries');
 		},
 		panelDescription() {
+			if (this.isPipPackagesConfigView) {
+				return this.vm.$t('config:section_pip_packages_desc', 'Configure optional Python packages installed into the package venv after an explicit restart.');
+			}
 			return this.vm.$t('config:section_exiftool_desc', 'Settings for optional ExifTool usage when reading embedded XMP metadata.');
 		},
 	},
