@@ -81,6 +81,7 @@ class PipPackagesStatusTests(unittest.TestCase):
             self.assertEqual(status["wheelhouse_target"], "dsm7-x86_64-python38")
             self.assertFalse(status["installed"])
             self.assertEqual(status["install_status"]["status"], "failed")
+            self.assertIn("model_status", status)
             self.assertEqual(status["modules"][0]["package"], "insightface")
             self.assertEqual(status["modules"][0]["module"], "insightface.app")
             self.assertFalse(status["modules"][0]["installed"])

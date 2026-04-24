@@ -7606,7 +7606,7 @@ class ImgDataService:
                 "enabled": bool(configured.get("ENABLED", False)),
                 "install_on_start": bool(configured.get("INSTALL_ON_START", True)),
                 "requirements_file": str(configured.get("REQUIREMENTS_FILE") or spec["requirements_file"]),
-                "wheelhouse_enabled": bool(configured.get("WHEELHOUSE_ENABLED", False)),
+                "wheelhouse_enabled": True if key == "INSIGHTFACE" else bool(configured.get("WHEELHOUSE_ENABLED", False)),
                 "wheelhouse_manifest_url": str(configured.get("WHEELHOUSE_MANIFEST_URL") or "").strip(),
                 "wheelhouse_target": str(configured.get("WHEELHOUSE_TARGET") or "").strip(),
                 "installed": installed,
@@ -7619,6 +7619,8 @@ class ImgDataService:
                     if version
                 ],
             }
+            if key == "INSIGHTFACE":
+                result[key]["model_status"] = InsightFaceDetector.available_models()
         return {
             "packages": result,
             "status_file": str(status_file),

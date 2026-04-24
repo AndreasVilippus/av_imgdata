@@ -54,6 +54,15 @@ export default {
 				: {};
 			return packages.INSIGHTFACE && typeof packages.INSIGHTFACE === 'object' ? packages.INSIGHTFACE : {};
 		},
+		insightFaceModelStatus() {
+			const status = this.insightFacePipPackageStatus && typeof this.insightFacePipPackageStatus.model_status === 'object'
+				? this.insightFacePipPackageStatus.model_status
+				: {};
+			return {
+				root: String(status.root || ''),
+				models: Array.isArray(status.models) ? status.models : [],
+			};
+		},
 	},
 	methods: {
 		createExternalLibrariesDefaultConfig() {
@@ -106,7 +115,7 @@ export default {
 						ENABLED: false,
 						INSTALL_ON_START: true,
 						REQUIREMENTS_FILE: 'requirements-optional-insightface.txt',
-						WHEELHOUSE_ENABLED: false,
+						WHEELHOUSE_ENABLED: true,
 						WHEELHOUSE_MANIFEST_URL: '',
 						WHEELHOUSE_TARGET: '',
 					},
@@ -194,6 +203,31 @@ export default {
 				return `${this.$t('status:not_installed', 'Not installed')}: ${importError}`;
 			}
 			return this.$t('status:not_installed', 'Not installed');
+		},
+		getInsightFaceModelStatusLabel(modelStatus) {
+			if (!modelStatus || typeof modelStatus !== 'object') {
+				return this.$t('status:not_available', 'Not available');
+			}
+			if (modelStatus.installed) {
+				const fileCount = Array.isArray(modelStatus.onnx_files) ? modelStatus.onnx_files.length : 0;
+				return this.$t('config:insightface_model_installed', 'Installed ({count} ONNX files)', { count: fileCount });
+			}
+			return this.$t('status:not_installed', 'Not installed');
+		},
+		showExternalLibrariesRestartPopup(message) {
+			const text = String(message || '').trim();
+			if (text) {
+				window.alert(text);
+			}
+		},
+		externalLibrariesPipPackagesRequireRestart(previousConfig, nextConfig) {
+			const previousPackages = previousConfig && previousConfig.pip_packages && typeof previousConfig.pip_packages === 'object'
+				? previousConfig.pip_packages
+				: {};
+			const nextPackages = nextConfig && nextConfig.pip_packages && typeof nextConfig.pip_packages === 'object'
+				? nextConfig.pip_packages
+				: {};
+			return JSON.stringify(previousPackages) !== JSON.stringify(nextPackages);
 		},
 		setExiftoolImageExtensionsInput(value) {
 			this.exiftoolImageExtensionsInput = String(value || '');
@@ -293,7 +327,7 @@ export default {
 						ENABLED: Boolean(insightFace.ENABLED ?? defaults.pip_packages.INSIGHTFACE.ENABLED),
 						INSTALL_ON_START: Boolean(insightFace.INSTALL_ON_START ?? defaults.pip_packages.INSIGHTFACE.INSTALL_ON_START),
 						REQUIREMENTS_FILE: String(insightFace.REQUIREMENTS_FILE || defaults.pip_packages.INSIGHTFACE.REQUIREMENTS_FILE),
-						WHEELHOUSE_ENABLED: Boolean(insightFace.WHEELHOUSE_ENABLED ?? defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_ENABLED),
+						WHEELHOUSE_ENABLED: true,
 						WHEELHOUSE_MANIFEST_URL: String(insightFace.WHEELHOUSE_MANIFEST_URL || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_MANIFEST_URL),
 						WHEELHOUSE_TARGET: String(insightFace.WHEELHOUSE_TARGET || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_TARGET),
 					},
@@ -357,6 +391,7 @@ export default {
 			this.externalLibrariesSaving = true;
 			this.externalLibrariesMessage = '';
 			try {
+				const previousNormalized = this.normalizeExternalLibrariesConfig(this.externalLibrariesConfigModel);
 				const payloadConfig = {
 					...this.externalLibrariesConfigModel,
 					files: {
@@ -372,6 +407,14 @@ export default {
 				await this.fetchExiftoolStatus();
 				await this.fetchPipPackagesStatus();
 				this.externalLibrariesMessage = this.$t('config:message_saved', 'Configuration saved.');
+				if (this.externalLibrariesPipPackagesRequireRestart(previousNormalized, this.externalLibrariesConfigModel)) {
+					this.showExternalLibrariesRestartPopup(
+						this.$t(
+							'config:popup_restart_required_pip_packages',
+							'The package must be restarted so changed optional pip packages can be installed or updated.'
+						)
+					);
+				}
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
@@ -406,6 +449,12 @@ export default {
 				}
 				await this.fetchExiftoolStatus();
 				this.externalLibrariesMessage = this.$t('config:message_exiftool_installed', 'ExifTool downloaded and installed.');
+				this.showExternalLibrariesRestartPopup(
+					this.$t(
+						'config:popup_restart_may_be_required_exiftool',
+						'ExifTool was installed. A package restart may be required before the command is fully available.'
+					)
+				);
 			} catch (err) {
 				const detail = String(err.message || '');
 				if (detail.includes('perl_not_available')) {

@@ -4,6 +4,7 @@ import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import tempfile
 
 sys.path.insert(0, os.path.abspath("src"))
 
@@ -56,16 +57,23 @@ class FaceDetectorTests(unittest.TestCase):
         insightface_app_module = types.ModuleType("insightface.app")
         insightface_app_module.FaceAnalysis = LegacyFaceAnalysis
 
-        with patch.dict(sys.modules, {
-            "insightface": insightface_module,
-            "insightface.app": insightface_app_module,
-        }):
-            app = InsightFaceDetector()._load_app()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "buffalo_l").mkdir()
+            (root / "buffalo_l" / "det_10g.onnx").write_bytes(b"test")
+
+            with patch.dict(sys.modules, {
+                "insightface": insightface_module,
+                "insightface.app": insightface_app_module,
+            }):
+                app = InsightFaceDetector(model_root=root)._load_app()
 
         self.assertIsInstance(app, LegacyFaceAnalysis)
         self.assertEqual(calls[0][0], "init")
         self.assertIn("allowed_modules", calls[0][1])
-        self.assertEqual(calls[1], ("init", {"name": "buffalo_l"}))
+        self.assertEqual(calls[1][0], "init")
+        self.assertEqual(calls[1][1]["name"], "buffalo_l")
+        self.assertIn("root", calls[1][1])
         self.assertEqual(calls[2], ("prepare", {"ctx_id": -1, "det_size": (640, 640)}))
 
     def test_insightface_detector_supports_legacy_prepare_signature(self):
@@ -84,14 +92,22 @@ class FaceDetectorTests(unittest.TestCase):
         insightface_app_module = types.ModuleType("insightface.app")
         insightface_app_module.FaceAnalysis = LegacyFaceAnalysis
 
-        with patch.dict(sys.modules, {
-            "insightface": insightface_module,
-            "insightface.app": insightface_app_module,
-        }):
-            app = InsightFaceDetector()._load_app()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "buffalo_l").mkdir()
+            (root / "buffalo_l" / "det_10g.onnx").write_bytes(b"test")
+
+            with patch.dict(sys.modules, {
+                "insightface": insightface_module,
+                "insightface.app": insightface_app_module,
+            }):
+                app = InsightFaceDetector(model_root=root)._load_app()
 
         self.assertIsInstance(app, LegacyFaceAnalysis)
-        self.assertEqual(calls[0], ("init", {"name": "buffalo_l", "allowed_modules": ["detection"]}))
+        self.assertEqual(calls[0][0], "init")
+        self.assertEqual(calls[0][1]["name"], "buffalo_l")
+        self.assertEqual(calls[0][1]["allowed_modules"], ["detection"])
+        self.assertIn("root", calls[0][1])
         self.assertEqual(calls[1], ("prepare", {"ctx_id": -1, "det_size": (640, 640)}))
         self.assertEqual(calls[2], ("prepare", {"ctx_id": -1}))
 
@@ -107,17 +123,54 @@ class FaceDetectorTests(unittest.TestCase):
         insightface_app_module = types.ModuleType("insightface.app")
         insightface_app_module.FaceAnalysis = BrokenFaceAnalysis
 
-        with patch.dict(sys.modules, {
-            "insightface": insightface_module,
-            "insightface.app": insightface_app_module,
-        }):
-            with self.assertRaises(FaceDetectorUnavailable) as ctx:
-                InsightFaceDetector()._load_app()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "buffalo_l").mkdir()
+            (root / "buffalo_l" / "det_10g.onnx").write_bytes(b"test")
+
+            with patch.dict(sys.modules, {
+                "insightface": insightface_module,
+                "insightface.app": insightface_app_module,
+            }):
+                with self.assertRaises(FaceDetectorUnavailable) as ctx:
+                    InsightFaceDetector(model_root=root)._load_app()
 
         message = str(ctx.exception)
         self.assertIn("insightface detection model could not be prepared", message)
         self.assertIn("model_name=buffalo_l", message)
         self.assertIn("AssertionError", message)
+
+    def test_insightface_available_models_lists_installed_and_known_models(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "buffalo_l").mkdir()
+            (root / "buffalo_l" / "det_10g.onnx").write_bytes(b"test")
+
+            status = InsightFaceDetector.available_models(root)
+
+        self.assertEqual(status["root"], str(root.resolve()))
+        installed = {item["name"]: item for item in status["models"]}
+        self.assertTrue(installed["buffalo_l"]["installed"])
+        self.assertIn("det_10g.onnx", installed["buffalo_l"]["onnx_files"])
+        self.assertFalse(installed["buffalo_m"]["installed"])
+
+    def test_insightface_detector_reports_missing_model_directory_clearly(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            detector = InsightFaceDetector(model_root=Path(tmpdir))
+            with self.assertRaises(FaceDetectorUnavailable) as ctx:
+                detector._validate_model_files()
+
+        self.assertIn("insightface model buffalo_l not found", str(ctx.exception))
+
+    def test_insightface_detector_reports_missing_onnx_files_clearly(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "buffalo_l").mkdir()
+            detector = InsightFaceDetector(model_root=root)
+            with self.assertRaises(FaceDetectorUnavailable) as ctx:
+                detector._validate_model_files()
+
+        self.assertIn("no ONNX files found", str(ctx.exception))
 
 
 if __name__ == "__main__":

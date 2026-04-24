@@ -82,6 +82,10 @@
 						<div class="sm-kv-key">{{ vm.$t('config:label_pip_last_install_message', 'Last install message') }}</div>
 						<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.install_status.message }}</div>
 					</div>
+					<div v-if="vm.insightFaceModelStatus.root" class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_root', 'InsightFace model root') }}</div>
+						<div class="sm-kv-value">{{ vm.insightFaceModelStatus.root }}</div>
+					</div>
 					<template v-if="Array.isArray(vm.insightFacePipPackageStatus.modules)">
 						<div
 							v-for="moduleStatus in vm.insightFacePipPackageStatus.modules"
@@ -100,6 +104,16 @@
 							{{ vm.insightFacePipPackageStatus.conflicts.map((item) => `${item.package} ${item.version}`).join(', ') }}
 						</div>
 					</div>
+					<template v-if="Array.isArray(vm.insightFaceModelStatus.models) && vm.insightFaceModelStatus.models.length">
+						<div
+							v-for="modelStatus in vm.insightFaceModelStatus.models"
+							:key="`info-model-${modelStatus.name}`"
+							class="sm-kv-row"
+						>
+							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model', 'Model') }}: {{ modelStatus.name }}</div>
+							<div class="sm-kv-value">{{ vm.getInsightFaceModelStatusLabel(modelStatus) }}</div>
+						</div>
+					</template>
 				</div>
 			</section>
 
@@ -284,6 +298,10 @@
 							<div class="sm-kv-key">{{ vm.$t('config:label_pip_last_install_message', 'Last install message') }}</div>
 							<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.install_status.message }}</div>
 						</div>
+						<div v-if="vm.insightFaceModelStatus.root" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_root', 'InsightFace model root') }}</div>
+							<div class="sm-kv-value">{{ vm.insightFaceModelStatus.root }}</div>
+						</div>
 						<template v-if="Array.isArray(vm.insightFacePipPackageStatus.modules)">
 							<div
 								v-for="moduleStatus in vm.insightFacePipPackageStatus.modules"
@@ -302,6 +320,16 @@
 								{{ vm.insightFacePipPackageStatus.conflicts.map((item) => `${item.package} ${item.version}`).join(', ') }}
 							</div>
 						</div>
+						<template v-if="Array.isArray(vm.insightFaceModelStatus.models) && vm.insightFaceModelStatus.models.length">
+							<div
+								v-for="modelStatus in vm.insightFaceModelStatus.models"
+								:key="`config-model-${modelStatus.name}`"
+								class="sm-kv-row"
+							>
+								<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model', 'Model') }}: {{ modelStatus.name }}</div>
+								<div class="sm-kv-value">{{ vm.getInsightFaceModelStatusLabel(modelStatus) }}</div>
+							</div>
+						</template>
 					</div>
 
 					<div class="config-actions config-actions-right">
@@ -330,41 +358,17 @@
 						<span>{{ vm.$t('config:label_pip_install_on_start', 'Install or update during package start') }}</span>
 					</label>
 
-					<label class="config-checkbox">
-						<input
-							:checked="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_ENABLED"
-							type="checkbox"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
-							@change="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'WHEELHOUSE_ENABLED', $event.target.checked)"
-						/>
-						<span>{{ vm.$t('config:label_pip_wheelhouse_enabled', 'Use external wheelhouse download') }}</span>
-					</label>
-
-					<label class="config-field">
-						<span class="config-field-label">{{ vm.$t('config:label_pip_requirements_file', 'Requirements file') }}</span>
-						<input
-							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.REQUIREMENTS_FILE"
-							type="text"
-							class="config-input"
-							:disabled="vm.externalLibrariesSaving"
-							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'REQUIREMENTS_FILE', $event.target.value)"
-						/>
-						<span class="config-card-desc">
-							{{ vm.$t('config:hint_pip_requirements_file', 'The file is resolved below the package src directory. Keep optional packages separate from core requirements so the package can still start if optional installation fails.') }}
-						</span>
-					</label>
-
 					<label class="config-field">
 						<span class="config-field-label">{{ vm.$t('config:label_pip_wheelhouse_manifest_url', 'Wheelhouse manifest URL') }}</span>
 						<input
 							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_MANIFEST_URL"
 							type="text"
 							class="config-input"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_ENABLED"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
 							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'WHEELHOUSE_MANIFEST_URL', $event.target.value)"
 						/>
 						<span class="config-card-desc">
-							{{ vm.$t('config:hint_pip_wheelhouse_manifest_url', 'Points to the wheelhouse-manifest.json of a compatible release. All wheel files listed in the manifest are downloaded, verified via SHA256 and then installed locally without source builds.') }}
+							{{ vm.$t('config:hint_pip_wheelhouse_manifest_url', 'Points to the wheelhouse-manifest.json of a compatible release. The manifest is the lock for the wheelhouse install: all wheel files listed there are downloaded, verified via SHA256 and then installed locally without source builds.') }}
 						</span>
 					</label>
 
@@ -374,7 +378,7 @@
 							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_TARGET"
 							type="text"
 							class="config-input"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_ENABLED"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
 							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'WHEELHOUSE_TARGET', $event.target.value)"
 						/>
 						<span class="config-card-desc">

@@ -65,6 +65,45 @@ pip_install_requirements_with_capture() {
     return "${result}"
 }
 
+pip_install_wheelhouse_manifest_with_capture() {
+    manifest_path="$1"
+    output_file="$2"
+    [ -f "${manifest_path}" ] || return 1
+    mkdir -p "${PIP_TMP_DIR}" "${PIP_CACHE_DIR}" "$(dirname "${output_file}")" 2>/dev/null
+
+    TMPDIR="${PIP_TMP_DIR}" PIP_CACHE_DIR="${PIP_CACHE_DIR}" "${PYTHON}" - "${PIP}" "${manifest_path}" > "${output_file}" 2>&1 <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+pip_path = sys.argv[1]
+manifest_path = Path(sys.argv[2])
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+packages = manifest.get("packages")
+if not isinstance(packages, list) or not packages:
+    raise RuntimeError("wheelhouse manifest does not contain packages")
+
+wheel_paths = []
+for package in packages:
+    if not isinstance(package, dict):
+        raise RuntimeError("wheelhouse manifest package entry is invalid")
+    filename = str(package.get("file") or "").strip()
+    if not filename:
+        raise RuntimeError("wheelhouse manifest package entry misses file")
+    wheel_path = manifest_path.parent / filename
+    if not wheel_path.is_file():
+        raise RuntimeError(f"wheelhouse asset missing: {wheel_path}")
+    wheel_paths.append(str(wheel_path))
+
+command = [pip_path, "install", "--only-binary=:all:", "--no-index", *wheel_paths]
+raise SystemExit(subprocess.call(command))
+PY
+    result=$?
+    cat "${output_file}" >> "${LOG_FILE}" 2>/dev/null
+    return "${result}"
+}
+
 prepare_optional_python_package_install() {
     package_key="$1"
     [ -x "${PIP}" ] || return 0
@@ -298,30 +337,29 @@ install_optional_python_packages() {
     enabled_optional_requirement_files | while IFS='|' read -r package_key req_name wheelhouse_enabled wheelhouse_manifest_url wheelhouse_target; do
         [ -n "${package_key}" ] || continue
         [ -n "${req_name}" ] || continue
-        req_file="${OPTIONAL_REQS_DIR}/${req_name}"
-        package_wheel_dir="${WHEEL_DIR}"
-        if [ ! -f "${req_file}" ]; then
-            log "optional requirements file not found: ${req_file}"
-            write_optional_pip_status "${package_key}" "${req_name}" "failed" "requirements file not found: ${req_file}"
+        if [ "${wheelhouse_enabled}" != "1" ]; then
+            log "optional package ${package_key} skipped: wheelhouse-only installation is required"
+            write_optional_pip_status "${package_key}" "${req_name}" "failed" "wheelhouse-only installation is required for optional packages"
             continue
         fi
-        if [ "${wheelhouse_enabled}" = "1" ]; then
-            package_wheel_dir="${DOWNLOADED_WHEEL_DIR}/${package_key}/${wheelhouse_target}"
-            log "preparing optional wheelhouse for ${package_key} from ${wheelhouse_manifest_url}"
-            if ! prepare_optional_python_wheelhouse "${package_key}" "${wheelhouse_manifest_url}" "${wheelhouse_target}" "${req_name}" "${package_wheel_dir}"; then
-                install_message="wheelhouse download or verification failed; see ${LOG_FILE}"
-                log "optional wheelhouse preparation failed for ${package_key}; package start continues"
-                write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
-                continue
-            fi
+        package_wheel_dir="${DOWNLOADED_WHEEL_DIR}/${package_key}/${wheelhouse_target}"
+        log "preparing optional wheelhouse for ${package_key} from ${wheelhouse_manifest_url}"
+        if ! prepare_optional_python_wheelhouse "${package_key}" "${wheelhouse_manifest_url}" "${wheelhouse_target}" "${req_name}" "${package_wheel_dir}"; then
+            install_message="wheelhouse download or verification failed; see ${LOG_FILE}"
+            log "optional wheelhouse preparation failed for ${package_key}; package start continues"
+            write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
+            continue
         fi
-        log "installing optional python packages from ${req_file}"
+        manifest_path="${package_wheel_dir}/wheelhouse-manifest.json"
+        log "installing optional python packages for ${package_key} from wheelhouse manifest ${manifest_path}"
         prepare_optional_python_package_install "${package_key}"
         install_output="${VAR_DIR}/pip_install_${package_key}.log"
-        if ! pip_install_requirements_with_capture "${req_file}" "${install_output}" "${package_wheel_dir}"; then
+        pip_install_wheelhouse_manifest_with_capture "${manifest_path}" "${install_output}"
+        install_result=$?
+        if [ "${install_result}" -ne 0 ]; then
             install_message="$(tail -n 20 "${install_output}" 2>/dev/null | tr '\n' ' ' | cut -c 1-900)"
             [ -n "${install_message}" ] || install_message="pip install failed; see ${LOG_FILE}"
-            log "optional requirements install failed for ${req_file}; package start continues"
+            log "optional wheelhouse install failed for ${package_key}; package start continues"
             write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
         elif ! finalize_optional_python_package_install "${package_key}"; then
             install_message="optional package finalization failed; see ${LOG_FILE}"
