@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 import struct
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -392,12 +393,17 @@ class FileHandler:
         except Exception:
             return None
 
-        start = data.find(b"<x:xmpmeta")
-        end = data.find(b"</x:xmpmeta>")
-        if start == -1 or end == -1:
+        start_match = re.search(br"<[A-Za-z0-9_:-]*xmpmeta\b", data, re.IGNORECASE)
+        end_match = re.search(br"</[A-Za-z0-9_:-]*xmpmeta>", data, re.IGNORECASE)
+        if not start_match or not end_match:
             return None
 
-        xmp_bytes = data[start:end + len(b"</x:xmpmeta>")]
+        start = start_match.start()
+        end = end_match.end()
+        if end <= start:
+            return None
+
+        xmp_bytes = data[start:end]
         return xmp_bytes.decode("utf-8", errors="ignore")
 
     @staticmethod

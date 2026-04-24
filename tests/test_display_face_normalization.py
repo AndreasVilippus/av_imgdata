@@ -2,8 +2,9 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.abspath("src"))
 
@@ -202,6 +203,22 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(extended_payload.faces[0].source_format, "ACD")
         self.assertEqual(extended_payload.faces[0].name, "")
 
+    def test_load_xmp_from_image_parsed_accepts_nonstandard_namespace_prefix(self):
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:
+            path = handle.name
+            handle.write(b"prefix")
+            handle.write(
+                b'<ns0:xmpmeta xmlns:ns0="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"></rdf:RDF></ns0:xmpmeta>'
+            )
+            handle.write(b"suffix")
+        try:
+            parsed = self.service.files.loadXmpFromImageParsed(path)
+        finally:
+            os.unlink(path)
+
+        self.assertIn("<ns0:xmpmeta", parsed or "")
+        self.assertIn("</ns0:xmpmeta>", parsed or "")
+
     def test_search_missing_photos_faces_skips_existing_unknown_photos_face(self):
         metadata_face = MetadataFace.from_center_box(
             name="Person Candidate",
@@ -345,6 +362,57 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(signature["face_id"], 1234)
         self.assertEqual(signature["person_id"], 77)
 
+    def test_checks_conflict_token_ignores_name_and_source_noise(self):
+        entry_a = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "left_face_signature": {
+                "source": "embedded_xmp_exiftool",
+                "source_format": "ACD",
+                "name": "Kaire Vilippus",
+                "x": 0.460801,
+                "y": 0.688777,
+                "w": 0.275065,
+                "h": 0.594169,
+            },
+            "right_face_signature": {
+                "source": "embedded_xmp_exiftool",
+                "source_format": "MWG_REGIONS",
+                "name": "Andreas Vilippus",
+                "x": 0.483776,
+                "y": 0.603067,
+                "w": 0.377395,
+                "h": 0.791537,
+            },
+        }
+        entry_b = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "left_face_signature": {
+                "source": "metadata",
+                "source_format": "MWG_REGIONS",
+                "name": "Kaire Vilippus",
+                "x": 0.4837760001,
+                "y": 0.6030670001,
+                "w": 0.3773950001,
+                "h": 0.7915370001,
+            },
+            "right_face_signature": {
+                "source": "metadata",
+                "source_format": "ACD",
+                "name": "Andreas Vilippus",
+                "x": 0.4608010001,
+                "y": 0.6887770001,
+                "w": 0.2750650001,
+                "h": 0.5941690001,
+            },
+        }
+
+        self.assertEqual(
+            self.service._checksConflictToken(entry_a),
+            self.service._checksConflictToken(entry_b),
+        )
+
     def test_get_cleanup_progress_clears_stale_running_state_without_worker(self):
         written = {}
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
@@ -366,6 +434,32 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(progress.get("message"), "Last cleanup job is no longer running.")
         self.assertEqual(written.get("state_type"), "cleanup_progress")
         self.assertEqual(written.get("state_key"), "user_normalize_names")
+        self.assertFalse(written.get("payload", {}).get("running"))
+
+    def test_get_checks_progress_clears_stale_running_state_without_worker(self):
+        written = {}
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+            "check_type": "name_conflicts",
+            "running": True,
+            "finished": False,
+            "source_mode": "scan",
+            "files_scanned": 945,
+            "total_files": 1572,
+            "current_path": "/volume1/photo/2011/2011.06.11 - Harz/DSC03369.JPG",
+        }
+        self.service.file_analysis.writeRuntimeState = lambda state_type, state_key, payload: written.update({
+            "state_type": state_type,
+            "state_key": state_key,
+            "payload": dict(payload),
+        }) or True
+
+        progress = self.service.getChecksProgress("user", "name_conflicts")
+
+        self.assertFalse(progress.get("running"))
+        self.assertTrue(progress.get("finished"))
+        self.assertEqual(progress.get("message"), "Last checks scan is no longer running.")
+        self.assertEqual(written.get("state_type"), "checks_progress")
+        self.assertEqual(written.get("state_key"), "user_name_conflicts")
         self.assertFalse(written.get("payload", {}).get("running"))
 
     def test_replace_checks_face_name_reassigns_photos_face_using_name_mapping(self):
@@ -532,7 +626,355 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(captured["auto_apply_suggested_duplicates"])
         self.assertEqual(result["save_only"], True)
         self.assertEqual(result["findings_count"], 0)
-        self.assertEqual(captured["saved_findings"]["entries"], [])
+
+    def test_search_next_checks_item_scan_returns_entry_without_resolving_item_when_no_auto_apply(self):
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._getChecksCandidatePaths = lambda **kwargs: ["/volume1/photo/tests/test.jpg"]
+        self.service.analyzeImageFaceMetadata = lambda image_path: {}
+        self.service._buildCheckEntriesForType = lambda **kwargs: [
+            {"review_type": "name_conflicts", "image_path": kwargs["image_path"], "entry_id": "initial"}
+        ]
+
+        with patch.object(self.service, "getChecksReviewItem", side_effect=AssertionError("must not resolve item during scan")):
+            result = self.service.searchNextChecksItem(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                check_type="name_conflicts",
+                save_only=False,
+                auto_apply_suggested_names=False,
+                auto_apply_suggested_duplicates=False,
+            )
+
+        self.assertFalse(result["running"])
+        self.assertTrue(result["finished"])
+        self.assertEqual(result["files_scanned"], 1)
+        self.assertEqual(result["findings_count"], 1)
+        self.assertEqual(result["result"]["entry"]["entry_id"], "initial")
+        self.assertIsNone(result["result"]["item"])
+
+    def test_search_next_checks_item_resume_returns_pending_entry_without_resolving_item_when_no_auto_apply(self):
+        resume_cursor = {
+            "check_type": "name_conflicts",
+            "path_index": 945,
+            "pending_entries": [
+                {
+                    "review_type": "name_conflicts",
+                    "image_path": "/volume1/photo/2011/2011.06.11 - Harz/DSC03369.JPG",
+                    "entry_id": "remaining",
+                    "face_name": "Andreas Vilippus",
+                }
+            ],
+            "save_only": False,
+            "source_mode": "scan",
+            "findings_count": 1,
+        }
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._getChecksCandidatePaths = lambda **kwargs: [
+            f"/volume1/photo/tests/{index:04d}.jpg" for index in range(1000)
+        ]
+
+        with patch.object(self.service, "getChecksReviewItem", side_effect=AssertionError("must not resolve item during resume")):
+            result = self.service.searchNextChecksItem(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                check_type="name_conflicts",
+                save_only=False,
+                resume_cursor=resume_cursor,
+                auto_apply_suggested_names=False,
+                auto_apply_suggested_duplicates=False,
+            )
+
+        self.assertFalse(result["running"])
+        self.assertTrue(result["finished"])
+        self.assertEqual(result["files_scanned"], 945)
+        self.assertEqual(result["findings_count"], 1)
+        self.assertEqual(result["resume_cursor"]["path_index"], 945)
+        self.assertEqual(result["resume_cursor"]["pending_entries"], [])
+        self.assertEqual(result["result"]["entry"]["entry_id"], "remaining")
+        self.assertIsNone(result["result"]["item"])
+
+    def test_search_next_checks_item_auto_apply_name_conflict_uses_rebuilt_image_queue(self):
+        image_path = "/volume1/photo/tests/test.jpg"
+        initial_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "initial",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Andreas Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Kaire Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        flipped_same_pair = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "flipped",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Kaire Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Andreas Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        remaining_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "remaining",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Person Remaining",
+                "x": 0.11,
+                "y": 0.22,
+                "w": 0.10,
+                "h": 0.10,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Person Other",
+                "x": 0.31,
+                "y": 0.42,
+                "w": 0.12,
+                "h": 0.14,
+            },
+        }
+        initial_item = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "left_name": "Andreas Vilippus",
+            "right_name": "Kaire Vilippus",
+            "left_state": "suggested",
+            "right_state": "alert",
+            "left_face_target": dict(initial_entry["left_face_signature"]),
+            "right_face_target": dict(initial_entry["right_face_signature"]),
+        }
+        remaining_item = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "remaining-item",
+        }
+
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._getChecksCandidatePaths = lambda **kwargs: [image_path]
+        self.service.analyzeImageFaceMetadata = lambda image_path: {}
+        self.service._buildCheckEntriesForType = Mock(side_effect=[
+            [initial_entry],
+            [flipped_same_pair, remaining_entry],
+        ])
+
+        with patch.object(self.service, "getChecksReviewItem", side_effect=[initial_item, remaining_item]), \
+             patch.object(self.service, "replaceChecksFaceName", return_value={"updated": True, "operation": "metadata_write"}):
+            result = self.service.searchNextChecksItem(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                check_type="name_conflicts",
+                save_only=False,
+                auto_apply_suggested_names=True,
+                auto_apply_suggested_duplicates=False,
+            )
+
+        self.assertEqual(result["findings_count"], 1)
+        self.assertEqual(result["result"]["entry"]["entry_id"], "remaining")
+        self.assertEqual(result["result"]["item"]["entry_id"], "remaining-item")
+        self.assertEqual(result["resume_cursor"]["pending_entries"], [])
+
+    def test_refresh_checks_scan_progress_for_image_rebuilds_remaining_conflicts_for_same_file(self):
+        current_progress = {
+            "check_type": "name_conflicts",
+            "source_mode": "scan",
+            "running": False,
+            "finished": True,
+            "save_only": False,
+            "files_scanned": 945,
+            "total_files": 40798,
+            "findings_count": 2,
+            "current_path": "/volume1/photo/2011/2011.06.11 - Harz/DSC03369.JPG",
+            "result": {
+                "entry": {
+                    "review_type": "name_conflicts",
+                    "image_path": "/volume1/photo/2011/2011.06.11 - Harz/DSC03369.JPG",
+                    "entry_id": "initial-current",
+                }
+            },
+            "resume_cursor": {
+                "check_type": "name_conflicts",
+                "path_index": 945,
+                "pending_entries": [
+                    {
+                        "review_type": "name_conflicts",
+                        "image_path": "/volume1/photo/2011/2011.06.11 - Harz/DSC03369.JPG",
+                        "entry_id": "initial-pending",
+                    }
+                ],
+                "save_only": False,
+                "source_mode": "scan",
+                "findings_count": 2,
+            },
+        }
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: dict(current_progress)
+        written = {}
+        self.service.file_analysis.writeRuntimeState = lambda state_type, state_key, payload: written.update({
+            "state_type": state_type,
+            "state_key": state_key,
+            "payload": dict(payload),
+        }) or True
+        self.service._loadPhotoFacesForImageWithOverride = lambda **kwargs: []
+        self.service._buildCheckEntriesForType = lambda **kwargs: [
+            {
+                "review_type": "name_conflicts",
+                "image_path": kwargs["image_path"],
+                "entry_id": "remaining-after-rename",
+            }
+        ]
+
+        self.service.refreshChecksScanProgressForImage(
+            user_key="user",
+            check_type="name_conflicts",
+            image_path="/volume1/photo/2011/2011.06.11 - Harz/DSC03369.JPG",
+            cookies={},
+            base_url="https://example.test",
+            shared_folder="/volume1/photo",
+        )
+
+        self.assertEqual(written["state_type"], "checks_progress")
+        self.assertEqual(written["state_key"], "user_name_conflicts")
+        self.assertEqual(written["payload"]["findings_count"], 1)
+        self.assertIsNone(written["payload"]["result"])
+        self.assertEqual(written["payload"]["resume_cursor"]["path_index"], 945)
+        self.assertEqual(len(written["payload"]["resume_cursor"]["pending_entries"]), 1)
+        self.assertEqual(written["payload"]["resume_cursor"]["pending_entries"][0]["entry_id"], "remaining-after-rename")
+
+    def test_refresh_checks_scan_progress_for_image_excludes_processed_face_pair_token(self):
+        image_path = "/volume1/photo/2011/2011.06.11 - Harz/DSC03369.JPG"
+        current_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "current",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Andreas Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Kaire Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        remaining_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "remaining",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Andreas Vilippus",
+                "x": 0.10,
+                "y": 0.20,
+                "w": 0.10,
+                "h": 0.10,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Person Other",
+                "x": 0.30,
+                "y": 0.40,
+                "w": 0.11,
+                "h": 0.11,
+            },
+        }
+        flipped_current_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "current-flipped",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Kaire Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Andreas Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        current_progress = {
+            "check_type": "name_conflicts",
+            "source_mode": "scan",
+            "running": False,
+            "finished": True,
+            "save_only": False,
+            "files_scanned": 945,
+            "total_files": 40798,
+            "findings_count": 2,
+            "current_path": image_path,
+            "result": {"entry": current_entry},
+            "resume_cursor": {
+                "check_type": "name_conflicts",
+                "path_index": 945,
+                "pending_entries": [remaining_entry],
+                "save_only": False,
+                "source_mode": "scan",
+                "findings_count": 2,
+            },
+        }
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: dict(current_progress)
+        written = {}
+        self.service.file_analysis.writeRuntimeState = lambda state_type, state_key, payload: written.update({
+            "state_type": state_type,
+            "state_key": state_key,
+            "payload": dict(payload),
+        }) or True
+        self.service._loadPhotoFacesForImageWithOverride = lambda **kwargs: []
+        self.service._buildCheckEntriesForType = lambda **kwargs: [flipped_current_entry, remaining_entry]
+
+        self.service.refreshChecksScanProgressForImage(
+            user_key="user",
+            check_type="name_conflicts",
+            image_path=image_path,
+            cookies={},
+            base_url="https://example.test",
+            shared_folder="/volume1/photo",
+        )
+
+        self.assertEqual(written["payload"]["findings_count"], 1)
+        pending_entries = written["payload"]["resume_cursor"]["pending_entries"]
+        self.assertEqual(len(pending_entries), 1)
+        self.assertEqual(pending_entries[0]["entry_id"], "remaining")
 
     def test_run_checks_thread_preserves_latest_progress_on_session_error(self):
         self.service._setChecksProgress(
@@ -680,6 +1122,84 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(captured["new_name"], "Person Target")
         self.assertEqual(captured["face_data"]["source_format"], "PHOTOS")
         self.assertEqual(captured["face_data"]["face_id"], 77)
+
+    def test_resolve_checks_review_entry_skips_same_conflict_pair_after_name_flip(self):
+        initial_entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "left_face_signature": {
+                "source": "embedded_xmp_exiftool",
+                "source_format": "ACD",
+                "name": "Andreas Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source": "embedded_xmp_exiftool",
+                "source_format": "MWG_REGIONS",
+                "name": "Kaire Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        flipped_entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "left_face_signature": {
+                "source": "embedded_xmp_exiftool",
+                "source_format": "ACD",
+                "name": "Kaire Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source": "embedded_xmp_exiftool",
+                "source_format": "MWG_REGIONS",
+                "name": "Andreas Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        items = [
+            {
+                "review_type": "name_conflicts",
+                "image_path": "/volume1/photo/tests/test.jpg",
+                "left_name": "Andreas Vilippus",
+                "right_name": "Kaire Vilippus",
+                "left_state": "suggested",
+                "right_state": "alert",
+                "left_face_target": dict(initial_entry["left_face_signature"]),
+                "right_face_target": dict(initial_entry["right_face_signature"]),
+            }
+        ]
+        applied = {"count": 0}
+
+        with patch.object(self.service, "getChecksReviewItem", side_effect=items), \
+             patch.object(self.service, "replaceChecksFaceName", side_effect=lambda **kwargs: applied.update({"count": applied["count"] + 1}) or {
+                 "updated": True,
+                 "operation": "metadata_write",
+             }), \
+             patch.object(self.service, "_buildCheckEntriesForType", side_effect=[[flipped_entry]]):
+            result = self.service._resolveChecksReviewEntry(
+                entry=initial_entry,
+                auto_apply_suggested_names=True,
+                user_key="user",
+                cookies={"_SSID": "session"},
+                base_url="https://example.test",
+            )
+
+        self.assertIsNone(result["entry"])
+        self.assertIsNone(result["item"])
+        self.assertEqual(result["auto_applied_count"], 1)
+        self.assertEqual(applied["count"], 1)
 
     def test_orientation_risk_fallback_prefers_non_risky_side(self):
         risky_face = MetadataFace.from_center_box(

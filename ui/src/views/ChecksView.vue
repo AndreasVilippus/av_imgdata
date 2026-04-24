@@ -61,27 +61,30 @@
 			<div class="face-match-status-head">
 				<div class="sm-section-title">{{ vm.$t('checks:status_title', 'Status') }}</div>
 			</div>
-			<div class="face-match-status-message">{{ vm.checksStatusMessage }}</div>
-			<div v-if="Number(vm.checksProgress.total_files) > 0" class="sm-status-progress">
-				<RatioProgress
+			<div
+				v-if="vm.selectedChecksAction === 'scan' && (vm.checksLoading || (vm.checksProgress && Object.keys(vm.checksProgress).length))"
+				class="sm-status-progress"
+			>
+				<ProgressOverviewCard
+					:title="vm.$t('checks:label_images', 'Images')"
+					:count="Number(vm.checksProgress.total_files) || 0"
 					:current="Number(vm.checksProgress.files_scanned) || 0"
 					:total="Number(vm.checksProgress.total_files) || 0"
-					:primary-text="`${Number(vm.checksProgress.files_scanned) || 0} ${vm.$t('checks:label_scanned', 'Scanned:').replace(':', '')}`"
-					:secondary-text="`${Number(vm.checksProgress.total_files) || 0} ${vm.$t('status:files_matched', 'Matching files')}`"
-					:tooltip="`${Number(vm.checksProgress.files_scanned) || 0} / ${Number(vm.checksProgress.total_files) || 0}`"
+					:primary-label="vm.$t('checks:label_scanned', 'scanned').replace(':', '').toLowerCase()"
+					:secondary-label="vm.$t('checks:label_remaining', 'remaining')"
+					:status-text="vm.getChecksStatusHeadline()"
 				/>
 			</div>
 			<div v-if="vm.selectedChecksAction !== 'scan' && vm.checksEntries.length > 0" class="sm-status-progress">
-				<RatioProgress
+				<ProgressOverviewCard
+					:title="vm.$t('checks:label_list_entries', 'Entries')"
+					:count="vm.checksEntries.length"
 					:current="vm.checksCurrentIndex + 1"
 					:total="vm.checksEntries.length"
-					:primary-text="`${vm.checksCurrentIndex + 1} ${vm.$t('checks:label_index', 'Entry:').replace(':', '')}`"
-					:secondary-text="`${vm.checksEntries.length} ${vm.$t('checks:label_list_entries', 'Entries')}`"
-					:tooltip="`${vm.checksCurrentIndex + 1} / ${vm.checksEntries.length}`"
+					:primary-label="vm.$t('checks:label_index', 'Entry:').replace(':', '')"
+					:secondary-label="vm.$t('checks:label_entries_remaining', 'remaining')"
+					:status-text="vm.getChecksStatusHeadline()"
 				/>
-			</div>
-			<div v-if="vm.selectedChecksAction === 'scan' && !vm.checksCurrentItem" class="face-match-status-stats">
-				<div><strong>{{ vm.$t('checks:label_findings_count', 'Findings:') }}</strong> {{ vm.checksProgress.findings_count || 0 }}</div>
 			</div>
 			<div v-if="vm.checksCurrentItem" class="face-match-status-stats">
 				<div><strong>{{ vm.$t('checks:label_type', 'Check:') }}</strong> {{ vm.getChecksTypeLabel(vm.selectedChecksType) }}</div>
@@ -140,13 +143,13 @@
 
 <script>
 import ChecksFacePane from '../components/ChecksFacePane.vue';
-import RatioProgress from '../components/RatioProgress.vue';
+import ProgressOverviewCard from '../components/ProgressOverviewCard.vue';
 
 export default {
 	name: 'ChecksView',
 	components: {
 		ChecksFacePane,
-		RatioProgress,
+		ProgressOverviewCard,
 	},
 	props: {
 		vm: {

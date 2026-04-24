@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -825,7 +826,8 @@ class ImgDataService:
         normalized_type = self._normalizeChecksType(check_type or current.get("check_type"))
         current["check_type"] = normalized_type
         worker = self._checks_threads.get(self._checksStateKey(user_key, normalized_type))
-        if current.get("running") and worker is not None and not worker.is_alive():
+        worker_alive = worker.is_alive() if worker is not None else False
+        if current.get("running") and not worker_alive:
             current["running"] = False
             current["finished"] = True
             if not current.get("message"):
@@ -1261,6 +1263,12 @@ class ImgDataService:
             shared_folder=shared_folder,
             photo_faces=photo_faces,
         )
+        processed_tokens: List[str] = []
+        if isinstance(current_entry, dict) and str(current_entry.get("image_path") or "").strip() == normalized_path:
+            current_entry_token = self._checksEntryToken(current_entry)
+            if current_entry_token:
+                processed_tokens.append(current_entry_token)
+        replacement_entries = self._excludeChecksEntriesByTokens(rebuilt_entries, processed_tokens)
 
         remaining_pending_entries: List[Dict[str, Any]] = []
         for entry in pending_entries:
@@ -1269,10 +1277,10 @@ class ImgDataService:
             if str(entry.get("image_path") or "").strip() == normalized_path:
                 continue
             remaining_pending_entries.append(entry)
-        remaining_pending_entries = rebuilt_entries + remaining_pending_entries
+        remaining_pending_entries = replacement_entries + remaining_pending_entries
 
         findings_count = int(current.get("findings_count") or 0)
-        findings_count = max(0, findings_count - old_image_entries_count + len(rebuilt_entries))
+        findings_count = max(0, findings_count - old_image_entries_count + len(replacement_entries))
 
         updated_resume_cursor = self._buildChecksResumeCursor(
             path_index=int(resume_cursor.get("path_index") or 0),
@@ -1347,6 +1355,7 @@ class ImgDataService:
         entry: Dict[str, Any],
         auto_apply_suggested_names: bool = False,
         auto_apply_suggested_duplicates: bool = False,
+        include_item: bool = True,
         user_key: Optional[str] = None,
         cookies: Optional[Dict[str, str]] = None,
         base_url: str = "",
@@ -1354,8 +1363,15 @@ class ImgDataService:
     ) -> Dict[str, Any]:
         normalized_entry = dict(entry or {})
         auto_applied_count = 0
+        seen_entry_tokens = set()
 
         while True:
+            if not include_item and not auto_apply_suggested_names and not auto_apply_suggested_duplicates:
+                return {
+                    "entry": normalized_entry,
+                    "item": None,
+                    "auto_applied_count": auto_applied_count,
+                }
             item = self.getChecksReviewItem(
                 entry=normalized_entry,
                 user_key=user_key,
@@ -1388,6 +1404,9 @@ class ImgDataService:
                         "auto_applied_count": auto_applied_count,
                     }
             if delete_action:
+                current_entry_token = self._checksEntryToken(normalized_entry)
+                if current_entry_token:
+                    seen_entry_tokens.add(current_entry_token)
                 result = self.deleteMetadataFace(
                     image_path=str(item.get("image_path") or ""),
                     face_data=delete_action["face"],
@@ -1400,9 +1419,17 @@ class ImgDataService:
                         "auto_apply_warning": str(result.get("warning") or ""),
                     }
                 auto_applied_count += 1
+                if self._isChecksFacePairType(item.get("review_type")):
+                    return {
+                        "entry": None,
+                        "item": None,
+                        "auto_applied_count": auto_applied_count,
+                        "processed_entry_tokens": list(seen_entry_tokens),
+                    }
                 next_entry = next(
-                    iter(
-                        self._buildCheckEntriesForType(
+                    (
+                        candidate
+                        for candidate in self._buildCheckEntriesForType(
                             image_path=str(item.get("image_path") or ""),
                             review_type=str(item.get("review_type") or ""),
                             user_key=user_key,
@@ -1410,6 +1437,7 @@ class ImgDataService:
                             base_url=base_url,
                             shared_folder=shared_folder,
                         )
+                        if self._checksEntryToken(candidate) not in seen_entry_tokens
                     ),
                     None,
                 )
@@ -1436,6 +1464,9 @@ class ImgDataService:
                 face_data=action["face"],
                 new_name=str(action["new_name"] or ""),
             )
+            current_entry_token = self._checksEntryToken(normalized_entry)
+            if current_entry_token:
+                seen_entry_tokens.add(current_entry_token)
             if not result.get("updated"):
                 return {
                     "entry": normalized_entry,
@@ -1445,9 +1476,17 @@ class ImgDataService:
                 }
 
             auto_applied_count += 1
+            if self._isChecksFacePairType(item.get("review_type")):
+                return {
+                    "entry": None,
+                    "item": None,
+                    "auto_applied_count": auto_applied_count,
+                    "processed_entry_tokens": list(seen_entry_tokens),
+                }
             next_entry = next(
-                iter(
-                    self._buildCheckEntriesForType(
+                (
+                    candidate
+                    for candidate in self._buildCheckEntriesForType(
                         image_path=str(item.get("image_path") or ""),
                         review_type=str(item.get("review_type") or ""),
                         user_key=user_key,
@@ -1455,6 +1494,7 @@ class ImgDataService:
                         base_url=base_url,
                         shared_folder=shared_folder,
                     )
+                    if self._checksEntryToken(candidate) not in seen_entry_tokens
                 ),
                 None,
             )
@@ -2303,6 +2343,134 @@ class ImgDataService:
             if self._isSameFace(face, signature):
                 return face
         return None
+
+    @staticmethod
+    def _isChecksFacePairType(review_type: Any) -> bool:
+        normalized_type = str(review_type or "").strip().lower()
+        return normalized_type in {"name_conflicts", "duplicate_faces", "position_deviations"}
+
+    @staticmethod
+    def _faceIdentitySignature(face: Any) -> Dict[str, Any]:
+        signature = ImgDataService._faceSignature(face)
+        if not isinstance(signature, dict):
+            return {}
+        normalized: Dict[str, Any] = {}
+        source_format = str(signature.get("source_format") or "").strip().upper()
+        if source_format:
+            normalized["source_format"] = source_format
+        for key in ("x", "y", "w", "h"):
+            value = signature.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                normalized[key] = round(float(value), 6)
+            except (TypeError, ValueError):
+                normalized[key] = value
+        orientation = signature.get("orientation")
+        if orientation not in (None, ""):
+            try:
+                normalized["orientation"] = int(orientation)
+            except (TypeError, ValueError):
+                normalized["orientation"] = orientation
+        for key in ("face_id", "person_id"):
+            value = signature.get(key)
+            if value not in (None, ""):
+                normalized[key] = value
+        return normalized
+
+    @staticmethod
+    def _faceIdentityToken(face: Any) -> str:
+        signature = ImgDataService._faceIdentitySignature(face)
+        if not signature:
+            return ""
+        return json.dumps(signature, sort_keys=True, ensure_ascii=True)
+
+    def _checksConflictToken(self, entry: Any) -> str:
+        if not isinstance(entry, dict):
+            return ""
+        left_token = self._faceIdentityToken(entry.get("left_face_signature"))
+        right_token = self._faceIdentityToken(entry.get("right_face_signature"))
+        if not left_token or not right_token:
+            return ""
+        return json.dumps(
+            {
+                "review_type": str(entry.get("review_type") or "").strip().lower(),
+                "image_path": str(entry.get("image_path") or "").strip(),
+                "pair": sorted([left_token, right_token]),
+            },
+            sort_keys=True,
+            ensure_ascii=True,
+        )
+
+    def _checksEntryToken(self, entry: Any) -> str:
+        if not isinstance(entry, dict):
+            return ""
+        review_type = str(entry.get("review_type") or "").strip().lower()
+        if self._isChecksFacePairType(review_type):
+            return self._checksConflictToken(entry)
+        entry_id = str(entry.get("entry_id") or "").strip()
+        image_path = str(entry.get("image_path") or "").strip()
+        if entry_id:
+            return json.dumps(
+                {
+                    "review_type": review_type,
+                    "image_path": image_path,
+                    "entry_id": entry_id,
+                },
+                sort_keys=True,
+                ensure_ascii=True,
+            )
+        if review_type and image_path:
+            return json.dumps(
+                {
+                    "review_type": review_type,
+                    "image_path": image_path,
+                },
+                sort_keys=True,
+                ensure_ascii=True,
+            )
+        return ""
+
+    def _excludeChecksEntriesByTokens(
+        self,
+        entries: List[Dict[str, Any]],
+        excluded_tokens: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        normalized_tokens = {
+            str(token or "").strip()
+            for token in (excluded_tokens or [])
+            if str(token or "").strip()
+        }
+        filtered_entries: List[Dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_token = self._checksEntryToken(entry)
+            if entry_token and entry_token in normalized_tokens:
+                continue
+            filtered_entries.append(entry)
+        return filtered_entries
+
+    def _rebuildChecksEntriesForImageAfterMutation(
+        self,
+        *,
+        image_path: str,
+        review_type: str,
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: str = "",
+        shared_folder: str = "",
+        excluded_tokens: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        rebuilt_entries = self._buildCheckEntriesForType(
+            image_path=image_path,
+            review_type=review_type,
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            shared_folder=shared_folder,
+        )
+        return self._excludeChecksEntriesByTokens(rebuilt_entries, excluded_tokens)
 
     def _buildCheckEntry(
         self,
@@ -3259,6 +3427,7 @@ class ImgDataService:
                 entry=entry,
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                include_item=auto_apply_suggested_names or auto_apply_suggested_duplicates,
                 user_key=user_key,
                 cookies=cookies,
                 base_url=base_url,
@@ -3267,8 +3436,45 @@ class ImgDataService:
             entry = resolved.get("entry")
             item = resolved.get("item")
             auto_applied_count = int(resolved.get("auto_applied_count") or 0)
+            processed_entry_tokens = [
+                str(token or "").strip()
+                for token in resolved.get("processed_entry_tokens") or []
+                if str(token or "").strip()
+            ]
             if auto_applied_count:
-                findings_count = max(0, findings_count - auto_applied_count)
+                target_entry = entry or pending_entries[0]
+                target_image_path = str(target_entry.get("image_path") or "").strip()
+                rebuilt_same_image_entries = self._rebuildChecksEntriesForImageAfterMutation(
+                    image_path=target_image_path,
+                    review_type=str(target_entry.get("review_type") or check_type),
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                    excluded_tokens=processed_entry_tokens,
+                )
+                other_remaining_entries = [
+                    candidate
+                    for candidate in remaining_entries
+                    if str(candidate.get("image_path") or "").strip()
+                    != target_image_path
+                ]
+                refreshed_pending_entries = rebuilt_same_image_entries + other_remaining_entries
+                findings_count = max(0, findings_count - len(pending_entries) + len(refreshed_pending_entries))
+                if refreshed_pending_entries:
+                    entry = refreshed_pending_entries[0]
+                    remaining_entries = refreshed_pending_entries[1:]
+                    item = self.getChecksReviewItem(
+                        entry=entry,
+                        user_key=user_key,
+                        cookies=cookies,
+                        base_url=base_url,
+                        shared_folder=shared_folder,
+                    )
+                else:
+                    entry = None
+                    item = None
+                    remaining_entries = []
             if resolved.get("auto_apply_warning"):
                 return self._buildChecksScanPayload(
                     check_type=check_type,
@@ -3284,7 +3490,7 @@ class ImgDataService:
                     message="Suggested name could not be applied automatically.",
                     message_params={"count": findings_count},
                 )
-            if not entry or not item:
+            if not entry:
                 pending_entries = remaining_entries
             else:
                 findings_count = max(findings_count, 1)
@@ -3443,6 +3649,7 @@ class ImgDataService:
                 entry=entry,
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                include_item=save_only or auto_apply_suggested_names or auto_apply_suggested_duplicates,
                 user_key=user_key,
                 cookies=cookies,
                 base_url=base_url,
@@ -3451,16 +3658,23 @@ class ImgDataService:
             entry = resolved.get("entry")
             item = resolved.get("item")
             auto_applied_count = int(resolved.get("auto_applied_count") or 0)
+            processed_entry_tokens = [
+                str(token or "").strip()
+                for token in resolved.get("processed_entry_tokens") or []
+                if str(token or "").strip()
+            ]
             if auto_applied_count:
-                refreshed_entries = self._buildCheckEntriesForType(
+                old_image_entries_count = 1 + len(remaining_entries)
+                refreshed_entries = self._rebuildChecksEntriesForImageAfterMutation(
                     image_path=image_path,
                     review_type=check_type,
                     user_key=user_key,
                     cookies=cookies,
                     base_url=base_url,
                     shared_folder=shared_folder,
+                    excluded_tokens=processed_entry_tokens,
                 )
-                findings_count = max(0, findings_count - auto_applied_count)
+                findings_count = max(0, findings_count - old_image_entries_count + len(refreshed_entries))
                 if not refreshed_entries:
                     continue
                 entry = refreshed_entries[0]
@@ -3487,7 +3701,7 @@ class ImgDataService:
                     message="Suggested name could not be applied automatically.",
                     message_params={"count": findings_count},
                 )
-            if not entry or not item:
+            if not entry:
                 continue
             return self._buildChecksScanPayload(
                 check_type=check_type,

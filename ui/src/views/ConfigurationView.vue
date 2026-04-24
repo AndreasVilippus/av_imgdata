@@ -126,20 +126,6 @@
 						<span>{{ $t('config:label_check_name_conflicts_include_photos', 'Include Photos person names') }}</span>
 					</label>
 
-					<label
-						class="config-field"
-						:title="$t('config:tooltip_check_single_source_of_truth', 'Automatically the value from this source is suggested for corrections.')"
-					>
-						<span class="config-field-label">{{ $t('config:label_check_single_source_of_truth', 'Single Source of Truth for checks') }}</span>
-						<select v-model="configModel.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH" class="config-select" :disabled="saving">
-							<option value="">{{ $t('config:option_check_single_source_of_truth_none', 'None') }}</option>
-							<option
-								v-for="option in checksSingleSourceOptions"
-								:key="option.value"
-								:value="option.value"
-							>{{ option.label }}</option>
-						</select>
-					</label>
 				</div>
 			</section>
 
@@ -177,6 +163,21 @@
 					<label class="config-checkbox">
 						<input v-model="configModel.review.OPTIONS.DUPLICATE_FACE_SUGGESTIONS" type="checkbox" :disabled="saving" />
 						<span>{{ $t('config:label_review_duplicate_face_suggestions', 'Suggest likely valid duplicate face markings') }}</span>
+					</label>
+
+					<label
+						class="config-field"
+						:title="$t('config:tooltip_check_single_source_of_truth', 'Automatically the value from this source is suggested for corrections.')"
+					>
+						<span class="config-field-label">{{ $t('config:label_check_single_source_of_truth', 'Single Source of Truth for checks') }}</span>
+						<select v-model="configModel.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH" class="config-select" :disabled="saving">
+							<option value="">{{ $t('config:option_check_single_source_of_truth_none', 'None') }}</option>
+							<option
+								v-for="option in checksSingleSourceOptions"
+								:key="option.value"
+								:value="option.value"
+							>{{ option.label }}</option>
+						</select>
 					</label>
 				</div>
 			</section>
