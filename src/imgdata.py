@@ -3144,6 +3144,8 @@ class ImgDataService:
                 **result,
             )
         except (SessionBootstrapRequired, SessionManagerError) as exc:
+            current_progress = self.getChecksProgress(user_key, check_type)
+            current_resume_cursor = current_progress.get("resume_cursor") if isinstance(current_progress.get("resume_cursor"), dict) else {}
             self._setChecksProgressMessage(
                 user_key,
                 check_type,
@@ -3155,7 +3157,11 @@ class ImgDataService:
                 error=str(exc),
                 save_only=save_only,
                 source_mode="scan",
-                resume_cursor=resume_cursor or self._buildChecksResumeCursor(
+                files_scanned=int(current_progress.get("files_scanned") or 0),
+                total_files=int(current_progress.get("total_files") or 0),
+                findings_count=int(current_progress.get("findings_count") or 0),
+                current_path=str(current_progress.get("current_path") or ""),
+                resume_cursor=current_resume_cursor or resume_cursor or self._buildChecksResumeCursor(
                     path_index=0,
                     pending_entries=[],
                     source_mode="scan",

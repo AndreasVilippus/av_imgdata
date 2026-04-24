@@ -157,6 +157,35 @@ def _refresh_checks_mutation_state(
     return findings_update
 
 
+def _safe_refresh_checks_mutation_state(
+    session_ctx: Dict[str, Any],
+    *,
+    check_type: str,
+    image_path: str,
+    original_face_data: Optional[Dict[str, Any]] = None,
+    replacement_face_data: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    try:
+        refresh_kwargs = {
+            "check_type": check_type,
+            "image_path": image_path,
+        }
+        if original_face_data is not None:
+            refresh_kwargs["original_face_data"] = original_face_data
+        if replacement_face_data is not None:
+            refresh_kwargs["replacement_face_data"] = replacement_face_data
+        findings_update = _refresh_checks_mutation_state(session_ctx, **refresh_kwargs)
+        return findings_update, None
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return None, _session_exception_response(exc, bootstrap_message="checks_mutation_refresh_bootstrap_required")["error"]
+    except Exception as exc:
+        return None, {
+            "code": 500,
+            "message": "checks_mutation_refresh_failed",
+            "details": str(exc),
+        }
+
+
 @router.post("/status")
 async def status(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
@@ -1086,8 +1115,9 @@ async def checks_delete_metadata_face(request: Request):
         )
         findings_update = None
         review_type = str(body.get("review_type") or "").strip().lower()
+        refresh_error = None
         if result.get("deleted") and review_type:
-            findings_update = _refresh_checks_mutation_state(
+            findings_update, refresh_error = _safe_refresh_checks_mutation_state(
                 session_ctx,
                 check_type=review_type,
                 image_path=image_path,
@@ -1107,6 +1137,7 @@ async def checks_delete_metadata_face(request: Request):
         "data": {
             **result,
             "findings_update": findings_update,
+            "refresh_error": refresh_error,
         },
     })
 
@@ -1148,6 +1179,7 @@ async def checks_replace_metadata_face_name(request: Request):
                 source_name=source_name,
                 target_name=new_name,
             )
+        refresh_error = None
         if result.get("updated"):
             replacement_face_data = None
             if str(result.get("operation") or "").strip().lower() == "photos_assign":
@@ -1156,7 +1188,7 @@ async def checks_replace_metadata_face_name(request: Request):
                 target_person = result.get("target_person") if isinstance(result.get("target_person"), dict) else {}
                 if target_person.get("id") not in (None, ""):
                     replacement_face_data["person_id"] = target_person.get("id")
-            findings_update = _refresh_checks_mutation_state(
+            findings_update, refresh_error = _safe_refresh_checks_mutation_state(
                 session_ctx,
                 check_type="name_conflicts",
                 image_path=image_path,
@@ -1179,6 +1211,7 @@ async def checks_replace_metadata_face_name(request: Request):
             **result,
             "mapping_saved": mapping_saved if save_mapping else False,
             "findings_update": findings_update,
+            "refresh_error": refresh_error,
         },
     })
 
@@ -1210,8 +1243,9 @@ async def checks_replace_metadata_face_position(request: Request):
             source_face_data=source_face,
         )
         findings_update = None
+        refresh_error = None
         if result.get("updated") and review_type:
-            findings_update = _refresh_checks_mutation_state(
+            findings_update, refresh_error = _safe_refresh_checks_mutation_state(
                 session_ctx,
                 check_type=review_type,
                 image_path=image_path,
@@ -1231,6 +1265,7 @@ async def checks_replace_metadata_face_position(request: Request):
         "data": {
             **result,
             "findings_update": findings_update,
+            "refresh_error": refresh_error,
         },
     })
 
@@ -1277,13 +1312,14 @@ async def checks_assign_face_person(request: Request):
             person_name=person_name,
         )
         findings_update = None
+        refresh_error = None
         if result.get("updated") and review_type:
             replacement_face_data = None
             if str(face.get("source_format") or "").strip().upper() == "PHOTOS":
                 replacement_face_data = dict(face)
                 replacement_face_data["name"] = person_name
                 replacement_face_data["person_id"] = person_id
-            findings_update = _refresh_checks_mutation_state(
+            findings_update, refresh_error = _safe_refresh_checks_mutation_state(
                 session_ctx,
                 check_type=review_type,
                 image_path=image_path,
@@ -1307,6 +1343,7 @@ async def checks_assign_face_person(request: Request):
         "data": {
             **result,
             "findings_update": findings_update,
+            "refresh_error": refresh_error,
         },
     })
 
