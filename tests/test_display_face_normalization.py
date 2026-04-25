@@ -866,6 +866,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(written["payload"]["resume_cursor"]["path_index"], 945)
         self.assertEqual(len(written["payload"]["resume_cursor"]["pending_entries"]), 1)
         self.assertEqual(written["payload"]["resume_cursor"]["pending_entries"][0]["entry_id"], "remaining-after-rename")
+        self.assertEqual(written["payload"]["findings_count"], 1)
 
     def test_refresh_checks_scan_progress_for_image_excludes_processed_face_pair_token(self):
         image_path = "/volume1/photo/2011/2011.06.11 - Harz/DSC03369.JPG"
@@ -975,6 +976,60 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         pending_entries = written["payload"]["resume_cursor"]["pending_entries"]
         self.assertEqual(len(pending_entries), 1)
         self.assertEqual(pending_entries[0]["entry_id"], "remaining")
+        self.assertEqual(written["payload"]["findings_count"], 1)
+
+    def test_search_next_checks_item_resume_ignores_stale_findings_count_and_counts_pending_entries(self):
+        pending_entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "entry_id": "remaining",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Person Remaining",
+                "x": 0.11,
+                "y": 0.22,
+                "w": 0.10,
+                "h": 0.10,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Person Other",
+                "x": 0.31,
+                "y": 0.42,
+                "w": 0.12,
+                "h": 0.14,
+            },
+        }
+        pending_item = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "entry_id": "remaining-item",
+        }
+
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._getChecksCandidatePaths = lambda **kwargs: ["/volume1/photo/tests/test.jpg"]
+
+        with patch.object(self.service, "getChecksReviewItem", return_value=pending_item):
+            result = self.service.searchNextChecksItem(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                check_type="name_conflicts",
+                save_only=False,
+                resume_cursor={
+                    "check_type": "name_conflicts",
+                    "path_index": 945,
+                    "pending_entries": [pending_entry],
+                    "save_only": False,
+                    "source_mode": "scan",
+                    "findings_count": 38,
+                },
+            )
+
+        self.assertEqual(result["findings_count"], 1)
+        self.assertEqual(result["result"]["entry"]["entry_id"], "remaining")
+        self.assertIsNone(result["result"]["item"])
+        self.assertEqual(result["resume_cursor"]["pending_entries"], [])
 
     def test_run_checks_thread_preserves_latest_progress_on_session_error(self):
         self.service._setChecksProgress(
