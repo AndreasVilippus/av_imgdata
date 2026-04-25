@@ -825,6 +825,9 @@ class ImgDataService:
         current = dict(payload) if isinstance(payload, dict) else {}
         normalized_type = self._normalizeChecksType(check_type or current.get("check_type"))
         current["check_type"] = normalized_type
+        current["findings_count"] = max(0, int(current.get("findings_count") or 0))
+        current["resolved_count"] = max(0, int(current.get("resolved_count") or 0))
+        current["ignored_count"] = max(0, int(current.get("ignored_count") or 0))
         worker = self._checks_threads.get(self._checksStateKey(user_key, normalized_type))
         worker_alive = worker.is_alive() if worker is not None else False
         if current.get("running") and not worker_alive:
@@ -956,6 +959,9 @@ class ImgDataService:
         check_type: str,
         save_only: bool,
         findings_count: int,
+        resolved_count: int = 0,
+        ignored_count: int = 0,
+        metrics_trusted: bool = True,
     ) -> Dict[str, Any]:
         return {
             "path_index": max(0, int(path_index)),
@@ -964,6 +970,9 @@ class ImgDataService:
             "check_type": str(check_type or "dimension_issues"),
             "save_only": bool(save_only),
             "findings_count": max(0, int(findings_count)),
+            "resolved_count": max(0, int(resolved_count)),
+            "ignored_count": max(0, int(ignored_count)),
+            "metrics_trusted": bool(metrics_trusted),
         }
 
     def _buildChecksScanPayload(
@@ -984,6 +993,8 @@ class ImgDataService:
         running: bool = False,
         finished: bool = True,
         stop_requested: bool = False,
+        resolved_count: int = 0,
+        ignored_count: int = 0,
     ) -> Dict[str, Any]:
         return {
             "running": running,
@@ -995,6 +1006,8 @@ class ImgDataService:
             "files_scanned": files_scanned,
             "total_files": total_files,
             "findings_count": findings_count,
+            "resolved_count": max(0, int(resolved_count)),
+            "ignored_count": max(0, int(ignored_count)),
             "current_path": current_path,
             "result": result,
             "resume_cursor": self._buildChecksResumeCursor(
@@ -1004,6 +1017,8 @@ class ImgDataService:
                 check_type=check_type,
                 save_only=save_only,
                 findings_count=findings_count,
+                resolved_count=resolved_count,
+                ignored_count=ignored_count,
             ),
             "message_key": message_key,
             "message": message,
@@ -1022,6 +1037,42 @@ class ImgDataService:
             if isinstance(entry, dict) and entry:
                 count += 1
         return count
+
+    @staticmethod
+    def _currentChecksResultEntry(progress: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        result = progress.get("result") if isinstance(progress, dict) and isinstance(progress.get("result"), dict) else {}
+        entry = result.get("entry") if isinstance(result.get("entry"), dict) else None
+        return entry if isinstance(entry, dict) and entry else None
+
+    def _trustedChecksResumeCursor(
+        self,
+        current_progress: Optional[Dict[str, Any]],
+        *,
+        check_type: str,
+        save_only: bool,
+        advance_current_result: bool = False,
+    ) -> Dict[str, Any]:
+        progress = current_progress if isinstance(current_progress, dict) else {}
+        resume_cursor = progress.get("resume_cursor") if isinstance(progress.get("resume_cursor"), dict) else {}
+        resolved_count = int(progress.get("resolved_count") or 0)
+        ignored_count = int(progress.get("ignored_count") or 0)
+        if (
+            advance_current_result
+            and str(check_type or "").strip().lower() == "name_conflicts"
+            and self._currentChecksResultEntry(progress) is not None
+        ):
+            ignored_count += 1
+        return self._buildChecksResumeCursor(
+            path_index=int(resume_cursor.get("path_index") or 0),
+            pending_entries=resume_cursor.get("pending_entries") if isinstance(resume_cursor.get("pending_entries"), list) else [],
+            source_mode=str(resume_cursor.get("source_mode") or "scan"),
+            check_type=str(resume_cursor.get("check_type") or check_type or "dimension_issues"),
+            save_only=bool(resume_cursor.get("save_only", save_only)),
+            findings_count=int(progress.get("findings_count") or 0),
+            resolved_count=resolved_count,
+            ignored_count=ignored_count,
+            metrics_trusted=True,
+        )
 
     def _buildCheckEntriesForType(
         self,
@@ -1234,6 +1285,8 @@ class ImgDataService:
         shared_folder: str = "",
         original_face_data: Optional[Dict[str, Any]] = None,
         replacement_face_data: Optional[Dict[str, Any]] = None,
+        resolved_delta: int = 0,
+        ignored_delta: int = 0,
     ) -> Dict[str, Any]:
         normalized_type = self._normalizeChecksType(check_type)
         normalized_path = str(image_path or "").strip()
@@ -1283,10 +1336,12 @@ class ImgDataService:
             remaining_pending_entries.append(entry)
         remaining_pending_entries = replacement_entries + remaining_pending_entries
 
-        findings_count = self._countOpenChecksScanFindings(
-            None,
-            remaining_pending_entries,
-        )
+        findings_count = int(current.get("findings_count") or 0)
+        resolved_count = int(current.get("resolved_count") or 0)
+        ignored_count = int(current.get("ignored_count") or 0)
+        if normalized_type == "name_conflicts":
+            resolved_count += max(0, int(resolved_delta or 0))
+            ignored_count += max(0, int(ignored_delta or 0))
 
         updated_resume_cursor = self._buildChecksResumeCursor(
             path_index=int(resume_cursor.get("path_index") or 0),
@@ -1295,12 +1350,16 @@ class ImgDataService:
             check_type=str(resume_cursor.get("check_type") or normalized_type),
             save_only=bool(resume_cursor.get("save_only", current.get("save_only"))),
             findings_count=findings_count,
+            resolved_count=resolved_count,
+            ignored_count=ignored_count,
         )
 
         updated_progress = dict(current)
         updated_progress.update({
             "check_type": normalized_type,
             "findings_count": findings_count,
+            "resolved_count": resolved_count,
+            "ignored_count": ignored_count,
             "result": None,
             "resume_cursor": updated_resume_cursor,
         })
@@ -3181,6 +3240,7 @@ class ImgDataService:
         resume_from_progress: bool = False,
         auto_apply_suggested_names: bool = False,
         auto_apply_suggested_duplicates: bool = False,
+        advance_current_result: bool = False,
     ) -> Dict[str, Any]:
         source_mode_normalized = str(source_mode or "findings").strip().lower()
         if source_mode_normalized not in {"findings", "scan"}:
@@ -3201,6 +3261,7 @@ class ImgDataService:
                 resume_from_progress=resume_from_progress,
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                advance_current_result=advance_current_result,
             )
 
         if source_mode_normalized == "findings":
@@ -3234,6 +3295,7 @@ class ImgDataService:
         resume_from_progress: bool = False,
         auto_apply_suggested_names: bool = False,
         auto_apply_suggested_duplicates: bool = False,
+        advance_current_result: bool = False,
     ) -> Dict[str, Any]:
         check_type = self._normalizeChecksType(check_type)
         current = self.getChecksProgress(user_key, check_type)
@@ -3244,6 +3306,12 @@ class ImgDataService:
 
         resume_cursor = current.get("resume_cursor") if resume_from_progress and isinstance(current.get("resume_cursor"), dict) else {}
         if resume_cursor:
+            resume_cursor = self._trustedChecksResumeCursor(
+                current,
+                check_type=check_type,
+                save_only=save_only,
+                advance_current_result=advance_current_result,
+            )
             save_only = bool(resume_cursor.get("save_only", save_only))
             check_type = str(resume_cursor.get("check_type") or check_type or "dimension_issues").strip().lower()
         else:
@@ -3261,6 +3329,8 @@ class ImgDataService:
             files_scanned=0,
             total_files=0,
             findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
+            resolved_count=int(resume_cursor.get("resolved_count") or 0) if resume_cursor else 0,
+            ignored_count=int(resume_cursor.get("ignored_count") or 0) if resume_cursor else 0,
             current_path="",
             result=None,
             resume_cursor=resume_cursor or self._buildChecksResumeCursor(
@@ -3270,6 +3340,8 @@ class ImgDataService:
                 check_type=check_type,
                 save_only=save_only,
                 findings_count=0,
+                resolved_count=0,
+                ignored_count=0,
             ),
         )
         worker = Thread(
@@ -3334,6 +3406,8 @@ class ImgDataService:
                 files_scanned=int(current_progress.get("files_scanned") or 0),
                 total_files=int(current_progress.get("total_files") or 0),
                 findings_count=int(current_progress.get("findings_count") or 0),
+                resolved_count=int(current_progress.get("resolved_count") or 0),
+                ignored_count=int(current_progress.get("ignored_count") or 0),
                 current_path=str(current_progress.get("current_path") or ""),
                 resume_cursor=current_resume_cursor or resume_cursor or self._buildChecksResumeCursor(
                     path_index=0,
@@ -3342,6 +3416,8 @@ class ImgDataService:
                     check_type=check_type,
                     save_only=save_only,
                     findings_count=0,
+                    resolved_count=0,
+                    ignored_count=0,
                 ),
             )
         except Exception as exc:
@@ -3393,8 +3469,11 @@ class ImgDataService:
 
         path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
         pending_entries = resume_cursor.get("pending_entries") if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("pending_entries"), list) else []
-        findings_count = int(resume_cursor.get("findings_count") or 0) if isinstance(resume_cursor, dict) else 0
-        if not save_only:
+        metrics_trusted = bool(resume_cursor.get("metrics_trusted")) if isinstance(resume_cursor, dict) else False
+        findings_count = int(resume_cursor.get("findings_count") or 0) if metrics_trusted and isinstance(resume_cursor, dict) else 0
+        resolved_count = int(resume_cursor.get("resolved_count") or 0) if metrics_trusted and isinstance(resume_cursor, dict) else 0
+        ignored_count = int(resume_cursor.get("ignored_count") or 0) if metrics_trusted and isinstance(resume_cursor, dict) else 0
+        if not save_only and not metrics_trusted:
             findings_count = self._countOpenChecksScanFindings(None, pending_entries)
         saved_entries: List[Dict[str, Any]] = []
         candidate_paths = self._getChecksCandidatePaths(
@@ -3417,6 +3496,8 @@ class ImgDataService:
             files_scanned=max(0, path_index),
             total_files=total_files,
             findings_count=findings_count,
+            resolved_count=resolved_count,
+            ignored_count=ignored_count,
             current_path="",
             resume_cursor=self._buildChecksResumeCursor(
                 path_index=path_index,
@@ -3425,6 +3506,8 @@ class ImgDataService:
                 check_type=check_type,
                 save_only=save_only,
                 findings_count=findings_count,
+                resolved_count=resolved_count,
+                ignored_count=ignored_count,
             ),
         )
 
@@ -3450,6 +3533,8 @@ class ImgDataService:
                 if str(token or "").strip()
             ]
             if auto_applied_count:
+                if check_type == "name_conflicts":
+                    resolved_count += auto_applied_count
                 target_entry = entry or pending_entries[0]
                 target_image_path = str(target_entry.get("image_path") or "").strip()
                 rebuilt_same_image_entries = self._rebuildChecksEntriesForImageAfterMutation(
@@ -3493,6 +3578,8 @@ class ImgDataService:
                     files_scanned=min(path_index, total_files),
                     total_files=total_files,
                     findings_count=findings_count,
+                    resolved_count=resolved_count,
+                    ignored_count=ignored_count,
                     path_index=path_index,
                     pending_entries=remaining_entries,
                     current_path=str((entry or {}).get("image_path") or ""),
@@ -3512,6 +3599,8 @@ class ImgDataService:
                     files_scanned=min(path_index, total_files),
                     total_files=total_files,
                     findings_count=findings_count,
+                    resolved_count=resolved_count,
+                    ignored_count=ignored_count,
                     path_index=path_index,
                     pending_entries=remaining_entries,
                     current_path=str(entry.get("image_path") or ""),
@@ -3532,6 +3621,8 @@ class ImgDataService:
                     files_scanned=index,
                     total_files=total_files,
                     findings_count=findings_count,
+                    resolved_count=resolved_count,
+                    ignored_count=ignored_count,
                     path_index=index,
                     pending_entries=[],
                     message_key="checks:progress_stopped",
@@ -3553,6 +3644,8 @@ class ImgDataService:
                 files_scanned=scanned_count,
                 total_files=total_files,
                 findings_count=findings_count,
+                resolved_count=resolved_count,
+                ignored_count=ignored_count,
                 current_path=image_path,
                 resume_cursor=self._buildChecksResumeCursor(
                     path_index=index,
@@ -3561,6 +3654,8 @@ class ImgDataService:
                     check_type=check_type,
                     save_only=save_only,
                     findings_count=findings_count,
+                    resolved_count=resolved_count,
+                    ignored_count=ignored_count,
                 ),
             )
             analysis = self.analyzeImageFaceMetadata(image_path)
@@ -3576,7 +3671,7 @@ class ImgDataService:
             if not entries:
                 continue
 
-            findings_count = self._countOpenChecksScanFindings(entries[0], entries[1:])
+            findings_count += len(entries)
             if save_only:
                 entry = entries[0]
                 resolved = self._resolveChecksReviewEntry(
@@ -3590,7 +3685,8 @@ class ImgDataService:
                 )
                 auto_applied_count = int(resolved.get("auto_applied_count") or 0)
                 if auto_applied_count:
-                    findings_count = 0
+                    if check_type == "name_conflicts":
+                        resolved_count += auto_applied_count
                 if resolved.get("auto_apply_warning"):
                     return {
                         "running": False,
@@ -3602,6 +3698,8 @@ class ImgDataService:
                         "files_scanned": scanned_count,
                         "total_files": total_files,
                         "findings_count": findings_count,
+                        "resolved_count": resolved_count,
+                        "ignored_count": ignored_count,
                         "current_path": image_path,
                         "result": None,
                         "resume_cursor": self._buildChecksResumeCursor(
@@ -3611,6 +3709,8 @@ class ImgDataService:
                             check_type=check_type,
                             save_only=True,
                             findings_count=findings_count,
+                            resolved_count=resolved_count,
+                            ignored_count=ignored_count,
                         ),
                         "message_key": str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
                         "message": "Suggested solution could not be applied automatically.",
@@ -3642,6 +3742,8 @@ class ImgDataService:
                     files_scanned=scanned_count,
                     total_files=total_files,
                     findings_count=findings_count,
+                    resolved_count=resolved_count,
+                    ignored_count=ignored_count,
                     current_path=image_path,
                     resume_cursor=self._buildChecksResumeCursor(
                         path_index=index + 1,
@@ -3650,6 +3752,8 @@ class ImgDataService:
                         check_type=check_type,
                         save_only=True,
                         findings_count=findings_count,
+                        resolved_count=resolved_count,
+                        ignored_count=ignored_count,
                     ),
                 )
                 continue
@@ -3676,6 +3780,8 @@ class ImgDataService:
                 if str(token or "").strip()
             ]
             if auto_applied_count:
+                if check_type == "name_conflicts":
+                    resolved_count += auto_applied_count
                 refreshed_entries = self._rebuildChecksEntriesForImageAfterMutation(
                     image_path=image_path,
                     review_type=check_type,
@@ -3707,6 +3813,8 @@ class ImgDataService:
                     files_scanned=scanned_count,
                     total_files=total_files,
                     findings_count=findings_count,
+                    resolved_count=resolved_count,
+                    ignored_count=ignored_count,
                     path_index=index + 1,
                     pending_entries=remaining_entries,
                     current_path=image_path,
@@ -3725,6 +3833,8 @@ class ImgDataService:
                 files_scanned=scanned_count,
                 total_files=total_files,
                 findings_count=findings_count,
+                resolved_count=resolved_count,
+                ignored_count=ignored_count,
                 path_index=index + 1,
                 pending_entries=remaining_entries,
                 current_path=image_path,
@@ -3752,6 +3862,8 @@ class ImgDataService:
                 files_scanned=total_files,
                 total_files=total_files,
                 findings_count=len(saved_entries),
+                resolved_count=resolved_count,
+                ignored_count=ignored_count,
                 path_index=total_files,
                 pending_entries=[],
                 message_key="checks:progress_findings_saved" if saved_entries else "checks:progress_findings_empty",
@@ -3765,6 +3877,8 @@ class ImgDataService:
             files_scanned=total_files,
             total_files=total_files,
             findings_count=findings_count,
+            resolved_count=resolved_count,
+            ignored_count=ignored_count,
             path_index=total_files,
             pending_entries=[],
             message_key="checks:progress_finished_no_match",

@@ -455,6 +455,9 @@ export default {
 			if (nextProgress.check_type && !this.matchesSelectedChecksType(nextProgress.check_type)) {
 				return;
 			}
+			nextProgress.findings_count = Number(nextProgress.findings_count) || 0;
+			nextProgress.resolved_count = Number(nextProgress.resolved_count) || 0;
+			nextProgress.ignored_count = Number(nextProgress.ignored_count) || 0;
 			this.checksProgress = nextProgress;
 			const result = nextProgress.result && typeof nextProgress.result === 'object'
 				? nextProgress.result
@@ -562,21 +565,27 @@ export default {
 				? this.checksProgress
 				: {};
 			const key = String(progress.message_key || '').trim();
-			const findingsText = `${this.$t('checks:label_findings_count', 'Findings:')} ${Number(progress.findings_count) || 0}`;
-			const withFindings = (text) => {
+			const segments = [
+				`${this.$t('checks:label_findings_count', 'Findings:')} ${Number(progress.findings_count) || 0}`,
+			];
+			if (this.selectedChecksType === 'name_conflicts') {
+				segments.push(`${this.$t('checks:label_resolved_names_count', 'Resolved names:')} ${Number(progress.resolved_count) || 0}`);
+				segments.push(`${this.$t('checks:label_ignored_names_count', 'Ignored conflicts:')} ${Number(progress.ignored_count) || 0}`);
+			}
+			const withCounts = (text) => {
 				const normalized = String(text || '').trim();
-				return normalized ? `${normalized} | ${findingsText}` : findingsText;
+				return normalized ? `${normalized} | ${segments.join(' | ')}` : segments.join(' | ');
 			};
 			if (key === 'checks:progress_scanning') {
-				return withFindings(this.$t('checks:progress_scanning_short', 'Scanning files...'));
+				return withCounts(this.$t('checks:progress_scanning_short', 'Scanning files...'));
 			}
 			if (key === 'checks:progress_result_found') {
-				return withFindings(this.$t('checks:progress_result_found_short', 'Check finding found.'));
+				return withCounts(this.$t('checks:progress_result_found_short', 'Check finding found.'));
 			}
 			if (key === 'checks:progress_findings_saved') {
-				return withFindings(this.$t('checks:progress_findings_saved_short', 'Findings list saved.'));
+				return withCounts(this.$t('checks:progress_findings_saved_short', 'Findings list saved.'));
 			}
-			return withFindings(this.checksStatusMessage);
+			return withCounts(this.checksStatusMessage);
 		},
 		async startChecksReview() {
 			if (this.isChecksScanRunning) {
@@ -662,7 +671,7 @@ export default {
 			this.checksCurrentIndex = Math.min(resolvedIndex, Math.max(this.checksEntries.length - 1, 0));
 			this.checksStatusMessage = this.$t('checks:status_empty', 'No matching entries found.');
 		},
-		async startChecksScan({ resumeFromProgress = false } = {}) {
+		async startChecksScan({ resumeFromProgress = false, advanceCurrentResult = false } = {}) {
 			this.checksLoading = true;
 			if (!resumeFromProgress) {
 				this.checksEntries = [];
@@ -682,6 +691,7 @@ export default {
 					check_type: this.selectedChecksType,
 					save_only: this.checksSaveOnly,
 					resume_from_progress: resumeFromProgress,
+					advance_current_result: advanceCurrentResult,
 					auto_apply_suggested_names: this.checksAutoApplySuggestedNames,
 					auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
 				});
@@ -718,7 +728,7 @@ export default {
 				if (!this.hasNextChecksItem) {
 					return;
 				}
-				await this.startChecksScan({ resumeFromProgress: true });
+				await this.startChecksScan({ resumeFromProgress: true, advanceCurrentResult: true });
 				return;
 			}
 			if (!this.hasNextChecksItem) {

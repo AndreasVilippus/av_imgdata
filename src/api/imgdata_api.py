@@ -130,6 +130,8 @@ def _refresh_checks_mutation_state(
     image_path: str,
     original_face_data: Optional[Dict[str, Any]] = None,
     replacement_face_data: Optional[Dict[str, Any]] = None,
+    resolved_delta: int = 0,
+    ignored_delta: int = 0,
 ) -> Optional[Dict[str, Any]]:
     normalized_type = str(check_type or "").strip().lower()
     normalized_path = str(image_path or "").strip()
@@ -153,6 +155,8 @@ def _refresh_checks_mutation_state(
         base_url=session_ctx["base_url"],
         original_face_data=original_face_data,
         replacement_face_data=replacement_face_data,
+        resolved_delta=resolved_delta,
+        ignored_delta=ignored_delta,
     )
     return findings_update
 
@@ -164,6 +168,8 @@ def _safe_refresh_checks_mutation_state(
     image_path: str,
     original_face_data: Optional[Dict[str, Any]] = None,
     replacement_face_data: Optional[Dict[str, Any]] = None,
+    resolved_delta: int = 0,
+    ignored_delta: int = 0,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     try:
         refresh_kwargs = {
@@ -174,6 +180,10 @@ def _safe_refresh_checks_mutation_state(
             refresh_kwargs["original_face_data"] = original_face_data
         if replacement_face_data is not None:
             refresh_kwargs["replacement_face_data"] = replacement_face_data
+        if resolved_delta:
+            refresh_kwargs["resolved_delta"] = resolved_delta
+        if ignored_delta:
+            refresh_kwargs["ignored_delta"] = ignored_delta
         findings_update = _refresh_checks_mutation_state(session_ctx, **refresh_kwargs)
         return findings_update, None
     except (SessionBootstrapRequired, SessionManagerError) as exc:
@@ -884,6 +894,7 @@ async def checks_start(request: Request):
     resume_from_progress = bool(body.get("resume_from_progress"))
     auto_apply_suggested_names = bool(body.get("auto_apply_suggested_names"))
     auto_apply_suggested_duplicates = bool(body.get("auto_apply_suggested_duplicates"))
+    advance_current_result = bool(body.get("advance_current_result"))
 
     try:
         loop = asyncio.get_running_loop()
@@ -899,6 +910,7 @@ async def checks_start(request: Request):
                 resume_from_progress=resume_from_progress,
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                advance_current_result=advance_current_result,
             ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
@@ -1194,6 +1206,7 @@ async def checks_replace_metadata_face_name(request: Request):
                 image_path=image_path,
                 original_face_data=face,
                 replacement_face_data=replacement_face_data,
+                resolved_delta=1,
             )
     except Exception as exc:
         return JSONResponse({

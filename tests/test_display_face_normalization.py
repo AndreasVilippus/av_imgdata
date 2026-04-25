@@ -861,12 +861,12 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         self.assertEqual(written["state_type"], "checks_progress")
         self.assertEqual(written["state_key"], "user_name_conflicts")
-        self.assertEqual(written["payload"]["findings_count"], 1)
+        self.assertEqual(written["payload"]["findings_count"], 2)
         self.assertIsNone(written["payload"]["result"])
         self.assertEqual(written["payload"]["resume_cursor"]["path_index"], 945)
         self.assertEqual(len(written["payload"]["resume_cursor"]["pending_entries"]), 1)
         self.assertEqual(written["payload"]["resume_cursor"]["pending_entries"][0]["entry_id"], "remaining-after-rename")
-        self.assertEqual(written["payload"]["findings_count"], 1)
+        self.assertEqual(written["payload"]["findings_count"], 2)
 
     def test_refresh_checks_scan_progress_for_image_excludes_processed_face_pair_token(self):
         image_path = "/volume1/photo/2011/2011.06.11 - Harz/DSC03369.JPG"
@@ -972,11 +972,142 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             shared_folder="/volume1/photo",
         )
 
-        self.assertEqual(written["payload"]["findings_count"], 1)
+        self.assertEqual(written["payload"]["findings_count"], 2)
+        self.assertEqual(written["payload"]["resolved_count"], 0)
+        self.assertEqual(written["payload"]["ignored_count"], 0)
         pending_entries = written["payload"]["resume_cursor"]["pending_entries"]
         self.assertEqual(len(pending_entries), 1)
         self.assertEqual(pending_entries[0]["entry_id"], "remaining")
-        self.assertEqual(written["payload"]["findings_count"], 1)
+        self.assertEqual(written["payload"]["resume_cursor"]["findings_count"], 2)
+
+    def test_refresh_checks_scan_progress_for_image_increments_resolved_name_conflicts(self):
+        image_path = "/volume1/photo/tests/test.jpg"
+        current_progress = {
+            "check_type": "name_conflicts",
+            "source_mode": "scan",
+            "running": False,
+            "finished": True,
+            "save_only": False,
+            "files_scanned": 20,
+            "total_files": 100,
+            "findings_count": 7,
+            "resolved_count": 2,
+            "ignored_count": 1,
+            "current_path": image_path,
+            "result": {
+                "entry": {
+                    "review_type": "name_conflicts",
+                    "image_path": image_path,
+                    "entry_id": "current",
+                },
+            },
+            "resume_cursor": {
+                "check_type": "name_conflicts",
+                "path_index": 20,
+                "pending_entries": [],
+                "save_only": False,
+                "source_mode": "scan",
+                "findings_count": 7,
+                "resolved_count": 2,
+                "ignored_count": 1,
+                "metrics_trusted": True,
+            },
+        }
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: dict(current_progress)
+        written = {}
+        self.service.file_analysis.writeRuntimeState = lambda state_type, state_key, payload: written.update({
+            "state_type": state_type,
+            "state_key": state_key,
+            "payload": dict(payload),
+        }) or True
+        self.service._loadPhotoFacesForImageWithOverride = lambda **kwargs: []
+        self.service._buildCheckEntriesForType = lambda **kwargs: []
+
+        self.service.refreshChecksScanProgressForImage(
+            user_key="user",
+            check_type="name_conflicts",
+            image_path=image_path,
+            cookies={},
+            base_url="https://example.test",
+            shared_folder="/volume1/photo",
+            resolved_delta=1,
+        )
+
+        self.assertEqual(written["payload"]["findings_count"], 7)
+        self.assertEqual(written["payload"]["resolved_count"], 3)
+        self.assertEqual(written["payload"]["ignored_count"], 1)
+
+    def test_start_checks_scan_discovery_advances_ignored_name_conflicts_on_next(self):
+        current_progress = {
+            "check_type": "name_conflicts",
+            "source_mode": "scan",
+            "running": False,
+            "finished": False,
+            "save_only": False,
+            "files_scanned": 20,
+            "total_files": 100,
+            "findings_count": 7,
+            "resolved_count": 2,
+            "ignored_count": 1,
+            "result": {
+                "entry": {
+                    "review_type": "name_conflicts",
+                    "image_path": "/volume1/photo/tests/test.jpg",
+                    "entry_id": "current",
+                },
+                "item": {
+                    "review_type": "name_conflicts",
+                    "image_path": "/volume1/photo/tests/test.jpg",
+                },
+            },
+            "resume_cursor": {
+                "check_type": "name_conflicts",
+                "path_index": 20,
+                "pending_entries": [{"review_type": "name_conflicts", "image_path": "/volume1/photo/tests/test.jpg", "entry_id": "remaining"}],
+                "save_only": False,
+                "source_mode": "scan",
+                "findings_count": 7,
+                "resolved_count": 2,
+                "ignored_count": 1,
+                "metrics_trusted": True,
+            },
+        }
+        self.service.getChecksProgress = lambda user_key, check_type: dict(current_progress)
+
+        class DummyThread:
+            def __init__(self, target=None, kwargs=None, daemon=None):
+                self.target = target
+                self.kwargs = kwargs or {}
+                self.daemon = daemon
+
+            def start(self):
+                return None
+
+        captured = {}
+        original_set = self.service._setChecksProgressMessage
+        self.service._setChecksProgressMessage = lambda user_key, check_type, message_key, **updates: captured.update({
+            "user_key": user_key,
+            "check_type": check_type,
+            "message_key": message_key,
+            "updates": updates,
+        }) or original_set(user_key, check_type, message_key, **updates)
+
+        with patch("imgdata.Thread", DummyThread):
+            self.service.startChecksScanDiscovery(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                check_type="name_conflicts",
+                save_only=False,
+                resume_from_progress=True,
+                advance_current_result=True,
+            )
+
+        self.assertEqual(captured["updates"]["findings_count"], 7)
+        self.assertEqual(captured["updates"]["resolved_count"], 2)
+        self.assertEqual(captured["updates"]["ignored_count"], 2)
+        self.assertEqual(captured["updates"]["resume_cursor"]["ignored_count"], 2)
+        self.assertTrue(captured["updates"]["resume_cursor"]["metrics_trusted"])
 
     def test_search_next_checks_item_resume_ignores_stale_findings_count_and_counts_pending_entries(self):
         pending_entry = {
