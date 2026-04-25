@@ -1021,6 +1021,19 @@ class ImgDataService:
             "message_params": message_params or {},
         }
 
+    @staticmethod
+    def _countOpenChecksScanFindings(
+        current_entry: Optional[Dict[str, Any]] = None,
+        pending_entries: Optional[List[Dict[str, Any]]] = None,
+    ) -> int:
+        count = 0
+        if isinstance(current_entry, dict) and current_entry:
+            count += 1
+        for entry in pending_entries or []:
+            if isinstance(entry, dict) and entry:
+                count += 1
+        return count
+
     def _buildCheckEntriesForType(
         self,
         *,
@@ -1247,15 +1260,6 @@ class ImgDataService:
         current_result = current.get("result") if isinstance(current.get("result"), dict) else {}
         current_entry = current_result.get("entry") if isinstance(current_result.get("entry"), dict) else {}
 
-        old_image_entries_count = 0
-        if str(current_entry.get("image_path") or "").strip() == normalized_path:
-            old_image_entries_count += 1
-        for entry in pending_entries:
-            if not isinstance(entry, dict):
-                continue
-            if str(entry.get("image_path") or "").strip() == normalized_path:
-                old_image_entries_count += 1
-
         photo_faces = self._loadPhotoFacesForImageWithOverride(
             user_key=user_key,
             cookies=cookies,
@@ -1290,8 +1294,10 @@ class ImgDataService:
             remaining_pending_entries.append(entry)
         remaining_pending_entries = replacement_entries + remaining_pending_entries
 
-        findings_count = int(current.get("findings_count") or 0)
-        findings_count = max(0, findings_count - old_image_entries_count + len(replacement_entries))
+        findings_count = self._countOpenChecksScanFindings(
+            None,
+            remaining_pending_entries,
+        )
 
         updated_resume_cursor = self._buildChecksResumeCursor(
             path_index=int(resume_cursor.get("path_index") or 0),
@@ -3495,6 +3501,8 @@ class ImgDataService:
         path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
         pending_entries = resume_cursor.get("pending_entries") if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("pending_entries"), list) else []
         findings_count = int(resume_cursor.get("findings_count") or 0) if isinstance(resume_cursor, dict) else 0
+        if not save_only:
+            findings_count = self._countOpenChecksScanFindings(None, pending_entries)
         saved_entries: List[Dict[str, Any]] = []
         candidate_paths = self._getChecksCandidatePaths(
             user_key=user_key,
@@ -3567,7 +3575,10 @@ class ImgDataService:
                     != target_image_path
                 ]
                 refreshed_pending_entries = rebuilt_same_image_entries + other_remaining_entries
-                findings_count = max(0, findings_count - len(pending_entries) + len(refreshed_pending_entries))
+                findings_count = self._countOpenChecksScanFindings(
+                    refreshed_pending_entries[0] if refreshed_pending_entries else None,
+                    refreshed_pending_entries[1:] if refreshed_pending_entries else [],
+                )
                 if refreshed_pending_entries:
                     entry = refreshed_pending_entries[0]
                     remaining_entries = refreshed_pending_entries[1:]
@@ -3598,9 +3609,10 @@ class ImgDataService:
                     message_params={"count": findings_count},
                 )
             if not entry:
+                findings_count = self._countOpenChecksScanFindings(None, remaining_entries)
                 pending_entries = remaining_entries
             else:
-                findings_count = max(findings_count, 1)
+                findings_count = self._countOpenChecksScanFindings(entry, remaining_entries)
                 return self._buildChecksScanPayload(
                     check_type=check_type,
                     save_only=save_only,
@@ -3671,7 +3683,7 @@ class ImgDataService:
             if not entries:
                 continue
 
-            findings_count += len(entries)
+            findings_count = self._countOpenChecksScanFindings(entries[0], entries[1:])
             if save_only:
                 entry = entries[0]
                 resolved = self._resolveChecksReviewEntry(
@@ -3685,7 +3697,7 @@ class ImgDataService:
                 )
                 auto_applied_count = int(resolved.get("auto_applied_count") or 0)
                 if auto_applied_count:
-                    findings_count = max(0, findings_count - auto_applied_count)
+                    findings_count = 0
                 if resolved.get("auto_apply_warning"):
                     return {
                         "running": False,
@@ -3771,7 +3783,6 @@ class ImgDataService:
                 if str(token or "").strip()
             ]
             if auto_applied_count:
-                old_image_entries_count = 1 + len(remaining_entries)
                 refreshed_entries = self._rebuildChecksEntriesForImageAfterMutation(
                     image_path=image_path,
                     review_type=check_type,
@@ -3781,7 +3792,10 @@ class ImgDataService:
                     shared_folder=shared_folder,
                     excluded_tokens=processed_entry_tokens,
                 )
-                findings_count = max(0, findings_count - old_image_entries_count + len(refreshed_entries))
+                findings_count = self._countOpenChecksScanFindings(
+                    refreshed_entries[0] if refreshed_entries else None,
+                    refreshed_entries[1:] if refreshed_entries else [],
+                )
                 if not refreshed_entries:
                     continue
                 entry = refreshed_entries[0]
@@ -3809,7 +3823,9 @@ class ImgDataService:
                     message_params={"count": findings_count},
                 )
             if not entry:
+                findings_count = 0
                 continue
+            findings_count = self._countOpenChecksScanFindings(entry, remaining_entries)
             return self._buildChecksScanPayload(
                 check_type=check_type,
                 save_only=False,
