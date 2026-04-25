@@ -62,6 +62,7 @@
 								:total="Number(vm.faceMatchProgress.persons_total) || 0"
 								:primary-text="`${Number(vm.faceMatchProgress.persons_read) || 0} ${vm.$t('face_match:label_persons', 'Persons')}`"
 								:secondary-text="`${Number(vm.faceMatchProgress.persons_total) || 0} ${vm.$t('face_match:label_persons', 'Persons')}`"
+								:icon-url="vm.faceMatchProgressIconUrl"
 							/>
 						</div>
 						<div class="face-match-status-stats">

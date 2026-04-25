@@ -73,6 +73,7 @@
 					:primary-label="vm.$t('checks:label_scanned', 'scanned').replace(':', '').toLowerCase()"
 					:secondary-label="vm.$t('checks:label_remaining', 'remaining')"
 					:status-text="vm.getChecksStatusHeadline()"
+					:icon-url="vm.getChecksProgressIconUrl()"
 				/>
 			</div>
 			<div v-if="vm.selectedChecksAction !== 'scan' && vm.checksEntries.length > 0" class="sm-status-progress">

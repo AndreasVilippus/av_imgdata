@@ -149,6 +149,12 @@ export default {
 		getChecksSyncFaceOverlayIconUrl() {
 			return this.resolveLocalIconUrl('sync_icon.png');
 		},
+		getChecksProgressIconUrl() {
+			if (String(this.selectedChecksType || '').trim().toLowerCase() === 'name_conflicts') {
+				return this.resolveLocalIconUrl('persons_conflict.png');
+			}
+			return '';
+		},
 		isChecksMetadataFace(face) {
 			const sourceFormat = String(face && face.source_format || '').trim().toUpperCase();
 			return ['ACD', 'MICROSOFT', 'MWG_REGIONS'].includes(sourceFormat);
@@ -421,18 +427,29 @@ export default {
 		async refreshChecksSessionState() {
 			const progress = await this.fetchChecksProgress({
 				applyFinishedState: true,
-				adoptResultItem: false,
-				loadResultItem: false,
+				adoptResultItem: true,
+				loadResultItem: true,
 			});
 			const hasProgress = !!(progress && Object.keys(progress).length);
 			if (!hasProgress) {
 				return;
 			}
+			const result = progress && progress.result && typeof progress.result === 'object'
+				? progress.result
+				: null;
+			const hasRestorableResult = !!(
+				result
+				&& (
+					(result.item && typeof result.item === 'object' && Object.keys(result.item).length)
+					||
+					(result.entry && typeof result.entry === 'object' && Object.keys(result.entry).length)
+				)
+			);
 			const matchesCurrentSelection = !!(
 				String(progress.source_mode || '').trim().toLowerCase() === 'scan'
 				&& String(progress.check_type || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase()
 			);
-			if (matchesCurrentSelection && progress.running) {
+			if (matchesCurrentSelection && (progress.running || hasRestorableResult)) {
 				this.checksSessionSyncing = true;
 				try {
 					if (this.selectedChecksAction !== 'scan') {

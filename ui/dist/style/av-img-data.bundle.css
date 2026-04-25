@@ -862,6 +862,7 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	margin-right: 10px;
 }
 
 .sm-progress-overview-icon {
@@ -903,6 +904,32 @@
 	font-size: 13px;
 	line-height: 20px;
 	color: rgba(65, 75, 85, 0.7);
+}
+
+.sm-ratio-progress {
+	display: flex;
+	align-items: center;
+}
+
+.sm-ratio-progress-body {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.sm-ratio-progress-icon-wrap {
+	width: 64px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin-right: 10px;
+	flex: 0 0 auto;
+}
+
+.sm-ratio-progress-icon {
+	display: block;
+	width: 64px;
+	height: 32px;
+	object-fit: contain;
 }
 
 .sm-ratio-progress-bg,

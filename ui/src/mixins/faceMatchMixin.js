@@ -97,6 +97,12 @@ export default {
 			}
 			return this.$t('face_match:label_metadata_hint', 'Read metadata');
 		},
+		faceMatchProgressIconUrl() {
+			if (this.faceMatchCurrentAction === 'mark_missing_photos_faces') {
+				return this.resolveLocalIconUrl('face_search_empty.png');
+			}
+			return '';
+		},
 		showFaceMatchTargetFacesCounter() {
 			return this.faceMatchIsFileSourceAction;
 		},
