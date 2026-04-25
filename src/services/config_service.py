@@ -33,6 +33,8 @@ class ConfigService:
                     "WHEELHOUSE_ENABLED": True,
                     "WHEELHOUSE_MANIFEST_URL": "https://github.com/AndreasVilippus/av_imgdata-wheelhouse/releases/download/dsm7-x86_64-python38-2026.04.23/wheelhouse-manifest.json",
                     "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
+                    "MODEL_ROOT": "",
+                    "MODEL_NAME": "",
                 },
             },
             "files": {

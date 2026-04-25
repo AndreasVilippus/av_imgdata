@@ -507,6 +507,9 @@ export default {
 			});
 			const root = this.getResponseData(data);
 			this.applyChecksFindingsUpdate(root.findings_update);
+			if (root.progress_update && typeof root.progress_update === 'object') {
+				this.applyChecksProgress(root.progress_update, { adoptResultItem: false });
+			}
 			const resolvedItem = root && root.item && typeof root.item === 'object' ? root.item : {};
 			if (Object.keys(resolvedItem).length && this.matchesSelectedChecksType(resolvedItem.review_type)) {
 				this.checksCurrentItem = resolvedItem;
@@ -638,6 +641,9 @@ export default {
 				});
 				const root = this.getResponseData(data);
 				const findingsUpdated = this.applyChecksFindingsUpdate(root.findings_update);
+				if (root.progress_update && typeof root.progress_update === 'object') {
+					this.applyChecksProgress(root.progress_update, { adoptResultItem: false });
+				}
 				const autoAppliedCount = Number(root && root.auto_applied_count || 0);
 				const item = root && root.item && typeof root.item === 'object' ? root.item : {};
 				if (Object.keys(item).length && this.matchesSelectedChecksType(item.review_type)) {

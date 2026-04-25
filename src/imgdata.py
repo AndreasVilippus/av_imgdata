@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
+import io
 import json
 import os
 import importlib
 import importlib.util
-import json
+import shutil
 import traceback
+import zipfile
 from importlib import metadata as importlib_metadata
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -3917,6 +3919,27 @@ class ImgDataService:
             if not self._hasFaceSignature(entry.get("left_face_signature")) or not self._hasFaceSignature(entry.get("right_face_signature")):
                 return None
         analysis = self.analyzeImageFaceMetadata(image_path)
+        if review_type == "name_conflicts":
+            expected_entry_token = self._checksEntryToken(entry)
+            if expected_entry_token:
+                current_entries = self._buildCheckEntriesForType(
+                    image_path=image_path,
+                    review_type=review_type,
+                    analysis=analysis,
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                    photo_faces=photo_faces,
+                )
+                current_entry_tokens = {
+                    self._checksEntryToken(candidate)
+                    for candidate in current_entries
+                    if isinstance(candidate, dict)
+                }
+                current_entry_tokens.discard("")
+                if expected_entry_token not in current_entry_tokens:
+                    return None
         if review_type == "dimension_issues":
             return self._buildDimensionMismatchReviewItem(image_path, analysis, entry)
         if review_type == "duplicate_faces":
@@ -6380,7 +6403,10 @@ class ImgDataService:
                     "error": "shared_folder_not_found",
                 }
 
-            detector = InsightFaceDetector()
+            detector = InsightFaceDetector(
+                model_name=self._configuredInsightFaceModelName(),
+                model_root=self._configuredInsightFaceModelRoot(),
+            )
             self._setFaceMatchingProgressMessage(
                 user_key,
                 "face_match:progress_listing_files",
@@ -7774,6 +7800,162 @@ class ImgDataService:
     def saveRuntimeConfig(self, config: Dict[str, Any]) -> bool:
         return self.config.writeConfig(config)
 
+    def _defaultInsightFaceModelRoot(self) -> Path:
+        return (self.config._config_path.parent / "insightface_models").resolve()
+
+    def _insightFaceConfig(self) -> Dict[str, Any]:
+        config = self.config.readMergedConfig()
+        pip_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
+        package_config = pip_packages.get("INSIGHTFACE") if isinstance(pip_packages.get("INSIGHTFACE"), dict) else {}
+        return package_config
+
+    def _configuredInsightFaceModelRoot(self) -> Path:
+        package_config = self._insightFaceConfig()
+        configured_root = str(package_config.get("MODEL_ROOT") or "").strip()
+        if configured_root:
+            return Path(configured_root).expanduser().resolve()
+        return self._defaultInsightFaceModelRoot()
+
+    def _configuredInsightFaceModelName(self, model_status: Optional[Dict[str, Any]] = None) -> str:
+        package_config = self._insightFaceConfig()
+        configured_name = str(package_config.get("MODEL_NAME") or "").strip()
+        if configured_name:
+            return configured_name
+        status = model_status if isinstance(model_status, dict) else InsightFaceDetector.available_models(self._configuredInsightFaceModelRoot())
+        models = status.get("models") if isinstance(status.get("models"), list) else []
+        installed_names = {
+            str(item.get("name") or "").strip()
+            for item in models
+            if isinstance(item, dict) and bool(item.get("installed"))
+        }
+        for preferred_name in ("buffalo_l", "buffalo_m", "buffalo_s", "buffalo_sc"):
+            if preferred_name in installed_names:
+                return preferred_name
+        return sorted(installed_names)[0] if installed_names else ""
+
+    @staticmethod
+    def _sanitizeInsightFaceModelName(value: str) -> str:
+        return "".join(
+            ch if ch.isalnum() or ch in {"_", "-", "."} else "_"
+            for ch in str(value or "").strip()
+        ).strip("._")
+
+    @staticmethod
+    def _safeZipRelativeParts(member_name: str) -> Optional[List[str]]:
+        normalized = str(member_name or "").replace("\\", "/").strip("/")
+        if not normalized:
+            return None
+        parts = [part for part in normalized.split("/") if part not in {"", "."}]
+        if not parts or any(part == ".." for part in parts):
+            return None
+        return parts
+
+    def _deriveInsightFaceModelArchiveLayout(
+        self,
+        archive: zipfile.ZipFile,
+        *,
+        archive_name: str,
+    ) -> Dict[str, Any]:
+        file_entries = []
+        top_level_parts = []
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            parts = self._safeZipRelativeParts(info.filename)
+            if not parts or parts[0].startswith("__MACOSX"):
+                continue
+            file_entries.append((info, parts))
+            top_level_parts.append(parts[0])
+        if not file_entries:
+            raise ValueError("insightface_model_archive_empty")
+
+        unique_top_levels = {part for part in top_level_parts if part}
+        common_prefix = top_level_parts[0] if len(unique_top_levels) == 1 else ""
+        model_name_source = common_prefix or Path(str(archive_name or "").strip()).stem
+        model_name = self._sanitizeInsightFaceModelName(model_name_source)
+        if not model_name:
+            raise ValueError("insightface_model_name_invalid")
+
+        normalized_entries = []
+        for info, parts in file_entries:
+            relative_parts = parts[1:] if common_prefix and len(parts) > 1 else parts
+            if common_prefix and len(parts) == 1:
+                continue
+            if not relative_parts:
+                continue
+            normalized_entries.append((info, relative_parts))
+        if not normalized_entries:
+            raise ValueError("insightface_model_archive_empty")
+
+        return {
+            "model_name": model_name,
+            "entries": normalized_entries,
+        }
+
+    def installInsightFaceModelArchive(
+        self,
+        *,
+        archive_name: str,
+        archive_bytes: bytes,
+    ) -> Dict[str, Any]:
+        if not archive_bytes:
+            raise ValueError("insightface_model_archive_empty")
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+                layout = self._deriveInsightFaceModelArchiveLayout(archive, archive_name=archive_name)
+                model_name = str(layout["model_name"])
+                entries = list(layout["entries"])
+                model_root = self._configuredInsightFaceModelRoot()
+                model_root.mkdir(parents=True, exist_ok=True)
+                target_dir = model_root / model_name
+                if target_dir.exists():
+                    shutil.rmtree(target_dir)
+                target_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    for info, relative_parts in entries:
+                        destination = target_dir.joinpath(*relative_parts)
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        with archive.open(info, "r") as source_handle, destination.open("wb") as target_handle:
+                            shutil.copyfileobj(source_handle, target_handle)
+                    onnx_files = sorted(path.name for path in target_dir.rglob("*.onnx") if path.is_file())
+                    if not onnx_files:
+                        raise ValueError("insightface_model_archive_has_no_onnx")
+                except Exception:
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                    raise
+        except zipfile.BadZipFile as exc:
+            raise ValueError("insightface_model_archive_invalid_zip") from exc
+
+        model_status = InsightFaceDetector.available_models(model_root)
+        return {
+            "root": str(model_root),
+            "model_name": model_name,
+            "model_status": model_status,
+        }
+
+    def deleteInsightFaceModel(
+        self,
+        *,
+        model_name: str,
+    ) -> Dict[str, Any]:
+        normalized_name = self._sanitizeInsightFaceModelName(model_name)
+        if not normalized_name:
+            raise ValueError("insightface_model_name_invalid")
+        model_root = self._configuredInsightFaceModelRoot()
+        target_dir = model_root / normalized_name
+        deleted = False
+        if target_dir.exists() and target_dir.is_dir():
+            shutil.rmtree(target_dir)
+            deleted = True
+        model_status = InsightFaceDetector.available_models(model_root)
+        return {
+            "root": str(model_root),
+            "model_name": normalized_name,
+            "deleted": deleted,
+            "model_status": model_status,
+        }
+
     def pipPackagesStatus(self) -> Dict[str, Any]:
         config = self.config.readMergedConfig()
         configured_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
@@ -7856,7 +8038,12 @@ class ImgDataService:
                 ],
             }
             if key == "INSIGHTFACE":
-                result[key]["model_status"] = InsightFaceDetector.available_models()
+                model_root = self._configuredInsightFaceModelRoot()
+                model_status = InsightFaceDetector.available_models(model_root)
+                result[key]["model_root_configured"] = str(configured.get("MODEL_ROOT") or "").strip()
+                result[key]["model_name_configured"] = str(configured.get("MODEL_NAME") or "").strip()
+                result[key]["model_status"] = model_status
+                result[key]["active_model_name"] = self._configuredInsightFaceModelName(model_status)
         return {
             "packages": result,
             "status_file": str(status_file),

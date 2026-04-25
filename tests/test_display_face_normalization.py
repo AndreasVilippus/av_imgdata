@@ -1256,6 +1256,63 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(result["auto_applied_count"], 1)
         self.assertEqual(applied["count"], 1)
 
+    def test_get_checks_review_item_returns_none_for_stale_name_conflict_entry(self):
+        stale_entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Kaire Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Andreas Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+        }
+        different_entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Other Person",
+                "x": 0.11,
+                "y": 0.22,
+                "w": 0.10,
+                "h": 0.10,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Another Person",
+                "x": 0.31,
+                "y": 0.42,
+                "w": 0.12,
+                "h": 0.14,
+            },
+        }
+
+        self.service.analyzeImageFaceMetadata = lambda image_path: {}
+
+        with patch.object(self.service, "_loadPhotoFacesForImage", return_value=[]), \
+             patch.object(self.service, "_buildCheckEntriesForType", return_value=[different_entry]), \
+             patch.object(self.service, "_buildNameConflictReviewItem") as build_item:
+            result = self.service.getChecksReviewItem(
+                entry=stale_entry,
+                user_key="user",
+                cookies={"_SSID": "session"},
+                base_url="https://example.test",
+            )
+
+        self.assertIsNone(result)
+        build_item.assert_not_called()
+
     def test_orientation_risk_fallback_prefers_non_risky_side(self):
         risky_face = MetadataFace.from_center_box(
             name="Person Alpha",

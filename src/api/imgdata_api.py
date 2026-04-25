@@ -239,6 +239,39 @@ async def pip_packages_status(request: Request):
     }
 
 
+@router.post("/insightface_model_delete")
+async def insightface_model_delete(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    try:
+        result = IMGDATA.deleteInsightFaceModel(model_name=str(body.get("model_name") or ""))
+    except ValueError as exc:
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": str(exc),
+            },
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "insightface_model_delete_failed",
+                "details": str(exc),
+            },
+        }
+
+    return {
+        "success": True,
+        "data": result,
+    }
+
+
 @router.post("/exiftool_extensions")
 async def exiftool_extensions(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
@@ -986,25 +1019,33 @@ async def checks_item(request: Request):
             "entry": resolved.get("entry"),
             "item": resolved.get("item"),
             "auto_applied_count": int(resolved.get("auto_applied_count") or 0),
-            "findings_update": (
-                IMGDATA.refreshChecksFindingEntriesForImage(
-                    check_type=str(entry.get("review_type") or ""),
-                    image_path=str(entry.get("image_path") or ""),
-                    user_key=session_ctx["user_key"],
-                    cookies=session_ctx["cookies"],
-                    base_url=session_ctx["base_url"],
-                )
-                if (
-                    str(entry.get("review_type") or "").strip()
-                    and (
-                        int(resolved.get("auto_applied_count") or 0) > 0
-                        or resolved.get("item") is None
-                    )
-                )
-                else None
-            ),
+            "findings_update": None,
+            "progress_update": None,
         },
     }
+    refresh_required = (
+        str(entry.get("review_type") or "").strip()
+        and (
+            int(resolved.get("auto_applied_count") or 0) > 0
+            or resolved.get("item") is None
+        )
+    )
+    if refresh_required:
+        response_payload["data"]["findings_update"] = IMGDATA.refreshChecksFindingEntriesForImage(
+            check_type=str(entry.get("review_type") or ""),
+            image_path=str(entry.get("image_path") or ""),
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+        )
+        if resolved.get("item") is None:
+            response_payload["data"]["progress_update"] = IMGDATA.refreshChecksScanProgressForImage(
+                user_key=session_ctx["user_key"],
+                check_type=str(entry.get("review_type") or ""),
+                image_path=str(entry.get("image_path") or ""),
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
     return JSONResponse(response_payload)
 
 

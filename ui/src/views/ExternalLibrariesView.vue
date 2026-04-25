@@ -302,6 +302,10 @@
 							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_root', 'InsightFace model root') }}</div>
 							<div class="sm-kv-value">{{ vm.insightFaceModelStatus.root }}</div>
 						</div>
+						<div v-if="vm.insightFaceActiveModelName" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_active_model', 'Active model') }}</div>
+							<div class="sm-kv-value">{{ vm.insightFaceActiveModelName }}</div>
+						</div>
 						<template v-if="Array.isArray(vm.insightFacePipPackageStatus.modules)">
 							<div
 								v-for="moduleStatus in vm.insightFacePipPackageStatus.modules"
@@ -389,6 +393,38 @@
 					<div class="config-card-desc">
 						{{ vm.$t('config:pip_packages_insightface_license_hint', 'InsightFace code and model files have separate licensing considerations. No models are shipped or downloaded automatically by AV ImgData.') }}
 					</div>
+
+					<div class="config-card-desc">
+						{{ vm.$t('config:insightface_model_management_hint', 'Model packages are managed locally. Upload a ZIP package, AV ImgData derives the model name from the package or top-level folder, clears the target model folder and extracts the ONNX files there. No model download is triggered automatically.') }}
+					</div>
+
+					<div class="sm-kv-list">
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_root', 'InsightFace model root') }}</div>
+							<div class="sm-kv-value">{{ vm.insightFaceModelStatus.root || '-' }}</div>
+						</div>
+					</div>
+
+					<template v-if="Array.isArray(vm.insightFaceModelStatus.models) && vm.insightFaceModelStatus.models.length">
+						<div
+							v-for="modelStatus in vm.insightFaceModelStatus.models"
+							:key="`manage-model-${modelStatus.name}`"
+							class="sm-kv-row sm-kv-row-spread"
+						>
+							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model', 'Model') }}: {{ modelStatus.name }}</div>
+							<div class="sm-kv-value">
+								{{ vm.getInsightFaceModelStatusLabel(modelStatus) }}
+								<v-button
+									v-if="modelStatus.installed"
+									@click="vm.deleteInsightFaceModel(modelStatus.name)"
+									:disabled="vm.externalLibrariesSaving || vm.insightFaceModelDeleting === modelStatus.name"
+									style="width: 140px; margin-left: 12px;"
+								>
+									{{ vm.insightFaceModelDeleting === modelStatus.name ? vm.$t('config:button_insightface_model_deleting', 'Deleting model...') : vm.$t('config:button_insightface_model_delete', 'Delete model') }}
+								</v-button>
+							</div>
+						</div>
+					</template>
 				</div>
 			</section>
 		</div>

@@ -12,6 +12,7 @@ export default {
 			exiftoolExtensionsLoading: false,
 			pipPackagesStatus: {},
 			pipPackagesStatusLoading: false,
+			insightFaceModelDeleting: '',
 		};
 	},
 	computed: {
@@ -62,6 +63,9 @@ export default {
 				root: String(status.root || ''),
 				models: Array.isArray(status.models) ? status.models : [],
 			};
+		},
+		insightFaceActiveModelName() {
+			return String(this.insightFacePipPackageStatus.active_model_name || '').trim();
 		},
 	},
 	methods: {
@@ -118,6 +122,8 @@ export default {
 						WHEELHOUSE_ENABLED: true,
 						WHEELHOUSE_MANIFEST_URL: '',
 						WHEELHOUSE_TARGET: '',
+						MODEL_ROOT: '',
+						MODEL_NAME: '',
 					},
 				},
 			};
@@ -330,6 +336,8 @@ export default {
 						WHEELHOUSE_ENABLED: true,
 						WHEELHOUSE_MANIFEST_URL: String(insightFace.WHEELHOUSE_MANIFEST_URL || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_MANIFEST_URL),
 						WHEELHOUSE_TARGET: String(insightFace.WHEELHOUSE_TARGET || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_TARGET),
+						MODEL_ROOT: String(insightFace.MODEL_ROOT || defaults.pip_packages.INSIGHTFACE.MODEL_ROOT),
+						MODEL_NAME: String(insightFace.MODEL_NAME || defaults.pip_packages.INSIGHTFACE.MODEL_NAME),
 					},
 				},
 			};
@@ -385,6 +393,25 @@ export default {
 				this.pipPackagesStatus = {};
 			} finally {
 				this.pipPackagesStatusLoading = false;
+			}
+		},
+		async deleteInsightFaceModel(modelName) {
+			const normalizedName = String(modelName || '').trim();
+			if (!normalizedName || this.insightFaceModelDeleting) {
+				return;
+			}
+			this.insightFaceModelDeleting = normalizedName;
+			this.externalLibrariesMessage = '';
+			try {
+				await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/insightface_model_delete', {
+					model_name: normalizedName,
+				});
+				this.externalLibrariesMessage = this.$t('config:message_insightface_model_deleted', 'InsightFace model removed.');
+				await this.fetchPipPackagesStatus();
+			} catch (err) {
+				this.externalLibrariesMessage = `Error: ${err.message}`;
+			} finally {
+				this.insightFaceModelDeleting = '';
 			}
 		},
 		async saveExternalLibrariesConfig() {
