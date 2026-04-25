@@ -677,14 +677,16 @@ export default {
 				this.checksEntries = [];
 				this.checksCurrentIndex = 0;
 				this.checksCurrentItem = null;
+				this.checksProgress = {
+					message: this.$t('checks:status_preparing_scan', 'Checks scan starting. Building file list...'),
+					files_scanned: 0,
+					total_files: 0,
+					findings_count: 0,
+					resolved_count: 0,
+					ignored_count: 0,
+				};
+				this.checksStatusMessage = this.$t('checks:status_preparing_scan', 'Checks scan starting. Building file list...');
 			}
-			this.checksProgress = {
-				message: this.$t('checks:status_preparing_scan', 'Checks scan starting. Building file list...'),
-				files_scanned: 0,
-				total_files: 0,
-				findings_count: 0,
-			};
-			this.checksStatusMessage = this.$t('checks:status_preparing_scan', 'Checks scan starting. Building file list...');
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_start', {
 					source_mode: 'scan',
