@@ -62,6 +62,8 @@ class ImgDataService:
         self._face_matching_progress: Dict[str, Dict[str, Any]] = {}
         self._face_matching_progress_lock = Lock()
         self._face_matching_threads: Dict[str, Thread] = {}
+        self._face_matching_candidate_paths_cache: Dict[str, Dict[str, Any]] = {}
+        self._face_matching_candidate_paths_cache_lock = Lock()
         self._checks_progress: Dict[str, Dict[str, Any]] = {}
         self._checks_progress_lock = Lock()
         self._checks_threads: Dict[str, Thread] = {}
@@ -1007,6 +1009,39 @@ class ImgDataService:
         self._setFaceMatchingProgress(user_key, **payload)
 
     @staticmethod
+    def _faceMatchCandidatePathsCacheKey(user_key: str, action: Any) -> str:
+        return f"{str(user_key or '').strip()}:{str(action or '').strip().lower()}"
+
+    def _getFaceMatchCandidatePaths(
+        self,
+        *,
+        user_key: str,
+        action: Any,
+        shared_folder: str,
+        use_cache: bool = True,
+    ) -> List[str]:
+        state_key = self._faceMatchCandidatePathsCacheKey(user_key, action)
+        normalized_shared_folder = str(shared_folder or "").strip()
+        if not normalized_shared_folder:
+            return []
+        if use_cache:
+            with self._face_matching_candidate_paths_cache_lock:
+                cached = self._face_matching_candidate_paths_cache.get(state_key)
+                if (
+                    isinstance(cached, dict)
+                    and str(cached.get("shared_folder") or "") == normalized_shared_folder
+                    and isinstance(cached.get("paths"), list)
+                ):
+                    return list(cached.get("paths") or [])
+        candidate_paths = self.files.listImageFiles(normalized_shared_folder)
+        with self._face_matching_candidate_paths_cache_lock:
+            self._face_matching_candidate_paths_cache[state_key] = {
+                "shared_folder": normalized_shared_folder,
+                "paths": list(candidate_paths),
+            }
+        return candidate_paths
+
+    @staticmethod
     def _formatExceptionForProgress(exc: Exception) -> str:
         detail = str(exc).strip()
         return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
@@ -1042,6 +1077,61 @@ class ImgDataService:
             "faces_read": max(0, int(faces_read)),
             "target_faces_read": max(0, int(target_faces_read)),
             "metadata_faces_read": max(0, int(metadata_faces_read)),
+        }
+
+    def recordFaceMatchTransferProgress(
+        self,
+        user_key: str,
+        *,
+        skip_face_ids: Optional[List[int]] = None,
+        skip_targets: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        current = self.getFaceMatchingProgress(user_key)
+        if not isinstance(current, dict):
+            current = {}
+        current_cursor = current.get("resume_cursor") if isinstance(current.get("resume_cursor"), dict) else {}
+        current_count = max(
+            int(current.get("transferred_count") or 0),
+            int(current_cursor.get("transferred_count") or 0),
+        )
+        next_count = current_count + 1
+        merged_face_ids = list(current_cursor.get("skip_face_ids") or [])
+        for face_id in skip_face_ids or []:
+            try:
+                normalized_face_id = int(face_id)
+            except (TypeError, ValueError):
+                continue
+            if normalized_face_id not in merged_face_ids:
+                merged_face_ids.append(normalized_face_id)
+        merged_targets = [str(value) for value in current_cursor.get("skip_targets") or [] if str(value or "").strip()]
+        for target in skip_targets or []:
+            normalized_target = str(target or "").strip()
+            if normalized_target and normalized_target not in merged_targets:
+                merged_targets.append(normalized_target)
+        action = str(current_cursor.get("action") or current.get("action") or "search_photo_face_in_file")
+        resume_cursor = self._buildFaceMatchResumeCursor(
+            skip_face_ids=merged_face_ids,
+            skip_targets=merged_targets,
+            transferred_count=next_count,
+            auto=bool(current_cursor.get("auto", current.get("auto", False))),
+            save_only=bool(current_cursor.get("save_only", current.get("save_only", False))),
+            action=action,
+            findings_count=int(current_cursor.get("findings_count") or current.get("findings_count") or 0),
+            path_index=int(current_cursor.get("path_index") or current.get("images_read") or 0),
+            persons_read=int(current_cursor.get("persons_read") or current.get("persons_read") or 0),
+            images_read=int(current_cursor.get("images_read") or current.get("images_read") or 0),
+            faces_read=int(current_cursor.get("faces_read") or current.get("faces_read") or 0),
+            target_faces_read=int(current_cursor.get("target_faces_read") or current.get("target_faces_read") or 0),
+            metadata_faces_read=int(current_cursor.get("metadata_faces_read") or current.get("metadata_faces_read") or 0),
+        )
+        self._setFaceMatchingProgress(
+            user_key,
+            transferred_count=next_count,
+            resume_cursor=resume_cursor,
+        )
+        return {
+            "transferred_count": next_count,
+            "resume_cursor": resume_cursor,
         }
 
     def getFaceMatchingProgress(self, user_key: str) -> Dict[str, Any]:
@@ -7031,6 +7121,7 @@ class ImgDataService:
         last_keepalive_at = monotonic()
         saved_entries: List[Dict[str, Any]] = []
         transferred_count = int(resume_cursor.get("transferred_count") or 0) if isinstance(resume_cursor, dict) else 0
+        path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
         skip_target_tokens = [str(value) for value in (skip_targets or []) if str(value or "").strip()]
         if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("skip_targets"), list):
             for token in resume_cursor.get("skip_targets") or []:
@@ -7039,10 +7130,10 @@ class ImgDataService:
                     skip_target_tokens.append(normalized)
 
         persons_read = 0
-        images_read = 0
-        faces_read = 0
-        target_faces_read = 0
-        metadata_faces_read = 0
+        images_read = int(resume_cursor.get("images_read") or path_index) if isinstance(resume_cursor, dict) else 0
+        faces_read = int(resume_cursor.get("faces_read") or 0) if isinstance(resume_cursor, dict) else 0
+        target_faces_read = int(resume_cursor.get("target_faces_read") or 0) if isinstance(resume_cursor, dict) else 0
+        metadata_faces_read = int(resume_cursor.get("metadata_faces_read") or 0) if isinstance(resume_cursor, dict) else 0
         final_message_key = "face_match:progress_finished"
         final_message_params: Dict[str, Any] = {}
         action = "search_missing_faces_insightface"
@@ -7054,13 +7145,13 @@ class ImgDataService:
             stop_requested=False,
             action=action,
             persons_read=0,
-            images_read=0,
-            faces_read=0,
-            target_faces_read=0,
+            images_read=images_read,
+            faces_read=faces_read,
+            target_faces_read=target_faces_read,
             current_person_id=None,
             current_image_id=None,
             current_face_id=None,
-            metadata_faces_read=0,
+            metadata_faces_read=metadata_faces_read,
             transferred_count=transferred_count,
             resume_cursor=self._buildFaceMatchResumeCursor(
                 skip_face_ids=[],
@@ -7069,6 +7160,11 @@ class ImgDataService:
                 auto=auto,
                 save_only=save_only,
                 action=action,
+                path_index=path_index,
+                images_read=images_read,
+                faces_read=faces_read,
+                target_faces_read=target_faces_read,
+                metadata_faces_read=metadata_faces_read,
             ),
         )
 
@@ -7117,17 +7213,46 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action=action,
+                    path_index=path_index,
+                    images_read=images_read,
+                    faces_read=faces_read,
+                    target_faces_read=target_faces_read,
+                    metadata_faces_read=metadata_faces_read,
                 ),
             )
-            candidate_paths = self.files.listImageFiles(shared_folder)
+            candidate_paths = self._getFaceMatchCandidatePaths(
+                user_key=user_key,
+                action=action,
+                shared_folder=shared_folder,
+                use_cache=bool(resume_cursor),
+            )
+            path_index = min(max(0, path_index), len(candidate_paths))
             self._setFaceMatchingProgressMessage(
                 user_key,
                 "face_match:progress_files_listed",
                 message_params={"count": len(candidate_paths)},
                 total_images=len(candidate_paths),
+                images_read=images_read,
+                faces_read=faces_read,
+                target_faces_read=target_faces_read,
+                metadata_faces_read=metadata_faces_read,
+                transferred_count=transferred_count,
+                resume_cursor=self._buildFaceMatchResumeCursor(
+                    skip_face_ids=[],
+                    skip_targets=skip_target_tokens,
+                    transferred_count=transferred_count,
+                    auto=auto,
+                    save_only=save_only,
+                    action=action,
+                    path_index=path_index,
+                    images_read=images_read,
+                    faces_read=faces_read,
+                    target_faces_read=target_faces_read,
+                    metadata_faces_read=metadata_faces_read,
+                ),
             )
 
-            for image_path in candidate_paths:
+            for index, image_path in enumerate(candidate_paths[path_index:], start=path_index):
                 last_keepalive_at = self._refreshFaceMatchingSessionIfNeeded(
                     user_key=user_key,
                     base_url=base_url,
@@ -7275,6 +7400,11 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         action=action,
+                        path_index=images_read,
+                        images_read=images_read,
+                        faces_read=faces_read,
+                        target_faces_read=target_faces_read,
+                        metadata_faces_read=metadata_faces_read,
                     ),
                 }
 
@@ -8808,9 +8938,6 @@ class ImgDataService:
             for item in models
             if isinstance(item, dict) and bool(item.get("installed"))
         }
-        for preferred_name in ("buffalo_l", "buffalo_m", "buffalo_s", "buffalo_sc"):
-            if preferred_name in installed_names:
-                return preferred_name
         return sorted(installed_names)[0] if installed_names else ""
 
     @staticmethod
@@ -8887,8 +9014,9 @@ class ImgDataService:
                 model_name = str(layout["model_name"])
                 entries = list(layout["entries"])
                 model_root = self._configuredInsightFaceModelRoot()
-                model_root.mkdir(parents=True, exist_ok=True)
-                target_dir = model_root / model_name
+                model_store = InsightFaceDetector.model_store_dir(model_root)
+                model_store.mkdir(parents=True, exist_ok=True)
+                target_dir = model_store / model_name
                 if target_dir.exists():
                     shutil.rmtree(target_dir)
                 target_dir.mkdir(parents=True, exist_ok=True)
@@ -8923,7 +9051,7 @@ class ImgDataService:
         if not normalized_name:
             raise ValueError("insightface_model_name_invalid")
         model_root = self._configuredInsightFaceModelRoot()
-        target_dir = model_root / normalized_name
+        target_dir = InsightFaceDetector.model_store_dir(model_root) / normalized_name
         deleted = False
         if target_dir.exists() and target_dir.is_dir():
             shutil.rmtree(target_dir)

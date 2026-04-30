@@ -7,14 +7,6 @@ class FaceDetectorUnavailable(RuntimeError):
     pass
 
 
-INSIGHTFACE_KNOWN_MODELS = [
-    "buffalo_l",
-    "buffalo_m",
-    "buffalo_s",
-    "buffalo_sc",
-]
-
-
 def default_haar_cascade_path() -> Path:
     return Path(__file__).resolve().parents[1] / "face_detection_models" / "haarcascade_frontalface_default.xml"
 
@@ -71,8 +63,8 @@ class OpenCvHaarFaceDetector:
 
 
 class InsightFaceDetector:
-    def __init__(self, model_name: str = "buffalo_l", model_root: Optional[Path] = None, ctx_id: int = -1, det_size: Tuple[int, int] = (640, 640)):
-        self.model_name = model_name
+    def __init__(self, model_name: str = "", model_root: Optional[Path] = None, ctx_id: int = -1, det_size: Tuple[int, int] = (640, 640)):
+        self.model_name = str(model_name or "").strip()
         self.model_root = Path(model_root) if model_root else None
         self.ctx_id = ctx_id
         self.det_size = det_size
@@ -85,35 +77,30 @@ class InsightFaceDetector:
         return Path(os.path.expanduser("~/.insightface")).resolve()
 
     @classmethod
+    def model_store_dir(cls, model_root: Optional[Path] = None) -> Path:
+        return cls.resolved_model_root(model_root) / "models"
+
+    @classmethod
     def available_models(cls, model_root: Optional[Path] = None) -> Dict[str, Any]:
         resolved_root = cls.resolved_model_root(model_root)
+        model_store = cls.model_store_dir(resolved_root)
         models: List[Dict[str, Any]] = []
-        discovered_names = set()
-        if resolved_root.is_dir():
-            for entry in sorted(resolved_root.iterdir(), key=lambda path: path.name.lower()):
+        if model_store.is_dir():
+            for entry in sorted(model_store.iterdir(), key=lambda path: path.name.lower()):
                 if not entry.is_dir():
                     continue
                 onnx_files = sorted(path.name for path in entry.rglob("*.onnx") if path.is_file())
                 if not onnx_files:
                     continue
-                discovered_names.add(entry.name)
                 models.append({
                     "name": entry.name,
                     "installed": True,
                     "path": str(entry),
                     "onnx_files": onnx_files,
                 })
-        for model_name in INSIGHTFACE_KNOWN_MODELS:
-            if model_name in discovered_names:
-                continue
-            models.append({
-                "name": model_name,
-                "installed": False,
-                "path": str(resolved_root / model_name),
-                "onnx_files": [],
-            })
         return {
             "root": str(resolved_root),
+            "model_store": str(model_store),
             "models": sorted(models, key=lambda item: item["name"].lower()),
         }
 
@@ -121,16 +108,18 @@ class InsightFaceDetector:
         return self.resolved_model_root(self.model_root)
 
     def _validate_model_files(self) -> None:
-        resolved_root = self._resolved_model_root()
-        model_dir = resolved_root / self.model_name
+        model_name = str(self.model_name or "").strip()
+        if not model_name:
+            raise FaceDetectorUnavailable("insightface model name is not configured")
+        model_dir = self.model_store_dir(self._resolved_model_root()) / model_name
         if not model_dir.is_dir():
             raise FaceDetectorUnavailable(
-                f"insightface model {self.model_name} not found in {resolved_root}"
+                f"insightface model {model_name} not found in {model_dir.parent}"
             )
         onnx_files = sorted(path for path in model_dir.rglob("*.onnx") if path.is_file())
         if not onnx_files:
             raise FaceDetectorUnavailable(
-                f"insightface model {self.model_name} is incomplete in {model_dir}: no ONNX files found"
+                f"insightface model {model_name} is incomplete in {model_dir}: no ONNX files found"
             )
 
     def _load_app(self):
@@ -142,12 +131,11 @@ class InsightFaceDetector:
         except ImportError as exc:
             raise FaceDetectorUnavailable(f"insightface could not be imported: {exc}") from exc
 
-        self._validate_model_files()
-
         kwargs: Dict[str, Any] = {
-            "name": self.model_name,
             "allowed_modules": ["detection"],
         }
+        if self.model_name:
+            kwargs["name"] = self.model_name
         kwargs["root"] = str(self._resolved_model_root())
         try:
             app = FaceAnalysis(**kwargs)
@@ -176,7 +164,8 @@ class InsightFaceDetector:
         return app
 
     def _model_location_hint(self) -> str:
-        return f"model_name={self.model_name}, model_root={self._resolved_model_root()}"
+        model_name = self.model_name or "insightface_default"
+        return f"model_name={model_name}, model_root={self._resolved_model_root()}, model_store={self.model_store_dir(self._resolved_model_root())}"
 
     def _format_app_init_error(self, exc: Exception) -> str:
         detail = str(exc).strip()

@@ -61,11 +61,18 @@ export default {
 				: {};
 			return {
 				root: String(status.root || ''),
+				model_store: String(status.model_store || ''),
 				models: Array.isArray(status.models) ? status.models : [],
 			};
 		},
 		insightFaceActiveModelName() {
 			return String(this.insightFacePipPackageStatus.active_model_name || '').trim();
+		},
+		insightFaceInstalledModelNames() {
+			return this.insightFaceModelStatus.models
+				.map((modelStatus) => String(modelStatus && modelStatus.name || '').trim())
+				.filter((name, index, names) => name && names.indexOf(name) === index)
+				.sort((left, right) => left.localeCompare(right));
 		},
 	},
 	methods: {
@@ -178,6 +185,7 @@ export default {
 		setExternalLibrariesPipPackageConfigValue(packageKey, key, value) {
 			const pipPackages = this.externalLibrariesConfigModel.pip_packages || {};
 			const packageConfig = pipPackages[packageKey] || {};
+			const wasInsightFaceEnabled = packageKey === 'INSIGHTFACE' && key === 'ENABLED' && Boolean(packageConfig.ENABLED);
 			this.externalLibrariesConfigModel = {
 				...this.externalLibrariesConfigModel,
 				pip_packages: {
@@ -188,6 +196,14 @@ export default {
 					},
 				},
 			};
+			if (packageKey === 'INSIGHTFACE' && key === 'ENABLED' && Boolean(value) && !wasInsightFaceEnabled) {
+				this.showExternalLibrariesRestartPopup(
+					this.$t(
+						'config:popup_insightface_model_license_warning',
+						'InsightFace can download models with separate non-free license terms. These models may only be used under the applicable InsightFace model license terms. Please review the InsightFace license notes before enabling this feature:\n\nhttps://github.com/deepinsight/insightface#license'
+					)
+				);
+			}
 		},
 		getPipPackageInstallStatusLabel(installStatus) {
 			const status = String(installStatus && installStatus.status || '').trim().toLowerCase();

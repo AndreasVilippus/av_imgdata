@@ -231,7 +231,7 @@ prepare_optional_python_wheelhouse() {
     [ -n "${requirements_file}" ] || return 1
     mkdir -p "${target_dir}" 2>/dev/null || return 1
 
-    "${PYTHON}" - "${manifest_url}" "${target}" "${requirements_file}" "${target_dir}" >> "${LOG_FILE}" 2>&1 <<'PY'
+    "${PYTHON}" - "${package_key}" "${manifest_url}" "${target}" "${requirements_file}" "${target_dir}" >> "${LOG_FILE}" 2>&1 <<'PY'
 import hashlib
 import json
 import os
@@ -249,10 +249,11 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-manifest_url = sys.argv[1]
-expected_target = sys.argv[2]
-expected_requirements = sys.argv[3]
-target_dir = Path(sys.argv[4])
+package_key = sys.argv[1]
+manifest_url = sys.argv[2]
+expected_target = sys.argv[3]
+expected_requirements = sys.argv[4]
+target_dir = Path(sys.argv[5])
 target_dir.mkdir(parents=True, exist_ok=True)
 for existing_wheel in target_dir.glob("*.whl"):
     existing_wheel.unlink()
@@ -266,8 +267,13 @@ if not isinstance(manifest, dict):
     raise RuntimeError("wheelhouse manifest is not a JSON object")
 if str(manifest.get("target") or "").strip() != expected_target:
     raise RuntimeError(f"wheelhouse manifest target mismatch: expected {expected_target}")
-if str(manifest.get("requirements_file") or "").strip() != expected_requirements:
-    raise RuntimeError(f"wheelhouse manifest requirements mismatch: expected {expected_requirements}")
+manifest_requirements = str(manifest.get("requirements_file") or "").strip()
+compatible_requirements = {expected_requirements}
+if package_key == "INSIGHTFACE":
+    compatible_requirements.add("requirements-runtime-insightface.txt")
+if manifest_requirements not in compatible_requirements:
+    expected_label = ", ".join(sorted(compatible_requirements))
+    raise RuntimeError(f"wheelhouse manifest requirements mismatch: expected one of {expected_label}")
 
 packages = manifest.get("packages")
 if not isinstance(packages, list) or not packages:
@@ -363,14 +369,14 @@ install_optional_python_packages() {
             write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
         elif ! finalize_optional_python_package_install "${package_key}"; then
             install_message="optional package finalization failed; see ${LOG_FILE}"
-            log "optional requirements finalization failed for ${req_file}; package start continues"
+            log "optional requirements finalization failed for ${req_name}; package start continues"
             write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
         elif ! validate_optional_python_package_install "${package_key}"; then
             install_message="optional packages installed but runtime import validation failed; see ${LOG_FILE}"
-            log "optional requirements runtime validation failed for ${req_file}; package start continues"
+            log "optional requirements runtime validation failed for ${req_name}; package start continues"
             write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
         else
-            log "optional requirements install completed for ${req_file}"
+            log "optional requirements install completed for ${req_name}"
             write_optional_pip_status "${package_key}" "${req_name}" "success" "pip install completed"
         fi
     done

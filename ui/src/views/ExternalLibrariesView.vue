@@ -86,6 +86,10 @@
 						<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_root', 'InsightFace model root') }}</div>
 						<div class="sm-kv-value">{{ vm.insightFaceModelStatus.root }}</div>
 					</div>
+					<div v-if="vm.insightFaceModelStatus.model_store" class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_store', 'InsightFace model store') }}</div>
+						<div class="sm-kv-value">{{ vm.insightFaceModelStatus.model_store }}</div>
+					</div>
 					<template v-if="Array.isArray(vm.insightFacePipPackageStatus.modules)">
 						<div
 							v-for="moduleStatus in vm.insightFacePipPackageStatus.modules"
@@ -302,6 +306,10 @@
 							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_root', 'InsightFace model root') }}</div>
 							<div class="sm-kv-value">{{ vm.insightFaceModelStatus.root }}</div>
 						</div>
+						<div v-if="vm.insightFaceModelStatus.model_store" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_store', 'InsightFace model store') }}</div>
+							<div class="sm-kv-value">{{ vm.insightFaceModelStatus.model_store }}</div>
+						</div>
 						<div v-if="vm.insightFaceActiveModelName" class="sm-kv-row">
 							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_active_model', 'Active model') }}</div>
 							<div class="sm-kv-value">{{ vm.insightFaceActiveModelName }}</div>
@@ -390,18 +398,45 @@
 						</span>
 					</label>
 
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$t('config:label_insightface_selected_model', 'InsightFace model for face search') }}</span>
+						<input
+							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.MODEL_NAME"
+							type="text"
+							class="config-input"
+							list="insightface-model-options"
+							:placeholder="vm.$t('config:placeholder_insightface_model_default', 'InsightFace default')"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
+							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'MODEL_NAME', $event.target.value)"
+						/>
+						<datalist id="insightface-model-options">
+							<option
+								v-for="modelName in vm.insightFaceInstalledModelNames"
+								:key="`insightface-model-option-${modelName}`"
+								:value="modelName"
+							/>
+						</datalist>
+						<span class="config-card-desc">
+							{{ vm.$t('config:hint_insightface_selected_model', 'Leave empty to use the InsightFace package default, select an installed model, or enter a model name that InsightFace can resolve.') }}
+						</span>
+					</label>
+
 					<div class="config-card-desc">
 						{{ vm.$t('config:pip_packages_insightface_license_hint', 'InsightFace code and model files have separate licensing considerations. No models are shipped or downloaded automatically by AV ImgData.') }}
 					</div>
 
 					<div class="config-card-desc">
-						{{ vm.$t('config:insightface_model_management_hint', 'Model packages are managed locally. Upload a ZIP package, AV ImgData derives the model name from the package or top-level folder, clears the target model folder and extracts the ONNX files there. No model download is triggered automatically.') }}
+						{{ vm.$t('config:insightface_model_management_hint', 'Model packages are read from the InsightFace model store. Upload a ZIP package to install a local model, or configure a model name that the installed InsightFace package can resolve itself.') }}
 					</div>
 
 					<div class="sm-kv-list">
 						<div class="sm-kv-row">
 							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_root', 'InsightFace model root') }}</div>
 							<div class="sm-kv-value">{{ vm.insightFaceModelStatus.root || '-' }}</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$t('config:label_insightface_model_store', 'InsightFace model store') }}</div>
+							<div class="sm-kv-value">{{ vm.insightFaceModelStatus.model_store || '-' }}</div>
 						</div>
 					</div>
 

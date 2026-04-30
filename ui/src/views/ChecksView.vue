@@ -126,7 +126,7 @@
 					@click.prevent="vm.replaceChecksMetadataFaceName(vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_name)"
 				>
 					<img v-if="vm.getChecksReplaceLeftIconUrl()" :src="vm.getChecksReplaceLeftIconUrl()" alt="" class="face-match-icon-image" />
-					<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_name_left', '<- Name') }}</span>
+					<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_name_left', 'Name left') }}</span>
 				</button>
 			</div>
 			<ChecksFacePane :vm="vm" :item="vm.checksCurrentItem" side="left" />

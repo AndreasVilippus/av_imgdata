@@ -742,6 +742,15 @@ async def face_assign_metadata_match(request: Request):
             metadata_face=metadata_face,
             increment_transferred_count=True,
         )
+        progress_update = IMGDATA.recordFaceMatchTransferProgress(
+            session_ctx["user_key"],
+            skip_targets=[
+                IMGDATA._faceMatchTargetToken(
+                    image_path=image_path,
+                    face=metadata_face,
+                ),
+            ],
+        )
         mapping_saved = _save_name_mapping_if_requested(
             save_mapping=save_mapping,
             source_name=source_name,
@@ -762,6 +771,7 @@ async def face_assign_metadata_match(request: Request):
             "add_result": transfer_result.get("add_result"),
             "assign_result": transfer_result.get("assign_result"),
             "findings_update": findings_update,
+            "progress_update": progress_update,
             "mapping_saved": mapping_saved if save_mapping else False,
         },
     }
@@ -802,6 +812,15 @@ async def face_create_metadata_match(request: Request):
             metadata_face=metadata_face,
             increment_transferred_count=True,
         )
+        progress_update = IMGDATA.recordFaceMatchTransferProgress(
+            session_ctx["user_key"],
+            skip_targets=[
+                IMGDATA._faceMatchTargetToken(
+                    image_path=image_path,
+                    face=metadata_face,
+                ),
+            ],
+        )
         mapping_saved = _save_name_mapping_if_requested(
             save_mapping=save_mapping,
             source_name=source_name,
@@ -822,6 +841,7 @@ async def face_create_metadata_match(request: Request):
             "add_result": transfer_result.get("add_result"),
             "create_result": transfer_result.get("create_result"),
             "findings_update": findings_update,
+            "progress_update": progress_update,
             "mapping_saved": mapping_saved if save_mapping else False,
         },
     }
