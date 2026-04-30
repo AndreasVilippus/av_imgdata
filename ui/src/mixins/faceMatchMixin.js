@@ -11,6 +11,7 @@ export default {
 			faceMatchPreviewMode: 'photo',
 			faceMatchAutoAssignKnown: false,
 			faceMatchSaveOnly: false,
+			faceMatchUseStoredFindings: false,
 			faceMatchTransferredCount: 0,
 			faceMatchProgressBase: {
 				persons_read: 0,
@@ -53,8 +54,11 @@ export default {
 		hasInsightFaceForFaceMatch() {
 			return !!(this.insightFacePipPackageStatus && this.insightFacePipPackageStatus.installed);
 		},
+		faceMatchReviewingStoredFindings() {
+			return this.faceMatchUseStoredFindings || this.selectedFaceMatchingAction === 'load_photo_face_match_findings';
+		},
 		faceMatchCurrentAction() {
-			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+			if (this.faceMatchReviewingStoredFindings) {
 				const entryAction = this.faceMatchResult && this.faceMatchResult.action;
 				if (entryAction) {
 					return String(entryAction);
@@ -73,6 +77,24 @@ export default {
 			}
 			return Math.max(localCount, progressCount);
 		},
+		faceMatchDisplayedFindingsCount() {
+			const progressCount = Number(this.faceMatchProgress && this.faceMatchProgress.findings_count);
+			const resultCount = Number(this.faceMatchResult && this.faceMatchResult.findings_count);
+			return Math.max(
+				Number.isFinite(progressCount) ? progressCount : 0,
+				Number.isFinite(resultCount) ? resultCount : 0
+			);
+		},
+		faceMatchDisplayedSkippedCount() {
+			const transferredCount = this.faceMatchDisplayedTransferredCount;
+			let cursorCount = 0;
+			if (this.faceMatchIsFileSourceAction) {
+				cursorCount = Array.isArray(this.faceMatchSkippedTargets) ? this.faceMatchSkippedTargets.length : 0;
+			} else {
+				cursorCount = Array.isArray(this.faceMatchSkippedFaceIds) ? this.faceMatchSkippedFaceIds.length : 0;
+			}
+			return Math.max(0, cursorCount - transferredCount);
+		},
 		faceMatchDisplayedProgress() {
 			const fields = ['persons_read', 'images_read', 'faces_read', 'target_faces_read', 'metadata_faces_read'];
 			return fields.reduce((acc, field) => {
@@ -82,8 +104,22 @@ export default {
 				return acc;
 			}, {});
 		},
-		showFaceMatchPersonsCounter() {
-			return !this.faceMatchIsFileSourceAction;
+		faceMatchPersonsTotal() {
+			return Math.max(0, Number(this.faceMatchProgress && this.faceMatchProgress.persons_total) || 0);
+		},
+		faceMatchPersonsChecked() {
+			const checked = Math.max(0, Number(this.faceMatchDisplayedProgress && this.faceMatchDisplayedProgress.persons_read) || 0);
+			const total = this.faceMatchPersonsTotal;
+			return total > 0 ? Math.min(checked, total) : checked;
+		},
+		faceMatchShowPersonsProgress() {
+			return this.faceMatchPersonsTotal > 0 && !this.faceMatchIsFileSourceAction;
+		},
+		faceMatchShowFileProgress() {
+			return this.faceMatchIsFileSourceAction && (
+				this.faceMatchLoading
+				|| !!(this.faceMatchProgress && Object.keys(this.faceMatchProgress).length)
+			);
 		},
 		faceMatchFacesLabel() {
 			if (this.faceMatchIsFileSourceAction) {
@@ -103,6 +139,12 @@ export default {
 			}
 			return this.$t('face_match:label_metadata_hint', 'Read metadata');
 		},
+		faceMatchProgressIconUrl() {
+			if (this.faceMatchCurrentAction === 'mark_missing_photos_faces') {
+				return this.resolveLocalIconUrl('face_search_empty.png');
+			}
+			return '';
+		},
 		showFaceMatchTargetFacesCounter() {
 			return this.faceMatchIsFileSourceAction;
 		},
@@ -111,35 +153,9 @@ export default {
 				? this.faceMatchProgress
 				: null;
 			if (progress && progress.message_key) {
-				const messageKey = String(progress.message_key);
-				const persistentMessages = new Set([
-					'face_match:progress_stopping',
-					'face_match:progress_finished',
-					'face_match:progress_shared_folder_missing',
-					'face_match:progress_stopped',
-					'face_match:progress_findings_empty',
-					'face_match:progress_findings_saved',
-					'face_match:progress_auto_assign_complete',
-					'face_match:progress_auto_metadata_assign_complete',
-					'face_match:progress_auth_required',
-					'face_match:progress_failed',
-					'face_match:progress_insightface_missing',
-					'face_match:progress_insightface_unavailable',
-					'face_match:result_none',
-					'face_match:result_no_match',
-					'face_match:result_named_match',
-					'face_match:result_named_match_with_id',
-					'face_match:result_named_source_match',
-					'face_match:result_named_source_match_with_id',
-					'face_match:status_list_entry',
-					'face_match:status_findings_empty',
-				]);
-				if (this.faceMatchLoading && !persistentMessages.has(messageKey)) {
-					return this.$t('face_match:status_search_running', 'Search running...');
-				}
 				return this.$t(
-					messageKey,
-					progress.message || messageKey,
+					String(progress.message_key),
+					progress.message || String(progress.message_key),
 					progress.message_params && typeof progress.message_params === 'object'
 						? progress.message_params
 						: null
@@ -295,7 +311,7 @@ export default {
 			return this.faceMatchFileTitle;
 		},
 		hasNextFaceMatch() {
-			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+			if (this.faceMatchReviewingStoredFindings) {
 				return this.faceMatchFindingIndex + 1 < this.faceMatchFindingEntries.length;
 			}
 			return !!this.faceMatchResultSummary.found;
@@ -305,6 +321,17 @@ export default {
 		selectedFaceMatchingAction(nextAction) {
 			if (!['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(nextAction)) {
 				this.faceMatchSaveOnly = false;
+			}
+			if (nextAction === 'load_photo_face_match_findings') {
+				this.faceMatchUseStoredFindings = true;
+				this.selectedFaceMatchingAction = 'search_photo_face_in_file';
+			}
+		},
+		faceMatchUseStoredFindings(useStoredFindings) {
+			if (useStoredFindings) {
+				this.faceMatchSaveOnly = false;
+			} else {
+				this.resetFaceMatchFindingsReview();
 			}
 		},
 	},
@@ -354,6 +381,10 @@ export default {
 			try {
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_findings_status');
 				this.faceMatchFindingsStatus = this.getResponseData(data);
+				if (this.faceMatchReviewingStoredFindings && !this.hasFaceMatchStoredFindings) {
+					this.faceMatchUseStoredFindings = false;
+					this.resetFaceMatchFindingsReview();
+				}
 			} catch (err) {
 				this.faceMatchFindingsStatus = {};
 			}
@@ -406,6 +437,7 @@ export default {
 			if (entries.length) {
 				await this.loadFaceMatchFindingAtIndex(0);
 			} else {
+				this.faceMatchUseStoredFindings = false;
 				this.faceMatchResult = null;
 				this.faceMatchProgress = {
 					...(this.faceMatchProgress || {}),
@@ -857,13 +889,14 @@ export default {
 			};
 			this.faceMatchTransferredCount = Number(this.faceMatchFindingsStatus.transferred_count) || 0;
 
-			if (!remainingEntries.length) {
-				this.faceMatchResult = null;
-				this.faceMatchFindingIndex = 0;
-				this.resetFaceMatchSelectionState();
-				this.setFaceMatchProgressMessage(
-					this.$t('face_match:status_findings_empty', 'No saved matches found.')
-				);
+				if (!remainingEntries.length) {
+					this.faceMatchResult = null;
+					this.faceMatchFindingIndex = 0;
+					this.resetFaceMatchSelectionState();
+					this.faceMatchUseStoredFindings = false;
+					this.setFaceMatchProgressMessage(
+						this.$t('face_match:status_findings_empty', 'No saved matches found.')
+					);
 				return;
 			}
 
@@ -909,6 +942,42 @@ export default {
 			const localCount = Number(this.faceMatchTransferredCount) || 0;
 			this.faceMatchTransferredCount = Math.max(localCount, progressCount);
 		},
+		isFaceMatchProgressUpdateStale(current, next) {
+			const currentProgress = current && typeof current === 'object' ? current : {};
+			const nextProgress = next && typeof next === 'object' ? next : {};
+			const currentOperationId = String(currentProgress.operation_id || '').trim();
+			const nextOperationId = String(nextProgress.operation_id || '').trim();
+			if (currentOperationId && !nextOperationId) {
+				return true;
+			}
+			if (currentOperationId && nextOperationId && currentOperationId !== nextOperationId) {
+				return false;
+			}
+			const currentRevision = Number(currentProgress.revision);
+			const nextRevision = Number(nextProgress.revision);
+			return Number.isFinite(currentRevision)
+				&& Number.isFinite(nextRevision)
+				&& currentRevision > 0
+				&& nextRevision > 0
+				&& nextRevision < currentRevision;
+		},
+		applyFaceMatchingProgress(progress) {
+			const nextProgress = progress && typeof progress === 'object' ? progress : {};
+			if (this.isFaceMatchProgressUpdateStale(this.faceMatchProgress, nextProgress)) {
+				return false;
+			}
+			this.faceMatchProgress = nextProgress;
+			this.syncFaceMatchTransferredCountFromProgress(nextProgress);
+			const result = nextProgress && typeof nextProgress.result === 'object' ? nextProgress.result : null;
+			if (result && Object.keys(result).length) {
+				this.faceMatchResult = result;
+				this.syncFaceMatchEditableName();
+			} else if (!nextProgress.running && !nextProgress.paused) {
+				this.faceMatchResult = null;
+				this.resetFaceMatchSelectionState();
+			}
+			return true;
+		},
 		async fetchFaceMatchingProgress() {
 			const requestId = this.faceMatchProgressRequestId + 1;
 			this.faceMatchProgressRequestId = requestId;
@@ -918,15 +987,8 @@ export default {
 					return;
 				}
 				const progress = this.getResponseData(data);
-				this.faceMatchProgress = progress;
-				this.syncFaceMatchTransferredCountFromProgress(progress);
-				const result = progress && typeof progress.result === 'object' ? progress.result : null;
-				if (result && Object.keys(result).length) {
-					this.faceMatchResult = result;
-					this.syncFaceMatchEditableName();
-				} else if (!progress.running && !progress.paused) {
-					this.faceMatchResult = null;
-					this.resetFaceMatchSelectionState();
+				if (!this.applyFaceMatchingProgress(progress)) {
+					return;
 				}
 				if (progress.paused && !progress.running) {
 					this.faceMatchLoading = false;
@@ -948,7 +1010,7 @@ export default {
 			this.stopNamedPolling('faceMatchProgressTimer');
 		},
 		async loadNextFaceMatch() {
-			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+			if (this.faceMatchReviewingStoredFindings) {
 				if (!this.hasNextFaceMatch) {
 					return;
 				}
@@ -1020,7 +1082,7 @@ export default {
 					{ requireResumeMessage: true }
 				);
 				this.output = JSON.stringify(data, null, 2);
-				if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+				if (this.faceMatchReviewingStoredFindings) {
 					await this.advanceFaceMatchFindingsAfterTransfer(data);
 				} else {
 					this.faceMatchTransferredCount += 1;
@@ -1065,7 +1127,7 @@ export default {
 					{ requireResumeMessage: true }
 				);
 				this.output = JSON.stringify(data, null, 2);
-				if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+				if (this.faceMatchReviewingStoredFindings) {
 					await this.advanceFaceMatchFindingsAfterTransfer(data);
 				} else {
 					this.faceMatchTransferredCount += 1;
@@ -1095,7 +1157,7 @@ export default {
 					person_name: personName,
 				});
 				this.output = JSON.stringify(data, null, 2);
-				if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+				if (this.faceMatchReviewingStoredFindings) {
 					await this.loadStoredFaceMatchFindings();
 				} else {
 					this.faceMatchTransferredCount += 1;
@@ -1110,7 +1172,7 @@ export default {
 			if (this.faceMatchLoading) {
 				return;
 			}
-			if (this.selectedFaceMatchingAction === 'load_photo_face_match_findings') {
+			if (this.faceMatchReviewingStoredFindings) {
 				this.faceMatchLoading = true;
 				this.faceMatchResult = null;
 				this.resetFaceMatchSelectionState();
@@ -1153,7 +1215,11 @@ export default {
 				this.resetFaceMatchFindingsReview();
 			} else {
 				this.faceMatchProgressBase = {
-					...this.faceMatchDisplayedProgress,
+					persons_read: 0,
+					images_read: 0,
+					faces_read: 0,
+					target_faces_read: 0,
+					metadata_faces_read: 0,
 				};
 				const resumeCursor = this.faceMatchProgress && typeof this.faceMatchProgress.resume_cursor === 'object'
 					? this.faceMatchProgress.resume_cursor
@@ -1165,55 +1231,43 @@ export default {
 					? resumeCursor.skip_targets
 					: [];
 				if (cursorSkipFaceIds.length) {
-					this.faceMatchSkippedFaceIds = cursorSkipFaceIds
-						.map(value => Number(value))
-						.filter(value => Number.isFinite(value) && value > 0);
+					const mergedFaceIds = [
+						...this.faceMatchSkippedFaceIds,
+						...cursorSkipFaceIds.map(value => Number(value)).filter(value => Number.isFinite(value) && value > 0),
+					];
+					this.faceMatchSkippedFaceIds = Array.from(new Set(mergedFaceIds));
 				}
 				if (cursorSkipTargets.length) {
-					this.faceMatchSkippedTargets = cursorSkipTargets
-						.map(value => String(value || '').trim())
-						.filter(value => value);
+					const mergedTargets = [
+						...this.faceMatchSkippedTargets,
+						...cursorSkipTargets.map(value => String(value || '').trim()).filter(value => value),
+					];
+					this.faceMatchSkippedTargets = Array.from(new Set(mergedTargets));
 				}
 			}
 
 			this.faceMatchLoading = true;
-			this.faceMatchProgress = resetSkippedFaceIds ? {
-				message: this.$t('face_match:status_starting', 'Search starting...'),
-				persons_read: 0,
-				images_read: 0,
-				faces_read: 0,
-				target_faces_read: 0,
-				metadata_faces_read: 0,
-				transferred_count: 0,
-			} : {
-				...(this.faceMatchProgress || {}),
-				message: this.$t('face_match:status_starting', 'Search starting...'),
-				persons_read: 0,
-				images_read: 0,
-				faces_read: 0,
-				target_faces_read: 0,
-				metadata_faces_read: 0,
-				transferred_count: 0,
-			};
-			this.faceMatchResult = null;
-			this.resetFaceMatchSelectionState();
+			if (resetSkippedFaceIds) {
+				this.faceMatchProgress = {
+					message: this.$t('face_match:status_starting', 'Search starting...'),
+				};
+				this.faceMatchResult = null;
+				this.resetFaceMatchSelectionState();
+			}
 			this.startFaceMatchProgressPolling();
 			this.output = this.$t('face_match:output_start_action', 'Starting action: {action}', { action: this.selectedFaceMatchingAction });
 				try {
 					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
 						action: this.selectedFaceMatchingAction,
 						auto: this.faceMatchAutoAssignKnown,
-						save_only: this.faceMatchSaveOnly,
+						save_only: this.faceMatchUseStoredFindings ? false : this.faceMatchSaveOnly,
 						resume_from_progress: resumeFromProgress,
 						skip_face_ids: this.faceMatchSkippedFaceIds,
 						skip_targets: this.faceMatchSkippedTargets,
 					}, { requireResumeMessage: true });
 					const faceMatches = this.getResponseDataObject(data, 'face_matches');
-				this.faceMatchProgress = faceMatches;
-				const result = faceMatches && typeof faceMatches.result === 'object' ? faceMatches.result : null;
-				if (result && Object.keys(result).length) {
-					this.faceMatchResult = result;
-					this.syncFaceMatchEditableName();
+				if (!this.applyFaceMatchingProgress(faceMatches)) {
+					return;
 				}
 				if (faceMatches && faceMatches.running) {
 					this.faceMatchLoading = true;
@@ -1223,8 +1277,10 @@ export default {
 				this.syncFaceMatchTransferredCountFromProgress(faceMatches);
 				this.output = JSON.stringify(data, null, 2);
 			} catch (err) {
-				this.faceMatchResult = null;
-				this.resetFaceMatchSelectionState();
+				if (resetSkippedFaceIds) {
+					this.faceMatchResult = null;
+					this.resetFaceMatchSelectionState();
+				}
 				this.faceMatchLoading = false;
 				this.stopFaceMatchProgressPolling();
 				this.output = `Error: ${err.message}`;

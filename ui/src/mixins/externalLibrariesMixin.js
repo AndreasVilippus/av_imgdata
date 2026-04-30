@@ -106,6 +106,11 @@ export default {
 					OPTIONS: {
 						DUPLICATE_FACE_SUGGESTIONS: true,
 					},
+					CHECKS_IGNORE_LISTS: {
+						DUPLICATE_FACES_ENABLED: true,
+						POSITION_DEVIATIONS_ENABLED: true,
+						NAME_CONFLICTS_ENABLED: true,
+					},
 				},
 				photos: {
 					MAX_PHOTOS_PERSONS: 5000,
@@ -248,6 +253,7 @@ export default {
 			const checks = (analysis.CHECKS && typeof analysis.CHECKS === 'object' && !Array.isArray(analysis.CHECKS)) ? analysis.CHECKS : {};
 			const review = (root.review && typeof root.review === 'object' && !Array.isArray(root.review)) ? root.review : {};
 			const reviewOptions = (review.OPTIONS && typeof review.OPTIONS === 'object' && !Array.isArray(review.OPTIONS)) ? review.OPTIONS : {};
+			const reviewIgnoreLists = (review.CHECKS_IGNORE_LISTS && typeof review.CHECKS_IGNORE_LISTS === 'object' && !Array.isArray(review.CHECKS_IGNORE_LISTS)) ? review.CHECKS_IGNORE_LISTS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
 			const pipPackages = (root.pip_packages && typeof root.pip_packages === 'object' && !Array.isArray(root.pip_packages)) ? root.pip_packages : {};
@@ -310,6 +316,21 @@ export default {
 							reviewOptions.DUPLICATE_FACE_SUGGESTIONS
 							?? checks.DUPLICATE_FACE_SUGGESTIONS
 							?? defaults.review.OPTIONS.DUPLICATE_FACE_SUGGESTIONS
+						),
+					},
+					CHECKS_IGNORE_LISTS: {
+						...reviewIgnoreLists,
+						DUPLICATE_FACES_ENABLED: Boolean(
+							reviewIgnoreLists.DUPLICATE_FACES_ENABLED
+							?? defaults.review.CHECKS_IGNORE_LISTS.DUPLICATE_FACES_ENABLED
+						),
+						POSITION_DEVIATIONS_ENABLED: Boolean(
+							reviewIgnoreLists.POSITION_DEVIATIONS_ENABLED
+							?? defaults.review.CHECKS_IGNORE_LISTS.POSITION_DEVIATIONS_ENABLED
+						),
+						NAME_CONFLICTS_ENABLED: Boolean(
+							reviewIgnoreLists.NAME_CONFLICTS_ENABLED
+							?? defaults.review.CHECKS_IGNORE_LISTS.NAME_CONFLICTS_ENABLED
 						),
 					},
 				},

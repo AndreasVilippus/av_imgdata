@@ -1,14 +1,19 @@
 <template>
-	<div class="sm-ratio-progress" :title="tooltip">
-		<div class="sm-ratio-progress-bg">
-			<div class="sm-ratio-progress-bar" :style="{ width: `${percent}%` }"></div>
+	<div class="sm-ratio-progress sm-ratio-progress-standalone" :title="tooltip">
+		<div v-if="iconUrl" class="sm-ratio-progress-icon-wrap">
+			<img class="sm-ratio-progress-icon" :src="iconUrl" alt="" />
 		</div>
-		<div class="sm-ratio-progress-text">
-			<span class="sm-ratio-progress-primary">{{ primaryText }}</span>
-			<template v-if="secondaryText">
-				<span class="sm-ratio-progress-sep"> | </span>
-				<span class="sm-ratio-progress-secondary">{{ secondaryText }}</span>
-			</template>
+		<div class="sm-ratio-progress-body">
+			<div class="sm-ratio-progress-bg">
+				<div class="sm-ratio-progress-bar" :style="{ width: `${percent}%` }"></div>
+			</div>
+			<div class="sm-ratio-progress-text">
+				<span class="sm-ratio-progress-primary">{{ primaryText }}</span>
+				<template v-if="secondaryText">
+					<span class="sm-ratio-progress-sep"> | </span>
+					<span class="sm-ratio-progress-secondary">{{ secondaryText }}</span>
+				</template>
+			</div>
 		</div>
 	</div>
 </template>
@@ -34,6 +39,10 @@ export default {
 			default: '',
 		},
 		tooltip: {
+			type: String,
+			default: '',
+		},
+		iconUrl: {
 			type: String,
 			default: '',
 		},

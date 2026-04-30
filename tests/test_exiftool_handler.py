@@ -73,6 +73,28 @@ class ExifToolHandlerTests(unittest.TestCase):
             self.assertEqual(result["returncode"], 1)
             self.assertIn("Permission denied", result["stderr"])
 
+    def test_write_xmp_detailed_ignores_minor_makernotes_errors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            executable = Path(tmpdir) / "exiftool"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            target = Path(tmpdir) / "image.jpg"
+            target.write_text("dummy", encoding="utf-8")
+            handler = ExifToolHandler(StubConfigService(str(executable)))
+
+            class Completed:
+                returncode = 0
+                stdout = "    1 image files updated"
+                stderr = "Warning: Bad MakerNotes offset for CameraInfo2"
+
+            with patch("handler.exiftool_handler.subprocess.run", return_value=Completed()) as run_mock:
+                result = handler.writeXmpDetailed(str(target), "<x:xmpmeta xmlns:x='adobe:ns:meta/'></x:xmpmeta>")
+
+            command = run_mock.call_args[0][0]
+            self.assertIn("-m", command)
+            self.assertTrue(result["updated"])
+            self.assertIn("Bad MakerNotes offset", result["stderr"])
+
 
 if __name__ == "__main__":
     unittest.main()

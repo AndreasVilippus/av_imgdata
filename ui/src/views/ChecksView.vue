@@ -13,7 +13,7 @@
 					<option value="name_conflicts">{{ vm.$t('checks:type_name_conflicts', 'Name conflicts') }}</option>
 				</select>
 				<select v-model="vm.selectedChecksAction" class="face-match-select" :disabled="vm.checksLoading">
-					<option value="findings">{{ vm.$t('checks:action_findings', 'Use analysis findings') }}</option>
+					<option value="findings" :disabled="vm.checksFindingsStatusLoaded && !vm.hasChecksStoredFindings">{{ vm.$t('checks:action_findings', 'Process saved findings list') }}</option>
 					<option value="scan">{{ vm.$t('checks:action_scan', 'Run check scan') }}</option>
 				</select>
 			</div>
@@ -51,6 +51,14 @@
 					<v-button @click="vm.startChecksReview" style="width: 160px;">
 						{{ vm.checksPrimaryButtonLabel }}
 					</v-button>
+					<v-button
+						v-if="vm.checksCurrentItem && vm.canIgnoreChecksItem()"
+						@click="vm.ignoreChecksCurrentItem"
+						:disabled="vm.checksLoading"
+						style="width: 160px;"
+					>
+						{{ vm.$t('checks:button_ignore', 'Ignore') }}
+					</v-button>
 					<v-button v-if="vm.hasNextChecksItem" @click="vm.nextChecksReview" :disabled="vm.checksLoading" style="width: 160px;">
 						{{ vm.$t('checks:button_next', 'Next') }}
 					</v-button>
@@ -73,6 +81,7 @@
 					:primary-label="vm.$t('checks:label_scanned', 'scanned').replace(':', '').toLowerCase()"
 					:secondary-label="vm.$t('checks:label_remaining', 'remaining')"
 					:status-text="vm.getChecksStatusHeadline()"
+					:icon-url="vm.getChecksProgressIconUrl()"
 				/>
 			</div>
 			<div v-if="vm.selectedChecksAction !== 'scan' && vm.checksEntries.length > 0" class="sm-status-progress">

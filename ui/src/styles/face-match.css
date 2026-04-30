@@ -264,12 +264,18 @@
 	transform: translateX(20px);
 }
 
+.face-match-switch input:disabled + .face-match-switch-slider {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+
 .face-match-switch-label {
 	user-select: none;
 }
 
-.face-match-switch-label-disabled {
+.face-match-switch input:disabled ~ .face-match-switch-label {
 	color: var(--sm-text-muted);
+	cursor: not-allowed;
 }
 
 .face-match-select {

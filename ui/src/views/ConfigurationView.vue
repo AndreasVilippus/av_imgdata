@@ -165,6 +165,39 @@
 						<span>{{ $t('config:label_review_duplicate_face_suggestions', 'Suggest likely valid duplicate face markings') }}</span>
 					</label>
 
+					<div class="config-field">
+						<span class="config-field-label">{{ $t('config:label_review_ignore_lists', 'Ignore lists for checks') }}</span>
+						<div
+							v-for="ignoreList in checksIgnoreListConfigs"
+							:key="ignoreList.reviewType"
+							class="config-field"
+						>
+							<label class="config-checkbox">
+								<input
+									v-model="configModel.review.CHECKS_IGNORE_LISTS[ignoreList.enabledKey]"
+									type="checkbox"
+									:disabled="saving || clearingIgnoreListType === ignoreList.reviewType"
+								/>
+								<span>{{ ignoreList.label }}</span>
+							</label>
+							<div class="config-card-desc">
+								{{ $t('config:label_check_ignore_list_count', 'Entries: {count}', { count: getChecksIgnoreListStatus(ignoreList.reviewType).count }) }}
+							</div>
+							<div class="config-card-desc">
+								{{ $t('config:label_check_ignore_list_path', 'File: {path}', { path: getChecksIgnoreListStatus(ignoreList.reviewType).path || '-' }) }}
+							</div>
+							<div class="config-inline-actions">
+								<v-button
+									@click="clearChecksIgnoreList(ignoreList.reviewType)"
+									:disabled="saving || clearingIgnoreListType === ignoreList.reviewType"
+									style="width: 160px;"
+								>
+									{{ $t('config:button_clear_list', 'Clear list') }}
+								</v-button>
+							</div>
+						</div>
+					</div>
+
 					<label
 						class="config-field"
 						:title="$t('config:tooltip_check_single_source_of_truth', 'Automatically the value from this source is suggested for corrections.')"
@@ -192,10 +225,12 @@ export default {
 		return {
 			loading: false,
 			saving: false,
+			clearingIgnoreListType: '',
 			message: '',
 			configPath: '',
 			configModel: this.createDefaultConfig(),
 			imageExtensionsInput: '',
+			checksIgnoreListsStatus: this.createDefaultChecksIgnoreListsStatus(),
 		};
 	},
 	computed: {
@@ -230,6 +265,25 @@ export default {
 				}
 			}
 			return options;
+		},
+		checksIgnoreListConfigs() {
+			return [
+				{
+					reviewType: 'duplicate_faces',
+					enabledKey: 'DUPLICATE_FACES_ENABLED',
+					label: this.$t('config:label_check_ignore_list_duplicate_faces', 'Ignore list for duplicate face markings'),
+				},
+				{
+					reviewType: 'position_deviations',
+					enabledKey: 'POSITION_DEVIATIONS_ENABLED',
+					label: this.$t('config:label_check_ignore_list_position_deviations', 'Ignore list for deviating face positions'),
+				},
+				{
+					reviewType: 'name_conflicts',
+					enabledKey: 'NAME_CONFLICTS_ENABLED',
+					label: this.$t('config:label_check_ignore_list_name_conflicts', 'Ignore list for name conflicts'),
+				},
+			];
 		},
 	},
 	mounted() {
@@ -276,6 +330,11 @@ export default {
 					OPTIONS: {
 						DUPLICATE_FACE_SUGGESTIONS: true,
 					},
+					CHECKS_IGNORE_LISTS: {
+						DUPLICATE_FACES_ENABLED: true,
+						POSITION_DEVIATIONS_ENABLED: true,
+						NAME_CONFLICTS_ENABLED: true,
+					},
 				},
 				photos: {
 					MAX_PHOTOS_PERSONS: 5000,
@@ -284,6 +343,13 @@ export default {
 					FILE_MATCH_SOURCE_SCOPE: 'both',
 					PERSON_SORT_ORDER: 'id_desc',
 				},
+			};
+		},
+		createDefaultChecksIgnoreListsStatus() {
+			return {
+				duplicate_faces: { count: 0, path: '', enabled: true },
+				position_deviations: { count: 0, path: '', enabled: true },
+				name_conflicts: { count: 0, path: '', enabled: true },
 			};
 		},
 		getSynoToken() {
@@ -307,6 +373,40 @@ export default {
 				.map((entry) => String(entry || '').trim())
 				.filter((entry, index, arr) => entry && allowed.includes(entry) && arr.indexOf(entry) === index);
 			return normalized.length ? normalized : [...fallback];
+		},
+		normalizeChecksIgnoreListsStatus(value) {
+			const source = (value && typeof value === 'object' && !Array.isArray(value))
+				? value
+				: {};
+			const defaults = this.createDefaultChecksIgnoreListsStatus();
+			const normalized = {};
+			for (const reviewType of Object.keys(defaults)) {
+				const entry = (source[reviewType] && typeof source[reviewType] === 'object' && !Array.isArray(source[reviewType]))
+					? source[reviewType]
+					: {};
+				normalized[reviewType] = {
+					count: Math.max(0, Number(entry.count) || 0),
+					path: String(entry.path || ''),
+					enabled: Boolean(entry.enabled ?? defaults[reviewType].enabled),
+				};
+			}
+			return normalized;
+		},
+		getChecksIgnoreListStatus(reviewType) {
+			return this.checksIgnoreListsStatus[reviewType] || { count: 0, path: '', enabled: true };
+		},
+		async clearChecksIgnoreList(reviewType) {
+			this.clearingIgnoreListType = reviewType;
+			this.message = '';
+			try {
+				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_ignore_list_clear', { review_type: reviewType });
+				this.checksIgnoreListsStatus = this.normalizeChecksIgnoreListsStatus(data && data.data && data.data.checks_ignore_lists);
+				this.message = this.$t('config:message_ignore_list_cleared', 'Ignore list cleared.');
+			} catch (err) {
+				this.message = `Error: ${err.message}`;
+			} finally {
+				this.clearingIgnoreListType = '';
+			}
 		},
 		normalizeChecksSingleSourceOfTruth(value, fallback = '') {
 			const normalized = String(value || '').trim().toLowerCase();
@@ -354,6 +454,7 @@ export default {
 			const checks = (analysis.CHECKS && typeof analysis.CHECKS === 'object' && !Array.isArray(analysis.CHECKS)) ? analysis.CHECKS : {};
 			const review = (root.review && typeof root.review === 'object' && !Array.isArray(root.review)) ? root.review : {};
 			const reviewOptions = (review.OPTIONS && typeof review.OPTIONS === 'object' && !Array.isArray(review.OPTIONS)) ? review.OPTIONS : {};
+			const reviewIgnoreLists = (review.CHECKS_IGNORE_LISTS && typeof review.CHECKS_IGNORE_LISTS === 'object' && !Array.isArray(review.CHECKS_IGNORE_LISTS)) ? review.CHECKS_IGNORE_LISTS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
 
@@ -416,6 +517,21 @@ export default {
 							?? defaults.review.OPTIONS.DUPLICATE_FACE_SUGGESTIONS
 						),
 					},
+					CHECKS_IGNORE_LISTS: {
+						...reviewIgnoreLists,
+						DUPLICATE_FACES_ENABLED: Boolean(
+							reviewIgnoreLists.DUPLICATE_FACES_ENABLED
+							?? defaults.review.CHECKS_IGNORE_LISTS.DUPLICATE_FACES_ENABLED
+						),
+						POSITION_DEVIATIONS_ENABLED: Boolean(
+							reviewIgnoreLists.POSITION_DEVIATIONS_ENABLED
+							?? defaults.review.CHECKS_IGNORE_LISTS.POSITION_DEVIATIONS_ENABLED
+						),
+						NAME_CONFLICTS_ENABLED: Boolean(
+							reviewIgnoreLists.NAME_CONFLICTS_ENABLED
+							?? defaults.review.CHECKS_IGNORE_LISTS.NAME_CONFLICTS_ENABLED
+						),
+					},
 				},
 				photos: {
 					...photos,
@@ -460,6 +576,7 @@ export default {
 				this.configPath = (data && data.data && data.data.config_path) || '';
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
+				this.checksIgnoreListsStatus = this.normalizeChecksIgnoreListsStatus(data && data.data && data.data.checks_ignore_lists);
 				this.message = '';
 			} catch (err) {
 				this.message = `Error: ${err.message}`;
@@ -486,6 +603,7 @@ export default {
 				this.configPath = (data && data.data && data.data.config_path) || this.configPath;
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
+				this.checksIgnoreListsStatus = this.normalizeChecksIgnoreListsStatus(data && data.data && data.data.checks_ignore_lists);
 				this.message = this.$t('config:message_saved', 'Configuration saved.');
 			} catch (err) {
 				this.message = `Error: ${err.message}`;

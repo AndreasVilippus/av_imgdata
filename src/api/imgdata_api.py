@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
 from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
-from imgdata import ImgDataService
+from imgdata import ImgDataOperationError, ImgDataService
 
 router = APIRouter(prefix="/api")
 
@@ -123,6 +123,34 @@ def _session_exception_response(
     }
 
 
+def _exception_details(exc: Exception) -> Any:
+    if isinstance(exc, ImgDataOperationError):
+        return exc.details
+    return str(exc)
+
+
+def _operation_exception_response(exc: Exception, *, message: str, code: int = 500) -> Dict[str, Any]:
+    return {
+        "success": False,
+        "error": {
+            "code": code,
+            "message": message,
+            "details": _exception_details(exc),
+        },
+    }
+
+
+def _save_name_mapping_if_requested(*, save_mapping: bool, source_name: Any, target_name: Any) -> bool:
+    normalized_source = str(source_name or "").strip()
+    normalized_target = str(target_name or "").strip()
+    if not save_mapping or not normalized_source or not normalized_target:
+        return False
+    return IMGDATA.saveNameMapping(
+        source_name=normalized_source,
+        target_name=normalized_target,
+    )
+
+
 def _refresh_checks_mutation_state(
     session_ctx: Dict[str, Any],
     *,
@@ -130,6 +158,8 @@ def _refresh_checks_mutation_state(
     image_path: str,
     original_face_data: Optional[Dict[str, Any]] = None,
     replacement_face_data: Optional[Dict[str, Any]] = None,
+    resolved_delta: int = 0,
+    ignored_delta: int = 0,
 ) -> Optional[Dict[str, Any]]:
     normalized_type = str(check_type or "").strip().lower()
     normalized_path = str(image_path or "").strip()
@@ -153,6 +183,8 @@ def _refresh_checks_mutation_state(
         base_url=session_ctx["base_url"],
         original_face_data=original_face_data,
         replacement_face_data=replacement_face_data,
+        resolved_delta=resolved_delta,
+        ignored_delta=ignored_delta,
     )
     return findings_update
 
@@ -164,6 +196,8 @@ def _safe_refresh_checks_mutation_state(
     image_path: str,
     original_face_data: Optional[Dict[str, Any]] = None,
     replacement_face_data: Optional[Dict[str, Any]] = None,
+    resolved_delta: int = 0,
+    ignored_delta: int = 0,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     try:
         refresh_kwargs = {
@@ -174,16 +208,16 @@ def _safe_refresh_checks_mutation_state(
             refresh_kwargs["original_face_data"] = original_face_data
         if replacement_face_data is not None:
             refresh_kwargs["replacement_face_data"] = replacement_face_data
+        if resolved_delta:
+            refresh_kwargs["resolved_delta"] = resolved_delta
+        if ignored_delta:
+            refresh_kwargs["ignored_delta"] = ignored_delta
         findings_update = _refresh_checks_mutation_state(session_ctx, **refresh_kwargs)
         return findings_update, None
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return None, _session_exception_response(exc, bootstrap_message="checks_mutation_refresh_bootstrap_required")["error"]
     except Exception as exc:
-        return None, {
-            "code": 500,
-            "message": "checks_mutation_refresh_failed",
-            "details": str(exc),
-        }
+        return None, _operation_exception_response(exc, message="checks_mutation_refresh_failed")["error"]
 
 
 @router.post("/status")
@@ -526,14 +560,15 @@ async def face_assign_match(request: Request):
             face_id=face_id,
             increment_transferred_count=True,
         )
-        mapping_saved = False
-        if save_mapping and isinstance(source_name, str) and source_name.strip():
-            mapping_saved = IMGDATA.saveNameMapping(
-                source_name=source_name.strip(),
-                target_name=person_name.strip(),
-            )
+        mapping_saved = _save_name_mapping_if_requested(
+            save_mapping=save_mapping,
+            source_name=source_name,
+            target_name=person_name,
+        )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="face_assign_match_bootstrap_required")
+    except Exception as exc:
+        return _operation_exception_response(exc, message="face_assign_match_failed")
 
     return {
         "success": True,
@@ -589,19 +624,21 @@ async def face_create_match(request: Request):
             face_id=face_id,
             increment_transferred_count=True,
         )
-        mapping_saved = False
-        if save_mapping and isinstance(source_name, str) and source_name.strip():
-            mapping_saved = IMGDATA.saveNameMapping(
-                source_name=source_name.strip(),
-                target_name=person_name.strip(),
-            )
+        mapping_saved = _save_name_mapping_if_requested(
+            save_mapping=save_mapping,
+            source_name=source_name,
+            target_name=person_name,
+        )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="face_create_match_bootstrap_required")
+    except Exception as exc:
+        return _operation_exception_response(exc, message="face_create_match_failed")
 
     return {
         "success": True,
         "data": {
             "face_id": face_id,
+            "person_id": IMGDATA._extractPersonId(result),
             "person_name": person_name.strip(),
             "result": result,
             "findings_update": findings_update,
@@ -645,14 +682,7 @@ async def face_apply_metadata_match(request: Request):
             else None
         )
     except Exception as exc:
-        return {
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "face_apply_metadata_match_failed",
-                "details": str(exc),
-            },
-        }
+        return _operation_exception_response(exc, message="face_apply_metadata_match_failed")
 
     return {
         "success": True,
@@ -698,22 +728,12 @@ async def face_assign_metadata_match(request: Request):
         }
 
     try:
-        add_result = IMGDATA.addMatchedMetadataFaceToPhotos(
+        transfer_result = IMGDATA.assignMetadataFaceToKnownPhotosPerson(
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
             image_path=image_path,
             metadata_face=metadata_face,
-            person_id=person_id,
-        )
-        face_id = add_result.get("face_id")
-        if face_id is None:
-            raise ValueError("photos_face_create_failed")
-        assign_result = IMGDATA.assignMatchedFaceToKnownPerson(
-            user_key=session_ctx["user_key"],
-            cookies=session_ctx["cookies"],
-            base_url=session_ctx["base_url"],
-            face_id=int(face_id),
             person_id=person_id,
             person_name=person_name,
         )
@@ -722,23 +742,15 @@ async def face_assign_metadata_match(request: Request):
             metadata_face=metadata_face,
             increment_transferred_count=True,
         )
-        mapping_saved = False
-        if save_mapping and isinstance(source_name, str) and source_name.strip():
-            mapping_saved = IMGDATA.saveNameMapping(
-                source_name=source_name.strip(),
-                target_name=person_name,
-            )
+        mapping_saved = _save_name_mapping_if_requested(
+            save_mapping=save_mapping,
+            source_name=source_name,
+            target_name=person_name,
+        )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="face_assign_metadata_match_bootstrap_required")
     except Exception as exc:
-        return {
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "face_assign_metadata_match_failed",
-                "details": str(exc),
-            },
-        }
+        return _operation_exception_response(exc, message="face_assign_metadata_match_failed")
 
     return {
         "success": True,
@@ -746,9 +758,9 @@ async def face_assign_metadata_match(request: Request):
             "image_path": image_path,
             "person_id": person_id,
             "person_name": person_name,
-            "face_id": int(face_id),
-            "add_result": add_result,
-            "assign_result": assign_result,
+            "face_id": int(transfer_result["face_id"]),
+            "add_result": transfer_result.get("add_result"),
+            "assign_result": transfer_result.get("assign_result"),
             "findings_update": findings_update,
             "mapping_saved": mapping_saved if save_mapping else False,
         },
@@ -777,21 +789,12 @@ async def face_create_metadata_match(request: Request):
         }
 
     try:
-        add_result = IMGDATA.addMatchedMetadataFaceToPhotos(
+        transfer_result = IMGDATA.createMetadataFaceAsPhotosPerson(
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
             image_path=image_path,
             metadata_face=metadata_face,
-        )
-        face_id = add_result.get("face_id")
-        if face_id is None:
-            raise ValueError("photos_face_create_failed")
-        create_result = IMGDATA.createMatchedFaceAsPerson(
-            user_key=session_ctx["user_key"],
-            cookies=session_ctx["cookies"],
-            base_url=session_ctx["base_url"],
-            face_id=int(face_id),
             person_name=person_name,
         )
         findings_update = IMGDATA.removeFaceMatchFindingMetadataEntry(
@@ -799,32 +802,25 @@ async def face_create_metadata_match(request: Request):
             metadata_face=metadata_face,
             increment_transferred_count=True,
         )
-        mapping_saved = False
-        if save_mapping and isinstance(source_name, str) and source_name.strip():
-            mapping_saved = IMGDATA.saveNameMapping(
-                source_name=source_name.strip(),
-                target_name=person_name,
-            )
+        mapping_saved = _save_name_mapping_if_requested(
+            save_mapping=save_mapping,
+            source_name=source_name,
+            target_name=person_name,
+        )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="face_create_metadata_match_bootstrap_required")
     except Exception as exc:
-        return {
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "face_create_metadata_match_failed",
-                "details": str(exc),
-            },
-        }
+        return _operation_exception_response(exc, message="face_create_metadata_match_failed")
 
     return {
         "success": True,
         "data": {
             "image_path": image_path,
             "person_name": person_name,
-            "face_id": int(face_id),
-            "add_result": add_result,
-            "create_result": create_result,
+            "face_id": int(transfer_result["face_id"]),
+            "person_id": transfer_result.get("person_id"),
+            "add_result": transfer_result.get("add_result"),
+            "create_result": transfer_result.get("create_result"),
             "findings_update": findings_update,
             "mapping_saved": mapping_saved if save_mapping else False,
         },
@@ -929,6 +925,7 @@ async def checks_start(request: Request):
     resume_from_progress = bool(body.get("resume_from_progress"))
     auto_apply_suggested_names = bool(body.get("auto_apply_suggested_names"))
     auto_apply_suggested_duplicates = bool(body.get("auto_apply_suggested_duplicates"))
+    advance_current_result = bool(body.get("advance_current_result"))
 
     try:
         loop = asyncio.get_running_loop()
@@ -944,21 +941,14 @@ async def checks_start(request: Request):
                 resume_from_progress=resume_from_progress,
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                advance_current_result=advance_current_result,
             ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         error_payload = _session_exception_response(exc, bootstrap_message="checks_start_bootstrap_required")
         return JSONResponse(error_payload)
     except Exception as exc:
-        error_payload = {
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "checks_start_failed",
-                "details": str(exc),
-            },
-        }
-        return JSONResponse(error_payload)
+        return JSONResponse(_operation_exception_response(exc, message="checks_start_failed"))
 
     response_payload = {
         "success": True,
@@ -1003,15 +993,7 @@ async def checks_item(request: Request):
         error_payload = _session_exception_response(exc, bootstrap_message="checks_item_bootstrap_required")
         return JSONResponse(error_payload)
     except Exception as exc:
-        error_payload = {
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "checks_item_failed",
-                "details": str(exc),
-            },
-        }
-        return JSONResponse(error_payload)
+        return JSONResponse(_operation_exception_response(exc, message="checks_item_failed"))
 
     response_payload = {
         "success": True,
@@ -1063,6 +1045,30 @@ async def checks_progress(request: Request):
     }
 
 
+@router.post("/checks_findings_status")
+async def checks_findings_status(request: Request):
+    _session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    check_types = ("dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts")
+    statuses = {}
+    for check_type in check_types:
+        findings = IMGDATA.getChecksFindingEntries(check_type=check_type)
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        statuses[check_type] = {
+            "status": str(findings.get("status") or ""),
+            "count": len(entries),
+            "save_only": bool(findings.get("save_only")),
+        }
+    return {
+        "success": True,
+        "data": {
+            "statuses": statuses,
+        },
+    }
+
+
 @router.post("/checks_stop")
 async def checks_stop(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
@@ -1103,14 +1109,7 @@ async def cleanup_start(request: Request):
         error_payload = _session_exception_response(exc, bootstrap_message="cleanup_start_bootstrap_required")
         return JSONResponse(error_payload)
     except Exception as exc:
-        return JSONResponse({
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "cleanup_start_failed",
-                "details": str(exc),
-            },
-        })
+        return JSONResponse(_operation_exception_response(exc, message="cleanup_start_failed"))
 
     return JSONResponse({"success": True, "data": result})
 
@@ -1176,14 +1175,7 @@ async def checks_delete_metadata_face(request: Request):
                 image_path=image_path,
             )
     except Exception as exc:
-        return JSONResponse({
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "checks_delete_metadata_face_failed",
-                "details": str(exc),
-            },
-        })
+        return JSONResponse(_operation_exception_response(exc, message="checks_delete_metadata_face_failed"))
 
     return JSONResponse({
         "success": True,
@@ -1225,13 +1217,15 @@ async def checks_replace_metadata_face_name(request: Request):
             face_data=face,
             new_name=new_name,
         )
-        mapping_saved = False
         findings_update = None
         if result.get("updated") and save_mapping and source_name:
-            mapping_saved = IMGDATA.saveNameMapping(
+            mapping_saved = _save_name_mapping_if_requested(
+                save_mapping=True,
                 source_name=source_name,
                 target_name=new_name,
             )
+        else:
+            mapping_saved = False
         refresh_error = None
         if result.get("updated"):
             replacement_face_data = None
@@ -1247,16 +1241,10 @@ async def checks_replace_metadata_face_name(request: Request):
                 image_path=image_path,
                 original_face_data=face,
                 replacement_face_data=replacement_face_data,
+                resolved_delta=1,
             )
     except Exception as exc:
-        return JSONResponse({
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "checks_replace_metadata_face_name_failed",
-                "details": str(exc),
-            },
-        })
+        return JSONResponse(_operation_exception_response(exc, message="checks_replace_metadata_face_name_failed"))
 
     return JSONResponse({
         "success": True,
@@ -1304,14 +1292,7 @@ async def checks_replace_metadata_face_position(request: Request):
                 image_path=image_path,
             )
     except Exception as exc:
-        return JSONResponse({
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "checks_replace_metadata_face_position_failed",
-                "details": str(exc),
-            },
-        })
+        return JSONResponse(_operation_exception_response(exc, message="checks_replace_metadata_face_position_failed"))
 
     return JSONResponse({
         "success": True,
@@ -1382,14 +1363,7 @@ async def checks_assign_face_person(request: Request):
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="checks_assign_face_person_bootstrap_required")
     except Exception as exc:
-        return JSONResponse({
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "checks_assign_face_person_failed",
-                "details": str(exc),
-            },
-        })
+        return JSONResponse(_operation_exception_response(exc, message="checks_assign_face_person_failed"))
 
     return JSONResponse({
         "success": True,
@@ -1443,6 +1417,7 @@ async def config_get(request: Request):
         "data": {
             "config": config,
             "config_path": str(IMGDATA.config._config_path),
+            "checks_ignore_lists": IMGDATA.getChecksIgnoreListsStatus(),
         },
     }
 
@@ -1478,6 +1453,93 @@ async def config_save(request: Request):
         "data": {
             "config": IMGDATA.getRuntimeConfig(),
             "config_path": str(IMGDATA.config._config_path),
+            "checks_ignore_lists": IMGDATA.getChecksIgnoreListsStatus(),
             "saved": True,
+        },
+    }
+
+
+@router.post("/checks_ignore_entry")
+async def checks_ignore_entry(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    entry = body.get("entry") if isinstance(body.get("entry"), dict) else {}
+    image_path = str(entry.get("image_path") or body.get("image_path") or "").strip()
+    check_type = str(entry.get("review_type") or body.get("check_type") or "").strip().lower()
+    if not image_path or not check_type:
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_checks_ignore_payload",
+            },
+        }
+
+    ignore_result = IMGDATA.ignoreChecksEntry(entry=entry)
+    if not ignore_result.get("ignored"):
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": str(ignore_result.get("reason") or "checks_ignore_failed"),
+            },
+        }
+
+    findings_update, refresh_error = _safe_refresh_checks_mutation_state(
+        session_ctx,
+        check_type=check_type,
+        image_path=image_path,
+        ignored_delta=1,
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "ignored": True,
+            "token": ignore_result.get("token"),
+            "findings_update": findings_update,
+            "refresh_error": refresh_error,
+            "config": IMGDATA.getRuntimeConfig(),
+            "config_path": str(IMGDATA.config._config_path),
+            "checks_ignore_lists": IMGDATA.getChecksIgnoreListsStatus(),
+        },
+    }
+
+
+@router.post("/checks_ignore_list_clear")
+async def checks_ignore_list_clear(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    review_type = str(body.get("review_type") or body.get("check_type") or "").strip().lower()
+    if review_type not in {"duplicate_faces", "position_deviations", "name_conflicts"}:
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_checks_ignore_list_type",
+            },
+        }
+
+    if not IMGDATA.clearChecksIgnoreList(review_type):
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "checks_ignore_list_clear_failed",
+            },
+        }
+
+    return {
+        "success": True,
+        "data": {
+            "cleared": True,
+            "review_type": review_type,
+            "checks_ignore_lists": IMGDATA.getChecksIgnoreListsStatus(),
         },
     }

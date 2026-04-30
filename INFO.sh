@@ -3,7 +3,7 @@
 source /pkgscripts-ng/include/pkg_util.sh
 
 package="AV_ImgData"
-version="0.7.0"
+version="0.7.1"
 displayname="ImgData"
 description="Shell- & Python-Tool für Fotodatentransfer"
 maintainer="Andreas Vilippus"
