@@ -450,7 +450,7 @@ class ExifToolService:
 
     @staticmethod
     def _fetchText(url: str) -> str:
-        request = Request(url, headers={"User-Agent": "AV_ImgData/0.7.0"})
+        request = Request(url, headers={"User-Agent": "AV_ImgData/0.7.1"})
         try:
             with urlopen(request, timeout=8) as response:
                 return response.read().decode("utf-8", errors="replace")
@@ -459,7 +459,7 @@ class ExifToolService:
 
     @staticmethod
     def _downloadFile(url: str, target_path: Path) -> None:
-        request = Request(url, headers={"User-Agent": "AV_ImgData/0.7.0"})
+        request = Request(url, headers={"User-Agent": "AV_ImgData/0.7.1"})
         with urlopen(request, timeout=30) as response:
             target_path.write_bytes(response.read())
 

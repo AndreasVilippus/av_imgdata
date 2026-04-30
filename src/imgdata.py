@@ -2,11 +2,13 @@
 import json
 import os
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone
-from time import monotonic
+from time import monotonic, sleep
 from threading import Lock, Thread
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
 from handler.core_handler import CoreHandler
@@ -26,9 +28,16 @@ from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
 
 
+class ImgDataOperationError(Exception):
+    def __init__(self, message: str, details: Dict[str, Any]):
+        super().__init__(message)
+        self.details = details
+
+
 class ImgDataService:
     """Orchestrates business use-cases across Photos and file handlers."""
-    FACE_MATCH_KEEPALIVE_INTERVAL_SECONDS = 180
+    SESSION_KEEPALIVE_INTERVAL_SECONDS = 180
+    FACE_MATCH_KEEPALIVE_INTERVAL_SECONDS = SESSION_KEEPALIVE_INTERVAL_SECONDS
 
     def __init__(self, session_manager: SessionManager):
         self.session_manager = session_manager
@@ -56,6 +65,229 @@ class ImgDataService:
         self._file_analysis_progress: Dict[str, Any] = {}
         self._file_analysis_progress_lock = Lock()
         self._file_analysis_thread: Optional[Thread] = None
+        self._write_locks: Dict[str, Lock] = {}
+        self._write_locks_lock = Lock()
+
+    @contextmanager
+    def _writeOperationLock(
+        self,
+        key: str,
+        *,
+        phase: str,
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        normalized_key = str(key or "").strip()
+        if not normalized_key:
+            yield
+            return
+        with self._write_locks_lock:
+            lock = self._write_locks.get(normalized_key)
+            if lock is None:
+                lock = Lock()
+                self._write_locks[normalized_key] = lock
+        if not lock.acquire(blocking=False):
+            raise ImgDataOperationError(
+                "write_conflict",
+                {
+                    "code": "write_conflict",
+                    "message_key": "write_conflict",
+                    "phase": phase,
+                    "lock_key": normalized_key,
+                    "retryable": True,
+                    **(context or {}),
+                },
+            )
+        try:
+            yield
+        finally:
+            lock.release()
+
+    @staticmethod
+    def _metadataWriteLockKey(path: Any) -> str:
+        return f"metadata:{str(path or '').strip()}"
+
+    @staticmethod
+    def _photosFaceWriteLockKey(face_id: Any) -> str:
+        return f"photos:face:{str(face_id or '').strip()}"
+
+    @staticmethod
+    def _photosItemWriteLockKey(item_id: Any) -> str:
+        return f"photos:item:{str(item_id or '').strip()}"
+
+    @staticmethod
+    def _findPhotosFaceById(faces: List[Dict[str, Any]], face_id: Any) -> Optional[Dict[str, Any]]:
+        try:
+            expected_face_id = int(face_id)
+        except (TypeError, ValueError):
+            return None
+        for face in faces if isinstance(faces, list) else []:
+            if not isinstance(face, dict):
+                continue
+            try:
+                current_face_id = int(face.get("face_id"))
+            except (TypeError, ValueError):
+                continue
+            if current_face_id == expected_face_id:
+                return face
+        return None
+
+    def _raisePhotosFaceChanged(
+        self,
+        *,
+        phase: str,
+        face_id: Any,
+        item_id: Any = None,
+        person_id: Any = None,
+        image_path: str = "",
+        reason: str = "photos_face_changed_during_operation",
+        before: Optional[Dict[str, Any]] = None,
+        after: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        details: Dict[str, Any] = {
+            "code": "photos_face_changed_during_operation",
+            "message_key": "photos_face_changed_during_operation",
+            "reason": reason,
+            "phase": phase,
+            "face_id": face_id,
+            "retryable": False,
+        }
+        if item_id is not None:
+            details["item_id"] = item_id
+        if person_id is not None:
+            details["person_id"] = person_id
+        if image_path:
+            details["image_path"] = str(image_path or "").strip()
+        if before is not None:
+            details["before"] = before
+        if after is not None:
+            details["after"] = after
+        raise ImgDataOperationError("photos_face_changed_during_operation", details)
+
+    def _readPhotosFaceOnItem(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        item_id: int,
+        face_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        faces = self.photos.list_faceFotoTeamItems(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            id_item=int(item_id),
+        )
+        return self._findPhotosFaceById(faces, face_id)
+
+    def _validatePhotosFaceOnItem(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        item_id: int,
+        face_id: int,
+        phase: str,
+        image_path: str = "",
+        expected_person_id: Optional[int] = None,
+        before: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        current = self._readPhotosFaceOnItem(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            item_id=int(item_id),
+            face_id=int(face_id),
+        )
+        if current is None:
+            self._raisePhotosFaceChanged(
+                phase=phase,
+                face_id=face_id,
+                item_id=item_id,
+                person_id=expected_person_id,
+                image_path=image_path,
+                reason="photos_face_missing",
+                before=before,
+                after=None,
+            )
+        if expected_person_id is not None:
+            try:
+                current_person_id = int(current.get("person_id"))
+            except (TypeError, ValueError):
+                current_person_id = None
+            if current_person_id != int(expected_person_id):
+                self._raisePhotosFaceChanged(
+                    phase=phase,
+                    face_id=face_id,
+                    item_id=item_id,
+                    person_id=expected_person_id,
+                    image_path=image_path,
+                    reason="photos_face_person_mismatch",
+                    before=before,
+                    after=current,
+                )
+        return current
+
+    @staticmethod
+    def _fileChangeSnapshot(path: Any) -> Optional[Dict[str, Any]]:
+        normalized_path = str(path or "").strip()
+        if not normalized_path:
+            return None
+        try:
+            stat = Path(normalized_path).stat()
+        except OSError:
+            return None
+        return {
+            "path": normalized_path,
+            "mtime_ns": int(stat.st_mtime_ns),
+            "size": int(stat.st_size),
+        }
+
+    @staticmethod
+    def _fileSnapshotChanged(before: Optional[Dict[str, Any]], after: Optional[Dict[str, Any]]) -> bool:
+        if not before or not after:
+            return False
+        return before.get("mtime_ns") != after.get("mtime_ns") or before.get("size") != after.get("size")
+
+    def _raiseIfFileChangedDuringOperation(
+        self,
+        *,
+        phase: str,
+        image_path: str,
+        target_path: str,
+        image_snapshot: Optional[Dict[str, Any]],
+        target_snapshot: Optional[Dict[str, Any]],
+    ) -> None:
+        current_image_snapshot = self._fileChangeSnapshot(image_path)
+        current_target_snapshot = self._fileChangeSnapshot(target_path)
+        changed_path = ""
+        before_snapshot = None
+        after_snapshot = None
+        if self._fileSnapshotChanged(image_snapshot, current_image_snapshot):
+            changed_path = str(image_path or "").strip()
+            before_snapshot = image_snapshot
+            after_snapshot = current_image_snapshot
+        elif str(target_path or "").strip() != str(image_path or "").strip() and self._fileSnapshotChanged(target_snapshot, current_target_snapshot):
+            changed_path = str(target_path or "").strip()
+            before_snapshot = target_snapshot
+            after_snapshot = current_target_snapshot
+        if not changed_path:
+            return
+        raise ImgDataOperationError(
+            "image_changed_during_operation",
+            {
+                "code": "image_changed_during_operation",
+                "message_key": "image_changed_during_operation",
+                "phase": phase,
+                "image_path": str(image_path or "").strip(),
+                "target_path": str(target_path or "").strip(),
+                "changed_path": changed_path,
+                "retryable": False,
+                "before": before_snapshot,
+                "after": after_snapshot,
+            },
+        )
 
     def update_session_context(
         self,
@@ -292,39 +524,22 @@ class ImgDataService:
         return elements
 
     def deleteMetadataFace(self, *, image_path: str, face_data: Dict[str, Any]) -> Dict[str, Any]:
-        if not self.exiftool_handler.isAvailable():
+        edit_context, warning = self._prepareMetadataFaceEdit(
+            image_path=image_path,
+            not_found_warning="checks:warning_face_delete_not_found",
+        )
+        if warning == "checks:warning_exiftool_required":
             return {"deleted": False, "warning": "checks:warning_exiftool_required"}
-
-        payload = self._readImageMetadata(image_path)
-        if not payload.has_xmp:
-            return {"deleted": False, "warning": "checks:warning_face_delete_not_found"}
-
-        xmp_path = payload.xmp_path or ""
-        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
-        if not xmp_content:
-            return {"deleted": False, "warning": "checks:warning_face_delete_not_found"}
-
-        try:
-            root = ET.fromstring(xmp_content)
-        except ET.ParseError:
+        if warning:
             return {"deleted": False, "warning": "checks:warning_face_delete_not_found"}
 
         target = MetadataFace.from_dict(face_data if isinstance(face_data, dict) else {})
         source_format = str(target.source_format or "").strip().upper()
-        orientation = MetadataParser._extractXmpTiffOrientation(xmp_content)
+        root = edit_context["root"]
         parent_map = self._findParentMap(root)
 
-        if source_format == "ACD":
-            candidates = self._acdFaceElements(root, source="metadata")
-        elif source_format == "MICROSOFT":
-            candidates = self._microsoftFaceElements(root, source="metadata")
-        elif source_format == "MWG_REGIONS":
-            candidates = self._mwgFaceElements(root, source="metadata", orientation=orientation)
-        else:
-            candidates = []
-
         removed = False
-        for candidate in candidates:
+        for candidate in self._metadataFaceEditCandidates(edit_context, source_format):
             if not self._sameMetadataFaceCandidate(candidate["face"], target):
                 continue
             parent = parent_map.get(candidate["element"])
@@ -337,12 +552,16 @@ class ImgDataService:
         if not removed:
             return {"deleted": False, "warning": "checks:warning_face_delete_not_found"}
 
-        write_result = self.exiftool_handler.writeXmpDetailed(xmp_path or image_path, ET.tostring(root, encoding="unicode"))
+        write_result = self._writeMetadataEditContext(
+            edit_context,
+            phase="metadata_face_delete",
+            context={},
+        )
         return {
             "deleted": bool(write_result.get("updated")),
             "warning": "" if write_result.get("updated") else "checks:warning_face_delete_failed",
-            "target_path": xmp_path or image_path,
-            "used_sidecar": bool(xmp_path),
+            "target_path": edit_context["target_path"],
+            "used_sidecar": bool(edit_context["xmp_path"]),
             "details": write_result if not write_result.get("updated") else None,
         }
 
@@ -442,42 +661,24 @@ class ImgDataService:
         return False
 
     def replaceMetadataFaceName(self, *, image_path: str, face_data: Dict[str, Any], new_name: str) -> Dict[str, Any]:
-        if not self.exiftool_handler.isAvailable():
+        edit_context, warning = self._prepareMetadataFaceEdit(
+            image_path=image_path,
+            not_found_warning="checks:warning_face_replace_not_found",
+        )
+        if warning == "checks:warning_exiftool_required":
             return {"updated": False, "warning": "checks:warning_exiftool_required"}
 
         replacement_name = str(new_name or "").strip()
         if not replacement_name:
             return {"updated": False, "warning": "checks:warning_face_replace_failed"}
-
-        payload = self._readImageMetadata(image_path)
-        if not payload.has_xmp:
-            return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
-
-        xmp_path = payload.xmp_path or ""
-        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
-        if not xmp_content:
-            return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
-
-        try:
-            root = ET.fromstring(xmp_content)
-        except ET.ParseError:
+        if warning:
             return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
 
         target = MetadataFace.from_dict(face_data if isinstance(face_data, dict) else {})
         source_format = str(target.source_format or "").strip().upper()
-        orientation = MetadataParser._extractXmpTiffOrientation(xmp_content)
-
-        if source_format == "ACD":
-            candidates = self._acdFaceElements(root, source="metadata")
-        elif source_format == "MICROSOFT":
-            candidates = self._microsoftFaceElements(root, source="metadata")
-        elif source_format == "MWG_REGIONS":
-            candidates = self._mwgFaceElements(root, source="metadata", orientation=orientation)
-        else:
-            candidates = []
 
         updated = False
-        for candidate in candidates:
+        for candidate in self._metadataFaceEditCandidates(edit_context, source_format):
             if not self._sameMetadataFaceCandidate(candidate["face"], target):
                 continue
             self._setMetadataFaceName(candidate["element"], source_format, replacement_name)
@@ -487,14 +688,104 @@ class ImgDataService:
         if not updated:
             return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
 
-        write_result = self.exiftool_handler.writeXmpDetailed(xmp_path or image_path, ET.tostring(root, encoding="unicode"))
+        write_result = self._writeMetadataEditContext(
+            edit_context,
+            phase="metadata_face_name_replace",
+            context={"new_name": replacement_name},
+        )
         return {
             "updated": bool(write_result.get("updated")),
             "warning": "" if write_result.get("updated") else "checks:warning_face_replace_failed",
-            "target_path": xmp_path or image_path,
-            "used_sidecar": bool(xmp_path),
+            "target_path": edit_context["target_path"],
+            "used_sidecar": bool(edit_context["xmp_path"]),
             "details": write_result if not write_result.get("updated") else None,
         }
+
+    def _prepareMetadataFaceEdit(
+        self,
+        *,
+        image_path: str,
+        not_found_warning: str,
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        if not self.exiftool_handler.isAvailable():
+            return None, "checks:warning_exiftool_required"
+
+        image_snapshot = self._fileChangeSnapshot(image_path)
+        payload = self._readImageMetadata(image_path)
+        if not payload.has_xmp:
+            return None, not_found_warning
+
+        xmp_path = payload.xmp_path or ""
+        target_path = xmp_path or image_path
+        target_snapshot = self._fileChangeSnapshot(target_path)
+        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
+        if not xmp_content:
+            return None, not_found_warning
+
+        try:
+            root = ET.fromstring(xmp_content)
+        except ET.ParseError:
+            return None, not_found_warning
+
+        return {
+            "image_path": image_path,
+            "image_snapshot": image_snapshot,
+            "payload": payload,
+            "xmp_path": xmp_path,
+            "target_path": target_path,
+            "target_snapshot": target_snapshot,
+            "xmp_content": xmp_content,
+            "root": root,
+            "orientation": MetadataParser._extractXmpTiffOrientation(xmp_content),
+        }, ""
+
+    def _metadataFaceEditCandidates(
+        self,
+        edit_context: Dict[str, Any],
+        source_format: str,
+        *,
+        source: str = "metadata",
+    ) -> List[Dict[str, Any]]:
+        normalized_format = str(source_format or "").strip().upper()
+        root = edit_context["root"]
+        if normalized_format == "ACD":
+            return self._acdFaceElements(root, source=source)
+        if normalized_format == "MICROSOFT":
+            return self._microsoftFaceElements(root, source=source)
+        if normalized_format == "MWG_REGIONS":
+            return self._mwgFaceElements(root, source=source, orientation=edit_context.get("orientation"))
+        return []
+
+    def _writeMetadataEditContext(
+        self,
+        edit_context: Dict[str, Any],
+        *,
+        phase: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        image_path = edit_context["image_path"]
+        target_path = edit_context["target_path"]
+        write_context = {
+            "image_path": image_path,
+            "target_path": target_path,
+            **(context or {}),
+        }
+        with self._writeOperationLock(
+            self._metadataWriteLockKey(target_path),
+            phase=phase,
+            context=write_context,
+        ):
+            self._raiseIfFileChangedDuringOperation(
+                phase=phase,
+                image_path=image_path,
+                target_path=target_path,
+                image_snapshot=edit_context.get("image_snapshot"),
+                target_snapshot=edit_context.get("target_snapshot"),
+            )
+            return self.exiftool_handler.writeXmpDetailed(
+                target_path,
+                ET.tostring(edit_context["root"], encoding="unicode"),
+            )
 
     @staticmethod
     def _normalizedNameMappingTable(mappings: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -536,11 +827,14 @@ class ImgDataService:
                 "warning": "checks:warning_exiftool_required",
             }
 
+        image_snapshot = self._fileChangeSnapshot(image_path)
         payload = self._readImageMetadata(image_path)
         if not payload.has_xmp:
             return {"updated": False, "updated_faces": 0, "formats": {}}
 
         xmp_path = payload.xmp_path or ""
+        target_path = xmp_path or image_path
+        target_snapshot = self._fileChangeSnapshot(target_path)
         xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
         if not xmp_content:
             return {"updated": False, "updated_faces": 0, "formats": {}}
@@ -587,12 +881,24 @@ class ImgDataService:
         if callable(should_stop) and should_stop():
             return {"updated": False, "updated_faces": 0, "formats": {}, "stopped": True}
 
-        write_result = self.exiftool_handler.writeXmpDetailed(xmp_path or image_path, ET.tostring(root, encoding="unicode"))
+        with self._writeOperationLock(
+            self._metadataWriteLockKey(target_path),
+            phase="metadata_name_normalize",
+            context={"image_path": image_path, "target_path": target_path},
+        ):
+            self._raiseIfFileChangedDuringOperation(
+                phase="metadata_name_normalize",
+                image_path=image_path,
+                target_path=target_path,
+                image_snapshot=image_snapshot,
+                target_snapshot=target_snapshot,
+            )
+            write_result = self.exiftool_handler.writeXmpDetailed(target_path, ET.tostring(root, encoding="unicode"))
         return {
             "updated": bool(write_result.get("updated")),
             "updated_faces": updated_faces if write_result.get("updated") else 0,
             "formats": updated_formats if write_result.get("updated") else {},
-            "target_path": xmp_path or image_path,
+            "target_path": target_path,
             "used_sidecar": bool(xmp_path),
             "details": write_result if not write_result.get("updated") else None,
         }
@@ -604,39 +910,21 @@ class ImgDataService:
         face_data: Dict[str, Any],
         source_face_data: Dict[str, Any],
     ) -> Dict[str, Any]:
-        if not self.exiftool_handler.isAvailable():
+        edit_context, warning = self._prepareMetadataFaceEdit(
+            image_path=image_path,
+            not_found_warning="checks:warning_face_position_replace_not_found",
+        )
+        if warning == "checks:warning_exiftool_required":
             return {"updated": False, "warning": "checks:warning_exiftool_required"}
-
-        payload = self._readImageMetadata(image_path)
-        if not payload.has_xmp:
-            return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
-
-        xmp_path = payload.xmp_path or ""
-        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
-        if not xmp_content:
-            return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
-
-        try:
-            root = ET.fromstring(xmp_content)
-        except ET.ParseError:
+        if warning:
             return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
 
         target = MetadataFace.from_dict(face_data if isinstance(face_data, dict) else {})
         source_face = MetadataFace.from_dict(source_face_data if isinstance(source_face_data, dict) else {})
         source_format = str(target.source_format or "").strip().upper()
-        orientation = MetadataParser._extractXmpTiffOrientation(xmp_content)
-
-        if source_format == "ACD":
-            candidates = self._acdFaceElements(root, source="metadata")
-        elif source_format == "MICROSOFT":
-            candidates = self._microsoftFaceElements(root, source="metadata")
-        elif source_format == "MWG_REGIONS":
-            candidates = self._mwgFaceElements(root, source="metadata", orientation=orientation)
-        else:
-            candidates = []
 
         updated = False
-        for candidate in candidates:
+        for candidate in self._metadataFaceEditCandidates(edit_context, source_format):
             if not self._sameMetadataFaceCandidate(candidate["face"], target):
                 continue
             updated = self._setMetadataFacePosition(
@@ -650,12 +938,16 @@ class ImgDataService:
         if not updated:
             return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
 
-        write_result = self.exiftool_handler.writeXmpDetailed(xmp_path or image_path, ET.tostring(root, encoding="unicode"))
+        write_result = self._writeMetadataEditContext(
+            edit_context,
+            phase="metadata_face_position_replace",
+            context={},
+        )
         return {
             "updated": bool(write_result.get("updated")),
             "warning": "" if write_result.get("updated") else "checks:warning_face_position_replace_failed",
-            "target_path": xmp_path or image_path,
-            "used_sidecar": bool(xmp_path),
+            "target_path": edit_context["target_path"],
+            "used_sidecar": bool(edit_context["xmp_path"]),
             "details": write_result if not write_result.get("updated") else None,
         }
 
@@ -663,7 +955,31 @@ class ImgDataService:
         with self._face_matching_progress_lock:
             current = dict(self._face_matching_progress.get(user_key, {}))
             current.update(updates)
+            self._syncFaceMatchProgressCountsFromCursor(current, explicit_fields=set(updates.keys()))
+            if not current.get("operation_id"):
+                current["operation_id"] = f"face_match-{uuid4().hex}"
+            current["revision"] = max(0, int(current.get("revision") or 0)) + 1
+            current["last_updated_at"] = self._timestamp_now()
             self._face_matching_progress[user_key] = current
+        self.file_analysis.writeRuntimeState("face_match_progress", user_key, current)
+
+    @staticmethod
+    def _syncFaceMatchProgressCountsFromCursor(
+        progress: Dict[str, Any],
+        *,
+        explicit_fields: Optional[set] = None,
+    ) -> None:
+        resume_cursor = progress.get("resume_cursor") if isinstance(progress.get("resume_cursor"), dict) else {}
+        if not resume_cursor:
+            return
+        explicit = explicit_fields or set()
+        for field in ("findings_count", "transferred_count"):
+            if field in explicit or field not in resume_cursor:
+                continue
+            try:
+                progress[field] = int(resume_cursor.get(field))
+            except (TypeError, ValueError):
+                continue
 
     def _setFaceMatchingProgressMessage(
         self,
@@ -691,6 +1007,13 @@ class ImgDataService:
         auto: bool,
         save_only: bool,
         action: str = "search_photo_face_in_file",
+        findings_count: int = 0,
+        path_index: int = 0,
+        persons_read: int = 0,
+        images_read: int = 0,
+        faces_read: int = 0,
+        target_faces_read: int = 0,
+        metadata_faces_read: int = 0,
     ) -> Dict[str, Any]:
         return {
             "skip_face_ids": sorted({int(face_id) for face_id in skip_face_ids if isinstance(face_id, int)}),
@@ -699,16 +1022,26 @@ class ImgDataService:
             "auto": bool(auto),
             "save_only": bool(save_only),
             "action": str(action or "search_photo_face_in_file"),
+            "findings_count": max(0, int(findings_count)),
+            "path_index": max(0, int(path_index)),
+            "persons_read": max(0, int(persons_read)),
+            "images_read": max(0, int(images_read)),
+            "faces_read": max(0, int(faces_read)),
+            "target_faces_read": max(0, int(target_faces_read)),
+            "metadata_faces_read": max(0, int(metadata_faces_read)),
         }
 
     def getFaceMatchingProgress(self, user_key: str) -> Dict[str, Any]:
-        with self._face_matching_progress_lock:
-            current = self._face_matching_progress.get(user_key, {})
+        current = self.file_analysis.readRuntimeState("face_match_progress", user_key)
+        if not isinstance(current, dict) or not current:
+            with self._face_matching_progress_lock:
+                current = self._face_matching_progress.get(user_key, {})
         payload = dict(current) if isinstance(current, dict) else {}
         return self._normalizeFaceMatchingProgress(user_key, payload)
 
     def _normalizeFaceMatchingProgress(self, user_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
+        self._syncFaceMatchProgressCountsFromCursor(current)
         worker = self._face_matching_threads.get(user_key)
         worker_alive = bool(worker and worker.is_alive())
         if current.get("running") and not worker_alive:
@@ -718,6 +1051,7 @@ class ImgDataService:
                 current["finished"] = True
             if not current.get("message"):
                 current["message"] = "Last face matching job is no longer running."
+            self.file_analysis.writeRuntimeState("face_match_progress", user_key, current)
         return current
 
     def requestStopFaceMatching(self, user_key: str) -> Dict[str, Any]:
@@ -732,7 +1066,7 @@ class ImgDataService:
         progress = self.getFaceMatchingProgress(user_key)
         return bool(progress.get("stop_requested"))
 
-    def _refreshFaceMatchingSessionIfNeeded(
+    def _refreshSessionIfNeeded(
         self,
         *,
         user_key: str,
@@ -740,10 +1074,23 @@ class ImgDataService:
         last_keepalive_at: float,
     ) -> float:
         now = monotonic()
-        if now - last_keepalive_at < self.FACE_MATCH_KEEPALIVE_INTERVAL_SECONDS:
+        if now - last_keepalive_at < self.SESSION_KEEPALIVE_INTERVAL_SECONDS:
             return last_keepalive_at
         self.session_manager.keepalive(user_key, base_url=base_url)
         return now
+
+    def _refreshFaceMatchingSessionIfNeeded(
+        self,
+        *,
+        user_key: str,
+        base_url: str,
+        last_keepalive_at: float,
+    ) -> float:
+        return self._refreshSessionIfNeeded(
+            user_key=user_key,
+            base_url=base_url,
+            last_keepalive_at=last_keepalive_at,
+        )
 
     def _setChecksProgress(self, user_key: str, **updates: Any) -> None:
         check_type = self._normalizeChecksType(updates.get("check_type"))
@@ -752,6 +1099,9 @@ class ImgDataService:
             current = dict(self._checks_progress.get(state_key, {}))
             current.update(updates)
             current["check_type"] = check_type
+            if not current.get("operation_id"):
+                current["operation_id"] = f"checks-{check_type}-{uuid4().hex}"
+            current["revision"] = max(0, int(current.get("revision") or 0)) + 1
             current["last_updated_at"] = self._timestamp_now()
             self._checks_progress[state_key] = current
         self.file_analysis.writeRuntimeState("checks_progress", state_key, current)
@@ -904,6 +1254,10 @@ class ImgDataService:
             current.update(updates)
             current["action"] = action
             current["targets"] = self._normalizeCleanupTargets(current.get("targets"))
+            if not current.get("operation_id"):
+                current["operation_id"] = f"cleanup-{action}-{uuid4().hex}"
+            current["revision"] = max(0, int(current.get("revision") or 0)) + 1
+            current["last_updated_at"] = self._timestamp_now()
             self._cleanup_progress[state_key] = current
         self.file_analysis.writeRuntimeState("cleanup_progress", state_key, current)
         return current
@@ -1039,6 +1393,17 @@ class ImgDataService:
         return count
 
     @staticmethod
+    def _markChecksEntriesManualReviewRequired(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        marked_entries: List[Dict[str, Any]] = []
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            marked_entry = dict(entry)
+            marked_entry["_manual_review_required"] = True
+            marked_entries.append(marked_entry)
+        return marked_entries
+
+    @staticmethod
     def _currentChecksResultEntry(progress: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         result = progress.get("result") if isinstance(progress, dict) and isinstance(progress.get("result"), dict) else {}
         entry = result.get("entry") if isinstance(result.get("entry"), dict) else None
@@ -1091,7 +1456,10 @@ class ImgDataService:
             entry = self._buildDimensionMismatchReviewEntry(image_path, analysis)
             return [entry] if entry else []
         if normalized_type == "duplicate_faces":
-            return self._buildDuplicateFaceReviewEntries(image_path, analysis)
+            return self._excludeIgnoredChecksEntries(
+                normalized_type,
+                self._buildDuplicateFaceReviewEntries(image_path, analysis),
+            )
         if normalized_type == "position_deviations":
             comparison_faces = photo_faces
             if comparison_faces is None and self._configuredAnalysisChecks().get("POSITION_DEVIATIONS_INCLUDE_PHOTOS"):
@@ -1102,7 +1470,10 @@ class ImgDataService:
                     shared_folder=shared_folder,
                     image_path=image_path,
                 )
-            return self._buildPositionDeviationReviewEntries(image_path, analysis, comparison_faces)
+            return self._excludeIgnoredChecksEntries(
+                normalized_type,
+                self._buildPositionDeviationReviewEntries(image_path, analysis, comparison_faces),
+            )
         if normalized_type == "name_conflicts":
             comparison_faces = photo_faces
             if comparison_faces is None and self._configuredAnalysisChecks().get("NAME_CONFLICTS_INCLUDE_PHOTOS"):
@@ -1113,7 +1484,10 @@ class ImgDataService:
                     shared_folder=shared_folder,
                     image_path=image_path,
                 )
-            return self._buildNameConflictReviewEntries(image_path, analysis, comparison_faces)
+            return self._excludeIgnoredChecksEntries(
+                normalized_type,
+                self._buildNameConflictReviewEntries(image_path, analysis, comparison_faces),
+            )
         return []
 
     def _writeChecksFindings(
@@ -1325,7 +1699,9 @@ class ImgDataService:
             current_entry_token = self._checksEntryToken(current_entry)
             if current_entry_token:
                 processed_tokens.append(current_entry_token)
-        replacement_entries = self._excludeChecksEntriesByTokens(rebuilt_entries, processed_tokens)
+        replacement_entries = self._markChecksEntriesManualReviewRequired(
+            self._excludeChecksEntriesByTokens(rebuilt_entries, processed_tokens)
+        )
 
         remaining_pending_entries: List[Dict[str, Any]] = []
         for entry in pending_entries:
@@ -1339,9 +1715,8 @@ class ImgDataService:
         findings_count = int(current.get("findings_count") or 0)
         resolved_count = int(current.get("resolved_count") or 0)
         ignored_count = int(current.get("ignored_count") or 0)
-        if normalized_type == "name_conflicts":
-            resolved_count += max(0, int(resolved_delta or 0))
-            ignored_count += max(0, int(ignored_delta or 0))
+        resolved_count += max(0, int(resolved_delta or 0))
+        ignored_count += max(0, int(ignored_delta or 0))
 
         updated_resume_cursor = self._buildChecksResumeCursor(
             path_index=int(resume_cursor.get("path_index") or 0),
@@ -1484,7 +1859,10 @@ class ImgDataService:
                         "auto_apply_warning": str(result.get("warning") or ""),
                     }
                 auto_applied_count += 1
-                if self._isChecksFacePairType(item.get("review_type")):
+                if (
+                    self._isChecksFacePairType(item.get("review_type"))
+                    and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
+                ):
                     return {
                         "entry": None,
                         "item": None,
@@ -1511,6 +1889,7 @@ class ImgDataService:
                         "entry": None,
                         "item": None,
                         "auto_applied_count": auto_applied_count,
+                        "processed_entry_tokens": list(seen_entry_tokens),
                     }
                 normalized_entry = next_entry
                 continue
@@ -1541,7 +1920,10 @@ class ImgDataService:
                 }
 
             auto_applied_count += 1
-            if self._isChecksFacePairType(item.get("review_type")):
+            if (
+                self._isChecksFacePairType(item.get("review_type"))
+                and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
+            ):
                 return {
                     "entry": None,
                     "item": None,
@@ -1568,6 +1950,7 @@ class ImgDataService:
                     "entry": None,
                     "item": None,
                     "auto_applied_count": auto_applied_count,
+                    "processed_entry_tokens": list(seen_entry_tokens),
                 }
             normalized_entry = next_entry
 
@@ -1620,14 +2003,18 @@ class ImgDataService:
                     save_only=save_only,
                     resume_cursor=resume_cursor,
                 )
-            self._setFaceMatchingProgress(
-                user_key,
-                result=result,
-                finished=True,
-                action=action,
-                auto=auto,
-                save_only=save_only,
-            )
+            progress_updates: Dict[str, Any] = {
+                "result": result,
+                "finished": True,
+                "action": action,
+                "auto": auto,
+                "save_only": save_only,
+            }
+            if isinstance(result, dict):
+                for field in ("findings_count", "transferred_count"):
+                    if field in result:
+                        progress_updates[field] = result.get(field)
+            self._setFaceMatchingProgress(user_key, **progress_updates)
         except (SessionBootstrapRequired, SessionManagerError) as exc:
             self._setFaceMatchingProgressMessage(
                 user_key,
@@ -1675,7 +2062,12 @@ class ImgDataService:
         with self._file_analysis_progress_lock:
             current = dict(self._file_analysis_progress)
             current.update(updates)
+            if not current.get("operation_id"):
+                current["operation_id"] = f"file_analysis-{uuid4().hex}"
+            current["revision"] = max(0, int(current.get("revision") or 0)) + 1
+            current["last_updated_at"] = self._timestamp_now()
             self._file_analysis_progress = current
+        self.file_analysis.writeRuntimeState("file_analysis_progress", "default", current)
 
     def _normalizeFileAnalysisProgress(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
@@ -1691,6 +2083,7 @@ class ImgDataService:
                 current["finished_at"] = current.get("last_updated_at") or self._timestamp_now()
             if not current.get("message"):
                 current["message"] = "Last file analysis is no longer running."
+            self.file_analysis.writeRuntimeState("file_analysis_progress", "default", current)
         return current
 
     def _enrichFileAnalysisProgressWithFindings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1719,8 +2112,10 @@ class ImgDataService:
         return current
 
     def getFileAnalysisProgress(self) -> Dict[str, Any]:
-        with self._file_analysis_progress_lock:
-            current = dict(self._file_analysis_progress)
+        current = self.file_analysis.readRuntimeState("file_analysis_progress", "default")
+        if not isinstance(current, dict) or not current:
+            with self._file_analysis_progress_lock:
+                current = dict(self._file_analysis_progress)
         if current:
             return self._enrichFileAnalysisProgressWithFindings(self._normalizeFileAnalysisProgress(current))
         latest = self.file_analysis.readLatestResult()
@@ -2415,6 +2810,11 @@ class ImgDataService:
         return normalized_type in {"name_conflicts", "duplicate_faces", "position_deviations"}
 
     @staticmethod
+    def _isChecksIgnoreSupportedType(review_type: Any) -> bool:
+        normalized_type = str(review_type or "").strip().lower()
+        return normalized_type in {"name_conflicts", "duplicate_faces", "position_deviations"}
+
+    @staticmethod
     def _faceIdentitySignature(face: Any) -> Dict[str, Any]:
         signature = ImgDataService._faceSignature(face)
         if not isinstance(signature, dict):
@@ -2495,6 +2895,76 @@ class ImgDataService:
                 ensure_ascii=True,
             )
         return ""
+
+    def _checksIgnoreListConfigKey(self, review_type: Any) -> str:
+        normalized_type = str(review_type or "").strip().lower()
+        return ConfigService.checksIgnoreEnabledKey(normalized_type)
+
+    def _configuredChecksIgnoreSettings(self) -> Dict[str, Any]:
+        config = self.config.readMergedConfig()
+        review = config.get("review") if isinstance(config.get("review"), dict) else {}
+        ignore_lists = review.get("CHECKS_IGNORE_LISTS") if isinstance(review.get("CHECKS_IGNORE_LISTS"), dict) else {}
+        defaults = ConfigService.defaultConfig()["review"]["CHECKS_IGNORE_LISTS"]
+        return {
+            "DUPLICATE_FACES_ENABLED": bool(ignore_lists.get("DUPLICATE_FACES_ENABLED", defaults["DUPLICATE_FACES_ENABLED"])),
+            "POSITION_DEVIATIONS_ENABLED": bool(ignore_lists.get("POSITION_DEVIATIONS_ENABLED", defaults["POSITION_DEVIATIONS_ENABLED"])),
+            "NAME_CONFLICTS_ENABLED": bool(ignore_lists.get("NAME_CONFLICTS_ENABLED", defaults["NAME_CONFLICTS_ENABLED"])),
+        }
+
+    def _configuredChecksIgnoreTokens(self, review_type: Any) -> List[str]:
+        normalized_type = str(review_type or "").strip().lower()
+        if not self._isChecksIgnoreSupportedType(normalized_type):
+            return []
+        key = self._checksIgnoreListConfigKey(normalized_type)
+        if not key:
+            return []
+        ignore_settings = self._configuredChecksIgnoreSettings()
+        if not ignore_settings.get(key, True):
+            return []
+        return self.config.readChecksIgnoreList(normalized_type)
+
+    def _excludeIgnoredChecksEntries(
+        self,
+        review_type: Any,
+        entries: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        return self._excludeChecksEntriesByTokens(entries, self._configuredChecksIgnoreTokens(review_type))
+
+    def ignoreChecksEntry(self, *, entry: Dict[str, Any]) -> Dict[str, Any]:
+        normalized_entry = dict(entry or {})
+        review_type = str(normalized_entry.get("review_type") or "").strip().lower()
+        if not self._isChecksIgnoreSupportedType(review_type):
+            return {"ignored": False, "reason": "unsupported_review_type"}
+
+        token = self._checksEntryToken(normalized_entry)
+        if not token:
+            return {"ignored": False, "reason": "missing_entry_token"}
+
+        key = self._checksIgnoreListConfigKey(review_type)
+        ignore_settings = self._configuredChecksIgnoreSettings()
+        if key and not ignore_settings.get(key, True):
+            return {"ignored": False, "reason": "ignore_list_disabled"}
+        saved_result = self.config.appendChecksIgnoreToken(review_type, token)
+        return {
+            "ignored": bool(saved_result.get("saved")),
+            "token": str(saved_result.get("token") or token),
+            "review_type": review_type,
+            "count": int(saved_result.get("count") or 0),
+        }
+
+    def clearChecksIgnoreList(self, review_type: Any) -> bool:
+        return self.config.clearChecksIgnoreList(review_type)
+
+    def getChecksIgnoreListsStatus(self) -> Dict[str, Dict[str, Any]]:
+        statuses = self.config.getChecksIgnoreListsStatus()
+        settings = self._configuredChecksIgnoreSettings()
+        for review_type in list(statuses.keys()):
+            enabled_key = self._checksIgnoreListConfigKey(review_type)
+            statuses[review_type] = {
+                **statuses[review_type],
+                "enabled": bool(settings.get(enabled_key, True)),
+            }
+        return statuses
 
     def _excludeChecksEntriesByTokens(
         self,
@@ -3316,11 +3786,17 @@ class ImgDataService:
             check_type = str(resume_cursor.get("check_type") or check_type or "dimension_issues").strip().lower()
         else:
             self._invalidateChecksCandidatePathsCache(user_key, check_type)
+        operation_id = (
+            str(current.get("operation_id") or "").strip()
+            if resume_cursor and str(current.get("operation_id") or "").strip()
+            else f"checks-{check_type}-{uuid4().hex}"
+        )
 
         self._setChecksProgressMessage(
             user_key,
             check_type,
             "checks:status_preparing_scan",
+            operation_id=operation_id,
             running=True,
             finished=False,
             stop_requested=False,
@@ -3448,6 +3924,7 @@ class ImgDataService:
         auto_apply_suggested_names: bool = False,
         auto_apply_suggested_duplicates: bool = False,
     ) -> Dict[str, Any]:
+        last_keepalive_at = monotonic()
         shared_folder = self.core.getSharedFolder(
             user_key=user_key,
             cookies=cookies,
@@ -3514,10 +3991,11 @@ class ImgDataService:
         if pending_entries and not save_only:
             entry = pending_entries[0]
             remaining_entries = pending_entries[1:]
+            manual_review_required = bool(entry.get("_manual_review_required")) if isinstance(entry, dict) else False
             resolved = self._resolveChecksReviewEntry(
                 entry=entry,
-                auto_apply_suggested_names=auto_apply_suggested_names,
-                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
+                auto_apply_suggested_names=auto_apply_suggested_names and not manual_review_required,
+                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates and not manual_review_required,
                 include_item=auto_apply_suggested_names or auto_apply_suggested_duplicates,
                 user_key=user_key,
                 cookies=cookies,
@@ -3614,6 +4092,11 @@ class ImgDataService:
                 )
 
         for index in range(max(0, path_index), total_files):
+            last_keepalive_at = self._refreshSessionIfNeeded(
+                user_key=user_key,
+                base_url=base_url,
+                last_keepalive_at=last_keepalive_at,
+            )
             if self._shouldStopChecks(user_key, check_type):
                 return self._buildChecksScanPayload(
                     check_type=check_type,
@@ -4171,6 +4654,7 @@ class ImgDataService:
             return
 
         self._setFileAnalysisProgress(
+            operation_id=f"file_analysis-{uuid4().hex}",
             running=True,
             finished=False,
             stopped=False,
@@ -4901,9 +5385,30 @@ class ImgDataService:
         if current.get("running") and worker and worker.is_alive():
             return current
 
-        resume_cursor = current.get("resume_cursor") if resume_from_progress and isinstance(current.get("resume_cursor"), dict) else {}
-        cursor_skip_face_ids = resume_cursor.get("skip_face_ids") if isinstance(resume_cursor.get("skip_face_ids"), list) else []
         normalized_action = str(action or "search_photo_face_in_file").strip().lower()
+        current_resume_cursor = current.get("resume_cursor") if isinstance(current.get("resume_cursor"), dict) else {}
+        current_action = str(current_resume_cursor.get("action") or current.get("action") or "").strip().lower()
+        should_continue_current = (
+            (resume_from_progress or bool(skip_face_ids) or bool(skip_targets))
+            and isinstance(current_resume_cursor, dict)
+            and current_action == normalized_action
+        )
+        resume_cursor = dict(current_resume_cursor) if should_continue_current else {}
+        if resume_cursor:
+            if not resume_cursor.get("path_index"):
+                resume_cursor["path_index"] = int(current.get("images_read") or 0)
+            for field in (
+                "transferred_count",
+                "findings_count",
+                "persons_read",
+                "images_read",
+                "faces_read",
+                "target_faces_read",
+                "metadata_faces_read",
+            ):
+                if field not in resume_cursor:
+                    resume_cursor[field] = int(current.get(field) or 0)
+        cursor_skip_face_ids = resume_cursor.get("skip_face_ids") if isinstance(resume_cursor.get("skip_face_ids"), list) else []
         combined_skip_face_ids = list(skip_face_ids or [])
         combined_skip_targets = [str(value) for value in (skip_targets or []) if str(value or "").strip()]
         for face_id in cursor_skip_face_ids:
@@ -4922,10 +5427,18 @@ class ImgDataService:
             auto = bool(resume_cursor.get("auto", auto))
             save_only = bool(resume_cursor.get("save_only", save_only))
             normalized_action = str(resume_cursor.get("action") or normalized_action).strip().lower() or normalized_action
+        continue_existing_operation = bool(resume_cursor or combined_skip_face_ids or combined_skip_targets)
+        resume_path_index = int(resume_cursor.get("path_index") or 0) if resume_cursor else 0
+        operation_id = (
+            str(current.get("operation_id") or "").strip()
+            if continue_existing_operation and str(current.get("operation_id") or "").strip()
+            else f"face_match-{uuid4().hex}"
+        )
 
         self._setFaceMatchingProgressMessage(
             user_key,
             "face_match:status_starting",
+            operation_id=operation_id,
             running=True,
             finished=False,
             paused=False,
@@ -4936,15 +5449,16 @@ class ImgDataService:
             error="",
             auto=auto,
             save_only=save_only,
-            persons_read=0,
-            images_read=0,
-            faces_read=0,
-            target_faces_read=0,
+            persons_read=int(resume_cursor.get("persons_read") or 0) if resume_cursor else 0,
+            images_read=int(resume_cursor.get("images_read") or 0) if resume_cursor else resume_path_index,
+            faces_read=int(resume_cursor.get("faces_read") or 0) if resume_cursor else 0,
+            target_faces_read=int(resume_cursor.get("target_faces_read") or 0) if resume_cursor else 0,
             current_person_id=None,
             current_image_id=None,
             current_face_id=None,
-            metadata_faces_read=0,
+            metadata_faces_read=int(resume_cursor.get("metadata_faces_read") or 0) if resume_cursor else 0,
             transferred_count=int(resume_cursor.get("transferred_count") or 0) if resume_cursor else 0,
+            findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
             resume_cursor=self._buildFaceMatchResumeCursor(
                 skip_face_ids=combined_skip_face_ids,
                 skip_targets=combined_skip_targets,
@@ -4952,6 +5466,13 @@ class ImgDataService:
                 auto=auto,
                 save_only=save_only,
                 action=normalized_action,
+                findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
+                path_index=resume_path_index,
+                persons_read=int(resume_cursor.get("persons_read") or 0) if resume_cursor else 0,
+                images_read=int(resume_cursor.get("images_read") or 0) if resume_cursor else resume_path_index,
+                faces_read=int(resume_cursor.get("faces_read") or 0) if resume_cursor else 0,
+                target_faces_read=int(resume_cursor.get("target_faces_read") or 0) if resume_cursor else 0,
+                metadata_faces_read=int(resume_cursor.get("metadata_faces_read") or 0) if resume_cursor else 0,
             ),
         )
         worker = Thread(
@@ -5000,11 +5521,13 @@ class ImgDataService:
             int(face_id) for face_id in resume_skip_face_ids
             if isinstance(face_id, int) or str(face_id).isdigit()
         )
-        persons_read = 0
-        images_read = 0
-        faces_read = 0
-        metadata_faces_read = 0
+        persons_read = int(resume_cursor.get("persons_read") or 0) if isinstance(resume_cursor, dict) else 0
+        images_read = int(resume_cursor.get("images_read") or 0) if isinstance(resume_cursor, dict) else 0
+        faces_read = int(resume_cursor.get("faces_read") or 0) if isinstance(resume_cursor, dict) else 0
+        target_faces_read = int(resume_cursor.get("target_faces_read") or 0) if isinstance(resume_cursor, dict) else 0
+        metadata_faces_read = int(resume_cursor.get("metadata_faces_read") or 0) if isinstance(resume_cursor, dict) else 0
         transferred_count = int(resume_cursor.get("transferred_count") or 0) if isinstance(resume_cursor, dict) else 0
+        findings_count = int(resume_cursor.get("findings_count") or 0) if isinstance(resume_cursor, dict) else 0
         final_message_key = "face_match:progress_finished"
         final_message_params: Dict[str, Any] = {}
         self._setFaceMatchingProgressMessage(
@@ -5013,20 +5536,27 @@ class ImgDataService:
             running=True,
             stop_requested=False,
             action="search_photo_face_in_file",
-            persons_read=0,
-            images_read=0,
-            faces_read=0,
-            target_faces_read=0,
+            persons_read=persons_read,
+            images_read=images_read,
+            faces_read=faces_read,
+            target_faces_read=target_faces_read,
             current_person_id=None,
             current_image_id=None,
             current_face_id=None,
-            metadata_faces_read=0,
+            metadata_faces_read=metadata_faces_read,
             transferred_count=transferred_count,
+            findings_count=findings_count,
             resume_cursor=self._buildFaceMatchResumeCursor(
                 skip_face_ids=list(skip_face_ids_set),
                 transferred_count=transferred_count,
                 auto=auto,
                 save_only=save_only,
+                findings_count=findings_count,
+                persons_read=persons_read,
+                images_read=images_read,
+                faces_read=faces_read,
+                target_faces_read=target_faces_read,
+                metadata_faces_read=metadata_faces_read,
             ),
         )
         try:
@@ -5417,18 +5947,22 @@ class ImgDataService:
                             "name_mapping": mapped_assignment,
                             "lookup_debug": lookup_debug,
                             "transferred_count": transferred_count,
+                            "findings_count": findings_count + 1,
                             "auto": auto,
                             "resume_cursor": self._buildFaceMatchResumeCursor(
                                 skip_face_ids=list(skip_face_ids_set),
                                 transferred_count=transferred_count,
                                 auto=auto,
                                 save_only=save_only,
+                                findings_count=findings_count + 1,
                             ),
                         }
                         if save_only:
                             saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
+                            findings_count += 1
                             skip_face_ids_set.add(face_id_int)
                             continue
+                        findings_count += 1
                         return result_entry
 
             final_message_key = "face_match:result_no_match"
@@ -5458,12 +5992,13 @@ class ImgDataService:
                 "transferred_count": transferred_count,
                 "auto": auto,
                 "save_only": save_only,
-                "findings_count": len(saved_entries),
+                "findings_count": findings_count,
                 "resume_cursor": self._buildFaceMatchResumeCursor(
                     skip_face_ids=list(skip_face_ids_set),
                     transferred_count=transferred_count,
                     auto=auto,
                     save_only=save_only,
+                    findings_count=findings_count,
                 ),
             }
         finally:
@@ -5477,11 +6012,13 @@ class ImgDataService:
                 images_read=images_read,
                 faces_read=faces_read,
                 transferred_count=transferred_count,
+                findings_count=findings_count,
                 resume_cursor=self._buildFaceMatchResumeCursor(
                     skip_face_ids=list(skip_face_ids_set),
                     transferred_count=transferred_count,
                     auto=auto,
                     save_only=save_only,
+                    findings_count=findings_count,
                 ),
             )
 
@@ -5499,6 +6036,8 @@ class ImgDataService:
         last_keepalive_at = monotonic()
         saved_entries: List[Dict[str, Any]] = []
         transferred_count = int(resume_cursor.get("transferred_count") or 0) if isinstance(resume_cursor, dict) else 0
+        findings_count = int(resume_cursor.get("findings_count") or 0) if isinstance(resume_cursor, dict) else 0
+        path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
         skip_target_tokens = [str(value) for value in (skip_targets or []) if str(value or "").strip()]
         if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("skip_targets"), list):
             for token in resume_cursor.get("skip_targets") or []:
@@ -5510,7 +6049,7 @@ class ImgDataService:
         use_photos = source_scope in {"both", "photos"}
         use_metadata = source_scope in {"both", "metadata"}
         persons_read = 0
-        images_read = 0
+        images_read = path_index
         faces_read = 0
         target_faces_read = 0
         metadata_faces_read = 0
@@ -5532,6 +6071,7 @@ class ImgDataService:
             current_face_id=None,
             metadata_faces_read=0,
             transferred_count=transferred_count,
+            findings_count=findings_count,
             resume_cursor=self._buildFaceMatchResumeCursor(
                 skip_face_ids=[],
                 skip_targets=skip_target_tokens,
@@ -5539,6 +6079,7 @@ class ImgDataService:
                 auto=auto,
                 save_only=save_only,
                 action="search_file_face_in_sources",
+                findings_count=findings_count,
             ),
         )
 
@@ -5806,6 +6347,7 @@ class ImgDataService:
                     )
                     if not matched_entry:
                         continue
+                    findings_count += 1
                     source_name = str(matched_entry.get("source_name") or "").strip()
                     final_message_key = "face_match:result_named_source_match"
                     final_message_params = {}
@@ -5817,6 +6359,7 @@ class ImgDataService:
                     result_entry = dict(matched_entry)
                     result_entry.update({
                         "transferred_count": transferred_count,
+                        "findings_count": findings_count,
                         "auto": auto,
                         "resume_cursor": self._buildFaceMatchResumeCursor(
                             skip_face_ids=[],
@@ -5825,6 +6368,7 @@ class ImgDataService:
                             auto=auto,
                             save_only=save_only,
                             action="search_file_face_in_sources",
+                            findings_count=findings_count,
                         ),
                     })
 
@@ -5851,6 +6395,7 @@ class ImgDataService:
                                     auto=auto,
                                     save_only=save_only,
                                     action="search_file_face_in_sources",
+                                    findings_count=findings_count,
                                 ),
                             )
                             continue
@@ -5887,7 +6432,7 @@ class ImgDataService:
                 "transferred_count": transferred_count,
                 "auto": auto,
                 "save_only": save_only,
-                "findings_count": len(saved_entries),
+                "findings_count": findings_count,
                 "source_scope": source_scope,
                 "resume_cursor": self._buildFaceMatchResumeCursor(
                     skip_face_ids=[],
@@ -5896,6 +6441,7 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action="search_file_face_in_sources",
+                    findings_count=findings_count,
                 ),
             }
         finally:
@@ -5911,6 +6457,7 @@ class ImgDataService:
                 target_faces_read=target_faces_read,
                 metadata_faces_read=metadata_faces_read,
                 transferred_count=transferred_count,
+                findings_count=findings_count,
                 resume_cursor=self._buildFaceMatchResumeCursor(
                     skip_face_ids=[],
                     skip_targets=skip_target_tokens,
@@ -5918,6 +6465,7 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action="search_file_face_in_sources",
+                    findings_count=findings_count,
                 ),
             )
 
@@ -5935,6 +6483,8 @@ class ImgDataService:
         last_keepalive_at = monotonic()
         saved_entries: List[Dict[str, Any]] = []
         transferred_count = int(resume_cursor.get("transferred_count") or 0) if isinstance(resume_cursor, dict) else 0
+        findings_count = int(resume_cursor.get("findings_count") or 0) if isinstance(resume_cursor, dict) else 0
+        path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
         skip_target_tokens = [str(value) for value in (skip_targets or []) if str(value or "").strip()]
         if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("skip_targets"), list):
             for token in resume_cursor.get("skip_targets") or []:
@@ -5943,7 +6493,7 @@ class ImgDataService:
                     skip_target_tokens.append(normalized)
 
         persons_read = 0
-        images_read = 0
+        images_read = path_index
         faces_read = 0
         target_faces_read = 0
         metadata_faces_read = 0
@@ -5958,7 +6508,7 @@ class ImgDataService:
             stop_requested=False,
             action="mark_missing_photos_faces",
             persons_read=0,
-            images_read=0,
+            images_read=images_read,
             faces_read=0,
             target_faces_read=0,
             current_person_id=None,
@@ -5966,6 +6516,7 @@ class ImgDataService:
             current_face_id=None,
             metadata_faces_read=0,
             transferred_count=transferred_count,
+            findings_count=findings_count,
             resume_cursor=self._buildFaceMatchResumeCursor(
                 skip_face_ids=[],
                 skip_targets=skip_target_tokens,
@@ -5973,6 +6524,8 @@ class ImgDataService:
                 auto=auto,
                 save_only=save_only,
                 action="mark_missing_photos_faces",
+                findings_count=findings_count,
+                path_index=path_index,
             ),
         )
 
@@ -6000,6 +6553,7 @@ class ImgDataService:
                 target_faces_read=target_faces_read,
                 metadata_faces_read=metadata_faces_read,
                 transferred_count=transferred_count,
+                findings_count=findings_count,
                 resume_cursor=self._buildFaceMatchResumeCursor(
                     skip_face_ids=[],
                     skip_targets=skip_target_tokens,
@@ -6007,9 +6561,12 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action="mark_missing_photos_faces",
+                    findings_count=findings_count,
+                    path_index=path_index,
                 ),
             )
             candidate_paths = self.files.listImageFiles(shared_folder)
+            path_index = min(max(0, path_index), len(candidate_paths))
             self._setFaceMatchingProgressMessage(
                 user_key,
                 "face_match:progress_files_listed",
@@ -6020,6 +6577,7 @@ class ImgDataService:
                 target_faces_read=target_faces_read,
                 metadata_faces_read=metadata_faces_read,
                 transferred_count=transferred_count,
+                findings_count=findings_count,
                 total_images=len(candidate_paths),
                 resume_cursor=self._buildFaceMatchResumeCursor(
                     skip_face_ids=[],
@@ -6028,9 +6586,11 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action="mark_missing_photos_faces",
+                    findings_count=findings_count,
+                    path_index=path_index,
                 ),
             )
-            for image_path in candidate_paths:
+            for image_path in candidate_paths[path_index:]:
                 last_keepalive_at = self._refreshFaceMatchingSessionIfNeeded(
                     user_key=user_key,
                     base_url=base_url,
@@ -6050,6 +6610,8 @@ class ImgDataService:
                             auto=auto,
                             save_only=save_only,
                             action="mark_missing_photos_faces",
+                            findings_count=findings_count,
+                            path_index=images_read,
                         ),
                     }
 
@@ -6069,6 +6631,8 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         action="mark_missing_photos_faces",
+                        findings_count=findings_count,
+                        path_index=images_read,
                     ),
                 )
 
@@ -6090,6 +6654,8 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         action="mark_missing_photos_faces",
+                        findings_count=findings_count,
+                        path_index=images_read,
                     ),
                 )
 
@@ -6157,6 +6723,7 @@ class ImgDataService:
                 target_token = self._faceMatchTargetToken(image_path=image_path, face=target_face)
                 if target_token in skip_target_tokens:
                     continue
+                findings_count += 1
 
                 if known_persons_cache is None:
                     known_persons_cache = self.photos.sortPersonsForFaceMatch(
@@ -6203,6 +6770,7 @@ class ImgDataService:
                     "lookup_debug": lookup_debug,
                     "add_new_faces_to_photos": True,
                     "transferred_count": transferred_count,
+                    "findings_count": findings_count,
                     "auto": auto,
                     "resume_cursor": self._buildFaceMatchResumeCursor(
                         skip_face_ids=[],
@@ -6211,6 +6779,8 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         action="mark_missing_photos_faces",
+                        findings_count=findings_count,
+                        path_index=images_read,
                     ),
                 }
 
@@ -6233,6 +6803,8 @@ class ImgDataService:
                             face_id=int(created_face_id),
                             person_id=int(matched_person.get("id")),
                             person_name=matched_person_name,
+                            item_id=add_result.get("item_id") if add_result.get("item_id") is not None else None,
+                            image_path=image_path,
                         )
                         transferred_count += 1
                         skip_target_tokens.append(target_token)
@@ -6250,6 +6822,8 @@ class ImgDataService:
                                 auto=auto,
                                 save_only=save_only,
                                 action="mark_missing_photos_faces",
+                                findings_count=findings_count,
+                                path_index=images_read,
                             ),
                         )
                         continue
@@ -6286,7 +6860,7 @@ class ImgDataService:
                 "transferred_count": transferred_count,
                 "auto": auto,
                 "save_only": save_only,
-                "findings_count": len(saved_entries),
+                "findings_count": findings_count,
                 "resume_cursor": self._buildFaceMatchResumeCursor(
                     skip_face_ids=[],
                     skip_targets=skip_target_tokens,
@@ -6294,6 +6868,8 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action="mark_missing_photos_faces",
+                    findings_count=findings_count,
+                    path_index=images_read,
                 ),
             }
         finally:
@@ -6309,6 +6885,7 @@ class ImgDataService:
                 target_faces_read=target_faces_read,
                 metadata_faces_read=metadata_faces_read,
                 transferred_count=transferred_count,
+                findings_count=findings_count,
                 resume_cursor=self._buildFaceMatchResumeCursor(
                     skip_face_ids=[],
                     skip_targets=skip_target_tokens,
@@ -6316,6 +6893,8 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action="mark_missing_photos_faces",
+                    findings_count=findings_count,
+                    path_index=images_read,
                 ),
             )
 
@@ -6401,6 +6980,8 @@ class ImgDataService:
                                         face_id=int(created_face_id),
                                         person_id=int(matched_person_id),
                                         person_name=matched_person_name,
+                                        item_id=add_result.get("item_id") if add_result.get("item_id") is not None else None,
+                                        image_path=image_path,
                                     )
                                     transferred_count += 1
                                     findings_changed = True
@@ -6619,15 +7200,46 @@ class ImgDataService:
         face_id: int,
         person_id: int,
         person_name: str,
+        item_id: Optional[int] = None,
+        image_path: str = "",
         ) -> Dict[str, Any]:
-        return self.photos.assignFaceToPerson(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            face_id=face_id,
-            person_id=person_id,
-            person_name=person_name,
-        )
+        with self._writeOperationLock(
+            self._photosFaceWriteLockKey(face_id),
+            phase="photos_face_assign",
+            context={"face_id": face_id, "person_id": person_id, "person_name": person_name},
+        ):
+            before_face = None
+            if item_id is not None:
+                before_face = self._validatePhotosFaceOnItem(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    item_id=int(item_id),
+                    face_id=int(face_id),
+                    phase="photos_face_assign_precheck",
+                    image_path=image_path,
+                )
+            result = self.photos.assignFaceToPerson(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                face_id=face_id,
+                person_id=person_id,
+                person_name=person_name,
+            )
+            if item_id is not None:
+                self._validatePhotosFaceOnItem(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    item_id=int(item_id),
+                    face_id=int(face_id),
+                    phase="photos_face_assign_postcheck",
+                    image_path=image_path,
+                    expected_person_id=int(person_id),
+                    before=before_face,
+                )
+            return result
 
     def assignChecksFaceToKnownPerson(
         self,
@@ -6656,6 +7268,8 @@ class ImgDataService:
                     face_id=int(face_id),
                     person_id=person_id,
                     person_name=person_name,
+                    item_id=face_data.get("item_id") if face_data.get("item_id") is not None else None,
+                    image_path=image_path,
                 ),
             }
 
@@ -6691,6 +7305,8 @@ class ImgDataService:
             face_id=int(face_id),
             person_id=person_id,
             person_name=person_name,
+            item_id=add_result.get("item_id") if add_result.get("item_id") is not None else None,
+            image_path=image_path,
         )
         return {
             "updated": True,
@@ -6698,6 +7314,85 @@ class ImgDataService:
             "metadata_result": metadata_result,
             "add_result": add_result,
             "assign_result": assign_result,
+        }
+
+    def assignMetadataFaceToKnownPhotosPerson(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        image_path: str,
+        metadata_face: Dict[str, Any],
+        person_id: int,
+        person_name: str,
+    ) -> Dict[str, Any]:
+        add_result = self.addMatchedMetadataFaceToPhotos(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            image_path=image_path,
+            metadata_face=metadata_face,
+            person_id=person_id,
+        )
+        face_id = add_result.get("face_id")
+        if face_id is None:
+            raise ValueError("photos_face_create_failed")
+        assign_result = self.assignMatchedFaceToKnownPerson(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            face_id=int(face_id),
+            person_id=person_id,
+            person_name=person_name,
+            item_id=add_result.get("item_id") if isinstance(add_result, dict) and add_result.get("item_id") is not None else None,
+            image_path=image_path,
+        )
+        return {
+            "image_path": image_path,
+            "person_id": int(person_id),
+            "person_name": person_name,
+            "face_id": int(face_id),
+            "add_result": add_result,
+            "assign_result": assign_result,
+        }
+
+    def createMetadataFaceAsPhotosPerson(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        image_path: str,
+        metadata_face: Dict[str, Any],
+        person_name: str,
+    ) -> Dict[str, Any]:
+        add_result = self.addMatchedMetadataFaceToPhotos(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            image_path=image_path,
+            metadata_face=metadata_face,
+        )
+        face_id = add_result.get("face_id")
+        if face_id is None:
+            raise ValueError("photos_face_create_failed")
+        create_result = self.createMatchedFaceAsPerson(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            face_id=int(face_id),
+            person_name=person_name,
+            item_id=add_result.get("item_id") if isinstance(add_result, dict) and add_result.get("item_id") is not None else None,
+            image_path=image_path,
+        )
+        return {
+            "image_path": image_path,
+            "person_name": person_name,
+            "face_id": int(face_id),
+            "person_id": self._extractPersonId(create_result),
+            "add_result": add_result,
+            "create_result": create_result,
         }
 
     def replaceChecksFaceName(
@@ -6772,6 +7467,8 @@ class ImgDataService:
             face_id=face_id,
             person_id=target_person_id,
             person_name=str(target_person.get("name") or lookup_name),
+            item_id=face_data.get("item_id") if face_data.get("item_id") is not None else None,
+            image_path=image_path,
         )
         return {
             "updated": True,
@@ -6834,54 +7531,93 @@ class ImgDataService:
             raise ValueError("photos_item_not_found_for_image")
 
         item_id = int(item.get("id"))
-        candidate_face = PhotosFace(
-            face_id=0,
-            person_id=0,
-            bbox=from_xmp(MetadataFace.from_dict(metadata_face)),
-        )
-        existing_faces = self.photos.list_faceFotoTeamItems(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            id_item=item_id,
-        )
-        matched_existing = self._findExistingPhotosFaceMatch(
-            metadata_face=MetadataFace.from_dict(metadata_face),
-            existing_faces=existing_faces,
-        )
-        if matched_existing is not None:
-            return {
-                "created": False,
-                "face_id": int(matched_existing.get("face_id")),
+        metadata_face_obj = MetadataFace.from_dict(metadata_face)
+        with self._writeOperationLock(
+            self._photosItemWriteLockKey(item_id),
+            phase="photos_face_create_from_metadata",
+            context={
+                "image_path": str(image_path or "").strip(),
                 "item_id": item_id,
-                "item": item,
-                "duplicate": True,
-                "existing_match": matched_existing,
-            }
+                "person_id": int(person_id) if person_id is not None else None,
+                "metadata_face_name": str(metadata_face_obj.name or "").strip(),
+                "metadata_face_source_format": str(metadata_face_obj.source_format or "").strip().upper(),
+            },
+        ):
+            existing_faces = self.photos.list_faceFotoTeamItems(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                id_item=item_id,
+            )
+            matched_existing = self._findExistingPhotosFaceMatch(
+                metadata_face=metadata_face_obj,
+                existing_faces=existing_faces,
+            )
+            if matched_existing is not None:
+                return {
+                    "created": False,
+                    "face_id": int(matched_existing.get("face_id")),
+                    "item_id": item_id,
+                    "item": item,
+                    "duplicate": True,
+                    "existing_match": matched_existing,
+                }
 
-        face_id_temp = f"{item_id}-{int(monotonic() * 1000)}"
-        add_result = self.photos.addFaceToItem(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            id_item=item_id,
-            face_bbox=self._metadataFaceToPhotosBoundingBox(metadata_face),
-            face_id_temp=face_id_temp,
-            person_id=int(person_id) if person_id is not None else None,
-        )
-        created_face_id: Optional[int] = None
-        for entry in add_result.get("list", []) if isinstance(add_result.get("list"), list) else []:
-            if not isinstance(entry, dict):
-                continue
-            if str(entry.get("face_id_temp") or "") != face_id_temp:
-                continue
-            try:
-                created_face_id = int(entry.get("face_id"))
-            except (TypeError, ValueError):
-                created_face_id = None
-            break
-        if created_face_id is None:
-            raise ValueError("photos_face_create_failed")
+            face_id_temp = f"{item_id}-{int(monotonic() * 1000)}"
+            add_result = self.photos.addFaceToItem(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                id_item=item_id,
+                face_bbox=self._metadataFaceToPhotosBoundingBox(metadata_face),
+                face_id_temp=face_id_temp,
+                person_id=int(person_id) if person_id is not None else None,
+            )
+            created_face_id = self._extractCreatedPhotosFaceId(
+                add_result=add_result,
+                face_id_temp=face_id_temp,
+            )
+            if created_face_id is None:
+                created_face = self._findCreatedPhotosFaceAfterAdd(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    item_id=item_id,
+                    metadata_face=metadata_face_obj,
+                    before_faces=existing_faces,
+                )
+                if created_face is not None:
+                    try:
+                        created_face_id = int(created_face.get("face_id"))
+                    except (TypeError, ValueError):
+                        created_face_id = None
+            if created_face_id is None:
+                raise ImgDataOperationError(
+                    "photos_face_create_failed",
+                    {
+                        "reason": "photos_face_create_returned_no_id",
+                        "image_path": str(image_path or "").strip(),
+                        "item_id": item_id,
+                        "person_id": int(person_id) if person_id is not None else None,
+                        "person_name_required_in_photos": False,
+                        "metadata_face_name": str(metadata_face_obj.name or "").strip(),
+                        "metadata_face_source_format": str(metadata_face_obj.source_format or "").strip().upper(),
+                        "face_id_temp": face_id_temp,
+                        "add_result": add_result,
+                        "readback_attempted": True,
+                        "readback_found_face": False,
+                    },
+                )
+            self._validatePhotosFaceOnItem(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                item_id=item_id,
+                face_id=int(created_face_id),
+                phase="photos_face_create_postcheck",
+                image_path=image_path,
+                expected_person_id=int(person_id) if person_id is not None else None,
+            )
         return {
             "created": True,
             "face_id": created_face_id,
@@ -6889,6 +7625,69 @@ class ImgDataService:
             "item": item,
             "result": add_result,
         }
+
+    @staticmethod
+    def _extractCreatedPhotosFaceId(
+        *,
+        add_result: Dict[str, Any],
+        face_id_temp: str,
+    ) -> Optional[int]:
+        for entry in add_result.get("list", []) if isinstance(add_result.get("list"), list) else []:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("face_id_temp") or "") != face_id_temp:
+                continue
+            try:
+                return int(entry.get("face_id"))
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _findCreatedPhotosFaceAfterAdd(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        item_id: int,
+        metadata_face: MetadataFace,
+        before_faces: List[Dict[str, Any]],
+        attempts: int = 3,
+        delay_seconds: float = 0.25,
+    ) -> Optional[Dict[str, Any]]:
+        before_ids = set()
+        for face in before_faces if isinstance(before_faces, list) else []:
+            try:
+                before_ids.add(int(face.get("face_id")))
+            except (TypeError, ValueError):
+                continue
+
+        for attempt in range(max(1, int(attempts))):
+            current_faces = self.photos.list_faceFotoTeamItems(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                id_item=int(item_id),
+            )
+            candidates = []
+            for face in current_faces if isinstance(current_faces, list) else []:
+                if not isinstance(face, dict) or not isinstance(face.get("bbox"), dict):
+                    continue
+                try:
+                    face_id = int(face.get("face_id"))
+                except (TypeError, ValueError):
+                    continue
+                if face_id in before_ids:
+                    continue
+                score = self._photosOverlapScore(from_xmp(metadata_face), from_photos(face))
+                if score >= 0.5:
+                    candidates.append((score, face))
+            if candidates:
+                candidates.sort(key=lambda entry: entry[0], reverse=True)
+                return candidates[0][1]
+            if attempt + 1 < max(1, int(attempts)):
+                sleep(max(0.0, float(delay_seconds)))
+        return None
 
     def _findExistingPhotosFaceMatch(
         self,
@@ -6963,14 +7762,59 @@ class ImgDataService:
         base_url: str,
         face_id: int,
         person_name: str,
+        item_id: Optional[int] = None,
+        image_path: str = "",
     ) -> Dict[str, Any]:
-        return self.photos.createPersonFromFace(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            face_id=face_id,
-            person_name=person_name,
-        )
+        with self._writeOperationLock(
+            self._photosFaceWriteLockKey(face_id),
+            phase="photos_person_create_from_face",
+            context={"face_id": face_id, "person_name": person_name},
+        ):
+            before_face = None
+            if item_id is not None:
+                before_face = self._validatePhotosFaceOnItem(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    item_id=int(item_id),
+                    face_id=int(face_id),
+                    phase="photos_person_create_from_face_precheck",
+                    image_path=image_path,
+                )
+            result = self.photos.createPersonFromFace(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                face_id=face_id,
+                person_name=person_name,
+            )
+            created_face = None
+            if item_id is not None:
+                created_face = self._validatePhotosFaceOnItem(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    item_id=int(item_id),
+                    face_id=int(face_id),
+                    phase="photos_person_create_from_face_postcheck",
+                    image_path=image_path,
+                    expected_person_id=self._extractPersonId(result),
+                    before=before_face,
+                )
+            created_person_id = self._resolveCreatedPersonId(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                person_name=person_name,
+                create_result=result,
+                created_face=created_face,
+            )
+            if created_person_id is not None and isinstance(result, dict) and result.get("person_id") is None:
+                result = {
+                    **result,
+                    "person_id": int(created_person_id),
+                }
+            return result
 
     def _listAllPhotoItemsForPerson(
         self,
@@ -7047,11 +7891,38 @@ class ImgDataService:
         if isinstance(person_payload.get("list"), list):
             candidates.extend(item for item in person_payload.get("list") if isinstance(item, dict))
         for candidate in candidates:
-            try:
-                return int(candidate.get("id"))
-            except (TypeError, ValueError):
-                continue
+            for key in ("id", "person_id"):
+                try:
+                    return int(candidate.get(key))
+                except (TypeError, ValueError):
+                    continue
         return None
+
+    def _resolveCreatedPersonId(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        person_name: str,
+        create_result: Dict[str, Any],
+        created_face: Optional[Dict[str, Any]] = None,
+    ) -> Optional[int]:
+        person_id = self._extractPersonId(create_result)
+        if person_id is not None:
+            return person_id
+
+        person_id = self._extractPersonId(created_face or {})
+        if person_id is not None:
+            return person_id
+
+        created_person = self.photos.findKnownPersonByName(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            name=person_name,
+        )
+        return self._extractPersonId(created_person or {})
 
     def _normalizePhotosPersonByMapping(
         self,
@@ -7108,19 +7979,13 @@ class ImgDataService:
                 face_id=face_ids[0],
                 person_name=target_name,
             )
-            target_person_id = self._extractPersonId(created)
-            if target_person_id is None:
-                refreshed_target = self.photos.findKnownPersonByName(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    name=target_name,
-                )
-                if refreshed_target is not None:
-                    try:
-                        target_person_id = int(refreshed_target.get("id"))
-                    except (TypeError, ValueError):
-                        target_person_id = None
+            target_person_id = self._resolveCreatedPersonId(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                person_name=target_name,
+                create_result=created,
+            )
             if target_person_id is None:
                 return {"updated": False, "faces_reassigned": 0, "error": "photos_person_create_failed"}
 
@@ -7172,6 +8037,7 @@ class ImgDataService:
             user_key,
             normalized_action,
             "cleanup:status_preparing",
+            operation_id=f"cleanup-{normalized_action}-{uuid4().hex}",
             running=True,
             finished=False,
             stop_requested=False,

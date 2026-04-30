@@ -105,7 +105,46 @@ export default {
 			const root = this.getResponseData(data);
 			return (root && typeof root[key] === 'object' && root[key]) ? root[key] : {};
 		},
+		formatBackendError(backendError, fallback = 'Unknown error') {
+			if (!backendError || typeof backendError !== 'object') {
+				return typeof backendError === 'string' && backendError.trim()
+					? backendError.trim()
+					: fallback;
+			}
+			const message = String(backendError.message || fallback).trim();
+			const details = backendError.details && typeof backendError.details === 'object'
+				? backendError.details
+				: null;
+			if (!details) {
+				return message;
+			}
+			const parts = [];
+			const addPart = (labelKey, fallbackLabel, value) => {
+				const text = String(value || '').trim();
+				if (!text) {
+					return;
+				}
+				parts.push(`${this.$t(labelKey, fallbackLabel)}: ${text}`);
+			};
+			addPart('error:label_code', 'Code', details.code || details.reason);
+			if (details.reason && details.reason !== details.code) {
+				addPart('error:label_reason', 'Reason', details.reason);
+			}
+			addPart('error:label_phase', 'Phase', details.phase);
+			addPart('error:label_file', 'File', details.image_path || details.target_path);
+			addPart('error:label_changed_path', 'Changed path', details.changed_path);
+			addPart('error:label_face_id', 'Face ID', details.face_id);
+			addPart('error:label_item_id', 'Item ID', details.item_id);
+			addPart('error:label_person_id', 'Person ID', details.person_id);
+			if (details.retryable === true) {
+				parts.push(this.$t('error:retryable', 'Retry may be possible after the current write has finished.'));
+			}
+			return parts.length ? `${message} (${parts.join(', ')})` : message;
+		},
 		getErrorMessage(err, fallback = 'Unknown error') {
+			if (err && err.backendError) {
+				return this.formatBackendError(err.backendError, fallback);
+			}
 			if (err instanceof Error && err.message) {
 				return err.message;
 			}
@@ -184,7 +223,9 @@ export default {
 				const data = await resp.json().catch(() => ({}));
 				if (!resp.ok || data.success === false) {
 					const backendError = data.error || `HTTP ${resp.status}`;
-					throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError));
+					const error = new Error(this.formatBackendError(backendError, `HTTP ${resp.status}`));
+					error.backendError = backendError;
+					throw error;
 				}
 				return data;
 			},

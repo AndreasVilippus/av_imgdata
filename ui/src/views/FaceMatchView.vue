@@ -11,7 +11,6 @@
 						<option value="search_photo_face_in_file">{{ vm.$t('face_match:action_search_photo_face_in_file', 'search unknown Photos face in file') }}</option>
 						<option value="search_file_face_in_sources">{{ vm.$t('face_match:action_search_file_face_in_sources', 'search face from file') }}</option>
 						<option value="mark_missing_photos_faces">{{ vm.$t('face_match:action_mark_missing_photos_faces', 'mark missing faces in Photos') }}</option>
-						<option v-if="vm.hasFaceMatchStoredFindings" value="load_photo_face_match_findings">{{ vm.$t('face_match:action_load_photo_face_match_findings', 'load unknown Photos face from list') }}</option>
 					</select>
 					<div class="face-match-action-buttons">
 						<v-button @click="vm.handlePrimaryFaceMatchButton" style="width: 160px;">
@@ -32,7 +31,7 @@
 						<span class="face-match-switch-label">{{ vm.$t('face_match:switch_face_only', 'Show face only') }}</span>
 					</label>
 					<label class="face-match-switch" :title="vm.$t('face_match:hint_auto_assign', 'If a person with that name exists, the face is assigned automatically.')">
-						<input v-model="vm.faceMatchAutoAssignKnown" type="checkbox" />
+						<input v-model="vm.faceMatchAutoAssignKnown" type="checkbox" :disabled="vm.faceMatchLoading" />
 						<span class="face-match-switch-slider"></span>
 						<span class="face-match-switch-label">{{ vm.$t('face_match:switch_auto_assign', 'Assign all known') }}</span>
 					</label>
@@ -41,9 +40,17 @@
 						class="face-match-switch"
 						:title="vm.$t('face_match:hint_save_only', 'Known persons are still assigned depending on the setting; otherwise matches are only listed for later.')"
 					>
-						<input v-model="vm.faceMatchSaveOnly" type="checkbox" :disabled="vm.faceMatchLoading" />
+						<input v-model="vm.faceMatchSaveOnly" type="checkbox" :disabled="vm.faceMatchLoading || vm.faceMatchUseStoredFindings" />
 						<span class="face-match-switch-slider"></span>
 						<span class="face-match-switch-label">{{ vm.$t('face_match:switch_save_only', 'Save matches only') }}</span>
+					</label>
+					<label
+						class="face-match-switch"
+						:title="vm.$t('face_match:hint_use_findings', 'Load saved matches instead of starting a new search.')"
+					>
+						<input v-model="vm.faceMatchUseStoredFindings" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasFaceMatchStoredFindings" />
+						<span class="face-match-switch-slider"></span>
+						<span class="face-match-switch-label">{{ vm.$t('face_match:switch_use_findings', 'Use match list') }}</span>
 					</label>
 				</div>
 				<div class="face-match-status-column">
@@ -55,30 +62,42 @@
 								{{ vm.$t('face_match:card_running', 'Running') }}
 							</div>
 						</div>
-						<div class="face-match-status-message">{{ vm.faceMatchStatusMessage }}</div>
-						<div v-if="Number(vm.faceMatchProgress.persons_total) > 0 && !vm.faceMatchIsFileSourceAction" class="sm-status-progress">
-							<RatioProgress
-								:current="Number(vm.faceMatchProgress.persons_read) || 0"
-								:total="Number(vm.faceMatchProgress.persons_total) || 0"
-								:primary-text="`${Number(vm.faceMatchProgress.persons_read) || 0} ${vm.$t('face_match:label_persons', 'Persons')}`"
-								:secondary-text="`${Number(vm.faceMatchProgress.persons_total) || 0} ${vm.$t('face_match:label_persons', 'Persons')}`"
+						<div v-if="!vm.faceMatchShowPersonsProgress && !vm.faceMatchShowFileProgress" class="face-match-status-message">{{ vm.faceMatchStatusMessage }}</div>
+						<div v-if="vm.faceMatchShowPersonsProgress" class="sm-status-progress">
+							<ProgressOverviewCard
+								:title="vm.$t('face_match:label_persons', 'Persons')"
+								:count="vm.faceMatchPersonsTotal"
+								:current="vm.faceMatchPersonsChecked"
+								:total="vm.faceMatchPersonsTotal"
+								:primary-label="vm.$t('face_match:label_checked', 'checked')"
+								:secondary-label="vm.$t('face_match:label_unchecked', 'unchecked')"
+								:status-text="vm.faceMatchStatusMessage"
+							/>
+						</div>
+						<div v-if="vm.faceMatchShowFileProgress" class="sm-status-progress">
+							<ProgressOverviewCard
+								:title="vm.$t('face_match:label_images', 'Images')"
+								:count="Number(vm.faceMatchProgress.total_images) || 0"
+								:current="Number(vm.faceMatchProgress.images_read) || 0"
+								:total="Number(vm.faceMatchProgress.total_images) || 0"
+								:primary-label="vm.$t('cleanup:label_scanned', 'scanned')"
+								:secondary-label="vm.$t('checks:label_remaining', 'remaining')"
+								:status-text="vm.faceMatchStatusMessage"
 								:icon-url="vm.faceMatchProgressIconUrl"
 							/>
 						</div>
 						<div class="face-match-status-stats">
-							<span v-if="vm.showFaceMatchPersonsCounter">{{ vm.$t('face_match:label_persons', 'Persons') }}: {{ vm.faceMatchDisplayedProgress.persons_read }}</span>
 							<span>{{ vm.$t('face_match:label_images', 'Images') }}: {{ vm.faceMatchDisplayedProgress.images_read }}</span>
 							<span>{{ vm.faceMatchFacesLabel }}: {{ vm.faceMatchDisplayedProgress.faces_read }}</span>
 							<span v-if="vm.showFaceMatchTargetFacesCounter">{{ vm.$t('face_match:label_target_faces', 'Unknown faces') }}: {{ vm.faceMatchDisplayedProgress.target_faces_read }}</span>
 							<span :title="vm.faceMatchMetadataHint">{{ vm.faceMatchMetadataLabel }}: {{ vm.faceMatchDisplayedProgress.metadata_faces_read }}</span>
+							<span>{{ vm.$t('face_match:label_findings', 'Findings') }}: {{ vm.faceMatchDisplayedFindingsCount }}</span>
+							<span>{{ vm.$t('face_match:label_skipped', 'Skipped') }}: {{ vm.faceMatchDisplayedSkippedCount }}</span>
 							<span>{{ vm.$t('face_match:label_transferred', 'Transferred') }}: {{ vm.faceMatchDisplayedTransferredCount }}</span>
 						</div>
 						<div class="face-match-status-context">
-							<span v-if="vm.faceMatchProgress.current_person_id">{{ vm.$t('face_match:label_person_id', 'Person ID') }}: {{ vm.faceMatchProgress.current_person_id }}</span>
-							<span v-if="vm.faceMatchProgress.current_image_id">{{ vm.$t('face_match:label_image_id', 'Image ID') }}: {{ vm.faceMatchProgress.current_image_id }}</span>
-							<span v-if="vm.faceMatchProgress.current_face_id">{{ vm.$t('face_match:label_face_id', 'Face ID') }}: {{ vm.faceMatchProgress.current_face_id }}</span>
 							<span v-if="vm.hasFaceMatchStoredFindings">{{ vm.$t('face_match:label_list_entries', 'List entries') }}: {{ vm.faceMatchFindingsStatus.count }}</span>
-							<span v-if="vm.selectedFaceMatchingAction === 'load_photo_face_match_findings' && vm.faceMatchFindingEntries.length">{{ vm.$t('face_match:label_index', 'Entry') }}: {{ vm.faceMatchFindingIndex + 1 }} / {{ vm.faceMatchFindingEntries.length }}</span>
+							<span v-if="vm.faceMatchReviewingStoredFindings && vm.faceMatchFindingEntries.length">{{ vm.$t('face_match:label_index', 'Entry') }}: {{ vm.faceMatchFindingIndex + 1 }} / {{ vm.faceMatchFindingEntries.length }}</span>
 						</div>
 					</div>
 					<div class="face-match-status-card face-match-status-card-result">
@@ -199,12 +218,12 @@
 </template>
 
 <script>
-import RatioProgress from '../components/RatioProgress.vue';
+import ProgressOverviewCard from '../components/ProgressOverviewCard.vue';
 
 export default {
 	name: 'FaceMatchView',
 	components: {
-		RatioProgress,
+		ProgressOverviewCard,
 	},
 	props: {
 		vm: {

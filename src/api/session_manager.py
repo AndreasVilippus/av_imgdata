@@ -20,6 +20,9 @@ class SessionManagerError(Exception):
 
 
 class SessionManager:
+    TRANSIENT_HTTP_STATUS_CODES = {502, 503, 504}
+    TRANSIENT_REQUEST_EXCEPTIONS = (requests.Timeout, requests.ConnectionError)
+
     def __init__(self, verify_ssl: bool = False, timeout: int = 20):
         self.verify_ssl = verify_ssl
         self.timeout = timeout
@@ -87,6 +90,111 @@ class SessionManager:
             else:
                 normalized[key] = value
         return normalized
+
+    def _get_with_transient_retry(
+        self,
+        session: requests.Session,
+        url: str,
+        *,
+        api: str,
+        params: Dict[str, Any],
+        headers: Dict[str, str],
+    ) -> requests.Response:
+        attempts = 0
+        last_response: Optional[requests.Response] = None
+        while attempts < 2:
+            attempts += 1
+            try:
+                response = session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=self.timeout,
+                )
+            except self.TRANSIENT_REQUEST_EXCEPTIONS as exc:
+                if attempts < 2:
+                    continue
+                raise SessionManagerError(
+                    {
+                        "error": "transient_get_failed",
+                        "api": api,
+                        "method": "get",
+                        "retryable": True,
+                        "attempts": attempts,
+                        "reason": exc.__class__.__name__,
+                    },
+                    status_code=503,
+                ) from exc
+            except requests.RequestException as exc:
+                raise SessionManagerError(
+                    {
+                        "error": "request_failed",
+                        "api": api,
+                        "method": "get",
+                        "retryable": False,
+                        "attempts": attempts,
+                        "reason": exc.__class__.__name__,
+                    },
+                    status_code=502,
+                ) from exc
+            last_response = response
+            if response.status_code in self.TRANSIENT_HTTP_STATUS_CODES and attempts < 2:
+                continue
+            return response
+
+        if last_response is not None:
+            return last_response
+        raise SessionManagerError(
+            {
+                "error": "transient_get_failed",
+                "api": api,
+                "method": "get",
+                "retryable": True,
+                "attempts": attempts,
+            },
+            status_code=503,
+        )
+
+    def _post_without_retry(
+        self,
+        session: requests.Session,
+        url: str,
+        *,
+        api: str,
+        data: Dict[str, Any],
+        headers: Dict[str, str],
+    ) -> requests.Response:
+        try:
+            return session.post(
+                url,
+                data=data,
+                headers=headers,
+                timeout=self.timeout,
+            )
+        except self.TRANSIENT_REQUEST_EXCEPTIONS as exc:
+            raise SessionManagerError(
+                {
+                    "error": "transient_post_failed",
+                    "api": api,
+                    "method": "post",
+                    "retryable": False,
+                    "attempts": 1,
+                    "reason": exc.__class__.__name__,
+                },
+                status_code=503,
+            ) from exc
+        except requests.RequestException as exc:
+            raise SessionManagerError(
+                {
+                    "error": "request_failed",
+                    "api": api,
+                    "method": "post",
+                    "retryable": False,
+                    "attempts": 1,
+                    "reason": exc.__class__.__name__,
+                },
+                status_code=502,
+            ) from exc
 
     def update_context(
         self,
@@ -248,11 +356,12 @@ class SessionManager:
             session = requests.Session()
             session.verify = self.verify_ssl
             session.cookies.update(cookies)
-            response = session.get(
+            response = self._get_with_transient_retry(
+                session,
                 f"{base_url}/webapi/entry.cgi",
+                api=api,
                 params=request_params,
                 headers=headers,
-                timeout=self.timeout,
             )
             data = self._safe_json(response)
             if data.get("success"):
@@ -267,11 +376,12 @@ class SessionManager:
                     request_params.pop("_sid", None)
                 if state.get("synotoken"):
                     headers["X-SYNO-TOKEN"] = state.get("synotoken")
-                retry_response = session.get(
+                retry_response = self._get_with_transient_retry(
+                    session,
                     f"{base_url}/webapi/entry.cgi",
+                    api=api,
                     params=request_params,
                     headers=headers,
-                    timeout=self.timeout,
                 )
                 retry_data = self._safe_json(retry_response)
                 if retry_data.get("success"):
@@ -314,11 +424,12 @@ class SessionManager:
             session = requests.Session()
             session.verify = self.verify_ssl
             session.cookies.update(cookies)
-            response = session.post(
+            response = self._post_without_retry(
+                session,
                 f"{base_url}/webapi/entry.cgi",
+                api=api,
                 data=request_params,
                 headers=headers,
-                timeout=self.timeout,
             )
             data = self._safe_json(response)
             if data.get("success"):
@@ -333,11 +444,12 @@ class SessionManager:
                     request_params.pop("_sid", None)
                 if state.get("synotoken"):
                     headers["X-SYNO-TOKEN"] = state.get("synotoken")
-                retry_response = session.post(
+                retry_response = self._post_without_retry(
+                    session,
                     f"{base_url}/webapi/entry.cgi",
+                    api=api,
                     data=request_params,
                     headers=headers,
-                    timeout=self.timeout,
                 )
                 retry_data = self._safe_json(retry_response)
                 if retry_data.get("success"):

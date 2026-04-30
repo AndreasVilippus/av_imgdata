@@ -17,6 +17,8 @@ export default {
 			checksProgressRequestId: 0,
 			checksSessionSyncing: false,
 			checksSkipNameMappingConfirm: false,
+			checksFindingsStatusLoaded: false,
+			checksFindingsStatus: {},
 			checksDuplicateAssignments: {
 				left: this.createChecksDuplicateAssignmentState(),
 				right: this.createChecksDuplicateAssignmentState(),
@@ -47,6 +49,16 @@ export default {
 			}
 			return this.checksCurrentIndex + 1 < this.checksEntries.length;
 		},
+		checksStoredFindingsCount() {
+			const statuses = this.checksFindingsStatus && typeof this.checksFindingsStatus === 'object'
+				? this.checksFindingsStatus
+				: {};
+			const current = statuses[String(this.selectedChecksType || '').trim().toLowerCase()];
+			return Math.max(0, Number(current && current.count) || 0);
+		},
+		hasChecksStoredFindings() {
+			return this.checksStoredFindingsCount > 0;
+		},
 	},
 	watch: {
 		selectedChecksAction(nextAction) {
@@ -63,7 +75,13 @@ export default {
 			if (!this.checksLoading && !this.checksSessionSyncing) {
 				this.resetChecksUiState();
 			}
+			if (this.checksFindingsStatusLoaded && this.selectedChecksAction === 'findings' && !this.hasChecksStoredFindings) {
+				this.selectedChecksAction = 'scan';
+			}
 		},
+	},
+	mounted() {
+		this.fetchChecksFindingsStatus();
 	},
 	beforeDestroy() {
 		this.stopChecksProgressPolling();
@@ -82,6 +100,25 @@ export default {
 			this.checksLoading = false;
 			this.checksSkipNameMappingConfirm = false;
 			this.resetChecksDuplicateAssignmentState();
+		},
+		async fetchChecksFindingsStatus() {
+			try {
+				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_findings_status');
+				const root = this.getResponseData(data);
+				this.checksFindingsStatus = root.statuses && typeof root.statuses === 'object'
+					? root.statuses
+					: {};
+				this.checksFindingsStatusLoaded = true;
+				if (this.selectedChecksAction === 'findings' && !this.hasChecksStoredFindings) {
+					this.selectedChecksAction = 'scan';
+				}
+			} catch (err) {
+				this.checksFindingsStatus = {};
+				this.checksFindingsStatusLoaded = true;
+				if (this.selectedChecksAction === 'findings') {
+					this.selectedChecksAction = 'scan';
+				}
+			}
 		},
 		createChecksDuplicateAssignmentState() {
 			return {
@@ -189,6 +226,23 @@ export default {
 				&& !!(item && item.image_path)
 				&& this.isChecksMetadataFace(face)
 				&& !!(sourceFace && typeof sourceFace === 'object' && sourceFace.source_format);
+		},
+		canIgnoreChecksItem(item = this.checksCurrentItem) {
+			const reviewType = String(item && item.review_type || '').trim().toLowerCase();
+			return ['duplicate_faces', 'position_deviations', 'name_conflicts'].includes(reviewType);
+		},
+		getCurrentChecksEntry() {
+			if (this.selectedChecksAction === 'scan') {
+				const progress = this.checksProgress && typeof this.checksProgress === 'object'
+					? this.checksProgress
+					: {};
+				const result = progress.result && typeof progress.result === 'object'
+					? progress.result
+					: {};
+				return result.entry && typeof result.entry === 'object' ? result.entry : null;
+			}
+			const entry = this.checksEntries[this.checksCurrentIndex];
+			return entry && typeof entry === 'object' ? entry : null;
 		},
 		getChecksDuplicateAssignment(side) {
 			return this.checksDuplicateAssignments && this.checksDuplicateAssignments[side]
@@ -408,6 +462,15 @@ export default {
 			if (!this.checksProgress || typeof this.checksProgress !== 'object') {
 				this.checksProgress = {};
 			}
+			this.checksFindingsStatus = {
+				...(this.checksFindingsStatus || {}),
+				[String(this.selectedChecksType || '').trim().toLowerCase()]: {
+					status: String(findingsUpdate.status || ''),
+					count: Number.isFinite(findingsCount) ? findingsCount : findingsUpdate.entries.length,
+					save_only: !!findingsUpdate.save_only,
+				},
+			};
+			this.checksFindingsStatusLoaded = true;
 			this.checksProgress = {
 				...this.checksProgress,
 				findings_count: Number.isFinite(findingsCount) ? findingsCount : findingsUpdate.entries.length,
@@ -472,6 +535,9 @@ export default {
 			if (nextProgress.check_type && !this.matchesSelectedChecksType(nextProgress.check_type)) {
 				return;
 			}
+			if (this.isChecksProgressUpdateStale(this.checksProgress, nextProgress)) {
+				return;
+			}
 			nextProgress.findings_count = Number(nextProgress.findings_count) || 0;
 			nextProgress.resolved_count = Number(nextProgress.resolved_count) || 0;
 			nextProgress.ignored_count = Number(nextProgress.ignored_count) || 0;
@@ -502,6 +568,25 @@ export default {
 						: null
 				);
 			}
+		},
+		isChecksProgressUpdateStale(current, next) {
+			const currentProgress = current && typeof current === 'object' ? current : {};
+			const nextProgress = next && typeof next === 'object' ? next : {};
+			const currentOperationId = String(currentProgress.operation_id || '').trim();
+			const nextOperationId = String(nextProgress.operation_id || '').trim();
+			if (currentOperationId && !nextOperationId) {
+				return true;
+			}
+			if (currentOperationId && nextOperationId && currentOperationId !== nextOperationId) {
+				return false;
+			}
+			const currentRevision = Number(currentProgress.revision);
+			const nextRevision = Number(nextProgress.revision);
+			return Number.isFinite(currentRevision)
+				&& Number.isFinite(nextRevision)
+				&& currentRevision > 0
+				&& nextRevision > 0
+				&& nextRevision < currentRevision;
 		},
 		async ensureChecksResultItemLoaded(progress) {
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
@@ -582,12 +667,16 @@ export default {
 				? this.checksProgress
 				: {};
 			const key = String(progress.message_key || '').trim();
+			const openFindings = Number(progress.findings_count) || 0;
+			const resolvedNames = Number(progress.resolved_count) || 0;
+			const ignoredConflicts = Number(progress.ignored_count) || 0;
 			const segments = [
-				`${this.$t('checks:label_findings_count', 'Findings:')} ${Number(progress.findings_count) || 0}`,
+				`${this.$t('checks:label_findings_count', 'Findings:')} ${openFindings}`,
 			];
 			if (this.selectedChecksType === 'name_conflicts') {
-				segments.push(`${this.$t('checks:label_resolved_names_count', 'Resolved names:')} ${Number(progress.resolved_count) || 0}`);
-				segments.push(`${this.$t('checks:label_ignored_names_count', 'Ignored conflicts:')} ${Number(progress.ignored_count) || 0}`);
+				segments.splice(0, 1, `${this.$t('checks:label_name_conflict_findings_count', 'Findings:')} ${openFindings + resolvedNames + ignoredConflicts}`);
+				segments.push(`${this.$t('checks:label_resolved_names_count', 'Resolved names:')} ${resolvedNames}`);
+				segments.push(`${this.$t('checks:label_ignored_names_count', 'Ignored conflicts:')} ${ignoredConflicts}`);
 			}
 			const withCounts = (text) => {
 				const normalized = String(text || '').trim();
@@ -760,6 +849,47 @@ export default {
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.checksLoading = false;
+			}
+		},
+		async ignoreChecksCurrentItem() {
+			const item = this.checksCurrentItem;
+			const entry = this.getCurrentChecksEntry();
+			if (!this.canIgnoreChecksItem(item) || !entry) {
+				return;
+			}
+			this.checksActionLocked = true;
+			this.checksLoading = true;
+			let keepLoadingState = false;
+			try {
+				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_ignore_entry', {
+					check_type: String(item.review_type || '').trim().toLowerCase(),
+					image_path: item.image_path,
+					entry,
+				});
+				const root = this.getResponseData(data);
+				this.applyChecksFindingsUpdate(root.findings_update);
+				this.checksStatusMessage = this.$t('checks:status_item_ignored', 'Entry added to ignore list.');
+				if (root.config && typeof this.normalizeConfig === 'function') {
+					this.configModel = this.normalizeConfig(root.config);
+				}
+				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
+					keepLoadingState = true;
+					await this.startChecksScan({ resumeFromProgress: true });
+					return;
+				}
+				if (!this.checksEntries.length) {
+					this.checksCurrentItem = null;
+					this.resetChecksDuplicateAssignmentState();
+					return;
+				}
+				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
+			} catch (err) {
+				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
+			} finally {
+				this.checksActionLocked = false;
+				if (!keepLoadingState) {
+					this.checksLoading = false;
+				}
 			}
 		},
 		async deleteChecksMetadataFace(face) {
@@ -1024,7 +1154,7 @@ export default {
 			if (this.selectedChecksAction === 'scan') {
 				return this.$t('checks:action_scan', 'Run check scan');
 			}
-			return this.$t('checks:action_findings', 'Use analysis findings');
+			return this.$t('checks:action_findings', 'Process saved findings list');
 		},
 	},
 };

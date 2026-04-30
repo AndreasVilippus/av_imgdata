@@ -159,7 +159,7 @@ class ExifToolHandler:
                 handle.write(packet_content)
                 temp_path = handle.name
             result = subprocess.run(
-                [executable_path, "-overwrite_original", f"-XMP<={temp_path}", target_path],
+                [executable_path, "-m", "-overwrite_original", f"-XMP<={temp_path}", target_path],
                 capture_output=True,
                 text=True,
                 check=False,

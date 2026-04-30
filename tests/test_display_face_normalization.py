@@ -10,11 +10,12 @@ sys.path.insert(0, os.path.abspath("src"))
 
 from api import imgdata_api
 from api.session_manager import SessionManager, SessionManagerError
-from imgdata import ImgDataService
+from imgdata import ImgDataOperationError, ImgDataService
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
 from parser.metadata_parser import MetadataParser
 from services.bbox_normalizer import to_display_face
+from services.config_service import ConfigService
 
 
 XMP_MWG_AND_MICROSOFT = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
@@ -267,6 +268,191 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertIsNone(result.get("image_path"))
         self.assertIsNone(result.get("metadata_face"))
 
+    def test_search_missing_photos_faces_keeps_second_face_for_same_person_on_photo(self):
+        metadata_face = MetadataFace.from_center_box(
+            name="Person Target",
+            x=0.6254395,
+            y=0.428125,
+            w=0.073857,
+            h=0.05,
+            source="embedded_xmp_exiftool",
+            source_format="MICROSOFT",
+        )
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.files.listImageFiles = lambda base_path: ["/volume1/photo/tests/generic-event/generic-photo-100.JPG"]
+        self.service._readImageMetadata = lambda image_path, include_unnamed_acd=False: MetadataPayload(
+            image_path=image_path,
+            faces=[metadata_face],
+        )
+        self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 35535, "filename": "generic-photo-100.JPG"}
+        self.service.photos.list_faceFotoTeamItems = lambda **kwargs: [{
+            "face_id": 8001,
+            "face_name": "Person Target",
+            "person_id": 91,
+            "bbox": {
+                "top_left": {"x": 0.1, "y": 0.1},
+                "bottom_right": {"x": 0.2, "y": 0.2},
+            },
+        }]
+        self.service.photos.listFotoTeamPersonKnown = lambda **kwargs: [{"id": 91, "name": "Person Target"}]
+        self.service.photos.sortPersonsForFaceMatch = lambda persons: persons
+        self.service._lookupMatchedPersonBySourceName = lambda **kwargs: ({"id": 91, "name": "Person Target"}, None, {})
+
+        result = self.service.searchMissingPhotosFaces(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+        )
+
+        self.assertTrue(result.get("searched"))
+        self.assertEqual(result.get("action"), "mark_missing_photos_faces")
+        self.assertEqual(result.get("image_path"), "/volume1/photo/tests/generic-event/generic-photo-100.JPG")
+        self.assertTrue(result.get("add_new_faces_to_photos"))
+        self.assertEqual(result.get("matched_person_id"), 91)
+        self.assertEqual(result.get("source_name"), "Person Target")
+
+    def test_search_missing_photos_faces_resumes_from_path_index(self):
+        analyzed = []
+        paths = [
+            "/volume1/photo/tests/first.jpg",
+            "/volume1/photo/tests/second.jpg",
+            "/volume1/photo/tests/third.jpg",
+        ]
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.files.listImageFiles = lambda base_path: paths
+        self.service._readImageMetadata = lambda image_path, include_unnamed_acd=False: analyzed.append(image_path) or MetadataPayload(
+            image_path=image_path,
+            faces=[],
+        )
+        self.service.photos.findFotoTeamItemByPath = lambda **kwargs: None
+
+        result = self.service.searchMissingPhotosFaces(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            resume_cursor={
+                "action": "mark_missing_photos_faces",
+                "path_index": 2,
+                "skip_targets": ["existing-token"],
+                "transferred_count": 10,
+                "findings_count": 11,
+                "auto": True,
+                "save_only": False,
+            },
+        )
+
+        self.assertEqual(analyzed, ["/volume1/photo/tests/third.jpg"])
+        self.assertEqual(result["resume_cursor"]["path_index"], 3)
+        self.assertEqual(result["transferred_count"], 10)
+        self.assertEqual(result["findings_count"], 11)
+
+    def test_start_face_matching_discovery_reuses_progress_cursor_when_skipping_target(self):
+        class FakeThread:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def start(self):
+                return None
+
+            def is_alive(self):
+                return False
+
+        self.service._setFaceMatchingProgress(
+            "user",
+            action="mark_missing_photos_faces",
+            operation_id="face-match-existing",
+            running=False,
+            finished=True,
+            images_read=1444,
+            transferred_count=10,
+            findings_count=11,
+            resume_cursor={
+                "action": "mark_missing_photos_faces",
+                "path_index": 1444,
+                "skip_targets": ["old-token"],
+                "transferred_count": 10,
+                "findings_count": 11,
+                "auto": True,
+                "save_only": False,
+            },
+        )
+
+        with patch("imgdata.Thread", FakeThread):
+            progress = self.service.startFaceMatchingDiscovery(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                action="mark_missing_photos_faces",
+                skip_targets=["new-token"],
+                auto=True,
+                save_only=False,
+                resume_from_progress=False,
+            )
+
+        self.assertEqual(progress["operation_id"], "face-match-existing")
+        self.assertEqual(progress["images_read"], 1444)
+        self.assertEqual(progress["transferred_count"], 10)
+        self.assertEqual(progress["findings_count"], 11)
+        self.assertEqual(progress["resume_cursor"]["path_index"], 1444)
+        self.assertEqual(progress["resume_cursor"]["skip_targets"], ["new-token", "old-token"])
+
+    def test_start_face_matching_discovery_preserves_search_photo_progress_when_skipping_face(self):
+        class FakeThread:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def start(self):
+                return None
+
+            def is_alive(self):
+                return False
+
+        self.service._setFaceMatchingProgress(
+            "user",
+            action="search_photo_face_in_file",
+            operation_id="face-match-existing",
+            running=False,
+            finished=True,
+            persons_read=42,
+            images_read=17,
+            faces_read=180,
+            target_faces_read=3,
+            metadata_faces_read=99,
+            transferred_count=5,
+            findings_count=6,
+            resume_cursor={
+                "action": "search_photo_face_in_file",
+                "skip_face_ids": [123],
+                "transferred_count": 5,
+                "findings_count": 6,
+                "auto": True,
+                "save_only": False,
+            },
+        )
+
+        with patch("imgdata.Thread", FakeThread):
+            progress = self.service.startFaceMatchingDiscovery(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                action="search_photo_face_in_file",
+                skip_face_ids=[456],
+                auto=True,
+                save_only=False,
+                resume_from_progress=False,
+            )
+
+        self.assertEqual(progress["operation_id"], "face-match-existing")
+        self.assertEqual(progress["persons_read"], 42)
+        self.assertEqual(progress["images_read"], 17)
+        self.assertEqual(progress["faces_read"], 180)
+        self.assertEqual(progress["target_faces_read"], 3)
+        self.assertEqual(progress["metadata_faces_read"], 99)
+        self.assertEqual(progress["transferred_count"], 5)
+        self.assertEqual(progress["findings_count"], 6)
+        self.assertEqual(progress["resume_cursor"]["skip_face_ids"], [123, 456])
+        self.assertEqual(progress["resume_cursor"]["persons_read"], 42)
+
     def test_add_matched_metadata_face_to_photos_forwards_person_id(self):
         metadata_face = {
             "name": "Person Target",
@@ -280,7 +466,18 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         captured = {}
         self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
         self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 35535}
-        self.service.photos.list_faceFotoTeamItems = lambda **kwargs: []
+        self.service.photos.list_faceFotoTeamItems = Mock(side_effect=[
+            [],
+            [{
+                "face_id": 107256,
+                "face_name": "Person Target",
+                "person_id": 91,
+                "bbox": {
+                    "top_left": {"x": 0.1, "y": 0.2},
+                    "bottom_right": {"x": 0.2, "y": 0.3},
+                },
+            }],
+        ])
 
         def fake_add_face(**kwargs):
             captured.update(kwargs)
@@ -300,6 +497,283 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["created"])
         self.assertEqual(result["face_id"], 107256)
         self.assertEqual(captured["person_id"], 91)
+        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 2)
+
+    def test_add_matched_metadata_face_to_photos_allows_second_face_for_same_person_on_same_item(self):
+        metadata_face = {
+            "name": "Person Target",
+            "x": 0.6254395,
+            "y": 0.428125,
+            "w": 0.073857,
+            "h": 0.05,
+            "source": "embedded_xmp_exiftool",
+            "source_format": "MICROSOFT",
+        }
+        captured = {}
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 35535}
+        self.service.photos.list_faceFotoTeamItems = Mock(side_effect=[
+            [{
+                "face_id": 8001,
+                "face_name": "Person Target",
+                "person_id": 91,
+                "bbox": {
+                    "top_left": {"x": 0.1, "y": 0.1},
+                    "bottom_right": {"x": 0.2, "y": 0.2},
+                },
+            }],
+            [{
+                "face_id": 8001,
+                "face_name": "Person Target",
+                "person_id": 91,
+                "bbox": {
+                    "top_left": {"x": 0.1, "y": 0.1},
+                    "bottom_right": {"x": 0.2, "y": 0.2},
+                },
+            }, {
+                "face_id": 107256,
+                "face_name": "Person Target",
+                "person_id": 91,
+                "bbox": {
+                    "top_left": {"x": 0.58, "y": 0.40},
+                    "bottom_right": {"x": 0.66, "y": 0.45},
+                },
+            }],
+        ])
+
+        def fake_add_face(**kwargs):
+            captured.update(kwargs)
+            return {"list": [{"face_id": 107256, "face_id_temp": kwargs["face_id_temp"]}]}
+
+        self.service.photos.addFaceToItem = fake_add_face
+
+        result = self.service.addMatchedMetadataFaceToPhotos(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            image_path="/volume1/photo/tests/generic-event/generic-photo-100.JPG",
+            metadata_face=metadata_face,
+            person_id=91,
+        )
+
+        self.assertTrue(result["created"])
+        self.assertEqual(result["face_id"], 107256)
+        self.assertEqual(captured["person_id"], 91)
+        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 2)
+
+    def test_add_matched_metadata_face_to_photos_reports_missing_created_face(self):
+        metadata_face = {
+            "name": "Person Target",
+            "x": 0.6254395,
+            "y": 0.428125,
+            "w": 0.073857,
+            "h": 0.05,
+            "source": "embedded_xmp_exiftool",
+            "source_format": "MICROSOFT",
+        }
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 35535}
+        self.service.photos.list_faceFotoTeamItems = Mock(side_effect=[[], []])
+        self.service.photos.addFaceToItem = lambda **kwargs: {
+            "list": [{"face_id": 107256, "face_id_temp": kwargs["face_id_temp"]}],
+        }
+
+        with self.assertRaises(ImgDataOperationError) as context:
+            self.service.addMatchedMetadataFaceToPhotos(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                image_path="/volume1/photo/tests/generic-event/generic-photo-100.JPG",
+                metadata_face=metadata_face,
+                person_id=91,
+            )
+
+        self.assertEqual(context.exception.details["code"], "photos_face_changed_during_operation")
+        self.assertEqual(context.exception.details["reason"], "photos_face_missing")
+        self.assertEqual(context.exception.details["phase"], "photos_face_create_postcheck")
+        self.assertEqual(context.exception.details["item_id"], 35535)
+        self.assertEqual(context.exception.details["face_id"], 107256)
+
+    def test_add_matched_metadata_face_to_photos_recovers_face_id_from_postcheck_when_add_result_is_empty(self):
+        metadata_face = {
+            "name": "Person Target",
+            "x": 0.6254395,
+            "y": 0.428125,
+            "w": 0.073857,
+            "h": 0.05,
+            "source": "embedded_xmp_exiftool",
+            "source_format": "MICROSOFT",
+        }
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 35535}
+        self.service.photos.list_faceFotoTeamItems = Mock(side_effect=[
+            [],
+            [{
+                "face_id": 107256,
+                "face_name": "",
+                "person_id": 0,
+                "bbox": {
+                    "top_left": {"x": 0.588511, "y": 0.403125},
+                    "bottom_right": {"x": 0.662368, "y": 0.453125},
+                },
+            }],
+            [{
+                "face_id": 107256,
+                "face_name": "",
+                "person_id": 0,
+                "bbox": {
+                    "top_left": {"x": 0.588511, "y": 0.403125},
+                    "bottom_right": {"x": 0.662368, "y": 0.453125},
+                },
+            }],
+        ])
+        self.service.photos.addFaceToItem = lambda **kwargs: {"list": []}
+
+        result = self.service.addMatchedMetadataFaceToPhotos(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            image_path="/volume1/photo/tests/generic-event/generic-photo-100.JPG",
+            metadata_face=metadata_face,
+        )
+
+        self.assertTrue(result["created"])
+        self.assertEqual(result["face_id"], 107256)
+        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 3)
+
+    def test_assign_matched_face_validates_photos_person_after_write_when_item_known(self):
+        self.service.photos.list_faceFotoTeamItems = Mock(side_effect=[
+            [{"face_id": 555, "person_id": 17, "bbox": {}}],
+            [{"face_id": 555, "person_id": 17, "bbox": {}}],
+        ])
+        self.service.photos.assignFaceToPerson = lambda **kwargs: {"success": True}
+
+        with self.assertRaises(ImgDataOperationError) as context:
+            self.service.assignMatchedFaceToKnownPerson(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                face_id=555,
+                person_id=91,
+                person_name="Person Target",
+                item_id=35535,
+                image_path="/volume1/photo/tests/generic-event/generic-photo-100.JPG",
+            )
+
+        self.assertEqual(context.exception.details["code"], "photos_face_changed_during_operation")
+        self.assertEqual(context.exception.details["reason"], "photos_face_person_mismatch")
+        self.assertEqual(context.exception.details["phase"], "photos_face_assign_postcheck")
+        self.assertEqual(context.exception.details["person_id"], 91)
+
+    def test_create_matched_face_as_person_derives_person_id_from_postcheck_face(self):
+        self.service.photos.createPersonFromFace = lambda **kwargs: {}
+        self.service.photos.findKnownPersonByName = Mock()
+        self.service.photos.list_faceFotoTeamItems = Mock(side_effect=[
+            [{"face_id": 107256, "person_id": 0, "bbox": {}}],
+            [{"face_id": 107256, "person_id": 91, "bbox": {}}],
+        ])
+
+        result = self.service.createMatchedFaceAsPerson(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            face_id=107256,
+            person_name="Person Target",
+            item_id=35535,
+            image_path="/volume1/photo/tests/generic-event/generic-photo-100.JPG",
+        )
+
+        self.assertEqual(result["person_id"], 91)
+        self.service.photos.findKnownPersonByName.assert_not_called()
+
+    def test_face_create_metadata_match_route_returns_operation_details(self):
+        metadata_face = {
+            "name": "Person Target",
+            "x": 0.6254395,
+            "y": 0.428125,
+            "w": 0.073857,
+            "h": 0.05,
+            "source": "embedded_xmp_exiftool",
+            "source_format": "MICROSOFT",
+        }
+
+        async def fake_prepare(_request):
+            return ({"user_key": "user", "cookies": {}, "base_url": "http://example.test"}, None)
+
+        async def fake_body(_request):
+            return {
+                "image_path": "photo/test.jpg",
+                "metadata_face": metadata_face,
+                "person_name": "Person Target",
+            }
+
+        detail = {
+            "reason": "photos_face_create_failed",
+            "image_path": "photo/test.jpg",
+            "item_id": 35535,
+            "person_id": None,
+            "person_name_required_in_photos": False,
+            "metadata_face_name": "Person Target",
+            "metadata_face_source_format": "MICROSOFT",
+            "face_id_temp": "35535-123456",
+            "add_result": {"list": []},
+        }
+
+        with patch.object(imgdata_api, "_prepare_session_request", side_effect=fake_prepare), \
+             patch.object(imgdata_api, "_read_request_body", side_effect=fake_body), \
+             patch.object(
+                 imgdata_api.IMGDATA,
+                 "addMatchedMetadataFaceToPhotos",
+                 side_effect=ImgDataOperationError("photos_face_create_failed", detail),
+             ):
+            payload = asyncio.run(imgdata_api.face_create_metadata_match(None))
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"]["message"], "face_create_metadata_match_failed")
+        self.assertEqual(payload["error"]["details"], detail)
+
+    def test_face_create_metadata_match_route_returns_person_id(self):
+        metadata_face = {
+            "name": "Person Target",
+            "x": 0.6254395,
+            "y": 0.428125,
+            "w": 0.073857,
+            "h": 0.05,
+            "source": "embedded_xmp_exiftool",
+            "source_format": "MICROSOFT",
+        }
+
+        async def fake_prepare(_request):
+            return ({"user_key": "user", "cookies": {}, "base_url": "http://example.test"}, None)
+
+        async def fake_body(_request):
+            return {
+                "image_path": "photo/test.jpg",
+                "metadata_face": metadata_face,
+                "person_name": "Person Target",
+            }
+
+        with patch.object(imgdata_api, "_prepare_session_request", side_effect=fake_prepare), \
+             patch.object(imgdata_api, "_read_request_body", side_effect=fake_body), \
+             patch.object(
+                 imgdata_api.IMGDATA,
+                 "addMatchedMetadataFaceToPhotos",
+                 return_value={"face_id": 107256, "item_id": 35535},
+             ), \
+             patch.object(
+                 imgdata_api.IMGDATA,
+                 "createMatchedFaceAsPerson",
+                 return_value={"person_id": 91},
+             ), \
+             patch.object(
+                 imgdata_api.IMGDATA,
+                 "removeFaceMatchFindingMetadataEntry",
+                 return_value={"removed": True},
+             ):
+            payload = asyncio.run(imgdata_api.face_create_metadata_match(None))
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["data"]["person_id"], 91)
 
     def test_cleanup_targets_exclude_photos(self):
         self.assertEqual(
@@ -460,6 +934,105 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(progress.get("message"), "Last checks scan is no longer running.")
         self.assertEqual(written.get("state_type"), "checks_progress")
         self.assertEqual(written.get("state_key"), "user_name_conflicts")
+        self.assertFalse(written.get("payload", {}).get("running"))
+
+    def test_get_face_matching_progress_reads_runtime_state_and_clears_stale_running_state(self):
+        written = {}
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+            "operation_id": "face_match-existing",
+            "running": True,
+            "finished": False,
+            "action": "search_photo_face_in_file",
+            "findings_count": 7,
+            "resume_cursor": {
+                "skip_face_ids": [123],
+                "transferred_count": 2,
+                "auto": False,
+                "save_only": False,
+                "action": "search_photo_face_in_file",
+                "findings_count": 7,
+            },
+        }
+        self.service.file_analysis.writeRuntimeState = lambda state_type, state_key, payload: written.update({
+            "state_type": state_type,
+            "state_key": state_key,
+            "payload": dict(payload),
+        }) or True
+
+        progress = self.service.getFaceMatchingProgress("user")
+
+        self.assertFalse(progress.get("running"))
+        self.assertFalse(progress.get("stop_requested"))
+        self.assertEqual(progress.get("findings_count"), 7)
+        self.assertEqual(progress.get("message"), "Last face matching job is no longer running.")
+        self.assertEqual(written.get("state_type"), "face_match_progress")
+        self.assertEqual(written.get("state_key"), "user")
+        self.assertFalse(written.get("payload", {}).get("running"))
+
+    def test_face_matching_progress_syncs_counts_from_resume_cursor(self):
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {}
+        self.service.file_analysis.writeRuntimeState = Mock()
+
+        self.service._setFaceMatchingProgress(
+            "user",
+            action="mark_missing_photos_faces",
+            findings_count=37,
+            transferred_count=61,
+            resume_cursor={
+                "action": "mark_missing_photos_faces",
+                "findings_count": 65,
+                "transferred_count": 61,
+                "skip_targets": ["target-a"],
+            },
+        )
+        self.service._setFaceMatchingProgress(
+            "user",
+            message="Face transferred.",
+            transferred_count=61,
+            resume_cursor={
+                "action": "mark_missing_photos_faces",
+                "findings_count": 65,
+                "transferred_count": 61,
+                "skip_targets": ["target-a"],
+            },
+        )
+
+        progress = self.service.getFaceMatchingProgress("user")
+
+        self.assertEqual(progress["findings_count"], 65)
+        self.assertEqual(progress["transferred_count"], 61)
+
+    def test_get_file_analysis_progress_reads_runtime_state_and_clears_stale_running_state(self):
+        written = {}
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+            "operation_id": "file_analysis-existing",
+            "job_id": "20260426000000",
+            "running": True,
+            "finished": False,
+            "stopped": False,
+            "status": "running",
+            "phase": "analysis",
+            "files_analyzed": 12,
+            "files_matched_total": 40,
+            "analysis_progress": {"current": 12, "total": 40},
+        }
+        self.service.file_analysis.writeRuntimeState = lambda state_type, state_key, payload: written.update({
+            "state_type": state_type,
+            "state_key": state_key,
+            "payload": dict(payload),
+        }) or True
+        self.service.file_analysis.readLatestResult = lambda: {}
+
+        progress = self.service.getFileAnalysisProgress()
+
+        self.assertFalse(progress.get("running"))
+        self.assertTrue(progress.get("finished"))
+        self.assertTrue(progress.get("stopped"))
+        self.assertEqual(progress.get("status"), "stopped")
+        self.assertEqual(progress.get("files_analyzed"), 12)
+        self.assertEqual(progress.get("message"), "Last file analysis is no longer running.")
+        self.assertEqual(written.get("state_type"), "file_analysis_progress")
+        self.assertEqual(written.get("state_key"), "default")
         self.assertFalse(written.get("payload", {}).get("running"))
 
     def test_replace_checks_face_name_reassigns_photos_face_using_name_mapping(self):
@@ -782,9 +1355,10 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.service._buildCheckEntriesForType = Mock(side_effect=[
             [initial_entry],
             [flipped_same_pair, remaining_entry],
+            [remaining_entry],
         ])
 
-        with patch.object(self.service, "getChecksReviewItem", side_effect=[initial_item, remaining_item]), \
+        with patch.object(self.service, "getChecksReviewItem", side_effect=[initial_item, remaining_item, remaining_item]), \
              patch.object(self.service, "replaceChecksFaceName", return_value={"updated": True, "operation": "metadata_write"}):
             result = self.service.searchNextChecksItem(
                 user_key="user",
@@ -799,6 +1373,146 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(result["findings_count"], 1)
         self.assertEqual(result["result"]["entry"]["entry_id"], "remaining")
         self.assertEqual(result["result"]["item"]["entry_id"], "remaining-item")
+        self.assertEqual(result["resume_cursor"]["pending_entries"], [])
+
+    def test_search_next_checks_item_auto_applies_rebuilt_suggested_name_conflicts(self):
+        image_path = "/volume1/photo/tests/test.jpg"
+        first_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "first",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Andreas Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Kaire Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        second_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "second",
+            "left_face_signature": {
+                "source_format": "MICROSOFT",
+                "name": "Andreas Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Kaire Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        first_item = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "left_name": "Andreas Vilippus",
+            "right_name": "Kaire Vilippus",
+            "left_state": "suggested",
+            "right_state": "alert",
+            "left_face_target": dict(first_entry["left_face_signature"]),
+            "right_face_target": dict(first_entry["right_face_signature"]),
+        }
+        second_item = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "left_name": "Andreas Vilippus",
+            "right_name": "Kaire Vilippus",
+            "left_state": "suggested",
+            "right_state": "alert",
+            "left_face_target": dict(second_entry["left_face_signature"]),
+            "right_face_target": dict(second_entry["right_face_signature"]),
+        }
+
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._getChecksCandidatePaths = lambda **kwargs: [image_path]
+        self.service.analyzeImageFaceMetadata = lambda image_path: {}
+        self.service._buildCheckEntriesForType = Mock(side_effect=[
+            [first_entry],
+            [first_entry, second_entry],
+            [],
+            [],
+        ])
+
+        with patch.object(self.service, "getChecksReviewItem", side_effect=[first_item, second_item]), \
+             patch.object(self.service, "replaceChecksFaceName", return_value={"updated": True, "operation": "metadata_write"}) as replace_mock:
+            result = self.service.searchNextChecksItem(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                check_type="name_conflicts",
+                save_only=False,
+                auto_apply_suggested_names=True,
+                auto_apply_suggested_duplicates=False,
+            )
+
+        self.assertEqual(replace_mock.call_count, 2)
+        self.assertTrue(result["finished"])
+        self.assertEqual(result["resolved_count"], 2)
+        self.assertIsNone(result["result"])
+
+    def test_search_next_checks_item_does_not_auto_apply_manual_mutation_remainders(self):
+        image_path = "/volume1/photo/tests/test.jpg"
+        pending_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "remaining-after-manual-change",
+            "_manual_review_required": True,
+        }
+        resume_cursor = {
+            "check_type": "name_conflicts",
+            "path_index": 25,
+            "pending_entries": [pending_entry],
+            "save_only": False,
+            "source_mode": "scan",
+            "findings_count": 1,
+            "metrics_trusted": True,
+        }
+        review_item = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "left_name": "Andreas Vilippus",
+            "right_name": "Kaire Vilippus",
+            "left_state": "suggested",
+            "right_state": "alert",
+            "left_face_target": {"source_format": "ACD", "name": "Andreas Vilippus"},
+            "right_face_target": {"source_format": "MWG_REGIONS", "name": "Kaire Vilippus"},
+        }
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._getChecksCandidatePaths = lambda **kwargs: [image_path for _ in range(30)]
+
+        with patch.object(self.service, "getChecksReviewItem", return_value=review_item), \
+             patch.object(self.service, "replaceChecksFaceName") as replace_mock:
+            result = self.service.searchNextChecksItem(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                check_type="name_conflicts",
+                save_only=False,
+                resume_cursor=resume_cursor,
+                auto_apply_suggested_names=True,
+                auto_apply_suggested_duplicates=False,
+            )
+
+        replace_mock.assert_not_called()
+        self.assertEqual(result["result"]["entry"]["entry_id"], "remaining-after-manual-change")
+        self.assertEqual(result["result"]["item"]["left_state"], "suggested")
         self.assertEqual(result["resume_cursor"]["pending_entries"], [])
 
     def test_refresh_checks_scan_progress_for_image_rebuilds_remaining_conflicts_for_same_file(self):
@@ -866,6 +1580,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(written["payload"]["resume_cursor"]["path_index"], 945)
         self.assertEqual(len(written["payload"]["resume_cursor"]["pending_entries"]), 1)
         self.assertEqual(written["payload"]["resume_cursor"]["pending_entries"][0]["entry_id"], "remaining-after-rename")
+        self.assertTrue(written["payload"]["resume_cursor"]["pending_entries"][0]["_manual_review_required"])
         self.assertEqual(written["payload"]["findings_count"], 2)
 
     def test_refresh_checks_scan_progress_for_image_excludes_processed_face_pair_token(self):
@@ -1205,6 +1920,29 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(progress["current_path"], "/volume1/photo/tests/test.jpg")
         self.assertEqual(progress["resume_cursor"]["path_index"], 944)
         self.assertEqual(progress["resume_cursor"]["findings_count"], 12)
+
+    def test_search_next_checks_item_refreshes_session_during_long_scan(self):
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._getChecksCandidatePaths = lambda **kwargs: ["/volume1/photo/tests/test.jpg"]
+        self.service.analyzeImageFaceMetadata = lambda image_path: {}
+        self.service._buildCheckEntriesForType = lambda **kwargs: []
+        self.service.session_manager.keepalive = Mock(return_value={})
+
+        with patch("imgdata.monotonic", side_effect=[0, 181]):
+            result = self.service.searchNextChecksItem(
+                user_key="user",
+                cookies={"_SSID": "sid"},
+                base_url="https://example.test",
+                check_type="name_conflicts",
+                save_only=False,
+            )
+
+        self.service.session_manager.keepalive.assert_called_once_with(
+            "user",
+            base_url="https://example.test",
+        )
+        self.assertEqual(result["files_scanned"], 1)
+        self.assertEqual(result["message_key"], "checks:progress_finished_no_match")
 
     def test_checks_replace_metadata_face_name_returns_success_when_refresh_fails(self):
         async def run_test():
@@ -2077,6 +2815,87 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["save_only"])
         self.assertEqual(result["count"], 2)
         self.assertEqual(result["entries"], stored_entries)
+
+    def test_build_check_entries_for_type_excludes_configured_ignore_tokens(self):
+        entry = {
+            "review_type": "duplicate_faces",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "left_face_signature": {"source_format": "ACD", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2},
+            "right_face_signature": {"source_format": "ACD", "x": 0.2, "y": 0.2, "w": 0.2, "h": 0.2},
+        }
+        ignored_token = self.service._checksEntryToken(entry)
+
+        with patch.object(
+            self.service,
+            "_buildDuplicateFaceReviewEntries",
+            return_value=[entry],
+        ), patch.object(
+            self.service,
+            "_configuredChecksIgnoreSettings",
+            return_value={
+                "DUPLICATE_FACES_ENABLED": True,
+            },
+        ), patch.object(
+            self.service.config,
+            "readChecksIgnoreList",
+            return_value=[ignored_token],
+        ):
+            result = self.service._buildCheckEntriesForType(
+                image_path="/volume1/photo/tests/test.jpg",
+                review_type="duplicate_faces",
+            )
+
+        self.assertEqual(result, [])
+
+    def test_ignore_checks_entry_persists_unique_token(self):
+        entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "left_face_signature": {"source_format": "ACD", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2},
+            "right_face_signature": {"source_format": "MICROSOFT", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2},
+        }
+        ignored_token = self.service._checksEntryToken(entry)
+
+        with patch.object(
+            self.service,
+            "_configuredChecksIgnoreSettings",
+            return_value={
+                "NAME_CONFLICTS_ENABLED": True,
+            },
+        ), patch.object(
+            self.service.config,
+            "appendChecksIgnoreToken",
+            return_value={
+                "saved": True,
+                "token": ignored_token,
+                "count": 1,
+            },
+        ):
+            result = self.service.ignoreChecksEntry(entry=entry)
+
+        self.assertTrue(result["ignored"])
+        self.assertEqual(result["token"], ignored_token)
+
+    def test_config_service_migrates_legacy_checks_ignore_lists_to_files(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = os.path.join(tempdir, "config.json")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "analysis": {
+                            "CHECKS": {
+                                "IGNORE_LIST_DUPLICATE_FACES": ["token-a", "token-a", "token-b"],
+                            },
+                        },
+                    },
+                    handle,
+                )
+
+            config_service = ConfigService(config_path)
+            merged = config_service.readMergedConfig()
+
+            self.assertNotIn("IGNORE_LIST_DUPLICATE_FACES", merged["analysis"]["CHECKS"])
+            self.assertEqual(config_service.readChecksIgnoreList("duplicate_faces"), ["token-a", "token-b"])
 
 if __name__ == "__main__":
     unittest.main()

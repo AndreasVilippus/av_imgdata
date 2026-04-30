@@ -1,5 +1,5 @@
 <template>
-	<div class="sm-ratio-progress" :title="tooltip">
+	<div class="sm-ratio-progress sm-ratio-progress-standalone" :title="tooltip">
 		<div v-if="iconUrl" class="sm-ratio-progress-icon-wrap">
 			<img class="sm-ratio-progress-icon" :src="iconUrl" alt="" />
 		</div>
