@@ -37,11 +37,11 @@ export default {
 		},
 		checksPrimaryButtonLabel() {
 			if (this.isChecksScanRunning) {
-				return this.$t('checks:button_stop', 'Stop');
+				return this.$avt('checks:button_stop', 'Stop');
 			}
 			return this.checksLoading
-				? this.$t('checks:button_loading', 'Loading...')
-				: this.$t('checks:button_start', 'Start');
+				? this.$avt('checks:button_loading', 'Loading...')
+				: this.$avt('checks:button_start', 'Start');
 		},
 		hasNextChecksItem() {
 			if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
@@ -75,9 +75,6 @@ export default {
 			if (!this.checksLoading && !this.checksSessionSyncing) {
 				this.resetChecksUiState();
 			}
-			if (this.checksFindingsStatusLoaded && this.selectedChecksAction === 'findings' && !this.hasChecksStoredFindings) {
-				this.selectedChecksAction = 'scan';
-			}
 		},
 	},
 	mounted() {
@@ -103,21 +100,19 @@ export default {
 		},
 		async fetchChecksFindingsStatus() {
 			try {
-				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_findings_status');
+				const data = await this.callChecksApi(
+					'/webman/3rdparty/AV_ImgData/index.cgi/api/checks_findings_status',
+					{},
+					{ resume: false, requireSynoToken: false }
+				);
 				const root = this.getResponseData(data);
 				this.checksFindingsStatus = root.statuses && typeof root.statuses === 'object'
 					? root.statuses
 					: {};
 				this.checksFindingsStatusLoaded = true;
-				if (this.selectedChecksAction === 'findings' && !this.hasChecksStoredFindings) {
-					this.selectedChecksAction = 'scan';
-				}
 			} catch (err) {
 				this.checksFindingsStatus = {};
 				this.checksFindingsStatusLoaded = true;
-				if (this.selectedChecksAction === 'findings') {
-					this.selectedChecksAction = 'scan';
-				}
 			}
 		},
 		createChecksDuplicateAssignmentState() {
@@ -342,14 +337,14 @@ export default {
 		getChecksWarningPopupMessage(result) {
 			const warning = String(result && result.warning || '').trim();
 			if (warning === 'checks:warning_exiftool_required') {
-				return this.$t(
+				return this.$avt(
 					'checks:popup_exiftool_required',
 					'ExifTool is missing, but required for this action. Please configure or install ExifTool first.'
 				);
 			}
 			if (warning === 'checks:warning_target_person_not_found') {
 				const details = result && typeof result.details === 'object' ? result.details : {};
-				return this.$t(
+				return this.$avt(
 					'checks:popup_target_person_not_found',
 					'No Photos person could be found for "{name}".',
 					{ name: details.requested_name || details.lookup_name || '' }
@@ -363,17 +358,17 @@ export default {
 			if (stderr || stdout || errorCode) {
 				const parts = [];
 				if (errorCode) {
-					parts.push(this.$t('checks:popup_error_code', 'Error code: {code}', { code: errorCode }));
+					parts.push(this.$avt('checks:popup_error_code', 'Error code: {code}', { code: errorCode }));
 				}
 				if (Number.isFinite(returncode)) {
-					parts.push(this.$t('checks:popup_return_code', 'Return code: {code}', { code: returncode }));
+					parts.push(this.$avt('checks:popup_return_code', 'Return code: {code}', { code: returncode }));
 				}
 				if (stderr) {
-					parts.push(this.$t('checks:popup_error_stderr', 'Error output:\n{output}', { output: stderr }));
+					parts.push(this.$avt('checks:popup_error_stderr', 'Error output:\n{output}', { output: stderr }));
 				} else if (stdout) {
-					parts.push(this.$t('checks:popup_error_stdout', 'Command output:\n{output}', { output: stdout }));
+					parts.push(this.$avt('checks:popup_error_stdout', 'Command output:\n{output}', { output: stdout }));
 				}
-				return this.$t(
+				return this.$avt(
 					'checks:popup_action_failed_details',
 					'The metadata action failed.\n\n{details}',
 					{ details: parts.join('\n\n') }
@@ -383,7 +378,7 @@ export default {
 		},
 		getChecksReplaceRightTooltip(item) {
 			if (this.isChecksPositionDeviation(item)) {
-				return this.$t(
+				return this.$avt(
 					'checks:tooltip_replace_right_position',
 					'The face on the right takes the position from the left.'
 				);
@@ -392,13 +387,13 @@ export default {
 			const rightName = this.getChecksDisplayName(item && item.right_name);
 			const rightFace = item && item.right_face_target;
 			if (this.isChecksPhotosFace(rightFace)) {
-				return this.$t(
+				return this.$avt(
 					'checks:tooltip_assign_right_name',
-					'The Photos face on the right is assigned to the person from the left: {from} -> {to}',
+					'The Photos face on the right is assigned to the person from the left, or the person is created if missing: {from} -> {to}',
 					{ from: rightName, to: leftName }
 				);
 			}
-			return this.$t(
+			return this.$avt(
 				'checks:tooltip_replace_right_name',
 				'The face on the right gets the name from the left: {from} -> {to}',
 				{ from: rightName, to: leftName }
@@ -406,7 +401,7 @@ export default {
 		},
 		getChecksReplaceLeftTooltip(item) {
 			if (this.isChecksPositionDeviation(item)) {
-				return this.$t(
+				return this.$avt(
 					'checks:tooltip_replace_left_position',
 					'The face on the left takes the position from the right.'
 				);
@@ -415,13 +410,13 @@ export default {
 			const rightName = this.getChecksDisplayName(item && item.right_name);
 			const leftFace = item && item.left_face_target;
 			if (this.isChecksPhotosFace(leftFace)) {
-				return this.$t(
+				return this.$avt(
 					'checks:tooltip_assign_left_name',
-					'The Photos face on the left is assigned to the person from the right: {from} -> {to}',
+					'The Photos face on the left is assigned to the person from the right, or the person is created if missing: {from} -> {to}',
 					{ from: leftName, to: rightName }
 				);
 			}
-			return this.$t(
+			return this.$avt(
 				'checks:tooltip_replace_left_name',
 				'The face on the left gets the name from the right: {from} -> {to}',
 				{ from: leftName, to: rightName }
@@ -449,15 +444,39 @@ export default {
 			}
 			return false;
 		},
-		applyChecksFindingsUpdate(findingsUpdate) {
-			if (!findingsUpdate || typeof findingsUpdate !== 'object' || !Array.isArray(findingsUpdate.entries)) {
+		applyChecksFindingsUpdate(findingsUpdate, { resolvedDelta = 0, ignoredDelta = 0, skippedDelta = 0 } = {}) {
+			if (!findingsUpdate || typeof findingsUpdate !== 'object') {
 				return false;
 			}
-			this.checksEntries = findingsUpdate.entries;
+			const currentProgress = this.checksProgress && typeof this.checksProgress === 'object'
+				? this.checksProgress
+				: {};
+			const nextResolvedCount = Math.max(0, (Number(currentProgress.resolved_count) || 0) + Math.max(0, Number(resolvedDelta) || 0));
+			const nextIgnoredCount = Math.max(0, (Number(currentProgress.ignored_count) || 0) + Math.max(0, Number(ignoredDelta) || 0));
+			const nextSkippedCount = Math.max(0, (Number(currentProgress.skipped_count) || 0) + Math.max(0, Number(skippedDelta) || 0));
+			const hasFullEntries = Array.isArray(findingsUpdate.entries);
+			const hasImageEntries = Array.isArray(findingsUpdate.image_entries);
+			if (!hasFullEntries && !hasImageEntries && findingsUpdate.count === undefined) {
+				return false;
+			}
+			if (hasFullEntries) {
+				this.checksEntries = findingsUpdate.entries;
+			} else if (hasImageEntries) {
+				const imagePath = String(findingsUpdate.image_path || '').trim();
+				if (imagePath) {
+					const replacementEntries = findingsUpdate.image_entries.filter((entry) => entry && typeof entry === 'object');
+					const insertAt = this.checksEntries.findIndex((entry) => String(entry && entry.image_path || '').trim() === imagePath);
+					this.checksEntries = this.checksEntries.filter((entry) => String(entry && entry.image_path || '').trim() !== imagePath);
+					if (replacementEntries.length) {
+						const targetIndex = insertAt >= 0 ? insertAt : Math.min(this.checksCurrentIndex, this.checksEntries.length);
+						this.checksEntries.splice(targetIndex, 0, ...replacementEntries);
+					}
+				}
+			}
 			const findingsCount = Number(
 				findingsUpdate.count !== undefined
 					? findingsUpdate.count
-					: findingsUpdate.entries.length
+					: this.checksEntries.length
 			);
 			if (!this.checksProgress || typeof this.checksProgress !== 'object') {
 				this.checksProgress = {};
@@ -466,23 +485,45 @@ export default {
 				...(this.checksFindingsStatus || {}),
 				[String(this.selectedChecksType || '').trim().toLowerCase()]: {
 					status: String(findingsUpdate.status || ''),
-					count: Number.isFinite(findingsCount) ? findingsCount : findingsUpdate.entries.length,
+					count: Number.isFinite(findingsCount) ? findingsCount : this.checksEntries.length,
 					save_only: !!findingsUpdate.save_only,
 				},
 			};
 			this.checksFindingsStatusLoaded = true;
 			this.checksProgress = {
 				...this.checksProgress,
-				findings_count: Number.isFinite(findingsCount) ? findingsCount : findingsUpdate.entries.length,
+				source_mode: 'findings',
+				check_type: String(this.selectedChecksType || '').trim().toLowerCase(),
+				findings_count: Number.isFinite(findingsCount) ? findingsCount : this.checksEntries.length,
+				resolved_count: nextResolvedCount,
+				ignored_count: nextIgnoredCount,
+				skipped_count: nextSkippedCount,
 			};
 			if (!this.checksEntries.length) {
 				this.checksCurrentIndex = 0;
 				this.checksCurrentItem = null;
-				this.checksStatusMessage = this.$t('checks:status_empty', 'No matching entries found.');
+				this.checksStatusMessage = this.$avt('checks:status_empty', 'No matching entries found.');
 				return true;
 			}
 			this.checksCurrentIndex = Math.min(this.checksCurrentIndex, this.checksEntries.length - 1);
 			return true;
+		},
+		getChecksListResolvedCount() {
+			const progress = this.checksProgress && typeof this.checksProgress === 'object'
+				? this.checksProgress
+				: {};
+			return (Number(progress.resolved_count) || 0)
+				+ (Number(progress.ignored_count) || 0)
+				+ (Number(progress.skipped_count) || 0);
+		},
+		getChecksListTotalCount() {
+			return this.checksEntries.length + this.getChecksListResolvedCount();
+		},
+		getChecksListCurrentCount() {
+			if (!this.checksEntries.length) {
+				return this.getChecksListResolvedCount();
+			}
+			return this.getChecksListResolvedCount() + this.checksCurrentIndex + 1;
 		},
 		matchesSelectedChecksType(value) {
 			return String(value || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase();
@@ -560,7 +601,7 @@ export default {
 				this.resetChecksDuplicateAssignmentState();
 			}
 			if (nextProgress.message_key || nextProgress.message) {
-				this.checksStatusMessage = this.$t(
+				this.checksStatusMessage = this.$avt(
 					nextProgress.message_key || '',
 					nextProgress.message || '',
 					nextProgress.message_params && typeof nextProgress.message_params === 'object'
@@ -670,26 +711,28 @@ export default {
 			const openFindings = Number(progress.findings_count) || 0;
 			const resolvedNames = Number(progress.resolved_count) || 0;
 			const ignoredConflicts = Number(progress.ignored_count) || 0;
+			const skippedFindings = Number(progress.skipped_count) || 0;
 			const segments = [
-				`${this.$t('checks:label_findings_count', 'Findings:')} ${openFindings}`,
+				`${this.$avt('checks:label_findings_count', 'Findings:')} ${openFindings}`,
 			];
 			if (this.selectedChecksType === 'name_conflicts') {
-				segments.splice(0, 1, `${this.$t('checks:label_name_conflict_findings_count', 'Findings:')} ${openFindings + resolvedNames + ignoredConflicts}`);
-				segments.push(`${this.$t('checks:label_resolved_names_count', 'Resolved names:')} ${resolvedNames}`);
-				segments.push(`${this.$t('checks:label_ignored_names_count', 'Ignored conflicts:')} ${ignoredConflicts}`);
+				segments.splice(0, 1);
+				segments.push(`${this.$avt('checks:label_resolved_names_count', 'Resolved names:')} ${resolvedNames}`);
+				segments.push(`${this.$avt('checks:label_ignored_names_count', 'Ignored conflicts:')} ${ignoredConflicts}`);
+				segments.push(`${this.$avt('checks:label_skipped_findings_count', 'Skipped:')} ${skippedFindings}`);
 			}
 			const withCounts = (text) => {
 				const normalized = String(text || '').trim();
 				return normalized ? `${normalized} | ${segments.join(' | ')}` : segments.join(' | ');
 			};
 			if (key === 'checks:progress_scanning') {
-				return withCounts(this.$t('checks:progress_scanning_short', 'Scanning files...'));
+				return withCounts(this.$avt('checks:progress_scanning_short', 'Scanning files...'));
 			}
 			if (key === 'checks:progress_result_found') {
-				return withCounts(this.$t('checks:progress_result_found_short', 'Check finding found.'));
+				return withCounts(this.$avt('checks:progress_result_found_short', 'Check finding found.'));
 			}
 			if (key === 'checks:progress_findings_saved') {
-				return withCounts(this.$t('checks:progress_findings_saved_short', 'Findings list saved.'));
+				return withCounts(this.$avt('checks:progress_findings_saved_short', 'Findings list saved.'));
 			}
 			return withCounts(this.checksStatusMessage);
 		},
@@ -711,7 +754,7 @@ export default {
 			this.checksActionLocked = false;
 			this.resetChecksDuplicateAssignmentState();
 			this.checksLoading = true;
-			this.checksStatusMessage = this.$t('checks:status_loading', 'Loading checks...');
+			this.checksStatusMessage = this.$avt('checks:status_loading', 'Loading checks...');
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_start', {
 					source_mode: this.selectedChecksAction,
@@ -722,9 +765,17 @@ export default {
 				this.checksEntries = entries;
 				this.checksCurrentIndex = 0;
 				this.checksCurrentItem = null;
+				this.checksProgress = {
+					source_mode: 'findings',
+					check_type: this.selectedChecksType,
+					findings_count: entries.length,
+					resolved_count: 0,
+					ignored_count: 0,
+					skipped_count: 0,
+				};
 				this.checksStatusMessage = entries.length
-					? this.$t('checks:status_loaded', '{count} entries loaded.', { count: entries.length })
-					: this.$t('checks:status_empty', 'No matching entries found.');
+					? this.$avt('checks:status_loaded', '{count} entries loaded.', { count: entries.length })
+					: this.$avt('checks:status_empty', 'No matching entries found.');
 				if (entries.length) {
 					await this.loadChecksItemAtIndex(0);
 				}
@@ -746,15 +797,31 @@ export default {
 					resolvedIndex += 1;
 					continue;
 				}
+				this.checksCurrentIndex = resolvedIndex;
+				this.checksStatusMessage = this.$avt(
+					'checks:status_processing_finding',
+					'Processing entry {current} of {total}: {image}',
+					{
+						current: resolvedIndex + 1,
+						total: this.getChecksListTotalCount(),
+						image: String(entry.image_name || entry.image_path || '').trim(),
+					}
+				);
+				if (typeof this.$nextTick === 'function') {
+					await this.$nextTick();
+				}
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_item', {
 					entry,
 					auto_apply_suggested_names: this.checksAutoApplySuggestedNames,
 					auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
 				});
 				const root = this.getResponseData(data);
-				const findingsUpdated = this.applyChecksFindingsUpdate(root.findings_update);
 				const autoAppliedCount = Number(root && root.auto_applied_count || 0);
 				const item = root && root.item && typeof root.item === 'object' ? root.item : {};
+				const findingsUpdated = this.applyChecksFindingsUpdate(root.findings_update, {
+					resolvedDelta: Math.max(0, autoAppliedCount),
+					skippedDelta: !Object.keys(item).length && autoAppliedCount <= 0 ? 1 : 0,
+				});
 				if (Object.keys(item).length && this.matchesSelectedChecksType(item.review_type)) {
 					this.checksActionLocked = false;
 					this.checksCurrentItem = item;
@@ -766,6 +833,11 @@ export default {
 					break;
 				}
 				if (findingsUpdated && (autoAppliedCount > 0 || !Object.keys(item).length)) {
+					this.checksStatusMessage = this.$avt(
+						'checks:status_finding_refreshed',
+						'Entry {current} checked. Continuing with the next finding...',
+						{ current: resolvedIndex + 1 }
+					);
 					resolvedIndex = Math.min(resolvedIndex, this.checksEntries.length - 1);
 					continue;
 				}
@@ -775,7 +847,7 @@ export default {
 			this.checksCurrentItem = null;
 			this.resetChecksDuplicateAssignmentState();
 			this.checksCurrentIndex = Math.min(resolvedIndex, Math.max(this.checksEntries.length - 1, 0));
-			this.checksStatusMessage = this.$t('checks:status_empty', 'No matching entries found.');
+			this.checksStatusMessage = this.$avt('checks:status_empty', 'No matching entries found.');
 		},
 		async startChecksScan({ resumeFromProgress = false, advanceCurrentResult = false } = {}) {
 			this.checksLoading = true;
@@ -784,14 +856,14 @@ export default {
 				this.checksCurrentIndex = 0;
 				this.checksCurrentItem = null;
 				this.checksProgress = {
-					message: this.$t('checks:status_preparing_scan', 'Checks scan starting. Building file list...'),
+					message: this.$avt('checks:status_preparing_scan', 'Checks scan starting. Building file list...'),
 					files_scanned: 0,
 					total_files: 0,
 					findings_count: 0,
 					resolved_count: 0,
 					ignored_count: 0,
 				};
-				this.checksStatusMessage = this.$t('checks:status_preparing_scan', 'Checks scan starting. Building file list...');
+				this.checksStatusMessage = this.$avt('checks:status_preparing_scan', 'Checks scan starting. Building file list...');
 			}
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_start', {
@@ -828,7 +900,7 @@ export default {
 			} catch (err) {
 				// Best effort.
 			}
-			this.checksStatusMessage = this.$t('checks:progress_stopping', 'Stopping checks scan...');
+			this.checksStatusMessage = this.$avt('checks:progress_stopping', 'Stopping checks scan...');
 			await this.fetchChecksProgress();
 		},
 		async nextChecksReview() {
@@ -867,8 +939,8 @@ export default {
 					entry,
 				});
 				const root = this.getResponseData(data);
-				this.applyChecksFindingsUpdate(root.findings_update);
-				this.checksStatusMessage = this.$t('checks:status_item_ignored', 'Entry added to ignore list.');
+				this.applyChecksFindingsUpdate(root.findings_update, { ignoredDelta: 1 });
+				this.checksStatusMessage = this.$avt('checks:status_item_ignored', 'Entry added to ignore list.');
 				if (root.config && typeof this.normalizeConfig === 'function') {
 					this.configModel = this.normalizeConfig(root.config);
 				}
@@ -906,7 +978,7 @@ export default {
 				});
 				const result = this.getResponseData(data);
 				if (result.warning) {
-					this.checksStatusMessage = this.$t(
+					this.checksStatusMessage = this.$avt(
 						result.warning,
 						result.warning === 'checks:warning_exiftool_required'
 							? 'This function requires ExifTool.'
@@ -919,7 +991,7 @@ export default {
 					return;
 				}
 				this.applyChecksFindingsUpdate(result.findings_update);
-				this.checksStatusMessage = this.$t('checks:status_face_deleted', 'Face removed from metadata.');
+				this.checksStatusMessage = this.$avt('checks:status_face_deleted', 'Face removed from metadata.');
 				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
@@ -927,7 +999,7 @@ export default {
 				this.checksLoading = false;
 			}
 		},
-		async replaceChecksMetadataFaceName(face, newName) {
+		async replaceChecksMetadataFaceName(face, newName, options = {}) {
 			if (!this.canReplaceChecksFaceName(this.checksCurrentItem, face, newName)) {
 				return;
 			}
@@ -958,10 +1030,11 @@ export default {
 					new_name: targetName,
 					save_mapping: saveMapping,
 					source_name: sourceName,
+					create_missing_person: !!options.createMissingPerson,
 				});
 				const result = this.getResponseData(data);
 				if (result.warning) {
-					this.checksStatusMessage = this.$t(
+					this.checksStatusMessage = this.$avt(
 						result.warning,
 						result.warning === 'checks:warning_exiftool_required'
 							? 'This function requires ExifTool.'
@@ -973,11 +1046,15 @@ export default {
 					}
 					return;
 				}
-				this.applyChecksFindingsUpdate(result.findings_update);
+				this.applyChecksFindingsUpdate(result.findings_update, { resolvedDelta: 1 });
 				const operation = String(result.operation || '').trim().toLowerCase();
-				this.checksStatusMessage = operation === 'photos_assign'
-					? this.$t('checks:status_face_person_assigned', 'Photos face assigned to known person.')
-					: this.$t('checks:status_face_name_replaced', 'Face name replaced in metadata.');
+				if (operation === 'photos_create') {
+					this.checksStatusMessage = this.$avt('checks:status_face_person_created', 'Photos person created from face.');
+				} else if (operation === 'photos_assign') {
+					this.checksStatusMessage = this.$avt('checks:status_face_person_assigned', 'Photos face assigned to known person.');
+				} else {
+					this.checksStatusMessage = this.$avt('checks:status_face_name_replaced', 'Face name replaced in metadata.');
+				}
 				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
 					keepLoadingState = true;
 					await this.startChecksScan({ resumeFromProgress: true });
@@ -1014,7 +1091,7 @@ export default {
 				});
 				const result = this.getResponseData(data);
 				if (result.warning) {
-					this.checksStatusMessage = this.$t(
+					this.checksStatusMessage = this.$avt(
 						result.warning,
 						result.warning === 'checks:warning_exiftool_required'
 							? 'This function requires ExifTool.'
@@ -1027,7 +1104,7 @@ export default {
 					return;
 				}
 				this.applyChecksFindingsUpdate(result.findings_update);
-				this.checksStatusMessage = this.$t('checks:status_face_position_replaced', 'Face position replaced in metadata.');
+				this.checksStatusMessage = this.$avt('checks:status_face_position_replaced', 'Face position replaced in metadata.');
 				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
 					keepLoadingState = true;
 					await this.startChecksScan({ resumeFromProgress: true });
@@ -1071,7 +1148,7 @@ export default {
 				});
 				const result = this.getResponseData(data);
 				if (result.warning) {
-					this.checksStatusMessage = this.$t(
+					this.checksStatusMessage = this.$avt(
 						result.warning,
 						result.warning === 'checks:warning_exiftool_required'
 							? 'This function requires ExifTool.'
@@ -1083,8 +1160,8 @@ export default {
 					}
 					return;
 				}
-				this.applyChecksFindingsUpdate(result.findings_update);
-				this.checksStatusMessage = this.$t('checks:status_face_person_assigned', 'Known person assigned.');
+				this.applyChecksFindingsUpdate(result.findings_update, { resolvedDelta: 1 });
+				this.checksStatusMessage = this.$avt('checks:status_face_person_assigned', 'Known person assigned.');
 				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
 					keepLoadingState = true;
 					await this.startChecksScan({ resumeFromProgress: true });
@@ -1108,30 +1185,30 @@ export default {
 		getChecksTypeLabel(type) {
 			const normalized = String(type || '').trim().toLowerCase();
 			if (normalized === 'dimension_issues') {
-				return this.$t('checks:type_dimension_issues', 'Dimension issues');
+				return this.$avt('checks:type_dimension_issues', 'Dimension issues');
 			}
 			if (normalized === 'duplicate_faces') {
-				return this.$t('checks:type_duplicate_faces', 'Duplicate face markings');
+				return this.$avt('checks:type_duplicate_faces', 'Duplicate face markings');
 			}
 			if (normalized === 'position_deviations') {
-				return this.$t('checks:type_position_deviations', 'Deviating face positions');
+				return this.$avt('checks:type_position_deviations', 'Deviating face positions');
 			}
 			if (normalized === 'name_conflicts') {
-				return this.$t('checks:type_name_conflicts', 'Name conflicts');
+				return this.$avt('checks:type_name_conflicts', 'Name conflicts');
 			}
 			return String(type || '');
 		},
 		getChecksLeftTitle(item) {
 			if (item && item.review_type === 'dimension_issues') {
-				return this.$t('checks:preview_left_dimension', 'Affected metadata');
+				return this.$avt('checks:preview_left_dimension', 'Affected metadata');
 			}
-			return this.$t('checks:preview_left_pair', 'Left face');
+			return this.$avt('checks:preview_left_pair', 'Left face');
 		},
 		getChecksRightTitle(item) {
 			if (item && item.review_type === 'dimension_issues') {
-				return this.$t('checks:preview_right_dimension', 'Reference metadata');
+				return this.$avt('checks:preview_right_dimension', 'Reference metadata');
 			}
-			return this.$t('checks:preview_right_pair', 'Right face');
+			return this.$avt('checks:preview_right_pair', 'Right face');
 		},
 		getChecksPairLabel(item) {
 			if (!item) {
@@ -1144,7 +1221,7 @@ export default {
 			return `${left}${leftFormat ? ` (${leftFormat})` : ''} / ${right}${rightFormat ? ` (${rightFormat})` : ''}`;
 		},
 		getChecksDisplayName(name) {
-			return name || this.$t('face_match:unknown_name', '(unnamed)');
+			return name || this.$avt('face_match:unknown_name', '(unnamed)');
 		},
 		showChecksFaceName(item) {
 			const reviewType = String(item && item.review_type || '').trim().toLowerCase();
@@ -1152,9 +1229,9 @@ export default {
 		},
 		getChecksSourceModeLabel() {
 			if (this.selectedChecksAction === 'scan') {
-				return this.$t('checks:action_scan', 'Run check scan');
+				return this.$avt('checks:action_scan', 'Run check scan');
 			}
-			return this.$t('checks:action_findings', 'Process saved findings list');
+			return this.$avt('checks:action_findings', 'Process saved findings list');
 		},
 	},
 };

@@ -1,18 +1,18 @@
 <template>
 	<section class="panel">
 		<div class="panel-head">
-			<div class="sm-section-title">{{ $t('config:title', 'Configuration') }}</div>
+			<div class="sm-section-title">{{ $avt('config:title', 'Configuration') }}</div>
 		</div>
 
 		<div class="config-actions config-actions-right">
 			<v-button @click="loadConfig" :disabled="loading || saving" style="width: 160px;">
-				{{ $t('config:button_reload', 'Reload') }}
+				{{ $avt('config:button_reload', 'Reload') }}
 			</v-button>
 			<v-button @click="applyDefaults" :disabled="loading || saving" style="width: 160px;">
-				{{ $t('config:button_defaults', 'Defaults') }}
+				{{ $avt('config:button_defaults', 'Defaults') }}
 			</v-button>
 			<v-button @click="saveConfig" :disabled="loading || saving" style="width: 160px;">
-				{{ $t('config:button_save', 'Save') }}
+				{{ $avt('config:button_save', 'Save') }}
 			</v-button>
 		</div>
 
@@ -20,43 +20,43 @@
 
 		<div v-if="loading" class="config-loading">
 			<span class="sm-loader"></span>
-			{{ $t('config:loading', 'Loading configuration...') }}
+			{{ $avt('config:loading', 'Loading configuration...') }}
 		</div>
 
 		<div v-else class="config-layout">
 			<section class="config-card">
-				<div class="sm-section-title">{{ $t('config:section_runtime', 'Runtime settings') }}</div>
-				<div class="config-card-desc">{{ $t('config:config_path', 'Config path: {path}', { path: configPath || '-' }) }}</div>
+				<div class="sm-section-title">{{ $avt('config:section_runtime', 'Runtime settings') }}</div>
+				<div class="config-card-desc">{{ $avt('config:config_path', 'Config path: {path}', { path: configPath || '-' }) }}</div>
 
 				<div class="config-form-grid">
 					<label class="config-checkbox">
 						<input v-model="configModel.metadata.SCHEMAS.ACD" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_schema_acd', 'Read ACDSee metadata') }}</span>
+						<span>{{ $avt('config:label_schema_acd', 'Read ACDSee metadata') }}</span>
 					</label>
 
 					<label class="config-checkbox">
 						<input v-model="configModel.metadata.SCHEMAS.MICROSOFT" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_schema_microsoft', 'Read Microsoft face metadata') }}</span>
+						<span>{{ $avt('config:label_schema_microsoft', 'Read Microsoft face metadata') }}</span>
 					</label>
 
 					<label class="config-checkbox">
 						<input v-model="configModel.metadata.SCHEMAS.MWG_REGIONS" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_schema_mwg_regions', 'Read MWG face regions metadata') }}</span>
+						<span>{{ $avt('config:label_schema_mwg_regions', 'Read MWG face regions metadata') }}</span>
 					</label>
 
 					<label class="config-field">
-						<span class="config-field-label">{{ $t('config:label_image_extensions', 'Image file extensions for metadata scan') }}</span>
+						<span class="config-field-label">{{ $avt('config:label_image_extensions', 'Image file extensions for metadata scan') }}</span>
 						<input
 							v-model="imageExtensionsInput"
 							type="text"
 							class="config-text-input"
 							:disabled="saving"
-							:placeholder="$t('config:placeholder_image_extensions', 'jpg,jpeg,tif,tiff,png,heic')"
+							:placeholder="$avt('config:placeholder_image_extensions', 'jpg,jpeg,tif,tiff,png,heic')"
 						/>
 					</label>
 
 					<label class="config-field">
-						<span class="config-field-label">{{ $t('config:label_max_photos_persons', 'Max Photos persons per request') }}</span>
+						<span class="config-field-label">{{ $avt('config:label_max_photos_persons', 'Max Photos persons per request') }}</span>
 						<input
 							v-model.number="configModel.photos.MAX_PHOTOS_PERSONS"
 							type="number"
@@ -68,7 +68,7 @@
 					</label>
 
 					<div class="config-field">
-						<span class="config-field-label">{{ $t('config:label_sidecar_lookup_variants', 'Sidecar lookup variants') }}</span>
+						<span class="config-field-label">{{ $avt('config:label_sidecar_lookup_variants', 'Sidecar lookup variants') }}</span>
 						<div class="config-form-grid">
 							<label
 								v-for="option in sidecarLookupOptions"
@@ -85,70 +85,70 @@
 							</label>
 						</div>
 						<span class="config-card-desc">
-							{{ $t('config:hint_sidecar_lookup_variants', 'Select which XMP sidecar naming and subfolder variants should be checked. All are enabled by default.') }}
+							{{ $avt('config:hint_sidecar_lookup_variants', 'Select which XMP sidecar naming and subfolder variants should be checked. All are enabled by default.') }}
 						</span>
 					</div>
 				</div>
 			</section>
 
 			<section class="config-card">
-				<div class="sm-section-title">{{ $t('config:section_analysis', 'Analysis') }}</div>
-				<div class="config-card-desc">{{ $t('config:section_analysis_desc', 'Select which checks should be performed during analysis runs.') }}</div>
+				<div class="sm-section-title">{{ $avt('config:section_analysis', 'Analysis') }}</div>
+				<div class="config-card-desc">{{ $avt('config:section_analysis_desc', 'Select which checks should be performed during analysis runs.') }}</div>
 
 				<div class="config-form-grid">
 					<label class="config-checkbox">
 						<input v-model="configModel.analysis.CHECKS.DUPLICATE_FACES" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_check_duplicate_faces', 'Check for duplicate face markings') }}</span>
+						<span>{{ $avt('config:label_check_duplicate_faces', 'Check for duplicate face markings') }}</span>
 					</label>
 
 					<label class="config-checkbox">
 						<input v-model="configModel.analysis.CHECKS.POSITION_DEVIATIONS" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_check_position_deviations', 'Check for deviating face positions') }}</span>
+						<span>{{ $avt('config:label_check_position_deviations', 'Check for deviating face positions') }}</span>
 					</label>
 
 					<label class="config-checkbox">
 						<input v-model="configModel.analysis.CHECKS.POSITION_DEVIATIONS_INCLUDE_PHOTOS" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_check_position_deviations_include_photos', 'Include Photos face positions') }}</span>
+						<span>{{ $avt('config:label_check_position_deviations_include_photos', 'Include Photos face positions') }}</span>
 					</label>
 
 					<label class="config-checkbox">
 						<input v-model="configModel.analysis.CHECKS.DIMENSION_ISSUES" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_check_dimension_issues', 'Check for dimension issues') }}</span>
+						<span>{{ $avt('config:label_check_dimension_issues', 'Check for dimension issues') }}</span>
 					</label>
 
 					<label class="config-checkbox">
 						<input v-model="configModel.analysis.CHECKS.NAME_CONFLICTS" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_check_name_conflicts', 'Check for name conflicts') }}</span>
+						<span>{{ $avt('config:label_check_name_conflicts', 'Check for name conflicts') }}</span>
 					</label>
 
 					<label class="config-checkbox">
 						<input v-model="configModel.analysis.CHECKS.NAME_CONFLICTS_INCLUDE_PHOTOS" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_check_name_conflicts_include_photos', 'Include Photos person names') }}</span>
+						<span>{{ $avt('config:label_check_name_conflicts_include_photos', 'Include Photos person names') }}</span>
 					</label>
 
 				</div>
 			</section>
 
 			<section class="config-card">
-				<div class="sm-section-title">{{ $t('config:section_face_match', 'Face matching') }}</div>
-				<div class="config-card-desc">{{ $t('config:section_face_match_desc', 'Configure where file-face searches should look for matching names.') }}</div>
+				<div class="sm-section-title">{{ $avt('config:section_face_match', 'Face matching') }}</div>
+				<div class="config-card-desc">{{ $avt('config:section_face_match_desc', 'Configure where file-face searches should look for matching names.') }}</div>
 
 				<div class="config-form-grid">
 					<label class="config-field">
-						<span class="config-field-label">{{ $t('config:label_face_match_file_source_scope', 'Source scope for file-face search') }}</span>
+						<span class="config-field-label">{{ $avt('config:label_face_match_file_source_scope', 'Source scope for file-face search') }}</span>
 						<select v-model="configModel.face_match.FILE_MATCH_SOURCE_SCOPE" class="config-select" :disabled="saving">
-							<option value="both">{{ $t('config:option_face_match_scope_both', 'in both') }}</option>
-							<option value="photos">{{ $t('config:option_face_match_scope_photos', 'only in Photos') }}</option>
-							<option value="metadata">{{ $t('config:option_face_match_scope_metadata', 'only in metadata') }}</option>
+							<option value="both">{{ $avt('config:option_face_match_scope_both', 'in both') }}</option>
+							<option value="photos">{{ $avt('config:option_face_match_scope_photos', 'only in Photos') }}</option>
+							<option value="metadata">{{ $avt('config:option_face_match_scope_metadata', 'only in metadata') }}</option>
 						</select>
 					</label>
 
 					<label class="config-field">
-						<span class="config-field-label">{{ $t('config:label_face_match_person_sort_order', 'Person sort order for face matching') }}</span>
+						<span class="config-field-label">{{ $avt('config:label_face_match_person_sort_order', 'Person sort order for face matching') }}</span>
 						<select v-model="configModel.face_match.PERSON_SORT_ORDER" class="config-select" :disabled="saving">
-							<option value="id_desc">{{ $t('config:option_face_match_person_sort_id_desc', 'ID descending') }}</option>
-							<option value="id_asc">{{ $t('config:option_face_match_person_sort_id_asc', 'ID ascending') }}</option>
-							<option value="none">{{ $t('config:option_face_match_person_sort_none', 'No sorting') }}</option>
+							<option value="id_desc">{{ $avt('config:option_face_match_person_sort_id_desc', 'ID descending') }}</option>
+							<option value="id_asc">{{ $avt('config:option_face_match_person_sort_id_asc', 'ID ascending') }}</option>
+							<option value="none">{{ $avt('config:option_face_match_person_sort_none', 'No sorting') }}</option>
 						</select>
 					</label>
 
@@ -156,17 +156,17 @@
 			</section>
 
 			<section class="config-card">
-				<div class="sm-section-title">{{ $t('config:section_review', 'Review') }}</div>
-				<div class="config-card-desc">{{ $t('config:section_review_desc', 'Select optional support behavior for the checks view.') }}</div>
+				<div class="sm-section-title">{{ $avt('config:section_review', 'Review') }}</div>
+				<div class="config-card-desc">{{ $avt('config:section_review_desc', 'Select optional support behavior for the checks view.') }}</div>
 
 				<div class="config-form-grid">
 					<label class="config-checkbox">
 						<input v-model="configModel.review.OPTIONS.DUPLICATE_FACE_SUGGESTIONS" type="checkbox" :disabled="saving" />
-						<span>{{ $t('config:label_review_duplicate_face_suggestions', 'Suggest likely valid duplicate face markings') }}</span>
+						<span>{{ $avt('config:label_review_duplicate_face_suggestions', 'Suggest likely valid duplicate face markings') }}</span>
 					</label>
 
 					<div class="config-field">
-						<span class="config-field-label">{{ $t('config:label_review_ignore_lists', 'Ignore lists for checks') }}</span>
+						<span class="config-field-label">{{ $avt('config:label_review_ignore_lists', 'Ignore lists for checks') }}</span>
 						<div
 							v-for="ignoreList in checksIgnoreListConfigs"
 							:key="ignoreList.reviewType"
@@ -181,10 +181,10 @@
 								<span>{{ ignoreList.label }}</span>
 							</label>
 							<div class="config-card-desc">
-								{{ $t('config:label_check_ignore_list_count', 'Entries: {count}', { count: getChecksIgnoreListStatus(ignoreList.reviewType).count }) }}
+								{{ $avt('config:label_check_ignore_list_count', 'Entries: {count}', { count: getChecksIgnoreListStatus(ignoreList.reviewType).count }) }}
 							</div>
 							<div class="config-card-desc">
-								{{ $t('config:label_check_ignore_list_path', 'File: {path}', { path: getChecksIgnoreListStatus(ignoreList.reviewType).path || '-' }) }}
+								{{ $avt('config:label_check_ignore_list_path', 'File: {path}', { path: getChecksIgnoreListStatus(ignoreList.reviewType).path || '-' }) }}
 							</div>
 							<div class="config-inline-actions">
 								<v-button
@@ -192,7 +192,7 @@
 									:disabled="saving || clearingIgnoreListType === ignoreList.reviewType"
 									style="width: 160px;"
 								>
-									{{ $t('config:button_clear_list', 'Clear list') }}
+									{{ $avt('config:button_clear_list', 'Clear list') }}
 								</v-button>
 							</div>
 						</div>
@@ -200,11 +200,11 @@
 
 					<label
 						class="config-field"
-						:title="$t('config:tooltip_check_single_source_of_truth', 'Automatically the value from this source is suggested for corrections.')"
+						:title="$avt('config:tooltip_check_single_source_of_truth', 'Automatically the value from this source is suggested for corrections.')"
 					>
-						<span class="config-field-label">{{ $t('config:label_check_single_source_of_truth', 'Single Source of Truth for checks') }}</span>
+						<span class="config-field-label">{{ $avt('config:label_check_single_source_of_truth', 'Single Source of Truth for checks') }}</span>
 						<select v-model="configModel.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH" class="config-select" :disabled="saving">
-							<option value="">{{ $t('config:option_check_single_source_of_truth_none', 'None') }}</option>
+							<option value="">{{ $avt('config:option_check_single_source_of_truth_none', 'None') }}</option>
 							<option
 								v-for="option in checksSingleSourceOptions"
 								:key="option.value"
@@ -236,15 +236,15 @@ export default {
 	computed: {
 		sidecarLookupOptions() {
 			return [
-				{ value: 'same_dir_stem', label: this.$t('config:label_sidecar_variant_same_dir_stem', 'Same folder: image.xmp') },
-				{ value: 'same_dir_filename', label: this.$t('config:label_sidecar_variant_same_dir_filename', 'Same folder: image.jpg.xmp') },
-				{ value: 'xmp_dir_stem', label: this.$t('config:label_sidecar_variant_xmp_dir_stem', 'xmp subfolder: xmp/image.xmp') },
-				{ value: 'xmp_dir_filename', label: this.$t('config:label_sidecar_variant_xmp_dir_filename', 'xmp subfolder: xmp/image.jpg.xmp') },
+				{ value: 'same_dir_stem', label: this.$avt('config:label_sidecar_variant_same_dir_stem', 'Same folder: image.xmp') },
+				{ value: 'same_dir_filename', label: this.$avt('config:label_sidecar_variant_same_dir_filename', 'Same folder: image.jpg.xmp') },
+				{ value: 'xmp_dir_stem', label: this.$avt('config:label_sidecar_variant_xmp_dir_stem', 'xmp subfolder: xmp/image.xmp') },
+				{ value: 'xmp_dir_filename', label: this.$avt('config:label_sidecar_variant_xmp_dir_filename', 'xmp subfolder: xmp/image.jpg.xmp') },
 			];
 		},
 		checksSingleSourceOptions() {
 			const options = [
-				{ value: 'photos', label: this.$t('config:option_check_single_source_of_truth_photos', 'Photos') },
+				{ value: 'photos', label: this.$avt('config:option_check_single_source_of_truth_photos', 'Photos') },
 			];
 			const formatOptions = [
 				{ value: 'acd', label: 'ACD' },
@@ -252,9 +252,9 @@ export default {
 				{ value: 'mwg_regions', label: 'MWG_REGIONS' },
 			];
 			const storageOptions = [
-				{ value: 'any', label: this.$t('config:option_check_single_source_location_any', 'egal') },
-				{ value: 'embedded', label: this.$t('config:option_check_single_source_location_embedded', 'eingebettet') },
-				{ value: 'sidecar', label: this.$t('config:option_check_single_source_location_sidecar', 'Sidecar') },
+				{ value: 'any', label: this.$avt('config:option_check_single_source_location_any', 'egal') },
+				{ value: 'embedded', label: this.$avt('config:option_check_single_source_location_embedded', 'eingebettet') },
+				{ value: 'sidecar', label: this.$avt('config:option_check_single_source_location_sidecar', 'Sidecar') },
 			];
 			for (const format of formatOptions) {
 				for (const storage of storageOptions) {
@@ -271,17 +271,17 @@ export default {
 				{
 					reviewType: 'duplicate_faces',
 					enabledKey: 'DUPLICATE_FACES_ENABLED',
-					label: this.$t('config:label_check_ignore_list_duplicate_faces', 'Ignore list for duplicate face markings'),
+					label: this.$avt('config:label_check_ignore_list_duplicate_faces', 'Ignore list for duplicate face markings'),
 				},
 				{
 					reviewType: 'position_deviations',
 					enabledKey: 'POSITION_DEVIATIONS_ENABLED',
-					label: this.$t('config:label_check_ignore_list_position_deviations', 'Ignore list for deviating face positions'),
+					label: this.$avt('config:label_check_ignore_list_position_deviations', 'Ignore list for deviating face positions'),
 				},
 				{
 					reviewType: 'name_conflicts',
 					enabledKey: 'NAME_CONFLICTS_ENABLED',
-					label: this.$t('config:label_check_ignore_list_name_conflicts', 'Ignore list for name conflicts'),
+					label: this.$avt('config:label_check_ignore_list_name_conflicts', 'Ignore list for name conflicts'),
 				},
 			];
 		},
@@ -401,7 +401,7 @@ export default {
 			try {
 				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_ignore_list_clear', { review_type: reviewType });
 				this.checksIgnoreListsStatus = this.normalizeChecksIgnoreListsStatus(data && data.data && data.data.checks_ignore_lists);
-				this.message = this.$t('config:message_ignore_list_cleared', 'Ignore list cleared.');
+				this.message = this.$avt('config:message_ignore_list_cleared', 'Ignore list cleared.');
 			} catch (err) {
 				this.message = `Error: ${err.message}`;
 			} finally {
@@ -566,7 +566,7 @@ export default {
 				...exiftoolFiles,
 			};
 			this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
-			this.message = this.$t('config:output_defaults_applied', 'Default values loaded into the editor.');
+			this.message = this.$avt('config:output_defaults_applied', 'Default values loaded into the editor.');
 		},
 		async loadConfig() {
 			this.loading = true;
@@ -604,7 +604,7 @@ export default {
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
 				this.checksIgnoreListsStatus = this.normalizeChecksIgnoreListsStatus(data && data.data && data.data.checks_ignore_lists);
-				this.message = this.$t('config:message_saved', 'Configuration saved.');
+				this.message = this.$avt('config:message_saved', 'Configuration saved.');
 			} catch (err) {
 				this.message = `Error: ${err.message}`;
 			} finally {

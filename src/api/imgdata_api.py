@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
+from fastapi.responses import Response
 from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
 from imgdata import ImgDataOperationError, ImgDataService
 
@@ -138,6 +139,28 @@ def _operation_exception_response(exc: Exception, *, message: str, code: int = 5
             "details": _exception_details(exc),
         },
     }
+
+
+def _compact_checks_findings_update(findings_update: Any, *, image_path: str = "") -> Any:
+    if not isinstance(findings_update, dict):
+        return findings_update
+
+    entries = findings_update.get("entries") if isinstance(findings_update.get("entries"), list) else []
+    normalized_path = str(image_path or "").strip()
+    compact = {
+        "status": str(findings_update.get("status") or ""),
+        "check_type": str(findings_update.get("check_type") or ""),
+        "source_mode": str(findings_update.get("source_mode") or "findings"),
+        "save_only": bool(findings_update.get("save_only")),
+        "count": int(findings_update.get("count") if findings_update.get("count") is not None else len(entries)),
+    }
+    if normalized_path:
+        compact["image_path"] = normalized_path
+        compact["image_entries"] = [
+            entry for entry in entries
+            if isinstance(entry, dict) and str(entry.get("image_path") or "").strip() == normalized_path
+        ]
+    return compact
 
 
 def _save_name_mapping_if_requested(*, save_mapping: bool, source_name: Any, target_name: Any) -> bool:
@@ -1033,18 +1056,23 @@ async def checks_item(request: Request):
         )
     )
     if refresh_required:
-        response_payload["data"]["findings_update"] = IMGDATA.refreshChecksFindingEntriesForImage(
+        image_path = str(entry.get("image_path") or "")
+        findings_update = IMGDATA.refreshChecksFindingEntriesForImage(
             check_type=str(entry.get("review_type") or ""),
-            image_path=str(entry.get("image_path") or ""),
+            image_path=image_path,
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
+        )
+        response_payload["data"]["findings_update"] = _compact_checks_findings_update(
+            findings_update,
+            image_path=image_path,
         )
         if resolved.get("item") is None:
             response_payload["data"]["progress_update"] = IMGDATA.refreshChecksScanProgressForImage(
                 user_key=session_ctx["user_key"],
                 check_type=str(entry.get("review_type") or ""),
-                image_path=str(entry.get("image_path") or ""),
+                image_path=image_path,
                 cookies=session_ctx["cookies"],
                 base_url=session_ctx["base_url"],
             )
@@ -1219,6 +1247,7 @@ async def checks_replace_metadata_face_name(request: Request):
     new_name = str(body.get("new_name") or "").strip()
     save_mapping = bool(body.get("save_mapping"))
     source_name = str(body.get("source_name") or "").strip()
+    create_missing_person = bool(body.get("create_missing_person"))
     if not image_path or not isinstance(face, dict) or not new_name:
         return JSONResponse({
             "success": False,
@@ -1236,6 +1265,7 @@ async def checks_replace_metadata_face_name(request: Request):
             image_path=image_path,
             face_data=face,
             new_name=new_name,
+            create_missing_person=create_missing_person,
         )
         findings_update = None
         if result.get("updated") and save_mapping and source_name:
@@ -1249,7 +1279,7 @@ async def checks_replace_metadata_face_name(request: Request):
         refresh_error = None
         if result.get("updated"):
             replacement_face_data = None
-            if str(result.get("operation") or "").strip().lower() == "photos_assign":
+            if str(result.get("operation") or "").strip().lower() in {"photos_assign", "photos_create"}:
                 replacement_face_data = dict(face)
                 replacement_face_data["name"] = str(result.get("resolved_name") or new_name)
                 target_person = result.get("target_person") if isinstance(result.get("target_person"), dict) else {}
@@ -1421,6 +1451,14 @@ async def file_image(request: Request, path: str = ""):
         return {"success": False, "error": {"code": 403, "message": "path_outside_shared_folder"}}
     if not os.path.isfile(requested):
         return {"success": False, "error": {"code": 404, "message": "file_not_found"}}
+
+    preview = IMGDATA.files.extractEmbeddedJpegPreview(requested)
+    if preview:
+        return Response(
+            content=preview,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
 
     return FileResponse(requested)
 

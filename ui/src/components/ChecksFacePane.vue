@@ -7,14 +7,14 @@
 					v-model.trim="assignment.name"
 					type="text"
 					class="face-match-result-name-input"
-					:placeholder="vm.$t('checks:name_placeholder', 'Name of the person')"
+					:placeholder="vm.$avt('checks:name_placeholder', 'Name of the person')"
 					@input="vm.handleChecksDuplicateNameInput(side)"
 					@focus="vm.handleChecksDuplicateNameFocus(side)"
 				/>
 				<div v-if="assignment.showSuggestions && (assignment.suggestLoading || assignment.suggestions.length)" class="face-match-suggest-list">
 					<div v-if="assignment.suggestLoading" class="face-match-suggest-loading">
 						<span class="sm-loader"></span>
-						{{ vm.$t('face_match:suggest_loading', 'Loading suggestions...') }}
+						{{ vm.$avt('face_match:suggest_loading', 'Loading suggestions...') }}
 					</div>
 					<button
 						v-for="person in assignment.suggestions"
@@ -25,8 +25,8 @@
 					>
 						<img :src="vm.getFaceMatchPersonPreviewUrl(person)" alt="" class="face-match-suggest-thumb" />
 						<span class="face-match-suggest-text">
-							<span class="face-match-suggest-name">{{ person.name || vm.$t('face_match:unknown_name', '(unnamed)') }}</span>
-							<span class="face-match-suggest-meta">{{ vm.$t('face_match:suggest_person_id', 'Photos Person-ID: {id}', { id: person.id }) }}</span>
+							<span class="face-match-suggest-name">{{ person.name || vm.$avt('face_match:unknown_name', '(unnamed)') }}</span>
+							<span class="face-match-suggest-meta">{{ vm.$avt('face_match:suggest_person_id', 'Photos Person-ID: {id}', { id: person.id }) }}</span>
 						</span>
 					</button>
 				</div>
@@ -41,8 +41,8 @@
 				type="button"
 				class="face-match-icon-button"
 				:class="deleteButtonClass"
-				:title="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
-				:aria-label="vm.$t('checks:tooltip_delete_face', 'Delete face from metadata')"
+				:title="vm.$avt('checks:tooltip_delete_face', 'Delete face from metadata')"
+				:aria-label="vm.$avt('checks:tooltip_delete_face', 'Delete face from metadata')"
 				:disabled="vm.checksLoading || vm.checksActionLocked"
 				@click.prevent="vm.deleteChecksMetadataFace(targetFace)"
 			>
@@ -56,8 +56,8 @@
 				type="button"
 				class="face-match-icon-button"
 				:class="syncButtonClass"
-				:title="vm.$t('checks:tooltip_assign_known_person', 'Assign selected known person')"
-				:aria-label="vm.$t('checks:tooltip_assign_known_person', 'Assign selected known person')"
+				:title="vm.$avt('checks:tooltip_assign_known_person', 'Assign selected known person')"
+				:aria-label="vm.$avt('checks:tooltip_assign_known_person', 'Assign selected known person')"
 				:disabled="!vm.canAssignChecksFaceToPerson(item, side)"
 				@click.prevent="vm.assignChecksFaceToPerson(side)"
 			>
@@ -82,7 +82,7 @@
 			<div class="face-match-preview">
 				<img
 					:src="vm.getChecksImageUrl(item)"
-					:alt="vm.$t('checks:image_alt', 'Check preview')"
+					:alt="vm.$avt('checks:image_alt', 'Check preview')"
 					class="face-match-thumbnail"
 				/>
 				<div
@@ -110,7 +110,7 @@
 				></div>
 			</div>
 		</div>
-		<div v-else class="face-match-empty">{{ vm.$t('checks:empty_image', 'No preview available.') }}</div>
+		<div v-else class="face-match-empty">{{ vm.$avt('checks:empty_image', 'No preview available.') }}</div>
 	</div>
 </template>
 
@@ -194,8 +194,8 @@ export default {
 		},
 		positionFallback() {
 			return this.isLeft
-				? this.vm.$t('checks:button_replace_position_left', '<- Pos')
-				: this.vm.$t('checks:button_replace_position_right', 'Pos ->');
+				? this.vm.$avt('checks:button_replace_position_left', '<- Pos')
+				: this.vm.$avt('checks:button_replace_position_right', 'Pos ->');
 		},
 	},
 };

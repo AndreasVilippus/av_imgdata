@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import struct
 import sys
 import tempfile
 import unittest
@@ -85,6 +86,50 @@ class FileHandlerPhotosComparisonTests(unittest.TestCase):
         )
 
         self.assertEqual(analysis["files_with_name_conflicts"], 1)
+
+
+class FileHandlerRawPreviewTests(unittest.TestCase):
+    def test_extract_embedded_jpeg_preview_from_arw_tiff_tags(self):
+        jpeg = b"\xff\xd8embedded-preview\xff\xd9"
+        jpeg_offset = 128
+        jpeg_length = len(jpeg)
+        data = bytearray(b"\x00" * (jpeg_offset + jpeg_length))
+        data[0:8] = b"II" + struct.pack("<HI", 42, 8)
+        data[8:10] = struct.pack("<H", 2)
+        data[10:22] = struct.pack("<HHI4s", 0x0201, 4, 1, struct.pack("<I", jpeg_offset))
+        data[22:34] = struct.pack("<HHI4s", 0x0202, 4, 1, struct.pack("<I", jpeg_length))
+        data[34:38] = struct.pack("<I", 0)
+        data[jpeg_offset:jpeg_offset + jpeg_length] = jpeg
+
+        with tempfile.NamedTemporaryFile(suffix=".ARW") as handle:
+            handle.write(data)
+            handle.flush()
+
+            self.assertEqual(FileHandler.extractEmbeddedJpegPreview(handle.name), jpeg)
+
+    def test_extract_embedded_jpeg_preview_ignores_non_raw_extension(self):
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as handle:
+            handle.write(b"\xff\xd8embedded-preview\xff\xd9")
+            handle.flush()
+
+            self.assertIsNone(FileHandler.extractEmbeddedJpegPreview(handle.name))
+
+    def test_extract_embedded_jpeg_preview_falls_back_to_embedded_segment(self):
+        jpeg = b"\xff\xd8fallback-preview\xff\xd9"
+        jpeg_offset = 32770
+        data = bytearray(b"\x00" * (jpeg_offset + len(jpeg)))
+        data[0:8] = b"II" + struct.pack("<HI", 42, 8)
+        data[8:10] = struct.pack("<H", 2)
+        data[10:22] = struct.pack("<HHI4s", 0x0201, 4, 1, struct.pack("<I", jpeg_offset + 1000))
+        data[22:34] = struct.pack("<HHI4s", 0x0202, 4, 1, struct.pack("<I", len(jpeg)))
+        data[34:38] = struct.pack("<I", 0)
+        data[jpeg_offset:jpeg_offset + len(jpeg)] = jpeg
+
+        with tempfile.NamedTemporaryFile(suffix=".ARW") as handle:
+            handle.write(data)
+            handle.flush()
+
+            self.assertEqual(FileHandler.extractEmbeddedJpegPreview(handle.name), jpeg)
 
 
 if __name__ == "__main__":

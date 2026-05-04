@@ -11,6 +11,7 @@
 			stroke-width="6"
 			stroke-linecap="round"
 			stroke-linejoin="round"
+			transform="matrix(1.8275008,0,0,1.8275008,-45.654863,-53.040749)"
 		>
 			<circle cx="34" cy="40" r="6"></circle>
 			<path d="M50 40 H92"></path>

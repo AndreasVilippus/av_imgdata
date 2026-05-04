@@ -30,6 +30,7 @@ export default {
 			faceMatchSuggestRequestId: 0,
 			faceMatchFindingEntries: [],
 			faceMatchFindingIndex: 0,
+			faceMatchFindingEntriesTotal: 0,
 			faceMatchFindingsStatus: {},
 			selectedFaceMatchingAction: 'search_photo_face_in_file',
 			addIconUrl: '',
@@ -113,31 +114,49 @@ export default {
 			return total > 0 ? Math.min(checked, total) : checked;
 		},
 		faceMatchShowPersonsProgress() {
-			return this.faceMatchPersonsTotal > 0 && !this.faceMatchIsFileSourceAction;
+			return !this.faceMatchShowStoredFindingsProgress && this.faceMatchPersonsTotal > 0 && !this.faceMatchIsFileSourceAction;
 		},
 		faceMatchShowFileProgress() {
-			return this.faceMatchIsFileSourceAction && (
+			return !this.faceMatchShowStoredFindingsProgress && this.faceMatchIsFileSourceAction && (
 				this.faceMatchLoading
 				|| !!(this.faceMatchProgress && Object.keys(this.faceMatchProgress).length)
 			);
 		},
+		faceMatchShowStoredFindingsProgress() {
+			return this.faceMatchReviewingStoredFindings && this.faceMatchStoredFindingsTotal > 0;
+		},
+		faceMatchStoredFindingsTotal() {
+			return Math.max(
+				0,
+				Number(this.faceMatchFindingEntriesTotal) || 0,
+				Array.isArray(this.faceMatchFindingEntries) ? this.faceMatchFindingEntries.length : 0,
+				Number(this.faceMatchFindingsStatus && this.faceMatchFindingsStatus.count) || 0
+			);
+		},
+		faceMatchStoredFindingsChecked() {
+			const total = this.faceMatchStoredFindingsTotal;
+			if (!total) {
+				return 0;
+			}
+			return Math.min(total, Math.max(0, Number(this.faceMatchFindingIndex) || 0) + 1);
+		},
 		faceMatchFacesLabel() {
 			if (this.faceMatchIsFileSourceAction) {
-				return this.$t('face_match:label_source_faces', 'Source faces');
+				return this.$avt('face_match:label_source_faces', 'Source faces');
 			}
-			return this.$t('face_match:label_faces', 'Faces');
+			return this.$avt('face_match:label_faces', 'Faces');
 		},
 		faceMatchMetadataLabel() {
 			if (this.faceMatchIsFileSourceAction) {
-				return this.$t('face_match:label_metadata_faces', 'Metadata faces');
+				return this.$avt('face_match:label_metadata_faces', 'Metadata faces');
 			}
-			return this.$t('face_match:label_metadata', 'Metadata');
+			return this.$avt('face_match:label_metadata', 'Metadata');
 		},
 		faceMatchMetadataHint() {
 			if (this.faceMatchIsFileSourceAction) {
-				return this.$t('face_match:label_metadata_faces_hint', 'Read face metadata from the scanned files');
+				return this.$avt('face_match:label_metadata_faces_hint', 'Read face metadata from the scanned files');
 			}
-			return this.$t('face_match:label_metadata_hint', 'Read metadata');
+			return this.$avt('face_match:label_metadata_hint', 'Read metadata');
 		},
 		faceMatchProgressIconUrl() {
 			if (this.faceMatchCurrentAction === 'mark_missing_photos_faces') {
@@ -153,7 +172,7 @@ export default {
 				? this.faceMatchProgress
 				: null;
 			if (progress && progress.message_key) {
-				return this.$t(
+				return this.$avt(
 					String(progress.message_key),
 					progress.message || String(progress.message_key),
 					progress.message_params && typeof progress.message_params === 'object'
@@ -165,8 +184,29 @@ export default {
 				return progress.message;
 			}
 			return this.faceMatchLoading
-				? this.$t('face_match:status_search_running', 'Search running...')
-				: this.$t('face_match:status_idle', 'No action running.');
+				? this.$avt('face_match:status_search_running', 'Search running...')
+				: this.$avt('face_match:status_idle', 'No action running.');
+		},
+		faceMatchStatusHeadline() {
+			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
+				? this.faceMatchProgress
+				: {};
+			const key = String(progress.message_key || '').trim();
+			const checkingLabel = this.$avt('face_match:status_phase_checking', 'Checking...');
+			const phaseLabels = {
+				'face_match:progress_checking_person': checkingLabel,
+				'face_match:progress_unknown_persons_loaded': checkingLabel,
+				'face_match:progress_known_persons_loaded': checkingLabel,
+				'face_match:progress_checking_image': checkingLabel,
+				'face_match:progress_checking_face': checkingLabel,
+				'face_match:progress_match_candidates': checkingLabel,
+				'face_match:progress_checking_metadata': checkingLabel,
+				'face_match:progress_checking_file': checkingLabel,
+				'face_match:progress_checking_insightface': checkingLabel,
+				'face_match:progress_listing_files': checkingLabel,
+				'face_match:progress_files_listed': checkingLabel,
+			};
+			return this.withFaceMatchStatusCounts(phaseLabels[key] || this.faceMatchStatusMessage);
 		},
 		faceMatchAuthRequired() {
 			return !!(this.faceMatchProgress && this.faceMatchProgress.auth_required);
@@ -179,19 +219,19 @@ export default {
 		},
 		faceMatchPrimaryButtonLabel() {
 			if (this.faceMatchLoading) {
-				return this.$t('face_match:button_stop', 'Stop');
+				return this.$avt('face_match:button_stop', 'Stop');
 			}
 			if (this.faceMatchAuthRequired) {
-				return this.$t('face_match:button_resume_login', 'Resume after login');
+				return this.$avt('face_match:button_resume_login', 'Resume after login');
 			}
 			if (this.faceMatchIsPaused) {
-				return this.$t('face_match:button_restart', 'Restart');
+				return this.$avt('face_match:button_restart', 'Restart');
 			}
-			return this.$t('face_match:button_start', 'Start');
+			return this.$avt('face_match:button_start', 'Start');
 		},
 		faceMatchResultSummary() {
 			if (this.faceMatchLoading) {
-				return { found: false, message: this.$t('face_match:result_none', 'No result yet.') };
+				return { found: false, message: this.$avt('face_match:result_none', 'No result yet.') };
 			}
 			if (this.faceMatchIsFileSourceAction) {
 				const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
@@ -200,16 +240,16 @@ export default {
 				if (metadataFace && sourceFace) {
 					return {
 						found: true,
-						name: (sourceFace && sourceFace.name) || this.$t('face_match:unknown_name', '(unnamed)'),
+						name: (sourceFace && sourceFace.name) || this.$avt('face_match:unknown_name', '(unnamed)'),
 						source: this.getFaceMatchSourceLabel(sourceFace && sourceFace.source),
 						format: this.getFaceMatchFormatLabel(sourceFace && (sourceFace.source_format || sourceFace.format)),
 						photosPersonId: matchedPerson && matchedPerson.id ? matchedPerson.id : null,
 					};
 				}
 				if (this.faceMatchResult && this.faceMatchResult.searched) {
-					return { found: false, message: this.$t('face_match:result_no_match', 'No match found yet.') };
+					return { found: false, message: this.$avt('face_match:result_no_match', 'No match found yet.') };
 				}
-				return { found: false, message: this.$t('face_match:result_none', 'No result yet.') };
+				return { found: false, message: this.$avt('face_match:result_none', 'No result yet.') };
 			}
 			const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
 			const match = this.faceMatchResult && this.faceMatchResult.match;
@@ -217,7 +257,7 @@ export default {
 			if (match && metadataFace) {
 				return {
 					found: true,
-					name: metadataFace.name || this.$t('face_match:unknown_name', '(unnamed)'),
+					name: metadataFace.name || this.$avt('face_match:unknown_name', '(unnamed)'),
 					source: this.getFaceMatchSourceLabel(metadataFace.source),
 					format: this.getFaceMatchFormatLabel(metadataFace.source_format || metadataFace.format),
 					photosPersonId: matchedPerson && matchedPerson.id ? matchedPerson.id : null,
@@ -226,31 +266,31 @@ export default {
 			if (metadataFace) {
 				return {
 					found: true,
-					name: metadataFace.name || this.$t('face_match:unknown_name', '(unnamed)'),
+					name: metadataFace.name || this.$avt('face_match:unknown_name', '(unnamed)'),
 					source: this.getFaceMatchSourceLabel(metadataFace.source),
 					format: this.getFaceMatchFormatLabel(metadataFace.source_format || metadataFace.format),
 					photosPersonId: matchedPerson && matchedPerson.id ? matchedPerson.id : null,
 				};
 			}
 			if (this.faceMatchResult && this.faceMatchResult.searched) {
-				return { found: false, message: this.$t('face_match:result_no_match', 'No match found yet.') };
+				return { found: false, message: this.$avt('face_match:result_no_match', 'No match found yet.') };
 			}
-			return { found: false, message: this.$t('face_match:result_none', 'No result yet.') };
+			return { found: false, message: this.$avt('face_match:result_none', 'No result yet.') };
 		},
 		faceMatchTransferTooltip() {
 			if (this.faceMatchAddsNewPhotosFaces) {
 				if (this.faceMatchActionMode === 'create') {
-					return this.$t('face_match:transfer_tooltip_create_photos_face', 'Add face in Photos and create person from file');
+					return this.$avt('face_match:transfer_tooltip_create_photos_face', 'Add face in Photos and create person from file');
 				}
-				return this.$t('face_match:transfer_tooltip_assign_photos_face', 'Add face in Photos and assign name from file');
+				return this.$avt('face_match:transfer_tooltip_assign_photos_face', 'Add face in Photos and assign name from file');
 			}
 			if (this.faceMatchActionMode === 'write_metadata') {
-				return this.$t('face_match:transfer_tooltip_write_metadata', 'Apply name to metadata');
+				return this.$avt('face_match:transfer_tooltip_write_metadata', 'Apply name to metadata');
 			}
 			if (this.faceMatchActionMode === 'create') {
-				return this.$t('face_match:transfer_tooltip_create', 'Create person and apply name from file');
+				return this.$avt('face_match:transfer_tooltip_create', 'Create person and apply name from file');
 			}
-			return this.$t('face_match:transfer_tooltip_assign', 'Apply name from file');
+			return this.$avt('face_match:transfer_tooltip_assign', 'Apply name from file');
 		},
 		faceMatchActionMode() {
 			if (!this.faceMatchResultSummary.found) {
@@ -286,13 +326,13 @@ export default {
 		},
 		faceMatchFileTitle() {
 			if (this.faceMatchIsFileSourceAction) {
-				return this.$t('face_match:file_title', 'File');
+				return this.$avt('face_match:file_title', 'File');
 			}
 			const matchedPerson = this.faceMatchEffectivePerson;
 			if (matchedPerson && matchedPerson.id && matchedPerson.name) {
-				return `${this.$t('face_match:file_title', 'File')} - ${matchedPerson.name}`;
+				return `${this.$avt('face_match:file_title', 'File')} - ${matchedPerson.name}`;
 			}
-			return this.$t('face_match:file_title', 'File');
+			return this.$avt('face_match:file_title', 'File');
 		},
 		faceMatchHasStoredNameMapping() {
 			const mapping = this.faceMatchResult && this.faceMatchResult.name_mapping;
@@ -303,9 +343,9 @@ export default {
 		},
 		faceMatchLeftTitle() {
 			if (this.faceMatchIsFileSourceAction) {
-				return this.$t('face_match:label_source', 'Source');
+				return this.$avt('face_match:label_source', 'Source');
 			}
-			return this.$t('face_match:photos_title', 'Photos');
+			return this.$avt('face_match:photos_title', 'Photos');
 		},
 		faceMatchRightTitle() {
 			return this.faceMatchFileTitle;
@@ -379,7 +419,11 @@ export default {
 		},
 		async fetchFaceMatchFindingsStatus() {
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_findings_status');
+				const data = await this.callFileAnalysisApi(
+					'/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_findings_status',
+					{},
+					{ resume: false, requireSynoToken: false }
+				);
 				this.faceMatchFindingsStatus = this.getResponseData(data);
 				if (this.faceMatchReviewingStoredFindings && !this.hasFaceMatchStoredFindings) {
 					this.faceMatchUseStoredFindings = false;
@@ -392,6 +436,7 @@ export default {
 		resetFaceMatchFindingsReview() {
 			this.faceMatchFindingEntries = [];
 			this.faceMatchFindingIndex = 0;
+			this.faceMatchFindingEntriesTotal = 0;
 		},
 		setFaceMatchProgressMessage(message, extra = {}) {
 			this.faceMatchProgress = {
@@ -410,9 +455,9 @@ export default {
 			this.faceMatchFindingIndex = index;
 			this.syncFaceMatchEditableName();
 			this.setFaceMatchProgressMessage(
-				this.$t('face_match:status_list_entry', 'List entry {current} of {total}.', {
+				this.$avt('face_match:status_list_entry', 'List entry {current} of {total}.', {
 					current: index + 1,
-					total: this.faceMatchFindingEntries.length,
+					total: this.faceMatchStoredFindingsTotal || this.faceMatchFindingEntries.length,
 				})
 			);
 		},
@@ -425,6 +470,7 @@ export default {
 			const entries = Array.isArray(payload.entries) ? payload.entries : [];
 			this.faceMatchFindingEntries = entries;
 			this.faceMatchFindingIndex = 0;
+			this.faceMatchFindingEntriesTotal = Number(payload.count) || entries.length;
 			this.faceMatchTransferredCount = Number(payload.transferred_count) || 0;
 			this.faceMatchFindingsStatus = {
 				...(this.faceMatchFindingsStatus || {}),
@@ -441,29 +487,29 @@ export default {
 				this.faceMatchResult = null;
 				this.faceMatchProgress = {
 					...(this.faceMatchProgress || {}),
-					message: this.$t('face_match:status_findings_empty', 'No saved matches found.'),
+					message: this.$avt('face_match:status_findings_empty', 'No saved matches found.'),
 				};
 			}
 		},
 		getFaceMatchSourceLabel(source) {
 			const normalized = String(source || '').trim().toLowerCase();
 			if (!normalized) {
-				return this.$t('face_match:result_unknown', 'unknown');
+				return this.$avt('face_match:result_unknown', 'unknown');
 			}
 			if (normalized === 'xmp_file') {
-				return this.$t('face_match:source_xmp_file', 'XMP sidecar file');
+				return this.$avt('face_match:source_xmp_file', 'XMP sidecar file');
 			}
 			if (normalized === 'embedded_xmp_parsed') {
-				return this.$t('face_match:source_embedded_xmp', 'Embedded XMP');
+				return this.$avt('face_match:source_embedded_xmp', 'Embedded XMP');
 			}
 			if (normalized === 'embedded_xmp_exiftool') {
-				return this.$t('face_match:source_embedded_xmp_exiftool', 'Embedded XMP via ExifTool');
+				return this.$avt('face_match:source_embedded_xmp_exiftool', 'Embedded XMP via ExifTool');
 			}
 			if (normalized === 'metadata') {
-				return this.$t('face_match:source_metadata', 'Metadata');
+				return this.$avt('face_match:source_metadata', 'Metadata');
 			}
 			if (normalized === 'insightface') {
-				return this.$t('face_match:source_insightface', 'InsightFace');
+				return this.$avt('face_match:source_insightface', 'InsightFace');
 			}
 			return String(source || '')
 				.replace(/[_-]+/g, ' ')
@@ -474,19 +520,19 @@ export default {
 		getFaceMatchFormatLabel(format) {
 			const normalized = String(format || '').trim().toUpperCase();
 			if (!normalized) {
-				return this.$t('face_match:result_unknown', 'unknown');
+				return this.$avt('face_match:result_unknown', 'unknown');
 			}
 			if (normalized === 'ACD' || normalized === 'ACDSEE') {
-				return this.$t('face_match:format_acdsee', 'ACDSee');
+				return this.$avt('face_match:format_acdsee', 'ACDSee');
 			}
 			if (normalized === 'MICROSOFT') {
-				return this.$t('face_match:format_microsoft', 'Microsoft People Tagging');
+				return this.$avt('face_match:format_microsoft', 'Microsoft People Tagging');
 			}
 			if (normalized === 'MWG_REGIONS') {
-				return this.$t('face_match:format_mwg_regions', 'MWG face regions');
+				return this.$avt('face_match:format_mwg_regions', 'MWG face regions');
 			}
 			if (normalized === 'INSIGHTFACE') {
-				return this.$t('face_match:format_insightface', 'InsightFace detection');
+				return this.$avt('face_match:format_insightface', 'InsightFace detection');
 			}
 			return String(format);
 		},
@@ -844,7 +890,7 @@ export default {
 			return new Promise((resolve) => {
 				const context = String(options && options.context || 'face_match').trim() || 'face_match';
 				this.nameMappingConfirm.visible = true;
-				this.nameMappingConfirm.message = this.$t(
+				this.nameMappingConfirm.message = this.$avt(
 					'face_match:confirm_save_mapping',
 					'Should "{source}" always be mapped to "{target}"?',
 					{ source: sourceName, target: targetName }
@@ -895,7 +941,7 @@ export default {
 					this.resetFaceMatchSelectionState();
 					this.faceMatchUseStoredFindings = false;
 					this.setFaceMatchProgressMessage(
-						this.$t('face_match:status_findings_empty', 'No saved matches found.')
+						this.$avt('face_match:status_findings_empty', 'No saved matches found.')
 					);
 				return;
 			}
@@ -982,7 +1028,7 @@ export default {
 			const requestId = this.faceMatchProgressRequestId + 1;
 			this.faceMatchProgressRequestId = requestId;
 			try {
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_progress');
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_progress', {}, { resume: false, requireSynoToken: false });
 				if (this.faceMatchProgressRequestId !== requestId) {
 					return;
 				}
@@ -995,6 +1041,7 @@ export default {
 				}
 				if (!progress.running) {
 					this.faceMatchLoading = false;
+					await this.fetchFaceMatchFindingsStatus();
 					this.stopFaceMatchProgressPolling();
 				}
 			} catch (err) {
@@ -1008,6 +1055,25 @@ export default {
 		},
 		stopFaceMatchProgressPolling() {
 			this.stopNamedPolling('faceMatchProgressTimer');
+		},
+		getFaceMatchStatusCountSegments() {
+			const segments = [
+				`${this.$avt('face_match:label_images', 'Images')}: ${this.faceMatchDisplayedProgress.images_read}`,
+				`${this.faceMatchFacesLabel}: ${this.faceMatchDisplayedProgress.faces_read}`,
+			];
+			if (this.showFaceMatchTargetFacesCounter) {
+				segments.push(`${this.$avt('face_match:label_target_faces', 'Unknown faces')}: ${this.faceMatchDisplayedProgress.target_faces_read}`);
+			}
+			segments.push(`${this.faceMatchMetadataLabel}: ${this.faceMatchDisplayedProgress.metadata_faces_read}`);
+			segments.push(`${this.$avt('face_match:label_findings', 'Findings')}: ${this.faceMatchDisplayedFindingsCount}`);
+			segments.push(`${this.$avt('face_match:label_skipped', 'Skipped')}: ${this.faceMatchDisplayedSkippedCount}`);
+			segments.push(`${this.$avt('face_match:label_transferred', 'Transferred')}: ${this.faceMatchDisplayedTransferredCount}`);
+			return segments;
+		},
+		withFaceMatchStatusCounts(text) {
+			const segments = this.getFaceMatchStatusCountSegments();
+			const normalized = String(text || '').trim();
+			return normalized ? `${normalized} | ${segments.join(' | ')}` : segments.join(' | ');
 		},
 		async loadNextFaceMatch() {
 			if (this.faceMatchReviewingStoredFindings) {
@@ -1036,11 +1102,11 @@ export default {
 		},
 		async stopFaceMatchingAction() {
 			try {
-				await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_stop');
+				await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_stop', {}, { resume: false, requireSynoToken: false });
 			} catch (err) {
 				// Best effort.
 			}
-			this.output = this.$t('face_match:output_stopping', 'Stopping search...');
+			this.output = this.$avt('face_match:output_stopping', 'Stopping search...');
 			await this.fetchFaceMatchingProgress();
 		},
 		async handleFaceMatchAction() {
@@ -1061,7 +1127,7 @@ export default {
 			const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
 			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
 			if ((!isMetadataPhotosCreate && !faceId) || !personName || (isMetadataPhotosCreate && (!metadataFace || !imagePath))) {
-				this.output = this.$t('face_match:error_missing_face_or_name', 'Error: Missing face ID or person name.');
+				this.output = this.$avt('face_match:error_missing_face_or_name', 'Error: Missing face ID or person name.');
 				return;
 			}
 			const mappingPreference = await this.resolveFaceMatchNameMappingPreference(personName);
@@ -1105,7 +1171,7 @@ export default {
 			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
 			const matchedPersonName = (this.faceMatchEditableName || '').trim();
 			if (!matchedPersonId || (!isMetadataPhotosAssign && !faceId) || !matchedPersonName || (isMetadataPhotosAssign && (!metadataFace || !imagePath))) {
-				this.output = this.$t('face_match:error_missing_known_person', 'Error: Missing known person ID, face ID, or person name.');
+				this.output = this.$avt('face_match:error_missing_known_person', 'Error: Missing known person ID, face ID, or person name.');
 				return;
 			}
 			const mappingPreference = await this.resolveFaceMatchNameMappingPreference(matchedPersonName);
@@ -1147,7 +1213,7 @@ export default {
 			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
 			const personName = (this.faceMatchEditableName || '').trim();
 			if (!metadataFace || !imagePath || !personName) {
-				this.output = this.$t('face_match:error_missing_face_or_name', 'Error: Missing face ID or person name.');
+				this.output = this.$avt('face_match:error_missing_face_or_name', 'Error: Missing face ID or person name.');
 				return;
 			}
 			try {
@@ -1193,7 +1259,7 @@ export default {
 				this.faceMatchProgress = {
 					...(this.faceMatchProgress || {}),
 					message_key: 'face_match:progress_insightface_missing',
-					message: this.$t('face_match:progress_insightface_missing', 'InsightFace is not installed.'),
+					message: this.$avt('face_match:progress_insightface_missing', 'InsightFace is not installed.'),
 				};
 				this.faceMatchResult = null;
 				this.resetFaceMatchSelectionState();
@@ -1249,13 +1315,13 @@ export default {
 			this.faceMatchLoading = true;
 			if (resetSkippedFaceIds) {
 				this.faceMatchProgress = {
-					message: this.$t('face_match:status_starting', 'Search starting...'),
+					message: this.$avt('face_match:status_starting', 'Search starting...'),
 				};
 				this.faceMatchResult = null;
 				this.resetFaceMatchSelectionState();
 			}
 			this.startFaceMatchProgressPolling();
-			this.output = this.$t('face_match:output_start_action', 'Starting action: {action}', { action: this.selectedFaceMatchingAction });
+			this.output = this.$avt('face_match:output_start_action', 'Starting action: {action}', { action: this.selectedFaceMatchingAction });
 				try {
 					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
 						action: this.selectedFaceMatchingAction,

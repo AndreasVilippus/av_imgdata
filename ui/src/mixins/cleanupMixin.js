@@ -17,9 +17,9 @@ export default {
 	computed: {
 		cleanupPrimaryButtonLabel() {
 			if (this.cleanupLoading) {
-				return this.$t('cleanup:button_stop', 'Stop');
+				return this.$avt('cleanup:button_stop', 'Stop');
 			}
-			return this.$t('cleanup:button_start', 'Start');
+			return this.$avt('cleanup:button_start', 'Start');
 		},
 		selectedCleanupTargets() {
 			return Object.entries(this.cleanupTargets)
@@ -35,7 +35,7 @@ export default {
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
 			this.cleanupProgress = nextProgress;
 			if (nextProgress.message_key || nextProgress.message) {
-				this.cleanupStatusMessage = this.$t(
+				this.cleanupStatusMessage = this.$avt(
 					nextProgress.message_key || '',
 					nextProgress.message || '',
 					nextProgress.message_params && typeof nextProgress.message_params === 'object'
@@ -50,7 +50,7 @@ export default {
 			try {
 				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
 					action: this.selectedCleanupAction,
-				});
+				}, { resume: false, requireSynoToken: false });
 				if (this.cleanupProgressRequestId !== requestId) {
 					return {};
 				}
@@ -93,7 +93,7 @@ export default {
 		},
 		async startCleanupRun() {
 			this.cleanupLoading = true;
-			this.cleanupStatusMessage = this.$t('cleanup:status_preparing', 'Cleanup starts. Preparing run...');
+			this.cleanupStatusMessage = this.$avt('cleanup:status_preparing', 'Cleanup starts. Preparing run...');
 			try {
 				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_start', {
 					action: this.selectedCleanupAction,
@@ -115,23 +115,23 @@ export default {
 			try {
 				await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_stop', {
 					action: this.selectedCleanupAction,
-				});
+				}, { resume: false, requireSynoToken: false });
 			} catch (err) {
 				// Best effort.
 			}
-			this.cleanupStatusMessage = this.$t('cleanup:progress_stopping', 'Cleanup is stopping...');
+			this.cleanupStatusMessage = this.$avt('cleanup:progress_stopping', 'Cleanup is stopping...');
 			await this.fetchCleanupProgress();
 		},
 		getCleanupTargetLabel(target) {
 			const key = String(target || '').trim().toUpperCase();
 			if (key === 'ACD') {
-				return this.$t('cleanup:target_acd', 'ACDSee');
+				return this.$avt('cleanup:target_acd', 'ACDSee');
 			}
 			if (key === 'MICROSOFT') {
-				return this.$t('cleanup:target_microsoft', 'Microsoft');
+				return this.$avt('cleanup:target_microsoft', 'Microsoft');
 			}
 			if (key === 'MWG_REGIONS') {
-				return this.$t('cleanup:target_mwg_regions', 'MWG regions');
+				return this.$avt('cleanup:target_mwg_regions', 'MWG regions');
 			}
 			return key;
 		},
@@ -141,10 +141,10 @@ export default {
 				: {};
 			const key = String(progress.message_key || '').trim();
 			if (key === 'cleanup:progress_checking_person') {
-				return this.$t('cleanup:progress_checking_person_short', 'Checking person...');
+				return this.$avt('cleanup:progress_checking_person_short', 'Checking person...');
 			}
 			if (key === 'cleanup:progress_checking_file') {
-				return this.$t('cleanup:progress_checking_file_short', 'Checking file...');
+				return this.$avt('cleanup:progress_checking_file_short', 'Checking file...');
 			}
 			return this.cleanupStatusMessage;
 		},

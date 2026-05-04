@@ -11,17 +11,15 @@
 			stroke-width="6"
 			stroke-linecap="round"
 			stroke-linejoin="round"
-			transform="matrix(1.4860527,0,0,1.4860527,-30.994397,-30.994405)"
+			transform="matrix(1.8137862,0,0,1.8137862,-67.052822,-37.111817)"
 		>
-			<path d="M 24,44 64,24 104,44 64,64 Z"></path>
-			<path d="m 24,44 v 40 l 40,20 V 64"></path>
-			<path d="M 104,44 V 84 L 64,104"></path>
+			<path d="M84 24 A20 20 0 0 0 60 48 L40 68 60 88 80 68 a20 20 0 0 0 24-24 l-20 8-8-8 z"></path>
 		</g>
 	</svg>
 </template>
 
 <script>
 export default {
-	name: 'ExternalLibrariesIcon',
+	name: 'ToolsIcon',
 };
 </script>

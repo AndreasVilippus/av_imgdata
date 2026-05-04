@@ -2,8 +2,9 @@
 import os
 import re
 import struct
+import mmap
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from services.config_service import ConfigService
 from services.exiftool_service import ExifToolService
 from models.metadata_payload import MetadataPayload
@@ -17,6 +18,19 @@ class FileHandler:
         "xmp_dir_stem",
         "xmp_dir_filename",
     ]
+    RAW_PREVIEW_EXTENSIONS = {
+        ".arw",
+        ".cr2",
+        ".cr3",
+        ".dng",
+        ".nef",
+        ".nrw",
+        ".orf",
+        ".pef",
+        ".raf",
+        ".rw2",
+    }
+    MAX_RAW_PREVIEW_FALLBACK_SCAN_BYTES = 64 * 1024 * 1024
     
     def __init__(self, config_service: Optional[ConfigService] = None):
         self._config = config_service or ConfigService()
@@ -405,6 +419,171 @@ class FileHandler:
 
         xmp_bytes = data[start:end]
         return xmp_bytes.decode("utf-8", errors="ignore")
+
+    @classmethod
+    def extractEmbeddedJpegPreview(cls, image_path: str) -> Optional[bytes]:
+        if Path(image_path).suffix.lower() not in cls.RAW_PREVIEW_EXTENSIONS:
+            return None
+        if not os.path.isfile(image_path):
+            return None
+
+        try:
+            with open(image_path, "rb") as handle:
+                if os.fstat(handle.fileno()).st_size == 0:
+                    return None
+                with mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                    return cls._extractTiffEmbeddedJpeg(data)
+        except Exception:
+            return None
+
+    @classmethod
+    def _extractTiffEmbeddedJpeg(cls, data: bytes) -> Optional[bytes]:
+        if len(data) < 8:
+            return None
+
+        byte_order = data[:2]
+        if byte_order == b"II":
+            endian = "<"
+        elif byte_order == b"MM":
+            endian = ">"
+        else:
+            return cls._findLargestJpegSegment(data, cls.MAX_RAW_PREVIEW_FALLBACK_SCAN_BYTES)
+
+        try:
+            magic = struct.unpack(f"{endian}H", data[2:4])[0]
+            if magic != 42:
+                return cls._findLargestJpegSegment(data, cls.MAX_RAW_PREVIEW_FALLBACK_SCAN_BYTES)
+            first_ifd_offset = struct.unpack(f"{endian}I", data[4:8])[0]
+        except Exception:
+            return None
+
+        queue = [first_ifd_offset]
+        visited = set()
+        best_preview: Optional[bytes] = None
+
+        while queue:
+            ifd_offset = queue.pop(0)
+            if ifd_offset in visited:
+                continue
+            visited.add(ifd_offset)
+
+            parsed = cls._parseTiffIfd(data, endian, ifd_offset)
+            if not parsed:
+                continue
+
+            tags, next_ifd_offset = parsed
+            jpeg_offsets = tags.get(0x0201, [])
+            jpeg_lengths = tags.get(0x0202, [])
+            for jpeg_offset in jpeg_offsets:
+                for jpeg_length in jpeg_lengths:
+                    preview = cls._sliceJpegPreview(data, jpeg_offset, jpeg_length)
+                    if preview and (best_preview is None or len(preview) > len(best_preview)):
+                        best_preview = preview
+
+            for sub_ifd_offset in tags.get(0x014A, []):
+                if 0 < sub_ifd_offset < len(data):
+                    queue.append(sub_ifd_offset)
+            if next_ifd_offset and 0 < next_ifd_offset < len(data):
+                queue.append(next_ifd_offset)
+
+        return best_preview or cls._findLargestJpegSegment(data, cls.MAX_RAW_PREVIEW_FALLBACK_SCAN_BYTES)
+
+    @classmethod
+    def _parseTiffIfd(cls, data: bytes, endian: str, ifd_offset: int) -> Optional[Tuple[Dict[int, List[int]], int]]:
+        if ifd_offset <= 0 or ifd_offset + 2 > len(data):
+            return None
+
+        try:
+            entry_count = struct.unpack(f"{endian}H", data[ifd_offset:ifd_offset + 2])[0]
+        except Exception:
+            return None
+
+        entries_start = ifd_offset + 2
+        entries_end = entries_start + (entry_count * 12)
+        next_offset_pos = entries_end
+        if entries_end > len(data) or next_offset_pos + 4 > len(data):
+            return None
+
+        tags: Dict[int, List[int]] = {}
+        for index in range(entry_count):
+            entry_offset = entries_start + (index * 12)
+            entry = data[entry_offset:entry_offset + 12]
+            try:
+                tag, value_type, count = struct.unpack(f"{endian}HHI", entry[:8])
+            except Exception:
+                continue
+            values = cls._readTiffUnsignedValues(data, endian, value_type, count, entry[8:12])
+            if values:
+                tags[tag] = values
+
+        try:
+            next_ifd_offset = struct.unpack(f"{endian}I", data[next_offset_pos:next_offset_pos + 4])[0]
+        except Exception:
+            next_ifd_offset = 0
+
+        return tags, next_ifd_offset
+
+    @staticmethod
+    def _readTiffUnsignedValues(data: bytes, endian: str, value_type: int, count: int, value_field: bytes) -> List[int]:
+        type_formats = {
+            3: ("H", 2),
+            4: ("I", 4),
+        }
+        if count <= 0 or value_type not in type_formats:
+            return []
+
+        fmt, unit_size = type_formats[value_type]
+        total_size = unit_size * count
+        if total_size <= 4:
+            raw = value_field[:total_size]
+        else:
+            try:
+                value_offset = struct.unpack(f"{endian}I", value_field)[0]
+            except Exception:
+                return []
+            if value_offset <= 0 or value_offset + total_size > len(data):
+                return []
+            raw = data[value_offset:value_offset + total_size]
+
+        values: List[int] = []
+        for offset in range(0, len(raw), unit_size):
+            chunk = raw[offset:offset + unit_size]
+            if len(chunk) != unit_size:
+                continue
+            try:
+                values.append(struct.unpack(f"{endian}{fmt}", chunk)[0])
+            except Exception:
+                continue
+        return values
+
+    @staticmethod
+    def _sliceJpegPreview(data: bytes, offset: int, length: int) -> Optional[bytes]:
+        if offset <= 0 or length <= 2 or offset + length > len(data):
+            return None
+        preview = data[offset:offset + length]
+        if not preview.startswith(b"\xff\xd8"):
+            return None
+        return preview
+
+    @staticmethod
+    def _findLargestJpegSegment(data: bytes, max_scan_bytes: Optional[int] = None) -> Optional[bytes]:
+        best: Optional[bytes] = None
+        position = 0
+        scan_limit = len(data)
+        if max_scan_bytes is not None:
+            scan_limit = min(scan_limit, max(0, max_scan_bytes))
+        while True:
+            start = data.find(b"\xff\xd8", position, scan_limit)
+            if start < 0:
+                break
+            end = data.find(b"\xff\xd9", start + 2, scan_limit)
+            if end < 0:
+                break
+            candidate = data[start:end + 2]
+            if best is None or len(candidate) > len(best):
+                best = candidate
+            position = end + 2
+        return best
 
     @staticmethod
     def readImageDimensions(image_path: str) -> Dict[str, Any]:

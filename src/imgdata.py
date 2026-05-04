@@ -46,6 +46,8 @@ class ImgDataService:
     """Orchestrates business use-cases across Photos and file handlers."""
     SESSION_KEEPALIVE_INTERVAL_SECONDS = 180
     FACE_MATCH_KEEPALIVE_INTERVAL_SECONDS = SESSION_KEEPALIVE_INTERVAL_SECONDS
+    FACE_MATCH_FINDINGS_FLUSH_INTERVAL_SECONDS = 60
+    FACE_MATCH_FINDINGS_FLUSH_ENTRY_INTERVAL = 25
 
     def __init__(self, session_manager: SessionManager):
         self.session_manager = session_manager
@@ -2327,14 +2329,19 @@ class ImgDataService:
         save_only: bool,
         transferred_count: int,
         entries: List[Dict[str, Any]],
+        job_id: Optional[str] = None,
+        started_at: Optional[str] = None,
+        finished: bool = True,
     ) -> None:
         timestamp = self._timestamp_now()
+        effective_job_id = str(job_id or timestamp)
+        effective_started_at = str(started_at or timestamp)
         self.file_analysis.writeCheckFindings(
             "face_match",
             {
-                "job_id": timestamp,
-                "started_at": timestamp,
-                "finished_at": timestamp,
+                "job_id": effective_job_id,
+                "started_at": effective_started_at,
+                "finished_at": timestamp if finished else "",
                 "last_updated_at": timestamp,
                 "status": status,
                 "shared_folder": shared_folder,
@@ -2346,6 +2353,21 @@ class ImgDataService:
                 "entries": entries,
             }
         )
+
+    def _shouldFlushFaceMatchFindings(
+        self,
+        *,
+        entries_count: int,
+        last_flush_count: int,
+        last_flush_at: float,
+    ) -> bool:
+        if entries_count <= last_flush_count:
+            return False
+        if last_flush_count <= 0:
+            return True
+        if entries_count - last_flush_count >= self.FACE_MATCH_FINDINGS_FLUSH_ENTRY_INTERVAL:
+            return True
+        return monotonic() - last_flush_at >= self.FACE_MATCH_FINDINGS_FLUSH_INTERVAL_SECONDS
 
     def _writeReverseFaceMatchCandidates(
         self,
@@ -2913,7 +2935,41 @@ class ImgDataService:
                 return False
             payload = self._readImageMetadata(image_path, include_unnamed_acd=True)
             existing = self._findFaceBySignature(payload.faces, metadata_face)
-            return bool(existing and str(existing.name or "").strip())
+            if not existing or not str(existing.name or "").strip():
+                return False
+
+            shared_folder = self.core.getSharedFolder(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                folder_name="photo",
+            )
+            if not shared_folder:
+                return True
+            item = self.photos.findFotoTeamItemByPath(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                shared_folder=shared_folder,
+                image_path=image_path,
+                additional=["thumbnail"],
+            )
+            item_id = item.get("id") if isinstance(item, dict) else None
+            try:
+                item_id_int = int(item_id)
+            except (TypeError, ValueError):
+                return True
+            if item_id_int not in image_faces_cache:
+                image_faces_cache[item_id_int] = self.photos.list_faceFotoTeamItems(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    id_item=item_id_int,
+                )
+            return self._findExistingPhotosFaceMatch(
+                metadata_face=existing,
+                existing_faces=image_faces_cache[item_id_int],
+            ) is None
         image = entry.get("image")
         face = entry.get("face")
         if not isinstance(image, dict) or not isinstance(face, dict):
@@ -4370,21 +4426,26 @@ class ImgDataService:
                     if check_type == "name_conflicts":
                         resolved_count += auto_applied_count
                 if resolved.get("auto_apply_warning"):
-                    return {
-                        "running": False,
-                        "finished": True,
-                        "stop_requested": False,
-                        "source_mode": "scan",
-                        "check_type": check_type,
-                        "save_only": True,
-                        "files_scanned": scanned_count,
-                        "total_files": total_files,
-                        "findings_count": findings_count,
-                        "resolved_count": resolved_count,
-                        "ignored_count": ignored_count,
-                        "current_path": image_path,
-                        "result": None,
-                        "resume_cursor": self._buildChecksResumeCursor(
+                    saved_entries.extend(entries)
+                    findings_count = len(saved_entries)
+                    self._setChecksProgressMessage(
+                        user_key,
+                        check_type,
+                        str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
+                        message="Suggested solution could not be applied automatically. The finding was saved for later review.",
+                        message_params={"count": findings_count},
+                        running=True,
+                        finished=False,
+                        source_mode="scan",
+                        save_only=True,
+                        files_scanned=scanned_count,
+                        total_files=total_files,
+                        findings_count=findings_count,
+                        resolved_count=resolved_count,
+                        ignored_count=ignored_count,
+                        current_path=image_path,
+                        result=None,
+                        resume_cursor=self._buildChecksResumeCursor(
                             path_index=index + 1,
                             pending_entries=[],
                             source_mode="scan",
@@ -4394,10 +4455,8 @@ class ImgDataService:
                             resolved_count=resolved_count,
                             ignored_count=ignored_count,
                         ),
-                        "message_key": str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
-                        "message": "Suggested solution could not be applied automatically.",
-                        "message_params": {"count": findings_count},
-                    }
+                    )
+                    continue
 
                 refreshed_entries = entries
                 if auto_applied_count:
@@ -5732,6 +5791,10 @@ class ImgDataService:
         last_keepalive_at = monotonic()
         known_persons_cache: Optional[List[Dict[str, Any]]] = None
         saved_entries: List[Dict[str, Any]] = []
+        findings_job_id = f"face_match-{uuid4().hex}"
+        findings_started_at = self._timestamp_now()
+        last_findings_flush_count = 0
+        last_findings_flush_at = monotonic()
         skip_face_ids_set = {
             int(face_id) for face_id in (skip_face_ids or [])
             if isinstance(face_id, int) or str(face_id).isdigit()
@@ -5797,6 +5860,8 @@ class ImgDataService:
                         save_only=save_only,
                         transferred_count=transferred_count,
                         entries=[],
+                        job_id=findings_job_id,
+                        started_at=findings_started_at,
                     )
                 return {
                     "searched": False,
@@ -5834,6 +5899,18 @@ class ImgDataService:
                 )
                 if self._shouldStopFaceMatching(user_key):
                     final_message_key = "face_match:progress_stopped"
+                    if save_only:
+                        self._writeFaceMatchFindings(
+                            status="stopped",
+                            shared_folder=shared_folder,
+                            action="search_photo_face_in_file",
+                            auto=auto,
+                            save_only=save_only,
+                            transferred_count=transferred_count,
+                            entries=saved_entries,
+                            job_id=findings_job_id,
+                            started_at=findings_started_at,
+                        )
                     return {
                         "searched": False,
                         "stopped": True,
@@ -5844,6 +5921,8 @@ class ImgDataService:
                         "image_path": None,
                         "transferred_count": transferred_count,
                         "auto": auto,
+                        "save_only": save_only,
+                        "findings_count": findings_count,
                         "resume_cursor": self._buildFaceMatchResumeCursor(
                             skip_face_ids=list(skip_face_ids_set),
                             transferred_count=transferred_count,
@@ -5891,6 +5970,18 @@ class ImgDataService:
                     )
                     if self._shouldStopFaceMatching(user_key):
                         final_message_key = "face_match:progress_stopped"
+                        if save_only:
+                            self._writeFaceMatchFindings(
+                                status="stopped",
+                                shared_folder=shared_folder,
+                                action="search_photo_face_in_file",
+                                auto=auto,
+                                save_only=save_only,
+                                transferred_count=transferred_count,
+                                entries=saved_entries,
+                                job_id=findings_job_id,
+                                started_at=findings_started_at,
+                            )
                         return {
                             "searched": False,
                             "stopped": True,
@@ -5899,15 +5990,17 @@ class ImgDataService:
                             "face": None,
                             "metadata_face": None,
                             "image_path": None,
-                        "transferred_count": transferred_count,
-                        "auto": auto,
-                        "resume_cursor": self._buildFaceMatchResumeCursor(
-                            skip_face_ids=list(skip_face_ids_set),
-                            transferred_count=transferred_count,
-                            auto=auto,
-                            save_only=save_only,
-                        ),
-                    }
+                            "transferred_count": transferred_count,
+                            "auto": auto,
+                            "save_only": save_only,
+                            "findings_count": findings_count,
+                            "resume_cursor": self._buildFaceMatchResumeCursor(
+                                skip_face_ids=list(skip_face_ids_set),
+                                transferred_count=transferred_count,
+                                auto=auto,
+                                save_only=save_only,
+                            ),
+                        }
                     image_id = image.get("id")
                     if image_id is None:
                         continue
@@ -5946,6 +6039,18 @@ class ImgDataService:
                         )
                         if self._shouldStopFaceMatching(user_key):
                             final_message_key = "face_match:progress_stopped"
+                            if save_only:
+                                self._writeFaceMatchFindings(
+                                    status="stopped",
+                                    shared_folder=shared_folder,
+                                    action="search_photo_face_in_file",
+                                    auto=auto,
+                                    save_only=save_only,
+                                    transferred_count=transferred_count,
+                                    entries=saved_entries,
+                                    job_id=findings_job_id,
+                                    started_at=findings_started_at,
+                                )
                             return {
                                 "searched": False,
                                 "stopped": True,
@@ -5956,6 +6061,8 @@ class ImgDataService:
                                 "image_path": None,
                                 "transferred_count": transferred_count,
                                 "auto": auto,
+                                "save_only": save_only,
+                                "findings_count": findings_count,
                                 "resume_cursor": self._buildFaceMatchResumeCursor(
                                     skip_face_ids=list(skip_face_ids_set),
                                     transferred_count=transferred_count,
@@ -6177,13 +6284,43 @@ class ImgDataService:
                                 findings_count=findings_count + 1,
                             ),
                         }
-                        if save_only:
-                            saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
-                            findings_count += 1
-                            skip_face_ids_set.add(face_id_int)
-                            continue
+                    if save_only:
+                        saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
                         findings_count += 1
-                        return result_entry
+                        skip_face_ids_set.add(face_id_int)
+                        if self._shouldFlushFaceMatchFindings(
+                            entries_count=len(saved_entries),
+                            last_flush_count=last_findings_flush_count,
+                            last_flush_at=last_findings_flush_at,
+                        ):
+                            self._writeFaceMatchFindings(
+                                status="running",
+                                shared_folder=shared_folder,
+                                action="search_photo_face_in_file",
+                                auto=auto,
+                                save_only=save_only,
+                                transferred_count=transferred_count,
+                                entries=saved_entries,
+                                job_id=findings_job_id,
+                                started_at=findings_started_at,
+                                finished=False,
+                            )
+                            last_findings_flush_count = len(saved_entries)
+                            last_findings_flush_at = monotonic()
+                        self._setFaceMatchingProgress(
+                            user_key,
+                            findings_count=findings_count,
+                            resume_cursor=self._buildFaceMatchResumeCursor(
+                                skip_face_ids=list(skip_face_ids_set),
+                                transferred_count=transferred_count,
+                                auto=auto,
+                                save_only=save_only,
+                                findings_count=findings_count,
+                            ),
+                        )
+                        continue
+                    findings_count += 1
+                    return result_entry
 
             final_message_key = "face_match:result_no_match"
             final_message_params = {}
@@ -6201,6 +6338,8 @@ class ImgDataService:
                     save_only=save_only,
                     transferred_count=transferred_count,
                     entries=saved_entries,
+                    job_id=findings_job_id,
+                    started_at=findings_started_at,
                 )
             return {
                 "searched": True,
@@ -6348,11 +6487,23 @@ class ImgDataService:
                     )
                     if self._shouldStopFaceMatching(user_key):
                         final_message_key = "face_match:progress_stopped"
+                        if save_only:
+                            self._writeFaceMatchFindings(
+                                status="stopped",
+                                shared_folder=shared_folder,
+                                action="search_file_face_in_sources",
+                                auto=auto,
+                                save_only=save_only,
+                                transferred_count=transferred_count,
+                                entries=saved_entries,
+                            )
                         return {
                             "searched": False,
                             "stopped": True,
                             "transferred_count": transferred_count,
                             "auto": auto,
+                            "save_only": save_only,
+                            "findings_count": findings_count,
                             "resume_cursor": self._buildFaceMatchResumeCursor(
                                 skip_face_ids=[],
                                 skip_targets=skip_target_tokens,
@@ -6461,11 +6612,23 @@ class ImgDataService:
                 )
                 if self._shouldStopFaceMatching(user_key):
                     final_message_key = "face_match:progress_stopped"
+                    if save_only:
+                        self._writeFaceMatchFindings(
+                            status="stopped",
+                            shared_folder=shared_folder,
+                            action="search_file_face_in_sources",
+                            auto=auto,
+                            save_only=save_only,
+                            transferred_count=transferred_count,
+                            entries=saved_entries,
+                        )
                     return {
                         "searched": False,
                         "stopped": True,
                         "transferred_count": transferred_count,
                         "auto": auto,
+                        "save_only": save_only,
+                        "findings_count": findings_count,
                         "resume_cursor": self._buildFaceMatchResumeCursor(
                             skip_face_ids=[],
                             skip_targets=skip_target_tokens,
@@ -6623,6 +6786,19 @@ class ImgDataService:
                     if save_only:
                         saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
                         skip_target_tokens.append(target_token)
+                        self._setFaceMatchingProgress(
+                            user_key,
+                            findings_count=findings_count,
+                            resume_cursor=self._buildFaceMatchResumeCursor(
+                                skip_face_ids=[],
+                                skip_targets=skip_target_tokens,
+                                transferred_count=transferred_count,
+                                auto=auto,
+                                save_only=save_only,
+                                action="search_file_face_in_sources",
+                                findings_count=findings_count,
+                            ),
+                        )
                         continue
                     return result_entry
 
@@ -6818,11 +6994,23 @@ class ImgDataService:
                 )
                 if self._shouldStopFaceMatching(user_key):
                     final_message_key = "face_match:progress_stopped"
+                    if save_only:
+                        self._writeFaceMatchFindings(
+                            status="stopped",
+                            shared_folder=shared_folder,
+                            action="mark_missing_photos_faces",
+                            auto=auto,
+                            save_only=save_only,
+                            transferred_count=transferred_count,
+                            entries=saved_entries,
+                        )
                     return {
                         "searched": False,
                         "stopped": True,
                         "transferred_count": transferred_count,
                         "auto": auto,
+                        "save_only": save_only,
+                        "findings_count": findings_count,
                         "resume_cursor": self._buildFaceMatchResumeCursor(
                             skip_face_ids=[],
                             skip_targets=skip_target_tokens,
@@ -7040,6 +7228,20 @@ class ImgDataService:
                 if save_only:
                     saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
                     skip_target_tokens.append(target_token)
+                    self._setFaceMatchingProgress(
+                        user_key,
+                        findings_count=findings_count,
+                        resume_cursor=self._buildFaceMatchResumeCursor(
+                            skip_face_ids=[],
+                            skip_targets=skip_target_tokens,
+                            transferred_count=transferred_count,
+                            auto=auto,
+                            save_only=save_only,
+                            action="mark_missing_photos_faces",
+                            findings_count=findings_count,
+                            path_index=images_read,
+                        ),
+                    )
                     continue
                 return result_entry
 
@@ -7260,11 +7462,23 @@ class ImgDataService:
                 )
                 if self._shouldStopFaceMatching(user_key):
                     final_message_key = "face_match:progress_stopped"
+                    if save_only:
+                        self._writeFaceMatchFindings(
+                            status="stopped",
+                            shared_folder=shared_folder,
+                            action=action,
+                            auto=auto,
+                            save_only=save_only,
+                            transferred_count=transferred_count,
+                            entries=saved_entries,
+                        )
                     return {
                         "searched": False,
                         "stopped": True,
                         "transferred_count": transferred_count,
                         "auto": auto,
+                        "save_only": save_only,
+                        "findings_count": len(saved_entries),
                         "resume_cursor": self._buildFaceMatchResumeCursor(
                             skip_face_ids=[],
                             skip_targets=skip_target_tokens,
@@ -7411,6 +7625,24 @@ class ImgDataService:
                 if save_only:
                     saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
                     skip_target_tokens.append(target_token)
+                    self._setFaceMatchingProgress(
+                        user_key,
+                        findings_count=len(saved_entries),
+                        resume_cursor=self._buildFaceMatchResumeCursor(
+                            skip_face_ids=[],
+                            skip_targets=skip_target_tokens,
+                            transferred_count=transferred_count,
+                            auto=auto,
+                            save_only=save_only,
+                            action=action,
+                            findings_count=len(saved_entries),
+                            path_index=images_read,
+                            images_read=images_read,
+                            faces_read=faces_read,
+                            target_faces_read=target_faces_read,
+                            metadata_faces_read=metadata_faces_read,
+                        ),
+                    )
                     continue
                 return result_entry
 
@@ -7986,6 +8218,7 @@ class ImgDataService:
         image_path: str,
         face_data: Dict[str, Any],
         new_name: str,
+        create_missing_person: bool = False,
     ) -> Dict[str, Any]:
         source_format = str(face_data.get("source_format") or "").strip().upper()
         replacement_name = str(new_name or "").strip()
@@ -8021,6 +8254,28 @@ class ImgDataService:
             name=lookup_name,
         )
         if not isinstance(target_person, dict):
+            if create_missing_person:
+                create_result = self.createMatchedFaceAsPerson(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    face_id=face_id,
+                    person_name=lookup_name,
+                    item_id=face_data.get("item_id") if face_data.get("item_id") is not None else None,
+                    image_path=image_path,
+                )
+                created_person_id = self._extractPersonId(create_result)
+                return {
+                    "updated": True,
+                    "warning": "",
+                    "operation": "photos_create",
+                    "create_result": create_result,
+                    "target_person": {
+                        "id": created_person_id,
+                        "name": lookup_name,
+                    },
+                    "resolved_name": lookup_name,
+                }
             return {
                 "updated": False,
                 "warning": "checks:warning_target_person_not_found",

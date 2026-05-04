@@ -68,7 +68,7 @@ export default {
 			const requestId = this.fileAnalysisProgressRequestId + 1;
 			this.fileAnalysisProgressRequestId = requestId;
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_progress');
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_progress', {}, { resume: false, requireSynoToken: false });
 				if (this.fileAnalysisProgressRequestId !== requestId) {
 					return;
 				}
@@ -87,10 +87,10 @@ export default {
 		},
 		async fetchExiftoolStatus() {
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_status');
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_status', {}, { resume: false, requireSynoToken: false });
 				this.exiftoolStatus = this.getResponseData(data);
 			} catch (err) {
-				this.exiftoolStatus = {};
+				this.output = `Error: ${err.message}`;
 			}
 		},
 		getPerlStatusValue() {
@@ -101,9 +101,9 @@ export default {
 				return String(perlInfo.version);
 			}
 			if (perlInfo && perlInfo.available) {
-				return this.$t('status:yes', 'Yes');
+				return this.$avt('status:yes', 'Yes');
 			}
-			return this.$t('status:not_available', 'Not available');
+			return this.$avt('status:not_available', 'Not available');
 		},
 		startFileAnalysisProgressPolling() {
 			this.startNamedPolling('fileAnalysisProgressTimer', () => {
@@ -147,30 +147,30 @@ export default {
 			const current = progress && typeof progress === 'object' ? progress : {};
 
 			if (current.stop_requested) {
-				return this.$t('status:analyze_stopping', 'Stopping file analysis...');
+				return this.$avt('status:analyze_stopping', 'Stopping file analysis...');
 			}
 			if (current.running && current.phase === 'discovery') {
-				return this.$t('status:progress_discovery_running', 'Scanning files...');
+				return this.$avt('status:progress_discovery_running', 'Scanning files...');
 			}
 			if (current.running && current.phase === 'analysis') {
-				return this.$t('status:progress_analysis_running', 'Analyzing face metadata...');
+				return this.$avt('status:progress_analysis_running', 'Analyzing face metadata...');
 			}
 			if (current.status === 'stopped' && current.phase === 'discovery') {
-				return this.$t('status:progress_discovery_stopped', 'Discovery stopped.');
+				return this.$avt('status:progress_discovery_stopped', 'Discovery stopped.');
 			}
 			if (current.status === 'stopped' && current.phase === 'analysis') {
-				return this.$t('status:progress_analysis_stopped', 'Analysis stopped.');
+				return this.$avt('status:progress_analysis_stopped', 'Analysis stopped.');
 			}
 			if (current.status === 'finished' && current.phase === 'analysis') {
-				return this.$t('status:progress_analysis_finished', 'Analysis finished.');
+				return this.$avt('status:progress_analysis_finished', 'Analysis finished.');
 			}
 			if (current.status === 'failed' && !current.shared_folder) {
-				return this.$t('status:progress_shared_folder_missing', 'Shared folder not found.');
+				return this.$avt('status:progress_shared_folder_missing', 'Shared folder not found.');
 			}
 			if (current.status === 'failed') {
-				return this.$t('status:progress_analysis_failed', 'File analysis failed.');
+				return this.$avt('status:progress_analysis_failed', 'File analysis failed.');
 			}
-			return current.message || this.$t('status:analyze_idle', 'No file analysis has been started yet.');
+			return current.message || this.$avt('status:analyze_idle', 'No file analysis has been started yet.');
 		},
 		getFileAnalysisWarningMessage(progress) {
 			const current = progress && typeof progress === 'object' ? progress : {};
@@ -180,21 +180,21 @@ export default {
 			const mismatchCount = Number(current.files_with_mwg_dimension_mismatch) || 0;
 			const orientationRiskCount = Number(current.files_with_mwg_orientation_transform_risk) || 0;
 			if (mismatchCount > 0 && orientationRiskCount > 0) {
-				return this.$t(
+				return this.$avt(
 					'status:warning_mwg_mismatch_and_orientation',
 					'Warning: {mismatch} files with MWG dimension mismatches and {risk} files with MWG orientation transform risk were found.',
 					{ mismatch: mismatchCount, risk: orientationRiskCount }
 				);
 			}
 			if (mismatchCount > 0) {
-				return this.$t(
+				return this.$avt(
 					'status:warning_mwg_mismatch',
 					'Warning: {count} files with MWG dimension mismatches were found.',
 					{ count: mismatchCount }
 				);
 			}
 			if (orientationRiskCount > 0) {
-				return this.$t(
+				return this.$avt(
 					'status:warning_mwg_orientation_risk',
 					'Warning: {count} files with MWG orientation transform risk were found.',
 					{ count: orientationRiskCount }
@@ -228,7 +228,7 @@ export default {
 					this.output = 'start synocredential resume flow...';
 				}
 				try {
-					const data = await this.callDsmApi(apiPath, {}, { requireResumeMessage: true });
+					const data = await this.callDsmApi(apiPath, {}, { resume: false, requireSynoToken: false });
 					if (updatePersons) {
 						this.persons = this.extractPersonsFromPayload(data);
 						this.system = this.extractSystemFromPayload(data);
@@ -248,8 +248,8 @@ export default {
 			try {
 				const current = this.isFileAnalysisRunning;
 				if (current) {
-					await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_stop');
-					this.output = this.$t('status:analyze_stopping', 'Stopping file analysis...');
+					await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_stop', {}, { resume: false, requireSynoToken: false });
+					this.output = this.$avt('status:analyze_stopping', 'Stopping file analysis...');
 					await this.fetchFileAnalysisProgress();
 					return;
 				}

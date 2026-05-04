@@ -25,11 +25,11 @@ function translateWithState(key, fallback = '', params = null) {
     });
 }
 
-Vue.prototype.$i18nState = i18nState;
-Vue.prototype.$i18n = function translateI18n(key, fallback = '', params = null) {
+Vue.prototype.$avI18nState = i18nState;
+Vue.prototype.$avI18n = function translateI18n(key, fallback = '', params = null) {
     return translateWithState(key, fallback, params);
 };
-Vue.prototype.$t = function translate(key, fallback = '', params = null) {
+Vue.prototype.$avt = function translate(key, fallback = '', params = null) {
     return translateWithState(key, fallback, params);
 };
 

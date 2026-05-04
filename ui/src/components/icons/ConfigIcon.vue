@@ -11,15 +11,16 @@
 			stroke-width="2"
 			stroke-linecap="round"
 			stroke-linejoin="round"
+			transform="matrix(1.141218,0,0,1.141218,-2.2312445,-2.2312445)"
 		>
-			<path d="M16 3v3"></path>
-			<path d="M16 26v3"></path>
-			<path d="M3 16h3"></path>
-			<path d="M26 16h3"></path>
-			<path d="M6.5 6.5l2.2 2.2"></path>
-			<path d="M23.3 23.3l2.2 2.2"></path>
-			<path d="M25.5 6.5l-2.2 2.2"></path>
-			<path d="M8.7 23.3l-2.2 2.2"></path>
+			<path d="M 16,3 V 6"></path>
+			<path d="m 16,26 v 3"></path>
+			<path d="M 3,16 H 6"></path>
+			<path d="m 26,16 h 3"></path>
+			<path d="M 6.5,6.5 8.7,8.7"></path>
+			<path d="m 23.3,23.3 2.2,2.2"></path>
+			<path d="M 25.5,6.5 23.3,8.7"></path>
+			<path d="M 8.7,23.3 6.5,25.5"></path>
 			<circle cx="16" cy="16" r="8"></circle>
 			<circle cx="16" cy="16" r="3"></circle>
 		</g>

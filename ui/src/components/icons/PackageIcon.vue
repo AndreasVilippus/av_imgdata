@@ -13,15 +13,15 @@
 			stroke-linejoin="round"
 			transform="matrix(1.4860527,0,0,1.4860527,-30.994397,-30.994405)"
 		>
-			<path d="M 24,44 64,24 104,44 64,64 Z"></path>
-			<path d="m 24,44 v 40 l 40,20 V 64"></path>
-			<path d="M 104,44 V 84 L 64,104"></path>
+			<path d="M24 44 64 24 104 44 64 64 Z"></path>
+			<path d="m24 44 v40 l40 20 V64"></path>
+			<path d="M104 44 V84 L64 104"></path>
 		</g>
 	</svg>
 </template>
 
 <script>
 export default {
-	name: 'ExternalLibrariesIcon',
+	name: 'PackageIcon',
 };
 </script>

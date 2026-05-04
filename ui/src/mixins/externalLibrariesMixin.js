@@ -43,10 +43,10 @@ export default {
 		},
 		externalLibrariesSidecarLookupOptions() {
 			return [
-				{ value: 'same_dir_stem', label: this.$t('config:label_sidecar_variant_same_dir_stem', 'Same folder: image.xmp') },
-				{ value: 'same_dir_filename', label: this.$t('config:label_sidecar_variant_same_dir_filename', 'Same folder: image.jpg.xmp') },
-				{ value: 'xmp_dir_stem', label: this.$t('config:label_sidecar_variant_xmp_dir_stem', 'xmp subfolder: xmp/image.xmp') },
-				{ value: 'xmp_dir_filename', label: this.$t('config:label_sidecar_variant_xmp_dir_filename', 'xmp subfolder: xmp/image.jpg.xmp') },
+				{ value: 'same_dir_stem', label: this.$avt('config:label_sidecar_variant_same_dir_stem', 'Same folder: image.xmp') },
+				{ value: 'same_dir_filename', label: this.$avt('config:label_sidecar_variant_same_dir_filename', 'Same folder: image.jpg.xmp') },
+				{ value: 'xmp_dir_stem', label: this.$avt('config:label_sidecar_variant_xmp_dir_stem', 'xmp subfolder: xmp/image.xmp') },
+				{ value: 'xmp_dir_filename', label: this.$avt('config:label_sidecar_variant_xmp_dir_filename', 'xmp subfolder: xmp/image.jpg.xmp') },
 			];
 		},
 		insightFacePipPackageStatus() {
@@ -198,7 +198,7 @@ export default {
 			};
 			if (packageKey === 'INSIGHTFACE' && key === 'ENABLED' && Boolean(value) && !wasInsightFaceEnabled) {
 				this.showExternalLibrariesRestartPopup(
-					this.$t(
+					this.$avt(
 						'config:popup_insightface_model_license_warning',
 						'InsightFace can download models with separate non-free license terms. These models may only be used under the applicable InsightFace model license terms. Please review the InsightFace license notes before enabling this feature:\n\nhttps://github.com/deepinsight/insightface#license'
 					)
@@ -208,38 +208,38 @@ export default {
 		getPipPackageInstallStatusLabel(installStatus) {
 			const status = String(installStatus && installStatus.status || '').trim().toLowerCase();
 			if (!status) {
-				return this.$t('status:not_available', 'Not available');
+				return this.$avt('status:not_available', 'Not available');
 			}
 			if (status === 'success') {
-				return this.$t('config:pip_install_status_success', 'Last installation completed.');
+				return this.$avt('config:pip_install_status_success', 'Last installation completed.');
 			}
 			if (status === 'failed') {
-				return this.$t('config:pip_install_status_failed', 'Last installation failed.');
+				return this.$avt('config:pip_install_status_failed', 'Last installation failed.');
 			}
 			return status;
 		},
 		getPipPackageModuleStatusLabel(moduleStatus) {
 			if (!moduleStatus || typeof moduleStatus !== 'object') {
-				return this.$t('status:not_available', 'Not available');
+				return this.$avt('status:not_available', 'Not available');
 			}
 			if (moduleStatus.installed) {
-				return moduleStatus.version || this.$t('status:installed', 'Installed');
+				return moduleStatus.version || this.$avt('status:installed', 'Installed');
 			}
 			const importError = String(moduleStatus.import_error || '').trim();
 			if (importError) {
-				return `${this.$t('status:not_installed', 'Not installed')}: ${importError}`;
+				return `${this.$avt('status:not_installed', 'Not installed')}: ${importError}`;
 			}
-			return this.$t('status:not_installed', 'Not installed');
+			return this.$avt('status:not_installed', 'Not installed');
 		},
 		getInsightFaceModelStatusLabel(modelStatus) {
 			if (!modelStatus || typeof modelStatus !== 'object') {
-				return this.$t('status:not_available', 'Not available');
+				return this.$avt('status:not_available', 'Not available');
 			}
 			if (modelStatus.installed) {
 				const fileCount = Array.isArray(modelStatus.onnx_files) ? modelStatus.onnx_files.length : 0;
-				return this.$t('config:insightface_model_installed', 'Installed ({count} ONNX files)', { count: fileCount });
+				return this.$avt('config:insightface_model_installed', 'Installed ({count} ONNX files)', { count: fileCount });
 			}
-			return this.$t('status:not_installed', 'Not installed');
+			return this.$avt('status:not_installed', 'Not installed');
 		},
 		showExternalLibrariesRestartPopup(message) {
 			const text = String(message || '').trim();
@@ -403,7 +403,7 @@ export default {
 				},
 			});
 			this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
-			this.externalLibrariesMessage = this.$t('config:output_defaults_applied', 'Default values loaded into the editor.');
+			this.externalLibrariesMessage = this.$avt('config:output_defaults_applied', 'Default values loaded into the editor.');
 		},
 		async loadExternalLibrariesConfig() {
 			this.externalLibrariesLoading = true;
@@ -424,10 +424,10 @@ export default {
 		async fetchPipPackagesStatus() {
 			this.pipPackagesStatusLoading = true;
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status');
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status', {}, { resume: false, requireSynoToken: false });
 				this.pipPackagesStatus = this.getResponseData(data);
 			} catch (err) {
-				this.pipPackagesStatus = {};
+				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
 				this.pipPackagesStatusLoading = false;
 			}
@@ -443,7 +443,7 @@ export default {
 				await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/insightface_model_delete', {
 					model_name: normalizedName,
 				});
-				this.externalLibrariesMessage = this.$t('config:message_insightface_model_deleted', 'InsightFace model removed.');
+				this.externalLibrariesMessage = this.$avt('config:message_insightface_model_deleted', 'InsightFace model removed.');
 				await this.fetchPipPackagesStatus();
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
@@ -470,10 +470,10 @@ export default {
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
 				await this.fetchPipPackagesStatus();
-				this.externalLibrariesMessage = this.$t('config:message_saved', 'Configuration saved.');
+				this.externalLibrariesMessage = this.$avt('config:message_saved', 'Configuration saved.');
 				if (this.externalLibrariesPipPackagesRequireRestart(previousNormalized, this.externalLibrariesConfigModel)) {
 					this.showExternalLibrariesRestartPopup(
-						this.$t(
+						this.$avt(
 							'config:popup_restart_required_pip_packages',
 							'The package must be restarted so changed optional pip packages can be installed or updated.'
 						)
@@ -492,7 +492,7 @@ export default {
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_extensions');
 				const extensions = data && data.data && Array.isArray(data.data.extensions) ? data.data.extensions : [];
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(extensions);
-				this.externalLibrariesMessage = this.$t('config:message_exiftool_extensions_loaded', 'ExifTool extensions loaded into the editor.');
+				this.externalLibrariesMessage = this.$avt('config:message_exiftool_extensions_loaded', 'ExifTool extensions loaded into the editor.');
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
@@ -512,9 +512,9 @@ export default {
 					this.externalLibrariesConfigModel.files.USE_EXIFTOOL = true;
 				}
 				await this.fetchExiftoolStatus();
-				this.externalLibrariesMessage = this.$t('config:message_exiftool_installed', 'ExifTool downloaded and installed.');
+				this.externalLibrariesMessage = this.$avt('config:message_exiftool_installed', 'ExifTool downloaded and installed.');
 				this.showExternalLibrariesRestartPopup(
-					this.$t(
+					this.$avt(
 						'config:popup_restart_may_be_required_exiftool',
 						'ExifTool was installed. A package restart may be required before the command is fully available.'
 					)
@@ -522,12 +522,12 @@ export default {
 			} catch (err) {
 				const detail = String(err.message || '');
 				if (detail.includes('perl_not_available')) {
-					this.externalLibrariesMessage = this.$t(
+					this.externalLibrariesMessage = this.$avt(
 						'config:error_exiftool_perl_required',
 						'ExifTool cannot be installed because Perl is not available. Please install the Synology Perl package first.'
 					);
 				} else if (detail.includes('installed_exiftool_smoke_test_failed')) {
-					this.externalLibrariesMessage = this.$t(
+					this.externalLibrariesMessage = this.$avt(
 						'config:error_exiftool_smoke_test_failed',
 						'ExifTool was downloaded, but the installation test failed. ExifTool remains disabled.'
 					);
@@ -548,7 +548,7 @@ export default {
 					this.externalLibrariesConfigModel.files.USE_EXIFTOOL = false;
 				}
 				await this.fetchExiftoolStatus();
-				this.externalLibrariesMessage = this.$t('config:message_exiftool_removed', 'ExifTool installation removed.');
+				this.externalLibrariesMessage = this.$avt('config:message_exiftool_removed', 'ExifTool installation removed.');
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {

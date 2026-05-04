@@ -1,49 +1,49 @@
 <template>
 	<section class="panel">
 		<div class="panel-head">
-			<div class="sm-section-title">{{ vm.$t('checks:title', 'Checks') }}</div>
-			<p>{{ vm.$t('checks:desc', 'Area for validation and review functions.') }}</p>
+			<div class="sm-section-title">{{ vm.$avt('checks:title', 'Checks') }}</div>
+			<p>{{ vm.$avt('checks:desc', 'Area for validation and review functions.') }}</p>
 		</div>
 		<div class="checks-actions panel-content-start">
 			<div class="checks-actions-row checks-actions-row-selects">
 				<select v-model="vm.selectedChecksType" class="face-match-select" :disabled="vm.checksLoading">
-					<option value="dimension_issues">{{ vm.$t('checks:type_dimension_issues', 'Dimension issues') }}</option>
-					<option value="duplicate_faces">{{ vm.$t('checks:type_duplicate_faces', 'Duplicate face markings') }}</option>
-					<option value="position_deviations">{{ vm.$t('checks:type_position_deviations', 'Deviating face positions') }}</option>
-					<option value="name_conflicts">{{ vm.$t('checks:type_name_conflicts', 'Name conflicts') }}</option>
+					<option value="dimension_issues">{{ vm.$avt('checks:type_dimension_issues', 'Dimension issues') }}</option>
+					<option value="duplicate_faces">{{ vm.$avt('checks:type_duplicate_faces', 'Duplicate face markings') }}</option>
+					<option value="position_deviations">{{ vm.$avt('checks:type_position_deviations', 'Deviating face positions') }}</option>
+					<option value="name_conflicts">{{ vm.$avt('checks:type_name_conflicts', 'Name conflicts') }}</option>
 				</select>
 				<select v-model="vm.selectedChecksAction" class="face-match-select" :disabled="vm.checksLoading">
-					<option value="findings" :disabled="vm.checksFindingsStatusLoaded && !vm.hasChecksStoredFindings">{{ vm.$t('checks:action_findings', 'Process saved findings list') }}</option>
-					<option value="scan">{{ vm.$t('checks:action_scan', 'Run check scan') }}</option>
+					<option value="findings">{{ vm.$avt('checks:action_findings', 'Process saved findings list') }}</option>
+					<option value="scan">{{ vm.$avt('checks:action_scan', 'Run check scan') }}</option>
 				</select>
 			</div>
 			<div class="checks-actions-row checks-actions-row-switches">
 				<label
 					v-if="vm.selectedChecksAction === 'scan'"
 					class="face-match-switch"
-					:title="vm.$t('checks:hint_save_only', 'Findings are only stored in the findings list and not shown directly during the scan. Automatic recommended solutions are still applied.')"
+					:title="vm.$avt('checks:hint_save_only', 'Findings are only stored in the findings list and not shown directly during the scan. Automatic recommended solutions are still applied.')"
 				>
 					<input v-model="vm.checksSaveOnly" type="checkbox" :disabled="vm.checksLoading" />
 					<span class="face-match-switch-slider"></span>
-					<span class="face-match-switch-label">{{ vm.$t('checks:switch_save_only', 'Save findings only') }}</span>
+					<span class="face-match-switch-label">{{ vm.$avt('checks:switch_save_only', 'Save findings only') }}</span>
 				</label>
 				<label
 					v-if="vm.selectedChecksType === 'name_conflicts'"
 					class="face-match-switch"
-					:title="vm.$t('checks:hint_auto_apply_suggested_names', 'Suggested target names from stored name mappings are applied automatically.')"
+					:title="vm.$avt('checks:hint_auto_apply_suggested_names', 'Suggested target names from stored name mappings are applied automatically.')"
 				>
 					<input v-model="vm.checksAutoApplySuggestedNames" type="checkbox" :disabled="vm.checksLoading" />
 					<span class="face-match-switch-slider"></span>
-					<span class="face-match-switch-label">{{ vm.$t('checks:switch_auto_apply_suggested_names', 'Apply suggested names automatically') }}</span>
+					<span class="face-match-switch-label">{{ vm.$avt('checks:switch_auto_apply_suggested_names', 'Apply suggested names automatically') }}</span>
 				</label>
 				<label
 					v-if="vm.selectedChecksType === 'duplicate_faces'"
 					class="face-match-switch"
-					:title="vm.$t('checks:hint_auto_apply_suggested_duplicates', 'If a clear recommendation exists, the alternative face marking is removed automatically.')"
+					:title="vm.$avt('checks:hint_auto_apply_suggested_duplicates', 'If a clear recommendation exists, the alternative face marking is removed automatically.')"
 				>
 					<input v-model="vm.checksAutoApplySuggestedDuplicates" type="checkbox" :disabled="vm.checksLoading" />
 					<span class="face-match-switch-slider"></span>
-					<span class="face-match-switch-label">{{ vm.$t('checks:switch_auto_apply_suggested_duplicates', 'Keep suggested face automatically') }}</span>
+					<span class="face-match-switch-label">{{ vm.$avt('checks:switch_auto_apply_suggested_duplicates', 'Keep suggested face automatically') }}</span>
 				</label>
 			</div>
 			<div class="checks-actions-row checks-actions-row-buttons">
@@ -57,49 +57,48 @@
 						:disabled="vm.checksLoading"
 						style="width: 160px;"
 					>
-						{{ vm.$t('checks:button_ignore', 'Ignore') }}
+						{{ vm.$avt('checks:button_ignore', 'Ignore') }}
 					</v-button>
 					<v-button v-if="vm.hasNextChecksItem" @click="vm.nextChecksReview" :disabled="vm.checksLoading" style="width: 160px;">
-						{{ vm.$t('checks:button_next', 'Next') }}
+						{{ vm.$avt('checks:button_next', 'Next') }}
 					</v-button>
 				</div>
 			</div>
 		</div>
 		<div class="face-match-status-card face-match-status-card-action">
 			<div class="face-match-status-head">
-				<div class="sm-section-title">{{ vm.$t('checks:status_title', 'Status') }}</div>
+				<div class="sm-section-title">{{ vm.$avt('checks:status_title', 'Status') }}</div>
 			</div>
 			<div
 				v-if="vm.selectedChecksAction === 'scan' && (vm.checksLoading || (vm.checksProgress && Object.keys(vm.checksProgress).length))"
 				class="sm-status-progress"
 			>
 				<ProgressOverviewCard
-					:title="vm.$t('checks:label_images', 'Images')"
+					:title="vm.$avt('checks:label_images', 'Images')"
 					:count="Number(vm.checksProgress.total_files) || 0"
 					:current="Number(vm.checksProgress.files_scanned) || 0"
 					:total="Number(vm.checksProgress.total_files) || 0"
-					:primary-label="vm.$t('checks:label_scanned', 'scanned').replace(':', '').toLowerCase()"
-					:secondary-label="vm.$t('checks:label_remaining', 'remaining')"
+					:primary-label="vm.$avt('checks:label_scanned', 'scanned').replace(':', '').toLowerCase()"
+					:secondary-label="vm.$avt('checks:label_remaining', 'remaining')"
 					:status-text="vm.getChecksStatusHeadline()"
 					:icon-url="vm.getChecksProgressIconUrl()"
 				/>
 			</div>
 			<div v-if="vm.selectedChecksAction !== 'scan' && vm.checksEntries.length > 0" class="sm-status-progress">
 				<ProgressOverviewCard
-					:title="vm.$t('checks:label_list_entries', 'Entries')"
-					:count="vm.checksEntries.length"
-					:current="vm.checksCurrentIndex + 1"
-					:total="vm.checksEntries.length"
-					:primary-label="vm.$t('checks:label_index', 'Entry:').replace(':', '')"
-					:secondary-label="vm.$t('checks:label_entries_remaining', 'remaining')"
+					:title="vm.$avt('checks:label_list_entries', 'Entries')"
+					:count="vm.getChecksListTotalCount()"
+					:current="vm.getChecksListCurrentCount()"
+					:total="vm.getChecksListTotalCount()"
+					:primary-label="vm.$avt('checks:label_index', 'Entry:').replace(':', '')"
+					:secondary-label="vm.$avt('checks:label_entries_remaining', 'remaining')"
 					:status-text="vm.getChecksStatusHeadline()"
 				/>
 			</div>
 			<div v-if="vm.checksCurrentItem" class="face-match-status-stats">
-				<div><strong>{{ vm.$t('checks:label_type', 'Check:') }}</strong> {{ vm.getChecksTypeLabel(vm.selectedChecksType) }}</div>
-				<div><strong>{{ vm.$t('checks:label_file', 'File:') }}</strong> {{ vm.checksCurrentItem.image_name }}</div>
-				<div><strong>{{ vm.$t('checks:label_face_name', 'Face:') }}</strong> {{ vm.checksCurrentItem.face_name || vm.$t('face_match:unknown_name', '(unnamed)') }}</div>
-				<div><strong>{{ vm.$t('checks:label_pair', 'Pair:') }}</strong> {{ vm.getChecksPairLabel(vm.checksCurrentItem) }}</div>
+				<div><strong>{{ vm.$avt('checks:label_file', 'File:') }}</strong> {{ vm.checksCurrentItem.image_name }}</div>
+				<div><strong>{{ vm.$avt('checks:label_face_name', 'Face:') }}</strong> {{ vm.checksCurrentItem.face_name || vm.$avt('face_match:unknown_name', '(unnamed)') }}</div>
+				<div><strong>{{ vm.$avt('checks:label_pair', 'Pair:') }}</strong> {{ vm.getChecksPairLabel(vm.checksCurrentItem) }}</div>
 			</div>
 		</div>
 			<div v-if="vm.checksCurrentItem" class="face-match-split checks-split">
@@ -111,10 +110,10 @@
 					:title="vm.getChecksReplaceRightTooltip(vm.checksCurrentItem)"
 					:aria-label="vm.getChecksReplaceRightTooltip(vm.checksCurrentItem)"
 					:disabled="vm.checksLoading"
-					@click.prevent="vm.replaceChecksMetadataFaceName(vm.checksCurrentItem.right_face_target, vm.checksCurrentItem.left_name)"
+					@click.prevent="vm.replaceChecksMetadataFaceName(vm.checksCurrentItem.right_face_target, vm.checksCurrentItem.left_name, { createMissingPerson: vm.isChecksPhotosFace(vm.checksCurrentItem.right_face_target) })"
 				>
 					<img v-if="vm.getChecksReplaceRightIconUrl()" :src="vm.getChecksReplaceRightIconUrl()" alt="" class="face-match-icon-image" />
-					<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_name_right', 'Name ->') }}</span>
+					<span v-else class="face-match-icon-fallback">{{ vm.$avt('checks:button_replace_name_right', 'Name ->') }}</span>
 				</button>
 				<button
 					v-if="vm.isChecksNameConflict(vm.checksCurrentItem) && vm.canReplaceChecksFaceName(vm.checksCurrentItem, vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_name)"
@@ -123,10 +122,10 @@
 					:title="vm.getChecksReplaceLeftTooltip(vm.checksCurrentItem)"
 					:aria-label="vm.getChecksReplaceLeftTooltip(vm.checksCurrentItem)"
 					:disabled="vm.checksLoading"
-					@click.prevent="vm.replaceChecksMetadataFaceName(vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_name)"
+					@click.prevent="vm.replaceChecksMetadataFaceName(vm.checksCurrentItem.left_face_target, vm.checksCurrentItem.right_name, { createMissingPerson: vm.isChecksPhotosFace(vm.checksCurrentItem.left_face_target) })"
 				>
 					<img v-if="vm.getChecksReplaceLeftIconUrl()" :src="vm.getChecksReplaceLeftIconUrl()" alt="" class="face-match-icon-image" />
-					<span v-else class="face-match-icon-fallback">{{ vm.$t('checks:button_replace_name_left', 'Name left') }}</span>
+					<span v-else class="face-match-icon-fallback">{{ vm.$avt('checks:button_replace_name_left', 'Name left') }}</span>
 				</button>
 			</div>
 			<ChecksFacePane :vm="vm" :item="vm.checksCurrentItem" side="left" />
@@ -134,16 +133,16 @@
 		</div>
 		<div v-if="vm.nameMappingConfirm.visible" class="sm-modal-backdrop">
 			<div class="sm-modal sm-modal-centered" role="dialog" aria-modal="true" aria-labelledby="checks-name-mapping-confirm-title">
-				<div id="checks-name-mapping-confirm-title" class="sm-modal-title">{{ vm.$t('face_match:modal_mapping_title', 'Save name mapping') }}</div>
+				<div id="checks-name-mapping-confirm-title" class="sm-modal-title">{{ vm.$avt('face_match:modal_mapping_title', 'Save name mapping') }}</div>
 				<div class="sm-modal-text">{{ vm.nameMappingConfirm.message }}</div>
 				<label v-if="vm.nameMappingConfirm.context === 'checks'" class="face-match-switch sm-modal-switch-option">
 					<input v-model="vm.nameMappingConfirm.skipFuturePrompts" type="checkbox" />
 					<span class="face-match-switch-slider"></span>
-					<span class="face-match-switch-label">{{ vm.$t('checks:switch_skip_name_mapping_confirm', 'Do not ask again for this check') }}</span>
+					<span class="face-match-switch-label">{{ vm.$avt('checks:switch_skip_name_mapping_confirm', 'Do not ask again for this check') }}</span>
 				</label>
 				<div class="sm-modal-actions">
-					<v-button @click="vm.resolveNameMappingConfirm(false)" style="width: 120px;">{{ vm.$t('face_match:button_no', 'No') }}</v-button>
-					<v-button @click="vm.resolveNameMappingConfirm(true)" style="width: 120px;">{{ vm.$t('face_match:button_yes', 'Yes') }}</v-button>
+					<v-button @click="vm.resolveNameMappingConfirm(false)" style="width: 120px;">{{ vm.$avt('face_match:button_no', 'No') }}</v-button>
+					<v-button @click="vm.resolveNameMappingConfirm(true)" style="width: 120px;">{{ vm.$avt('face_match:button_yes', 'Yes') }}</v-button>
 				</div>
 			</div>
 		</div>

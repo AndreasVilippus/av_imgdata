@@ -6,7 +6,7 @@
 			@click="$emit('select', 'status')"
 		>
 			<StatusIcon class="sm-nav-icon" />
-			{{ $t('nav:status', 'Status') }}
+			{{ $avt('nav:status', 'Status') }}
 		</button>
 		<button
 			class="sm-nav-item"
@@ -14,7 +14,7 @@
 			@click="$emit('select', 'face_match')"
 		>
 			<FaceMatchIcon class="sm-nav-icon" />
-			{{ $t('nav:face_match', 'Face Matching') }}
+			{{ $avt('nav:face_match', 'Face Matching') }}
 		</button>
 		<button
 			class="sm-nav-item"
@@ -22,7 +22,7 @@
 			@click="$emit('select', 'checks')"
 		>
 			<ChecksIcon class="sm-nav-icon" />
-			{{ $t('nav:checks', 'Checks') }}
+			{{ $avt('nav:checks', 'Checks') }}
 		</button>
 		<button
 			class="sm-nav-item"
@@ -30,7 +30,7 @@
 			@click="$emit('select', 'cleanup')"
 		>
 			<CleanupIcon class="sm-nav-icon" />
-			{{ $t('nav:cleanup', 'Cleanup') }}
+			{{ $avt('nav:cleanup', 'Cleanup') }}
 		</button>
 		<button
 			class="sm-nav-item"
@@ -38,7 +38,7 @@
 			@click="$emit('select', 'configuration')"
 		>
 			<ConfigIcon class="sm-nav-icon" />
-			{{ $t('nav:configuration', 'Configuration') }}
+			{{ $avt('nav:configuration', 'Configuration') }}
 		</button>
 		<div class="sm-nav-separator"></div>
 		<button
@@ -47,21 +47,22 @@
 			@click="$emit('select', 'external_libraries')"
 		>
 			<ExternalLibrariesIcon class="sm-nav-icon" />
-			{{ $t('nav:external_libraries', 'External libraries') }}
+			{{ $avt('nav:external_libraries', 'External libraries') }}
 		</button>
 		<button
 			class="sm-nav-item sm-nav-sub-item"
 			:class="{ active: selectedOption === 'external_libraries_exiftool' }"
 			@click="$emit('select', 'external_libraries_exiftool')"
 		>
-			{{ $t('nav:exiftool', 'ExifTool') }}
+			{{ $avt('nav:exiftool', 'ExifTool') }}
 		</button>
 		<button
-			class="sm-nav-item sm-nav-sub-item"
+			class="sm-nav-item"
 			:class="{ active: selectedOption === 'external_libraries_pip_packages' }"
 			@click="$emit('select', 'external_libraries_pip_packages')"
 		>
-			{{ $t('nav:pip_packages', 'pip packages') }}
+			<ModulesIcon class="sm-nav-icon" />
+			{{ $avt('nav:pip_packages', 'pip packages') }}
 		</button>
 	</aside>
 </template>
@@ -72,6 +73,7 @@ import CleanupIcon from './icons/CleanupIcon.vue';
 import ConfigIcon from './icons/ConfigIcon.vue';
 import ExternalLibrariesIcon from './icons/ExternalLibrariesIcon.vue';
 import FaceMatchIcon from './icons/FaceMatchIcon.vue';
+import ModulesIcon from './icons/ModulesIcon.vue';
 import StatusIcon from './icons/StatusIcon.vue';
 
 export default {
@@ -82,6 +84,7 @@ export default {
 		ConfigIcon,
 		ExternalLibrariesIcon,
 		FaceMatchIcon,
+		ModulesIcon,
 		StatusIcon,
 	},
 	props: {
