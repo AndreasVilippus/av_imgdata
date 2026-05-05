@@ -67,6 +67,47 @@
 						/>
 					</label>
 
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('config:label_name_conflict_overlap_threshold', 'Name conflict face overlap threshold') }}</span>
+						<input
+							v-model.number="configModel.analysis.CHECKS.NAME_CONFLICT_OVERLAP_THRESHOLD"
+							type="number"
+							min="0"
+							max="1"
+							step="0.01"
+							class="config-text-input"
+							:disabled="saving"
+						/>
+						<span class="config-card-desc">
+							{{ $avt('config:hint_name_conflict_overlap_threshold', 'Minimum overlap for treating two face boxes as the same face. Higher values reduce false positives in pair and group photos.') }}
+						</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input
+							v-model="configModel.analysis.CHECKS.NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"
+							type="checkbox"
+							:disabled="saving"
+						/>
+						<span>{{ $avt('config:label_name_conflict_require_mutual_best_match', 'Require mutual best face match for name conflicts') }}</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('config:label_name_conflict_min_best_match_margin', 'Minimum best-match margin for name conflicts') }}</span>
+						<input
+							v-model.number="configModel.analysis.CHECKS.NAME_CONFLICT_MIN_BEST_MATCH_MARGIN"
+							type="number"
+							min="0"
+							max="1"
+							step="0.01"
+							class="config-text-input"
+							:disabled="saving || !configModel.analysis.CHECKS.NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"
+						/>
+						<span class="config-card-desc">
+							{{ $avt('config:hint_name_conflict_min_best_match_margin', 'The best matching face must be this much better than the second-best candidate. Increase this for close pair photos.') }}
+						</span>
+					</label>
+
 					<div class="config-field">
 						<span class="config-field-label">{{ $avt('config:label_sidecar_lookup_variants', 'Sidecar lookup variants') }}</span>
 						<div class="config-form-grid">
@@ -323,6 +364,9 @@ export default {
 						DIMENSION_ISSUES: true,
 						NAME_CONFLICTS: true,
 						NAME_CONFLICTS_INCLUDE_PHOTOS: true,
+						NAME_CONFLICT_OVERLAP_THRESHOLD: 0.75,
+						NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH: true,
+						NAME_CONFLICT_MIN_BEST_MATCH_MARGIN: 0.05,
 						SINGLE_SOURCE_OF_TRUTH: '',
 					},
 				},
@@ -407,6 +451,19 @@ export default {
 			} finally {
 				this.clearingIgnoreListType = '';
 			}
+		},
+		clampNumber(value, min, max, fallback) {
+			const numeric = Number(value);
+			if (!Number.isFinite(numeric)) {
+				return fallback;
+			}
+			if (numeric < min) {
+				return min;
+			}
+			if (numeric > max) {
+				return max;
+			}
+			return numeric;
 		},
 		normalizeChecksSingleSourceOfTruth(value, fallback = '') {
 			const normalized = String(value || '').trim().toLowerCase();
@@ -501,6 +558,19 @@ export default {
 						DIMENSION_ISSUES: Boolean(checks.DIMENSION_ISSUES ?? defaults.analysis.CHECKS.DIMENSION_ISSUES),
 						NAME_CONFLICTS: Boolean(checks.NAME_CONFLICTS ?? defaults.analysis.CHECKS.NAME_CONFLICTS),
 						NAME_CONFLICTS_INCLUDE_PHOTOS: Boolean(checks.NAME_CONFLICTS_INCLUDE_PHOTOS ?? defaults.analysis.CHECKS.NAME_CONFLICTS_INCLUDE_PHOTOS),
+						NAME_CONFLICT_OVERLAP_THRESHOLD: this.clampNumber(
+							checks.NAME_CONFLICT_OVERLAP_THRESHOLD,
+							0,
+							1,
+							defaults.analysis.CHECKS.NAME_CONFLICT_OVERLAP_THRESHOLD
+						),
+						NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH: Boolean(checks.NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH ?? defaults.analysis.CHECKS.NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH),
+						NAME_CONFLICT_MIN_BEST_MATCH_MARGIN: this.clampNumber(
+							checks.NAME_CONFLICT_MIN_BEST_MATCH_MARGIN,
+							0,
+							1,
+							defaults.analysis.CHECKS.NAME_CONFLICT_MIN_BEST_MATCH_MARGIN
+						),
 						SINGLE_SOURCE_OF_TRUTH: this.normalizeChecksSingleSourceOfTruth(
 							checks.SINGLE_SOURCE_OF_TRUTH,
 							defaults.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH
