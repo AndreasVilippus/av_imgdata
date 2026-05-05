@@ -534,12 +534,24 @@ export default {
 				.join(' · ');
 		},
 		getChecksProgressStatusText() {
+			const progress = this.checksProgress && typeof this.checksProgress === 'object' ? this.checksProgress : {};
+			const sourceMode = String(progress.source_mode || '').trim().toLowerCase();
+			const action = String(this.selectedChecksAction || '').trim().toLowerCase();
+			const isSaveOnlyScan = (action === 'scan' || sourceMode === 'scan') && (this.checksSaveOnly || !!progress.save_only);
 			const headline = String(this.getChecksStatusHeadline() || '').trim();
-			const counters = String(this.getChecksCountersStatusSuffix() || '').trim();
-			if (headline && counters) {
-				return `${headline} — ${counters}`;
+			if (!isSaveOnlyScan) {
+				return headline;
 			}
-			return headline || counters;
+			const findings = this.getChecksSaveOnlyFindingsCount(progress);
+			const skipped = Math.max(0, Number(progress.skipped_count || progress.skip_count) || 0);
+			const findingsLabel = this.$avt('checks:counter_findings', 'Findings').replace(/:$/, '').trim();
+			const skippedLabel = this.$avt('checks:counter_skipped', 'Skipped').replace(/:$/, '').trim();
+			const parts = [`${findingsLabel}: ${findings}`];
+			if (skipped > 0) {
+				parts.push(`${skippedLabel}: ${skipped}`);
+			}
+			const base = headline || this.$avt('checks:status_scan_running', 'Check scan is running.');
+			return `${base} | ${parts.join(' | ')}`;
 		},
 		getRelevantChecksStatusCounters() {
 			const progress = this.checksProgress && typeof this.checksProgress === 'object' ? this.checksProgress : {};
