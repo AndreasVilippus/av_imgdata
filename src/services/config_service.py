@@ -88,6 +88,9 @@ class ConfigService:
                     "DIMENSION_ISSUES": True,
                     "NAME_CONFLICTS": True,
                     "NAME_CONFLICTS_INCLUDE_PHOTOS": True,
+                    "NAME_CONFLICT_OVERLAP_THRESHOLD": 0.75,
+                    "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": True,
+                    "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": 0.05,
                     "SINGLE_SOURCE_OF_TRUTH": "",
                 },
             },
@@ -243,6 +246,9 @@ class ConfigService:
             "DIMENSION_ISSUES": bool(checks.get("DIMENSION_ISSUES", True)),
             "NAME_CONFLICTS": bool(checks.get("NAME_CONFLICTS", True)),
             "NAME_CONFLICTS_INCLUDE_PHOTOS": bool(checks.get("NAME_CONFLICTS_INCLUDE_PHOTOS", True)),
+            "NAME_CONFLICT_OVERLAP_THRESHOLD": cls._clamp_float(checks.get("NAME_CONFLICT_OVERLAP_THRESHOLD", 0.75), 0.0, 1.0, 0.75),
+            "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": bool(checks.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH", True)),
+            "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": cls._clamp_float(checks.get("NAME_CONFLICT_MIN_BEST_MATCH_MARGIN", 0.05), 0.0, 1.0, 0.05),
             "SINGLE_SOURCE_OF_TRUTH": str(checks.get("SINGLE_SOURCE_OF_TRUTH", "")),
         }
         root["analysis"] = analysis
@@ -262,6 +268,18 @@ class ConfigService:
         }
         root["review"] = review
         return root
+
+    @staticmethod
+    def _clamp_float(value: Any, minimum: float, maximum: float, default: float) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        if numeric < minimum:
+            return float(minimum)
+        if numeric > maximum:
+            return float(maximum)
+        return numeric
 
     @staticmethod
     def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
