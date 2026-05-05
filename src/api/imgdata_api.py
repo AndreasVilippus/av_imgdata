@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import os
+from contextvars import ContextVar
 from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlsplit
 from fastapi import APIRouter, Request
@@ -16,6 +17,8 @@ DSM_INTERNAL_BASE_URL = os.getenv("DSM_INTERNAL_BASE_URL", "https://127.0.0.1:50
 DSM_INTERNAL_VERIFY_SSL = os.getenv("DSM_INTERNAL_VERIFY_SSL", "false").lower() in ("1", "true", "yes")
 SESSION_MANAGER = SessionManager(verify_ssl=DSM_INTERNAL_VERIFY_SSL, timeout=20)
 IMGDATA = ImgDataService(SESSION_MANAGER)
+
+_REQUEST_MUTATION_CONTEXT: ContextVar[Dict[str, Any]] = ContextVar("request_mutation_context", default={})
 
 
 def _configured_max_photos_persons() -> int:
@@ -100,8 +103,27 @@ async def _read_request_body(request: Request) -> Dict[str, Any]:
     try:
         body = await request.json()
     except Exception:
+        _REQUEST_MUTATION_CONTEXT.set({})
         return {}
-    return body if isinstance(body, dict) else {}
+    if not isinstance(body, dict):
+        _REQUEST_MUTATION_CONTEXT.set({})
+        return {}
+
+    normalized_check_type = str(
+        body.get("check_type")
+        or body.get("review_type")
+        or body.get("finding_type")
+        or body.get("type")
+        or ""
+    ).strip().lower()
+    _REQUEST_MUTATION_CONTEXT.set(
+        {
+            "auto": bool(body.get("auto")),
+            "check_type": normalized_check_type,
+            "image_path": str(body.get("image_path") or "").strip(),
+        }
+    )
+    return body
 
 
 def _session_exception_response(
@@ -240,6 +262,14 @@ def _safe_refresh_checks_mutation_state(
     resolved_delta: int = 0,
     ignored_delta: int = 0,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    normalized_type = str(check_type or "").strip().lower()
+
+    # Name-conflict mutation refresh must not re-read the changed image.
+    # The current review list is a snapshot. Returning an empty findings_update
+    # would clear the UI list and look like an aborted check.
+    if normalized_type == "name_conflicts":
+        return None, None
+
     try:
         refresh_kwargs = {
             "check_type": check_type,

@@ -120,8 +120,23 @@ class FileHandler:
             "DIMENSION_ISSUES": bool(checks_config.get("DIMENSION_ISSUES", defaults["DIMENSION_ISSUES"])),
             "NAME_CONFLICTS": bool(checks_config.get("NAME_CONFLICTS", defaults["NAME_CONFLICTS"])),
             "NAME_CONFLICTS_INCLUDE_PHOTOS": bool(checks_config.get("NAME_CONFLICTS_INCLUDE_PHOTOS", defaults["NAME_CONFLICTS_INCLUDE_PHOTOS"])),
+            "NAME_CONFLICT_OVERLAP_THRESHOLD": self._clampFloat(checks_config.get("NAME_CONFLICT_OVERLAP_THRESHOLD", defaults.get("NAME_CONFLICT_OVERLAP_THRESHOLD", 0.75)), 0.0, 1.0, 0.75),
+            "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": bool(checks_config.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH", defaults.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH", True))),
+            "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": self._clampFloat(checks_config.get("NAME_CONFLICT_MIN_BEST_MATCH_MARGIN", defaults.get("NAME_CONFLICT_MIN_BEST_MATCH_MARGIN", 0.05)), 0.0, 1.0, 0.05),
             "SINGLE_SOURCE_OF_TRUTH": single_source,
         }
+
+    @staticmethod
+    def _clampFloat(value: Any, minimum: float, maximum: float, default: float) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        if numeric < minimum:
+            return float(minimum)
+        if numeric > maximum:
+            return float(maximum)
+        return numeric
 
     def configuredMetadataSchemas(self) -> Dict[str, bool]:
         config = self._config.readMergedConfig()
@@ -160,7 +175,12 @@ class FileHandler:
         name_conflict_faces = list(faces)
         if include_name_conflict_comparison_faces:
             name_conflict_faces.extend(normalized_comparison_faces)
-        name_conflicts_count = self._countOverlappingNameConflicts(name_conflict_faces) if analysis_checks["NAME_CONFLICTS"] else None
+        name_conflicts_count = self._countOverlappingNameConflicts(
+            name_conflict_faces,
+            overlap_threshold=analysis_checks["NAME_CONFLICT_OVERLAP_THRESHOLD"],
+            require_mutual_best_match=analysis_checks["NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"],
+            min_best_match_margin=analysis_checks["NAME_CONFLICT_MIN_BEST_MATCH_MARGIN"],
+        ) if analysis_checks["NAME_CONFLICTS"] else None
 
         named_faces = 0
         unnamed_faces = 0
@@ -244,21 +264,25 @@ class FileHandler:
         }
 
     @staticmethod
-    def _boxesOverlapStrongly(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    def _faceOverlapScore(left: Dict[str, Any], right: Dict[str, Any]) -> float:
         left_box = FileHandler._faceBox(left)
         right_box = FileHandler._faceBox(right)
         overlap_width = min(left_box["x2"], right_box["x2"]) - max(left_box["x1"], right_box["x1"])
         overlap_height = min(left_box["y2"], right_box["y2"]) - max(left_box["y1"], right_box["y1"])
         if overlap_width <= 0 or overlap_height <= 0:
-            return False
+            return 0.0
 
         overlap_area = overlap_width * overlap_height
         left_area = max(0.0, left_box["x2"] - left_box["x1"]) * max(0.0, left_box["y2"] - left_box["y1"])
         right_area = max(0.0, right_box["x2"] - right_box["x1"]) * max(0.0, right_box["y2"] - right_box["y1"])
         smaller_area = min(left_area, right_area)
         if smaller_area <= 0:
-            return False
-        return (overlap_area / smaller_area) >= 0.5
+            return 0.0
+        return overlap_area / smaller_area
+
+    @staticmethod
+    def _boxesOverlapStrongly(left: Dict[str, Any], right: Dict[str, Any], *, threshold: float = 0.5) -> bool:
+        return FileHandler._faceOverlapScore(left, right) >= threshold
 
     def _countDuplicateNamedFacesPerFormat(self, faces: List[Dict[str, Any]]) -> int:
         seen: Dict[tuple, int] = {}
@@ -294,21 +318,58 @@ class FileHandler:
                     deviations.add(self._normalizeFaceName(left.get("name")))
         return len(deviations)
 
-    def _countOverlappingNameConflicts(self, faces: List[Dict[str, Any]]) -> int:
+    def _countOverlappingNameConflicts(
+        self,
+        faces: List[Dict[str, Any]],
+        *,
+        overlap_threshold: float = 0.75,
+        require_mutual_best_match: bool = True,
+        min_best_match_margin: float = 0.05,
+    ) -> int:
         normalized_faces = [
             self._normalizedFaceForComparison(face)
             for face in faces
             if isinstance(face, dict) and self._normalizeFaceName(face.get("name"))
         ]
+
+        best_matches: Dict[int, Tuple[int, float, float]] = {}
+        if require_mutual_best_match:
+            for index, left in enumerate(normalized_faces):
+                scored: List[Tuple[int, float]] = []
+                for other_index, right in enumerate(normalized_faces):
+                    if index == other_index:
+                        continue
+                    if left.get("source_format") == right.get("source_format"):
+                        continue
+                    score = self._faceOverlapScore(left, right)
+                    if score > 0:
+                        scored.append((other_index, score))
+                scored.sort(key=lambda item: item[1], reverse=True)
+                if scored:
+                    best_score = scored[0][1]
+                    second_score = scored[1][1] if len(scored) > 1 else 0.0
+                    best_matches[index] = (scored[0][0], best_score, best_score - second_score)
+
         conflicts = set()
         for index, left in enumerate(normalized_faces):
-            for right in normalized_faces[index + 1:]:
+            for other_index, right in enumerate(normalized_faces[index + 1:], start=index + 1):
                 left_name = self._normalizeFaceName(left.get("name"))
                 right_name = self._normalizeFaceName(right.get("name"))
                 if not left_name or not right_name or left_name == right_name:
                     continue
-                if self._boxesOverlapStrongly(left, right):
-                    conflicts.add(tuple(sorted((left_name, right_name))))
+                score = self._faceOverlapScore(left, right)
+                if score < overlap_threshold:
+                    continue
+                if require_mutual_best_match:
+                    left_best = best_matches.get(index)
+                    right_best = best_matches.get(other_index)
+                    if not left_best or not right_best:
+                        continue
+                    if left_best[0] != other_index or right_best[0] != index:
+                        continue
+                    if left_best[2] < min_best_match_margin or right_best[2] < min_best_match_margin:
+                        continue
+                conflicts.add(tuple(sorted((left_name, right_name))))
         return len(conflicts)
 
     def listImageFiles(self, base_path: str) -> List[str]:

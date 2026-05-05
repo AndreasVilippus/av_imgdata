@@ -451,6 +451,10 @@ export default {
 			if (!findingsUpdate || typeof findingsUpdate !== 'object') {
 				return false;
 			}
+			const sourceMode = String(findingsUpdate.source_mode || '').trim().toLowerCase();
+			if (findingsUpdate.refresh_skipped || findingsUpdate.snapshot_mode || sourceMode === 'snapshot') {
+				return false;
+			}
 			const currentProgress = this.checksProgress && typeof this.checksProgress === 'object'
 				? this.checksProgress
 				: {};
