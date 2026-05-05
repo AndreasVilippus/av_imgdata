@@ -110,6 +110,39 @@ export default {
 			const root = this.getResponseData(data);
 			return (root && typeof root[key] === 'object' && root[key]) ? root[key] : {};
 		},
+		getDsmApiEndpoint(apiPath) {
+			try {
+				const parsed = new URL(String(apiPath || ''), window.location.origin);
+				const parts = parsed.pathname.split('/').filter(Boolean);
+				return parts.length ? parts[parts.length - 1] : '';
+			} catch (err) {
+				const parts = String(apiPath || '').split('?')[0].split('/').filter(Boolean);
+				return parts.length ? parts[parts.length - 1] : '';
+			}
+		},
+		getDsmApiTimeoutMs(apiPath, options = {}) {
+			const explicitTimeout = Number(options.timeoutMs);
+			if (Number.isFinite(explicitTimeout) && explicitTimeout > 0) {
+				return Math.max(1000, explicitTimeout);
+			}
+			const endpointTimeouts = {
+				checks_item: 120000,
+				checks_delete_metadata_face: 120000,
+				checks_replace_metadata_face_name: 120000,
+				checks_replace_metadata_face_position: 120000,
+				checks_assign_face_person: 120000,
+				checks_ignore_entry: 120000,
+				face_assign_match: 120000,
+				face_create_match: 120000,
+				face_apply_metadata_match: 120000,
+				face_assign_metadata_match: 120000,
+				face_create_metadata_match: 120000,
+				exiftool_install: 120000,
+				exiftool_remove: 120000,
+				insightface_model_delete: 120000,
+			};
+			return endpointTimeouts[this.getDsmApiEndpoint(apiPath)] || 15000;
+		},
 		formatBackendError(backendError, fallback = 'Unknown error') {
 			if (!backendError || typeof backendError !== 'object') {
 				return typeof backendError === 'string' && backendError.trim()
@@ -229,7 +262,7 @@ export default {
 					headers['X-SYNO-TOKEN'] = synoToken;
 				}
 				const controller = new AbortController();
-				const timeoutMs = Math.max(1000, Number(options.timeoutMs) || 15000);
+				const timeoutMs = this.getDsmApiTimeoutMs(apiPath, options);
 				const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
 				try {
@@ -263,15 +296,41 @@ export default {
 			},
 			startNamedPolling(timerKey, callback, interval = 1000) {
 				this.stopNamedPolling(timerKey);
-				callback();
-				this[timerKey] = window.setInterval(() => {
-					callback();
-				}, interval);
+				if (!this.__namedPollingPending) {
+					this.__namedPollingPending = {};
+				}
+				if (!this.__namedPollingRunIds) {
+					this.__namedPollingRunIds = {};
+				}
+				const runId = (Number(this.__namedPollingRunIds[timerKey]) || 0) + 1;
+				this.__namedPollingRunIds[timerKey] = runId;
+				const run = () => {
+					if (this.__namedPollingPending[timerKey]) {
+						return;
+					}
+					this.__namedPollingPending[timerKey] = true;
+					Promise.resolve()
+						.then(() => callback())
+						.catch(() => {})
+						.finally(() => {
+							if (this.__namedPollingPending && this.__namedPollingRunIds && this.__namedPollingRunIds[timerKey] === runId) {
+								this.__namedPollingPending[timerKey] = false;
+							}
+						});
+				};
+				run();
+				this[timerKey] = window.setInterval(run, interval);
 			},
 			stopNamedPolling(timerKey) {
 				if (this[timerKey]) {
 					window.clearInterval(this[timerKey]);
 					this[timerKey] = null;
+				}
+				if (this.__namedPollingPending) {
+					this.__namedPollingPending[timerKey] = false;
+				}
+				if (this.__namedPollingRunIds) {
+					this.__namedPollingRunIds[timerKey] = (Number(this.__namedPollingRunIds[timerKey]) || 0) + 1;
 				}
 			},
 			formatCountSummary(counterMap) {

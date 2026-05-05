@@ -1689,6 +1689,81 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(result["resolved_count"], 2)
         self.assertIsNone(result["result"])
 
+    def test_resolve_checks_review_entry_respects_auto_apply_limit(self):
+        image_path = "/volume1/photo/tests/test.jpg"
+        first_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "first",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Andreas Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Kaire Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        second_entry = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "entry_id": "second",
+            "left_face_signature": {
+                "source_format": "MICROSOFT",
+                "name": "Andreas Vilippus",
+                "x": 0.63,
+                "y": 0.44,
+                "w": 0.21,
+                "h": 0.46,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Kaire Vilippus",
+                "x": 0.48,
+                "y": 0.60,
+                "w": 0.37,
+                "h": 0.79,
+            },
+        }
+        first_item = {
+            "review_type": "name_conflicts",
+            "image_path": image_path,
+            "left_name": "Andreas Vilippus",
+            "right_name": "Kaire Vilippus",
+            "left_state": "suggested",
+            "right_state": "alert",
+            "left_face_target": dict(first_entry["left_face_signature"]),
+            "right_face_target": dict(first_entry["right_face_signature"]),
+        }
+
+        with patch.object(self.service, "getChecksReviewItem", return_value=first_item), \
+             patch.object(self.service, "replaceChecksFaceName", return_value={"updated": True, "operation": "metadata_write"}) as replace_mock, \
+             patch.object(self.service, "_buildCheckEntriesForType", return_value=[first_entry, second_entry]) as rebuild_mock:
+            result = self.service._resolveChecksReviewEntry(
+                entry=first_entry,
+                auto_apply_suggested_names=True,
+                user_key="user",
+                cookies={"_SSID": "session"},
+                base_url="https://example.test",
+                max_auto_apply_actions=1,
+            )
+
+        self.assertEqual(replace_mock.call_count, 1)
+        self.assertEqual(rebuild_mock.call_count, 0)
+        self.assertIsNone(result["entry"])
+        self.assertIsNone(result["item"])
+        self.assertEqual(result["auto_applied_count"], 1)
+        self.assertTrue(result["auto_apply_limit_reached"])
+        self.assertTrue(result["processed_entry_tokens"])
+
     def test_search_next_checks_item_does_not_auto_apply_manual_mutation_remainders(self):
         image_path = "/volume1/photo/tests/test.jpg"
         pending_entry = {
@@ -3146,6 +3221,37 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["save_only"])
         self.assertEqual(result["count"], 2)
         self.assertEqual(result["entries"], stored_entries)
+
+    def test_start_checks_scan_blocks_parallel_running_scan(self):
+        class AliveThread:
+            def is_alive(self):
+                return True
+
+        running_progress = {
+            "running": True,
+            "source_mode": "scan",
+            "check_type": "name_conflicts",
+            "files_scanned": 12,
+            "total_files": 30,
+            "findings_count": 4,
+        }
+        state_key = self.service._checksStateKey("user", "name_conflicts")
+        self.service._checks_progress[state_key] = dict(running_progress)
+        self.service._checks_threads[state_key] = AliveThread()
+
+        with patch("imgdata.Thread") as thread_cls:
+            result = self.service.startChecksScanDiscovery(
+                user_key="user",
+                cookies={},
+                base_url="http://example.test",
+                check_type="duplicate_faces",
+            )
+
+        self.assertTrue(result["blocked_by_running_scan"])
+        self.assertEqual(result["requested_check_type"], "duplicate_faces")
+        self.assertEqual(result["check_type"], "name_conflicts")
+        self.assertTrue(result["running"])
+        thread_cls.assert_not_called()
 
     def test_build_check_entries_for_type_excludes_configured_ignore_tokens(self):
         entry = {

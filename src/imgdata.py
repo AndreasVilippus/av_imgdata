@@ -68,6 +68,7 @@ class ImgDataService:
         self._face_matching_candidate_paths_cache_lock = Lock()
         self._checks_progress: Dict[str, Dict[str, Any]] = {}
         self._checks_progress_lock = Lock()
+        self._checks_start_lock = Lock()
         self._checks_threads: Dict[str, Thread] = {}
         self._checks_candidate_paths_cache: Dict[str, Dict[str, Any]] = {}
         self._checks_candidate_paths_cache_lock = Lock()
@@ -1237,8 +1238,32 @@ class ImgDataService:
             return "dimension_issues"
         return normalized
 
+    @staticmethod
+    def _checksTypeOptions() -> Tuple[str, ...]:
+        return ("dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts")
+
     def _checksStateKey(self, user_key: str, check_type: Any) -> str:
         return f"{user_key}_{self._normalizeChecksType(check_type)}"
+
+    def _runningChecksScanProgress(self, user_key: str, *, exclude_check_type: Any = "") -> Optional[Dict[str, Any]]:
+        excluded_type = self._normalizeChecksType(exclude_check_type) if str(exclude_check_type or "").strip() else ""
+        for candidate_type in self._checksTypeOptions():
+            if excluded_type and candidate_type == excluded_type:
+                continue
+            progress = self.getChecksProgress(user_key, candidate_type)
+            if (
+                progress.get("running")
+                and str(progress.get("source_mode") or "").strip().lower() == "scan"
+                and str(progress.get("check_type") or "").strip().lower() == candidate_type
+            ):
+                return progress
+        return None
+
+    def _buildChecksStartBlockedPayload(self, running_progress: Dict[str, Any], *, requested_check_type: str) -> Dict[str, Any]:
+        payload = dict(running_progress) if isinstance(running_progress, dict) else {}
+        payload["blocked_by_running_scan"] = True
+        payload["requested_check_type"] = self._normalizeChecksType(requested_check_type)
+        return payload
 
     def _invalidateChecksCandidatePathsCache(self, user_key: str, check_type: Any) -> None:
         state_key = self._checksStateKey(user_key, check_type)
@@ -1905,10 +1930,18 @@ class ImgDataService:
         cookies: Optional[Dict[str, str]] = None,
         base_url: str = "",
         shared_folder: str = "",
+        max_auto_apply_actions: Optional[int] = None,
     ) -> Dict[str, Any]:
         normalized_entry = dict(entry or {})
         auto_applied_count = 0
         seen_entry_tokens = set()
+        try:
+            auto_apply_limit = int(max_auto_apply_actions) if max_auto_apply_actions is not None else 0
+        except (TypeError, ValueError):
+            auto_apply_limit = 0
+
+        def auto_apply_limit_reached() -> bool:
+            return auto_apply_limit > 0 and auto_applied_count >= auto_apply_limit
 
         while True:
             if not include_item and not auto_apply_suggested_names and not auto_apply_suggested_duplicates:
@@ -1964,6 +1997,14 @@ class ImgDataService:
                         "auto_apply_warning": str(result.get("warning") or ""),
                     }
                 auto_applied_count += 1
+                if auto_apply_limit_reached():
+                    return {
+                        "entry": None,
+                        "item": None,
+                        "auto_applied_count": auto_applied_count,
+                        "processed_entry_tokens": list(seen_entry_tokens),
+                        "auto_apply_limit_reached": True,
+                    }
                 if (
                     self._isChecksFacePairType(item.get("review_type"))
                     and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
@@ -2025,6 +2066,14 @@ class ImgDataService:
                 }
 
             auto_applied_count += 1
+            if auto_apply_limit_reached():
+                return {
+                    "entry": None,
+                    "item": None,
+                    "auto_applied_count": auto_applied_count,
+                    "processed_entry_tokens": list(seen_entry_tokens),
+                    "auto_apply_limit_reached": True,
+                }
             if (
                 self._isChecksFacePairType(item.get("review_type"))
                 and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
@@ -4023,74 +4072,83 @@ class ImgDataService:
         advance_current_result: bool = False,
     ) -> Dict[str, Any]:
         check_type = self._normalizeChecksType(check_type)
-        current = self.getChecksProgress(user_key, check_type)
-        state_key = self._checksStateKey(user_key, check_type)
-        worker = self._checks_threads.get(state_key)
-        if current.get("running") and worker and worker.is_alive():
-            return current
+        with self._checks_start_lock:
+            current = self.getChecksProgress(user_key, check_type)
+            state_key = self._checksStateKey(user_key, check_type)
+            worker = self._checks_threads.get(state_key)
+            if current.get("running") and worker and worker.is_alive():
+                return current
 
-        resume_cursor = current.get("resume_cursor") if resume_from_progress and isinstance(current.get("resume_cursor"), dict) else {}
-        if resume_cursor:
-            resume_cursor = self._trustedChecksResumeCursor(
-                current,
-                check_type=check_type,
-                save_only=save_only,
-                advance_current_result=advance_current_result,
+            running_progress = self._runningChecksScanProgress(user_key, exclude_check_type=check_type)
+            if running_progress:
+                return self._buildChecksStartBlockedPayload(
+                    running_progress,
+                    requested_check_type=check_type,
+                )
+
+            resume_cursor = current.get("resume_cursor") if resume_from_progress and isinstance(current.get("resume_cursor"), dict) else {}
+            if resume_cursor:
+                resume_cursor = self._trustedChecksResumeCursor(
+                    current,
+                    check_type=check_type,
+                    save_only=save_only,
+                    advance_current_result=advance_current_result,
+                )
+                save_only = bool(resume_cursor.get("save_only", save_only))
+                check_type = str(resume_cursor.get("check_type") or check_type or "dimension_issues").strip().lower()
+                state_key = self._checksStateKey(user_key, check_type)
+            else:
+                self._invalidateChecksCandidatePathsCache(user_key, check_type)
+            operation_id = (
+                str(current.get("operation_id") or "").strip()
+                if resume_cursor and str(current.get("operation_id") or "").strip()
+                else f"checks-{check_type}-{uuid4().hex}"
             )
-            save_only = bool(resume_cursor.get("save_only", save_only))
-            check_type = str(resume_cursor.get("check_type") or check_type or "dimension_issues").strip().lower()
-        else:
-            self._invalidateChecksCandidatePathsCache(user_key, check_type)
-        operation_id = (
-            str(current.get("operation_id") or "").strip()
-            if resume_cursor and str(current.get("operation_id") or "").strip()
-            else f"checks-{check_type}-{uuid4().hex}"
-        )
 
-        self._setChecksProgressMessage(
-            user_key,
-            check_type,
-            "checks:status_preparing_scan",
-            operation_id=operation_id,
-            running=True,
-            finished=False,
-            stop_requested=False,
-            source_mode="scan",
-            save_only=save_only,
-            files_scanned=0,
-            total_files=0,
-            findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
-            resolved_count=int(resume_cursor.get("resolved_count") or 0) if resume_cursor else 0,
-            ignored_count=int(resume_cursor.get("ignored_count") or 0) if resume_cursor else 0,
-            current_path="",
-            result=None,
-            resume_cursor=resume_cursor or self._buildChecksResumeCursor(
-                path_index=0,
-                pending_entries=[],
+            self._setChecksProgressMessage(
+                user_key,
+                check_type,
+                "checks:status_preparing_scan",
+                operation_id=operation_id,
+                running=True,
+                finished=False,
+                stop_requested=False,
                 source_mode="scan",
-                check_type=check_type,
                 save_only=save_only,
-                findings_count=0,
-                resolved_count=0,
-                ignored_count=0,
-            ),
-        )
-        worker = Thread(
-            target=self._runChecksScan,
-            kwargs={
-                "user_key": user_key,
-                "cookies": dict(cookies),
-                "base_url": base_url,
-                "check_type": check_type,
-                "save_only": save_only,
-                "auto_apply_suggested_names": auto_apply_suggested_names,
-                "auto_apply_suggested_duplicates": auto_apply_suggested_duplicates,
-                "resume_cursor": resume_cursor if resume_cursor else None,
-            },
-            daemon=True,
-        )
-        self._checks_threads[state_key] = worker
-        worker.start()
+                files_scanned=0,
+                total_files=0,
+                findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
+                resolved_count=int(resume_cursor.get("resolved_count") or 0) if resume_cursor else 0,
+                ignored_count=int(resume_cursor.get("ignored_count") or 0) if resume_cursor else 0,
+                current_path="",
+                result=None,
+                resume_cursor=resume_cursor or self._buildChecksResumeCursor(
+                    path_index=0,
+                    pending_entries=[],
+                    source_mode="scan",
+                    check_type=check_type,
+                    save_only=save_only,
+                    findings_count=0,
+                    resolved_count=0,
+                    ignored_count=0,
+                ),
+            )
+            worker = Thread(
+                target=self._runChecksScan,
+                kwargs={
+                    "user_key": user_key,
+                    "cookies": dict(cookies),
+                    "base_url": base_url,
+                    "check_type": check_type,
+                    "save_only": save_only,
+                    "auto_apply_suggested_names": auto_apply_suggested_names,
+                    "auto_apply_suggested_duplicates": auto_apply_suggested_duplicates,
+                    "resume_cursor": resume_cursor if resume_cursor else None,
+                },
+                daemon=True,
+            )
+            self._checks_threads[state_key] = worker
+            worker.start()
         return self.getChecksProgress(user_key, check_type)
 
     def _runChecksScan(

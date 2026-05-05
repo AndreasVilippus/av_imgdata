@@ -163,6 +163,24 @@ def _compact_checks_findings_update(findings_update: Any, *, image_path: str = "
     return compact
 
 
+def _compact_file_analysis_progress(progress: Any) -> Any:
+    if not isinstance(progress, dict):
+        return progress
+
+    unused_ui_fields = {
+        "configured_extensions",
+        "directories_read",
+        "extensions",
+        "job_id",
+        "last_updated_at",
+    }
+    return {
+        key: value
+        for key, value in progress.items()
+        if key not in unused_ui_fields
+    }
+
+
 def _save_name_mapping_if_requested(*, save_mapping: bool, source_name: Any, target_name: Any) -> bool:
     normalized_source = str(source_name or "").strip()
     normalized_target = str(target_name or "").strip()
@@ -927,7 +945,7 @@ async def file_analysis_start(request: Request):
 
     return {
         "success": True,
-        "data": result,
+        "data": _compact_file_analysis_progress(result),
     }
 
 
@@ -939,7 +957,7 @@ async def file_analysis_progress(request: Request):
 
     return {
         "success": True,
-        "data": IMGDATA.getFileAnalysisProgress(),
+        "data": _compact_file_analysis_progress(IMGDATA.getFileAnalysisProgress()),
     }
 
 
@@ -1030,6 +1048,7 @@ async def checks_item(request: Request):
                 user_key=session_ctx["user_key"],
                 cookies=session_ctx["cookies"],
                 base_url=session_ctx["base_url"],
+                max_auto_apply_actions=1,
             ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
@@ -1045,7 +1064,6 @@ async def checks_item(request: Request):
             "item": resolved.get("item"),
             "auto_applied_count": int(resolved.get("auto_applied_count") or 0),
             "findings_update": None,
-            "progress_update": None,
         },
     }
     refresh_required = (
@@ -1068,14 +1086,6 @@ async def checks_item(request: Request):
             findings_update,
             image_path=image_path,
         )
-        if resolved.get("item") is None:
-            response_payload["data"]["progress_update"] = IMGDATA.refreshChecksScanProgressForImage(
-                user_key=session_ctx["user_key"],
-                check_type=str(entry.get("review_type") or ""),
-                image_path=image_path,
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
-            )
     return JSONResponse(response_payload)
 
 

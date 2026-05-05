@@ -187,6 +187,9 @@ export default {
 			}
 			return '';
 		},
+		getChecksTypeOptions() {
+			return ['dimension_issues', 'duplicate_faces', 'position_deviations', 'name_conflicts'];
+		},
 		isChecksMetadataFace(face) {
 			const sourceFormat = String(face && face.source_format || '').trim().toUpperCase();
 			return ['ACD', 'MICROSOFT', 'MWG_REGIONS'].includes(sourceFormat);
@@ -566,10 +569,65 @@ export default {
 				this.startChecksProgressPolling();
 				return;
 			}
+			const runningProgress = progress && progress.running
+				? progress
+				: await this.findRunningChecksScanProgress(String(this.selectedChecksType || '').trim().toLowerCase());
+			if (this.adoptRunningChecksScanProgress(runningProgress)) {
+				return;
+			}
 			if (matchesCurrentSelection || !progress.running) {
 				this.checksLoading = false;
 				this.stopChecksProgressPolling();
 			}
+		},
+		async findRunningChecksScanProgress(skipCheckType = '') {
+			const skippedType = String(skipCheckType || '').trim().toLowerCase();
+			const checkTypes = this.getChecksTypeOptions().filter((checkType) => checkType !== skippedType);
+			for (const checkType of checkTypes) {
+				try {
+					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_progress', {
+						check_type: checkType,
+					});
+					const progress = this.getResponseData(data);
+					const isRunningScan = !!(
+						progress
+						&& progress.running
+						&& String(progress.source_mode || '').trim().toLowerCase() === 'scan'
+						&& String(progress.check_type || '').trim().toLowerCase() === checkType
+					);
+					if (isRunningScan) {
+						return progress;
+					}
+				} catch (err) {
+					// Ignore unavailable progress for other check types.
+				}
+			}
+			return null;
+		},
+		adoptRunningChecksScanProgress(progress) {
+			const runningProgress = progress && typeof progress === 'object' ? progress : {};
+			if (!runningProgress.running || String(runningProgress.source_mode || '').trim().toLowerCase() !== 'scan') {
+				return false;
+			}
+			const runningType = String(runningProgress.check_type || '').trim().toLowerCase();
+			if (!this.getChecksTypeOptions().includes(runningType)) {
+				return false;
+			}
+			this.checksSessionSyncing = true;
+			try {
+				if (runningType !== String(this.selectedChecksType || '').trim().toLowerCase()) {
+					this.selectedChecksType = runningType;
+				}
+				if (this.selectedChecksAction !== 'scan') {
+					this.selectedChecksAction = 'scan';
+				}
+			} finally {
+				this.checksSessionSyncing = false;
+			}
+			this.applyChecksProgress(runningProgress, { adoptResultItem: true });
+			this.checksLoading = true;
+			this.startChecksProgressPolling();
+			return true;
 		},
 		applyChecksProgress(progress, { adoptResultItem = true } = {}) {
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
@@ -720,6 +778,9 @@ export default {
 				segments.push(`${this.$avt('checks:label_resolved_names_count', 'Resolved names:')} ${resolvedNames}`);
 				segments.push(`${this.$avt('checks:label_ignored_names_count', 'Ignored conflicts:')} ${ignoredConflicts}`);
 				segments.push(`${this.$avt('checks:label_skipped_findings_count', 'Skipped:')} ${skippedFindings}`);
+				if (this.selectedChecksAction !== 'scan') {
+					return segments.join(' | ');
+				}
 			}
 			const withCounts = (text) => {
 				const normalized = String(text || '').trim();
@@ -850,6 +911,12 @@ export default {
 			this.checksStatusMessage = this.$avt('checks:status_empty', 'No matching entries found.');
 		},
 		async startChecksScan({ resumeFromProgress = false, advanceCurrentResult = false } = {}) {
+			if (!resumeFromProgress) {
+				const runningProgress = await this.findRunningChecksScanProgress();
+				if (this.adoptRunningChecksScanProgress(runningProgress)) {
+					return;
+				}
+			}
 			this.checksLoading = true;
 			if (!resumeFromProgress) {
 				this.checksEntries = [];
@@ -876,6 +943,9 @@ export default {
 					auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
 				});
 				const progress = this.getResponseData(data);
+				if (progress.blocked_by_running_scan && this.adoptRunningChecksScanProgress(progress)) {
+					return;
+				}
 				this.applyChecksProgress(progress);
 				if (!progress.running) {
 					await this.ensureChecksResultItemLoaded(progress);
