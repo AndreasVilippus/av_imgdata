@@ -48,6 +48,8 @@ class ImgDataService:
     FACE_MATCH_KEEPALIVE_INTERVAL_SECONDS = SESSION_KEEPALIVE_INTERVAL_SECONDS
     FACE_MATCH_FINDINGS_FLUSH_INTERVAL_SECONDS = 60
     FACE_MATCH_FINDINGS_FLUSH_ENTRY_INTERVAL = 25
+    CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS = 60
+    CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL = 25
 
     def __init__(self, session_manager: SessionManager):
         self.session_manager = session_manager
@@ -4394,6 +4396,46 @@ class ImgDataService:
         if not save_only and not metrics_trusted:
             findings_count = self._countOpenChecksScanFindings(None, pending_entries)
         saved_entries: List[Dict[str, Any]] = []
+        last_checks_findings_flush_at = 0.0
+        last_checks_findings_flush_count = 0
+
+        def flush_saved_checks_findings(*, force: bool = False, status: str = "running", reason: str = "") -> bool:
+            nonlocal last_checks_findings_flush_at, last_checks_findings_flush_count
+
+            if not save_only:
+                return False
+            if not saved_entries and not force:
+                return False
+
+            now = monotonic()
+            entries_delta = len(saved_entries) - int(last_checks_findings_flush_count or 0)
+            if (
+                not force
+                and last_checks_findings_flush_count > 0
+                and entries_delta < self.CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL
+                and (now - last_checks_findings_flush_at) < self.CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS
+            ):
+                return False
+
+            self._writeChecksFindings(
+                check_type=check_type,
+                status=status,
+                shared_folder=shared_folder,
+                source_mode="scan",
+                save_only=True,
+                entries=saved_entries,
+            )
+            last_checks_findings_flush_at = now
+            last_checks_findings_flush_count = len(saved_entries)
+            self._updateChecksProgressHeartbeat(flush=True)
+            with self._checks_progress_lock:
+                progress = self._checks_progress.get(state_key)
+                if isinstance(progress, dict):
+                    progress["last_flush_at"] = self._utcNowIso()
+                    progress["last_flush_count"] = len(saved_entries)
+                    progress["last_flush_reason"] = str(reason or "save_only_findings_flush")
+            return True
+
         candidate_paths = self._getChecksCandidatePaths(
             user_key=user_key,
             check_type=check_type,
@@ -4614,6 +4656,7 @@ class ImgDataService:
                 if resolved.get("auto_apply_warning"):
                     saved_entries.extend(entries)
                     findings_count = len(saved_entries)
+                    flush_saved_checks_findings(force=True, reason="auto_apply_warning")
                     self._setChecksProgressMessage(
                         user_key,
                         check_type,
@@ -4657,6 +4700,7 @@ class ImgDataService:
 
                 if refreshed_entries:
                     saved_entries.extend(refreshed_entries)
+                    flush_saved_checks_findings(reason="save_only_result")
                 self._setChecksProgressMessage(
                     user_key,
                     check_type,
@@ -4775,14 +4819,7 @@ class ImgDataService:
             )
 
         if save_only:
-            self._writeChecksFindings(
-                check_type=check_type,
-                status="finished",
-                shared_folder=shared_folder,
-                source_mode="scan",
-                save_only=True,
-                entries=saved_entries,
-            )
+            flush_saved_checks_findings(force=True, status="finished", reason="final")
             return self._buildChecksScanPayload(
                 check_type=check_type,
                 save_only=True,
