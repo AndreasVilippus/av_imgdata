@@ -266,21 +266,22 @@ def _safe_refresh_checks_mutation_state(
     normalized_path = str(image_path or "").strip()
     request_context = _REQUEST_MUTATION_CONTEXT.get({}) or {}
 
-    # Automatic name_conflict processing must be snapshot-based. If the image is
+    # Name-conflict processing must be snapshot-based. If the image is
     # refreshed immediately after applying a recommendation, overlapping faces can
     # generate the same conflict combination again and the caller can loop
     # indefinitely. Manual changes and other check types keep the existing
     # refresh behaviour.
-    if normalized_type == "name_conflicts" and bool(request_context.get("auto")):
+    if normalized_type == "name_conflicts":
         return {
             "status": "snapshot_updated",
             "check_type": normalized_type,
             "source_mode": "snapshot",
             "image_path": normalized_path,
             "entries": [],
+            "image_entries": [],
             "count": 0,
             "refresh_skipped": True,
-            "reason": "auto_name_conflicts_snapshot_mode",
+            "reason": "name_conflicts_snapshot_mode",
             "resolved_delta": int(resolved_delta or 0),
             "ignored_delta": int(ignored_delta or 0),
             "snapshot_mode": True,
