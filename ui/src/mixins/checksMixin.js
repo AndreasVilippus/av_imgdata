@@ -853,6 +853,28 @@ export default {
 			}
 			return withCounts(this.checksStatusMessage);
 		},
+		async stopChecksReview() {
+			if (this.checksLoading && !this.isChecksScanRunning) {
+				return;
+			}
+			this.checksLoading = true;
+			try {
+				await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_stop', {
+					check_type: this.selectedChecksType,
+				});
+				this.checksProgress = {
+					...(this.checksProgress || {}),
+					stop_requested: true,
+					running: false,
+				};
+				this.checksStatusMessage = this.$avt('checks:status_stop_requested', 'Stop requested. The current check scan will stop shortly.');
+			} catch (err) {
+				this.checksStatusMessage = this.getApiErrorMessage(err, this.$avt('checks:status_stop_failed', 'Could not stop the current check scan.'));
+			} finally {
+				this.checksLoading = false;
+				this.stopChecksProgressPolling();
+			}
+		},
 		async startChecksReview() {
 			if (this.isChecksScanRunning) {
 				await this.stopChecksScan();

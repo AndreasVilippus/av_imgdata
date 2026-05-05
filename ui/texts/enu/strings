@@ -540,4 +540,7 @@ counter_resolved="Resolved"
 counter_ignored="Ignored"
 counter_total="Total"
 counter_stored_findings="Saved findings"
+status_stop_requested="Stop requested. The current check scan will stop shortly."
+status_stop_failed="Could not stop the current check scan."
+error_checks_stop_requested="Check scan stopped by user."
 

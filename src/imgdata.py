@@ -68,6 +68,8 @@ class ImgDataService:
         self._face_matching_candidate_paths_cache_lock = Lock()
         self._checks_progress: Dict[str, Dict[str, Any]] = {}
         self._checks_progress_lock = Lock()
+        self._checks_stop_requests: Dict[str, str] = {}
+        self._checks_active_context: Dict[str, Any] = {}
         self._checks_start_lock = Lock()
         self._checks_threads: Dict[str, Thread] = {}
         self._checks_candidate_paths_cache: Dict[str, Dict[str, Any]] = {}
@@ -360,6 +362,8 @@ class ImgDataService:
         return self.exiftool.removeInstalled()
 
     def _readImageMetadata(self, image_path: str, *, include_unnamed_acd: bool = False) -> MetadataPayload:
+        self._raiseIfChecksStopRequested()
+        self._updateChecksProgressHeartbeat(current_path=image_path)
         config = self.config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
         use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
@@ -4016,6 +4020,8 @@ class ImgDataService:
         auto_apply_suggested_duplicates: bool = False,
         advance_current_result: bool = False,
     ) -> Dict[str, Any]:
+        self._clearChecksStopRequest(user_key=user_key, check_type=check_type)
+        self._setActiveChecksContext(user_key=user_key, check_type=check_type, save_only=save_only)
         source_mode_normalized = str(source_mode or "findings").strip().lower()
         if source_mode_normalized not in {"findings", "scan"}:
             source_mode_normalized = "findings"

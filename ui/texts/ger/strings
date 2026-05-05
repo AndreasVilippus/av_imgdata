@@ -550,4 +550,7 @@ counter_resolved="Erledigt"
 counter_ignored="Ignoriert"
 counter_total="Gesamt"
 counter_stored_findings="Gespeicherte Funde"
+status_stop_requested="Stopp angefordert. Die laufende Prüfung wird in Kürze beendet."
+status_stop_failed="Die laufende Prüfung konnte nicht gestoppt werden."
+error_checks_stop_requested="Prüfung durch Benutzer gestoppt."
 
