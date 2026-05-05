@@ -4429,10 +4429,16 @@ class ImgDataService:
             last_checks_findings_flush_count = len(saved_entries)
             self._updateChecksProgressHeartbeat(flush=True)
             with self._checks_progress_lock:
-                progress = self._checks_progress.get(state_key)
+                progress = self._checks_progress.get(self._checksStateKey(user_key, check_type))
                 if isinstance(progress, dict):
                     progress["last_flush_at"] = self._utcNowIso()
                     progress["last_flush_count"] = len(saved_entries)
+                    progress["findings_count"] = len(saved_entries)
+                    progress["message_params"] = {
+                        **(progress.get("message_params") if isinstance(progress.get("message_params"), dict) else {}),
+                        "count": len(saved_entries),
+                        "findings": len(saved_entries),
+                    }
                     progress["last_flush_reason"] = str(reason or "save_only_findings_flush")
             return True
 
