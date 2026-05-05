@@ -80,7 +80,7 @@
 					:total="Number(vm.checksProgress.total_files) || 0"
 					:primary-label="vm.$avt('checks:label_scanned', 'scanned').replace(':', '').toLowerCase()"
 					:secondary-label="vm.$avt('checks:label_remaining', 'remaining')"
-					:status-text="vm.getChecksStatusHeadline()"
+					:status-text="vm.getChecksProgressStatusText()"
 					:icon-url="vm.getChecksProgressIconUrl()"
 				/>
 			</div>
@@ -92,13 +92,8 @@
 					:total="vm.getChecksListTotalCount()"
 					:primary-label="vm.$avt('checks:label_index', 'Entry:').replace(':', '')"
 					:secondary-label="vm.$avt('checks:label_entries_remaining', 'remaining')"
-					:status-text="vm.getChecksStatusHeadline()"
+					:status-text="vm.getChecksProgressStatusText()"
 				/>
-			</div>
-			<div v-if="vm.getRelevantChecksStatusCounters().length" class="face-match-status-stats face-match-status-counters">
-				<div v-for="counter in vm.getRelevantChecksStatusCounters()" :key="counter.key">
-					<strong>{{ counter.label }}:</strong> {{ counter.value }}
-				</div>
 			</div>
 			<div v-if="vm.checksCurrentItem" class="face-match-status-stats">
 				<div><strong>{{ vm.$avt('checks:label_file', 'File:') }}</strong> {{ vm.checksCurrentItem.image_name }}</div>

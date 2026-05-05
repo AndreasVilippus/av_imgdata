@@ -515,6 +515,32 @@ export default {
 			this.checksCurrentIndex = Math.min(this.checksCurrentIndex, this.checksEntries.length - 1);
 			return true;
 		},
+		formatChecksStatusCounter(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return '';
+			}
+			const label = String(counter.label || '').replace(/:$/, '').trim();
+			const value = counter.value;
+			return label ? `${label}: ${value}` : String(value);
+		},
+		getChecksCountersStatusSuffix() {
+			const counters = this.getRelevantChecksStatusCounters();
+			if (!Array.isArray(counters) || !counters.length) {
+				return '';
+			}
+			return counters
+				.map((counter) => this.formatChecksStatusCounter(counter))
+				.filter(Boolean)
+				.join(' · ');
+		},
+		getChecksProgressStatusText() {
+			const headline = String(this.getChecksStatusHeadline() || '').trim();
+			const counters = String(this.getChecksCountersStatusSuffix() || '').trim();
+			if (headline && counters) {
+				return `${headline} — ${counters}`;
+			}
+			return headline || counters;
+		},
 		getRelevantChecksStatusCounters() {
 			const progress = this.checksProgress && typeof this.checksProgress === 'object' ? this.checksProgress : {};
 			const sourceMode = String(progress.source_mode || '').trim().toLowerCase();
