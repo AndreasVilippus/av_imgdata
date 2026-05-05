@@ -263,29 +263,12 @@ def _safe_refresh_checks_mutation_state(
     ignored_delta: int = 0,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     normalized_type = str(check_type or "").strip().lower()
-    normalized_path = str(image_path or "").strip()
-    request_context = _REQUEST_MUTATION_CONTEXT.get({}) or {}
 
-    # Name-conflict processing must be snapshot-based. If the image is
-    # refreshed immediately after applying a recommendation, overlapping faces can
-    # generate the same conflict combination again and the caller can loop
-    # indefinitely. Manual changes and other check types keep the existing
-    # refresh behaviour.
+    # Name-conflict mutation refresh must not re-read the changed image.
+    # The current review list is a snapshot. Returning an empty findings_update
+    # would clear the UI list and look like an aborted check.
     if normalized_type == "name_conflicts":
-        return {
-            "status": "snapshot_updated",
-            "check_type": normalized_type,
-            "source_mode": "snapshot",
-            "image_path": normalized_path,
-            "entries": [],
-            "image_entries": [],
-            "count": 0,
-            "refresh_skipped": True,
-            "reason": "name_conflicts_snapshot_mode",
-            "resolved_delta": int(resolved_delta or 0),
-            "ignored_delta": int(ignored_delta or 0),
-            "snapshot_mode": True,
-        }, None
+        return None, None
 
     try:
         refresh_kwargs = {
