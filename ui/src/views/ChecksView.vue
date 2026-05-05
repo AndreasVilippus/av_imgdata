@@ -95,6 +95,11 @@
 					:status-text="vm.getChecksStatusHeadline()"
 				/>
 			</div>
+			<div v-if="vm.getRelevantChecksStatusCounters().length" class="face-match-status-stats face-match-status-counters">
+				<div v-for="counter in vm.getRelevantChecksStatusCounters()" :key="counter.key">
+					<strong>{{ counter.label }}:</strong> {{ counter.value }}
+				</div>
+			</div>
 			<div v-if="vm.checksCurrentItem" class="face-match-status-stats">
 				<div><strong>{{ vm.$avt('checks:label_file', 'File:') }}</strong> {{ vm.checksCurrentItem.image_name }}</div>
 				<div><strong>{{ vm.$avt('checks:label_face_name', 'Face:') }}</strong> {{ vm.checksCurrentItem.face_name || vm.$avt('face_match:unknown_name', '(unnamed)') }}</div>
