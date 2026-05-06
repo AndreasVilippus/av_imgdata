@@ -9198,7 +9198,7 @@ class ImgDataService:
         person_id: int,
     ) -> List[int]:
         face_ids: List[int] = []
-        seen: set[int] = set()
+        seen = set()
         for item in self._listAllPhotoItemsForPerson(
             user_key=user_key,
             cookies=cookies,

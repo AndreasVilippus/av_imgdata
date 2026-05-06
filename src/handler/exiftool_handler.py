@@ -2,7 +2,7 @@
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from services.config_service import ConfigService
 from services.exiftool_service import ExifToolService
@@ -228,7 +228,7 @@ class ExifToolHandler:
             "error": None,
         }
 
-    def readMetadataContextBatch(self, image_paths: list[str], *, include_xmp: bool = True, batch_size: int = 100) -> Dict[str, Dict[str, Any]]:
+    def readMetadataContextBatch(self, image_paths: List[str], *, include_xmp: bool = True, batch_size: int = 100) -> Dict[str, Dict[str, Any]]:
         """
         Liest Metadaten-Kontext für mehrere Dateien in Batches.
         Gibt ein Dictionary zurück, das Dateipfade auf ihre Kontexte mappt.

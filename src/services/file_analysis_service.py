@@ -2,7 +2,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 class FileAnalysisService:
@@ -120,7 +120,7 @@ class FileAnalysisService:
         candidate = self._finding_path(finding_type)
         return self._write_json_if_changed(candidate, payload, pretty=True)
 
-    def appendCheckFindingEntries(self, finding_type: str, entries: list[dict]) -> bool:
+    def appendCheckFindingEntries(self, finding_type: str, entries: List[Dict[str, Any]]) -> bool:
         if not isinstance(entries, list):
             return False
 

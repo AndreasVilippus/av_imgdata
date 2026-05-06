@@ -278,7 +278,7 @@ class ConfigService:
         Berechne eine Signatur aller relevanten Config-Dateien.
         Enthält mtime und Größe der Hauptconfig-Datei sowie aller Ignore-List-Dateien.
         """
-        signature_parts: list[Any] = [
+        signature_parts: list = [
             str(self._config_path),
         ]
         
