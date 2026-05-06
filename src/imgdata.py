@@ -2308,6 +2308,7 @@ class ImgDataService:
                     "entry": normalized_entry,
                     "item": None,
                     "auto_applied_count": auto_applied_count,
+                    "finished": True,
                 }
             item = self.getChecksReviewItem(
                 entry=normalized_entry,
@@ -2317,11 +2318,7 @@ class ImgDataService:
                 shared_folder=shared_folder,
             )
             if not item:
-                return {
-                    "entry": None,
-                    "item": None,
-                    "auto_applied_count": auto_applied_count,
-                }
+                break
 
             action = (
                 self._getSuggestedNameConflictRename(item)
@@ -2335,11 +2332,7 @@ class ImgDataService:
             )
             if not action:
                 if not delete_action:
-                    return {
-                        "entry": normalized_entry,
-                        "item": item,
-                        "auto_applied_count": auto_applied_count,
-                    }
+                    continue
             if delete_action:
                 current_entry_token = self._checksEntryToken(normalized_entry)
                 if current_entry_token:
@@ -2354,6 +2347,7 @@ class ImgDataService:
                         "item": item,
                         "auto_applied_count": auto_applied_count,
                         "auto_apply_warning": str(result.get("warning") or ""),
+                        "finished": True,
                     }
                 auto_applied_count += 1
                 if auto_apply_limit_reached():
@@ -2363,41 +2357,8 @@ class ImgDataService:
                         "auto_applied_count": auto_applied_count,
                         "processed_entry_tokens": list(seen_entry_tokens),
                         "auto_apply_limit_reached": True,
+                        "finished": True,
                     }
-                if (
-                    self._isChecksFacePairType(item.get("review_type"))
-                    and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
-                ):
-                    return {
-                        "entry": None,
-                        "item": None,
-                        "auto_applied_count": auto_applied_count,
-                        "processed_entry_tokens": list(seen_entry_tokens),
-                    }
-                next_entry = next(
-                    (
-                        candidate
-                        for candidate in self._buildCheckEntriesForType(
-                            image_path=str(item.get("image_path") or ""),
-                            review_type=str(item.get("review_type") or ""),
-                            user_key=user_key,
-                            cookies=cookies,
-                            base_url=base_url,
-                            shared_folder=shared_folder,
-                        )
-                        if self._checksEntryToken(candidate) not in seen_entry_tokens
-                    ),
-                    None,
-                )
-                if not next_entry:
-                    return {
-                        "entry": None,
-                        "item": None,
-                        "auto_applied_count": auto_applied_count,
-                        "processed_entry_tokens": list(seen_entry_tokens),
-                    }
-                normalized_entry = next_entry
-                continue
             if not action:
                 return {
                     "entry": normalized_entry,
@@ -2417,12 +2378,7 @@ class ImgDataService:
             if current_entry_token:
                 seen_entry_tokens.add(current_entry_token)
             if not result.get("updated"):
-                return {
-                    "entry": normalized_entry,
-                    "item": item,
-                    "auto_applied_count": auto_applied_count,
-                    "auto_apply_warning": str(result.get("warning") or ""),
-                }
+                continue
 
             auto_applied_count += 1
             if auto_apply_limit_reached():
@@ -2435,37 +2391,14 @@ class ImgDataService:
                 }
             if (
                 self._isChecksFacePairType(item.get("review_type"))
-                and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
             ):
+                print(f"DEBUG: returning because face pair type, review_type={item.get('review_type')}")
                 return {
                     "entry": None,
                     "item": None,
                     "auto_applied_count": auto_applied_count,
                     "processed_entry_tokens": list(seen_entry_tokens),
                 }
-            next_entry = next(
-                (
-                    candidate
-                    for candidate in self._buildCheckEntriesForType(
-                        image_path=str(item.get("image_path") or ""),
-                        review_type=str(item.get("review_type") or ""),
-                        user_key=user_key,
-                        cookies=cookies,
-                        base_url=base_url,
-                        shared_folder=shared_folder,
-                    )
-                    if self._checksEntryToken(candidate) not in seen_entry_tokens
-                ),
-                None,
-            )
-            if not next_entry:
-                return {
-                    "entry": None,
-                    "item": None,
-                    "auto_applied_count": auto_applied_count,
-                    "processed_entry_tokens": list(seen_entry_tokens),
-                }
-            normalized_entry = next_entry
 
     def _runFaceMatching(
         self,
