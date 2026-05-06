@@ -18,6 +18,34 @@ Mehrere Uvicorn-Worker sind **nicht** Bestandteil dieses Plans. Die Optimierunge
 
 ---
 
+## Umsetzungsstatus
+
+Stand dieser Planfortführung:
+
+```text
+AP1  ConfigService mtime-cache                         umgesetzt
+AP2  NameMappingService mtime-cache und Lookup-Index   umgesetzt
+AP3  Sidecar-Verzeichnis-Cache pro Scanlauf            umgesetzt
+AP4  JPEG-Kontext in einem Header-Scan lesen           umgesetzt
+AP5  Full-File-XMP-Scan begrenzen                      umgesetzt
+AP6  ExifTool-Reads pro Datei bündeln                  umgesetzt
+AP7  ExifTool-Batch-Read für Scanläufe vorbereiten     umgesetzt
+AP8  Sidecars direkt lesen, ExifTool nur als Fallback  umgesetzt
+AP9  JSON-Schreibvorgänge atomar/nur bei Änderung      umgesetzt
+AP10 Findings-/Progress-Flush drosseln                 umgesetzt
+AP11 Photos-Folder- und Item-Cache pro Scanlauf        umgesetzt
+AP12 requests.Session pro User wiederverwenden         umgesetzt
+AP13 Scan-Kontext-Objekt einführen                     umgesetzt
+AP14 Instrumentierung für I/O-/ExifTool-Messung        umgesetzt, optional/deaktiviert per Default
+AP15 Optionales Speicherformat für große Findings      vorbereitet, JSON bleibt Standard
+```
+
+Automatisierte Prüfung: `python3 -m unittest discover -s tests` läuft mit 239 Tests erfolgreich, 1 Test ist skipped.
+
+Manuelle DSM-/UI-Prüfung aus der Prüfliste am Ende dieses Dokuments ist weiterhin separat auszuführen.
+
+---
+
 ## Grundregeln für alle Änderungen
 
 Codex soll bei allen Arbeitspaketen folgende Regeln einhalten:
@@ -1458,4 +1486,3 @@ Empfohlener Arbeitsmodus:
    - Invalidierung
    - Thread-Sicherheit
    - Fehlerfallback
-
