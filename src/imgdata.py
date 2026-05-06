@@ -419,6 +419,8 @@ class ImgDataService:
                     continue
                 progress["last_progress_at"] = now
                 progress["heartbeat_at"] = now
+                progress["running"] = True
+                progress["finished"] = False
                 if normalized_path:
                     progress["current_path"] = normalized_path
                 if finding_delta:
@@ -427,6 +429,7 @@ class ImgDataService:
                 if flush:
                     progress["last_flush_at"] = now
                     progress["last_flush_count"] = int(progress.get("findings_count") or 0)
+                self.file_analysis.writeRuntimeState("checks_progress", key, dict(progress))
 
     def update_session_context(
         self,
@@ -4427,19 +4430,33 @@ class ImgDataService:
             )
             last_checks_findings_flush_at = now
             last_checks_findings_flush_count = len(saved_entries)
+            progress_key = self._checksStateKey(user_key, check_type)
             self._updateChecksProgressHeartbeat(flush=True)
             with self._checks_progress_lock:
-                progress = self._checks_progress.get(self._checksStateKey(user_key, check_type))
-                if isinstance(progress, dict):
-                    progress["last_flush_at"] = self._utcNowIso()
-                    progress["last_flush_count"] = len(saved_entries)
-                    progress["findings_count"] = len(saved_entries)
-                    progress["message_params"] = {
-                        **(progress.get("message_params") if isinstance(progress.get("message_params"), dict) else {}),
-                        "count": len(saved_entries),
-                        "findings": len(saved_entries),
-                    }
-                    progress["last_flush_reason"] = str(reason or "save_only_findings_flush")
+                progress = self._checks_progress.get(progress_key)
+                if not isinstance(progress, dict):
+                    progress = self.file_analysis.readRuntimeState("checks_progress", progress_key)
+                if not isinstance(progress, dict):
+                    progress = {}
+                progress = dict(progress)
+                progress["check_type"] = check_type
+                progress["source_mode"] = "scan"
+                progress["save_only"] = True
+                progress["running"] = status not in {"finished", "stopped", "failed"}
+                progress["finished"] = status in {"finished", "stopped", "failed"}
+                progress["last_progress_at"] = self._utcNowIso()
+                progress["heartbeat_at"] = progress["last_progress_at"]
+                progress["last_flush_at"] = progress["last_progress_at"]
+                progress["last_flush_count"] = len(saved_entries)
+                progress["findings_count"] = len(saved_entries)
+                progress["message_params"] = {
+                    **(progress.get("message_params") if isinstance(progress.get("message_params"), dict) else {}),
+                    "count": len(saved_entries),
+                    "findings": len(saved_entries),
+                }
+                progress["last_flush_reason"] = str(reason or "save_only_findings_flush")
+                self._checks_progress[progress_key] = progress
+                self.file_analysis.writeRuntimeState("checks_progress", progress_key, dict(progress))
             return True
 
         candidate_paths = self._getChecksCandidatePaths(
