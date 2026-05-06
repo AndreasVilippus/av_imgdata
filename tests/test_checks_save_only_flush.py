@@ -16,7 +16,7 @@ def test_save_only_checks_flushes_saved_entries_during_scan():
     assert "def flush_saved_checks_findings" in excerpt
     assert "flush_saved_checks_findings(force=True" in excerpt
     assert "flush_saved_checks_findings(reason=" in excerpt
-    assert "last_checks_findings_flush_count" in excerpt
+    assert "checks_findings_debouncer" in excerpt
     assert "_writeChecksFindings(" in excerpt
 
 

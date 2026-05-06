@@ -17,7 +17,7 @@ class FileAnalysisService:
         "face_match_candidates": "face_match_candidates.json",
     }
 
-    def __init__(self, result_path: Optional[str] = None):
+    def __init__(self, result_path: Optional[str] = None, findings_storage_format: str = "json"):
         if result_path:
             self._result_path = Path(result_path)
         else:
@@ -25,6 +25,12 @@ class FileAnalysisService:
             self._result_path = Path(package_var) / "file_analysis.json"
         self._findings_dir = self._result_path.parent / "analysis_findings"
         self._runtime_dir = self._result_path.parent / "runtime_state"
+        self._findings_storage_format = self._normalize_findings_storage_format(findings_storage_format)
+
+    @staticmethod
+    def _normalize_findings_storage_format(value: str) -> str:
+        normalized = str(value or "json").strip().lower()
+        return normalized if normalized in {"json"} else "json"
 
     def _json_bytes(self, payload: Dict[str, Any], *, pretty: bool = True) -> bytes:
         """
@@ -113,6 +119,18 @@ class FileAnalysisService:
             return False
         candidate = self._finding_path(finding_type)
         return self._write_json_if_changed(candidate, payload, pretty=True)
+
+    def appendCheckFindingEntries(self, finding_type: str, entries: list[dict]) -> bool:
+        if not isinstance(entries, list):
+            return False
+
+        payload = self.readCheckFindings(finding_type)
+        if not isinstance(payload, dict):
+            payload = {}
+        existing_entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+        payload["entries"] = list(existing_entries) + [dict(entry) for entry in entries if isinstance(entry, dict)]
+        payload["count"] = len(payload["entries"])
+        return self.writeCheckFindings(finding_type, payload)
 
     def deleteCheckFindings(self, finding_type: str) -> bool:
         candidate = self._finding_path(finding_type)

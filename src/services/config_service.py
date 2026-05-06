@@ -105,6 +105,12 @@ class ConfigService:
                     "SINGLE_SOURCE_OF_TRUTH": "",
                 },
             },
+            "runtime": {
+                "FINDINGS_STORAGE_FORMAT": "json",
+            },
+            "debug": {
+                "IO_METRICS_ENABLED": False,
+            },
             "review": {
                 "OPTIONS": {
                     "DUPLICATE_FACE_SUGGESTIONS": True,
@@ -312,6 +318,17 @@ class ConfigService:
             "SINGLE_SOURCE_OF_TRUTH": str(checks.get("SINGLE_SOURCE_OF_TRUTH", "")),
         }
         root["analysis"] = analysis
+
+        runtime = root.get("runtime") if isinstance(root.get("runtime"), dict) else {}
+        findings_storage_format = str(runtime.get("FINDINGS_STORAGE_FORMAT", "json") or "").strip().lower()
+        if findings_storage_format not in {"json"}:
+            findings_storage_format = "json"
+        runtime["FINDINGS_STORAGE_FORMAT"] = findings_storage_format
+        root["runtime"] = runtime
+
+        debug = root.get("debug") if isinstance(root.get("debug"), dict) else {}
+        debug["IO_METRICS_ENABLED"] = bool(debug.get("IO_METRICS_ENABLED", False))
+        root["debug"] = debug
 
         review = root.get("review") if isinstance(root.get("review"), dict) else {}
         review_options = review.get("OPTIONS") if isinstance(review.get("OPTIONS"), dict) else {}

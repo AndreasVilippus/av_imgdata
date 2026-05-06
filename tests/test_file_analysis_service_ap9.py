@@ -290,6 +290,42 @@ class TestFileAnalysisServiceAtomicWrites(unittest.TestCase):
         self.assertEqual(dim_content["count"], 5)
         self.assertEqual(dup_content["count"], 3)
 
+    def test_unknown_findings_storage_format_falls_back_to_json(self):
+        service = FileAnalysisService(str(self.result_file), findings_storage_format="sqlite")
+
+        self.assertEqual(service._findings_storage_format, "json")
+
+    def test_appendCheckFindingEntries_adds_entries_to_existing_json_payload(self):
+        service = FileAnalysisService(str(self.result_file))
+        service.writeCheckFindings(
+            "duplicate_faces",
+            {
+                "status": "running",
+                "count": 1,
+                "entries": [{"id": 1}],
+            },
+        )
+
+        success = service.appendCheckFindingEntries(
+            "duplicate_faces",
+            [{"id": 2}, {"id": 3}],
+        )
+
+        self.assertTrue(success)
+        read_back = service.readCheckFindings("duplicate_faces")
+        self.assertEqual(read_back["count"], 3)
+        self.assertEqual([entry["id"] for entry in read_back["entries"]], [1, 2, 3])
+
+    def test_appendCheckFindingEntries_creates_payload_when_missing(self):
+        service = FileAnalysisService(str(self.result_file))
+
+        success = service.appendCheckFindingEntries("dimension_issues", [{"id": 1}])
+
+        self.assertTrue(success)
+        read_back = service.readCheckFindings("dimension_issues")
+        self.assertEqual(read_back["count"], 1)
+        self.assertEqual(read_back["entries"], [{"id": 1}])
+
 
 if __name__ == "__main__":
     unittest.main()

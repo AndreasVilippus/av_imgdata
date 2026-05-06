@@ -240,6 +240,8 @@ class TestConfigServiceDefaults(unittest.TestCase):
         self.assertIn("files", config)
         self.assertIn("metadata", config)
         self.assertIn("analysis", config)
+        self.assertIn("runtime", config)
+        self.assertIn("debug", config)
         self.assertIn("review", config)
 
     def test_readMergedConfig_merges_custom_config(self):
@@ -259,6 +261,29 @@ class TestConfigServiceDefaults(unittest.TestCase):
         self.assertEqual(config["photos"]["MAX_PHOTOS_PERSONS"], 3000)
         # Andere Defaults sollten erhalten sein
         self.assertIn("face_match", config)
+
+    def test_runtime_findings_storage_format_defaults_to_json(self):
+        service = ConfigService(str(self.config_file))
+
+        config = service.readMergedConfig()
+
+        self.assertEqual(config["runtime"]["FINDINGS_STORAGE_FORMAT"], "json")
+
+    def test_runtime_findings_storage_format_falls_back_to_json(self):
+        service = ConfigService(str(self.config_file))
+        with self.config_file.open("w") as f:
+            json.dump({"runtime": {"FINDINGS_STORAGE_FORMAT": "sqlite"}}, f)
+
+        config = service.readMergedConfig()
+
+        self.assertEqual(config["runtime"]["FINDINGS_STORAGE_FORMAT"], "json")
+
+    def test_debug_io_metrics_defaults_to_disabled(self):
+        service = ConfigService(str(self.config_file))
+
+        config = service.readMergedConfig()
+
+        self.assertFalse(config["debug"]["IO_METRICS_ENABLED"])
 
 
 if __name__ == "__main__":
