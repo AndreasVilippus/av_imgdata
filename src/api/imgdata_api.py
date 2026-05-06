@@ -185,6 +185,37 @@ def _compact_checks_findings_update(findings_update: Any, *, image_path: str = "
     return compact
 
 
+
+def _enrich_checks_progress_counters(progress: Any) -> Any:
+    if not isinstance(progress, dict):
+        return progress
+    normalized_type = str(progress.get("check_type") or "").strip().lower()
+    source_mode = str(progress.get("source_mode") or "").strip().lower()
+    save_only = bool(progress.get("save_only"))
+    if source_mode != "scan" or not save_only or not normalized_type:
+        return progress
+    if progress.get("findings_count") is not None:
+        return progress
+
+    statuses = None
+    try:
+        status_reader = getattr(IMGDATA, "getChecksFindingsStatus", None)
+        if callable(status_reader):
+            statuses = status_reader()
+    except Exception:
+        statuses = None
+
+    if isinstance(statuses, dict) and isinstance(statuses.get("statuses"), dict):
+        statuses = statuses.get("statuses")
+    current = statuses.get(normalized_type) if isinstance(statuses, dict) else None
+    if isinstance(current, dict):
+        try:
+            progress = dict(progress)
+            progress["findings_count"] = max(0, int(current.get("count") or 0))
+        except Exception:
+            pass
+    return progress
+
 def _compact_file_analysis_progress(progress: Any) -> Any:
     if not isinstance(progress, dict):
         return progress
@@ -1129,7 +1160,7 @@ async def checks_progress(request: Request):
 
     return {
         "success": True,
-        "data": IMGDATA.getChecksProgress(session_ctx["user_key"], str(check_type or "dimension_issues")),
+        "data": _enrich_checks_progress_counters(IMGDATA.getChecksProgress(session_ctx["user_key"], str(check_type or "dimension_issues"))),
     }
 
 

@@ -80,7 +80,7 @@
 					:total="Number(vm.checksProgress.total_files) || 0"
 					:primary-label="vm.$avt('checks:label_scanned', 'scanned').replace(':', '').toLowerCase()"
 					:secondary-label="vm.$avt('checks:label_remaining', 'remaining')"
-					:status-text="vm.getChecksStatusHeadline()"
+					:status-text="vm.getChecksProgressStatusText()"
 					:icon-url="vm.getChecksProgressIconUrl()"
 				/>
 			</div>
@@ -92,7 +92,7 @@
 					:total="vm.getChecksListTotalCount()"
 					:primary-label="vm.$avt('checks:label_index', 'Entry:').replace(':', '')"
 					:secondary-label="vm.$avt('checks:label_entries_remaining', 'remaining')"
-					:status-text="vm.getChecksStatusHeadline()"
+					:status-text="vm.getChecksProgressStatusText()"
 				/>
 			</div>
 			<div v-if="vm.checksCurrentItem" class="face-match-status-stats">

@@ -48,6 +48,8 @@ class ImgDataService:
     FACE_MATCH_KEEPALIVE_INTERVAL_SECONDS = SESSION_KEEPALIVE_INTERVAL_SECONDS
     FACE_MATCH_FINDINGS_FLUSH_INTERVAL_SECONDS = 60
     FACE_MATCH_FINDINGS_FLUSH_ENTRY_INTERVAL = 25
+    CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS = 60
+    CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL = 25
 
     def __init__(self, session_manager: SessionManager):
         self.session_manager = session_manager
@@ -68,6 +70,8 @@ class ImgDataService:
         self._face_matching_candidate_paths_cache_lock = Lock()
         self._checks_progress: Dict[str, Dict[str, Any]] = {}
         self._checks_progress_lock = Lock()
+        self._checks_stop_requests: Dict[str, str] = {}
+        self._checks_active_context: Dict[str, Any] = {}
         self._checks_start_lock = Lock()
         self._checks_threads: Dict[str, Thread] = {}
         self._checks_candidate_paths_cache: Dict[str, Dict[str, Any]] = {}
@@ -302,6 +306,131 @@ class ImgDataService:
             },
         )
 
+
+    @staticmethod
+    def _utcNowIso() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _checksProgressKeys(self, user_key: str = "", check_type: str = "") -> List[str]:
+        normalized_user = str(user_key or "").strip()
+        normalized_type = str(check_type or "").strip().lower()
+        keys: List[str] = []
+        if normalized_user and normalized_type:
+            keys.append(f"{normalized_user}:{normalized_type}")
+        if normalized_user:
+            keys.append(normalized_user)
+        if normalized_type:
+            keys.append(normalized_type)
+        return keys
+
+    def _setActiveChecksContext(self, *, user_key: str = "", check_type: str = "", save_only: bool = False) -> None:
+        with self._checks_progress_lock:
+            self._checks_active_context = {
+                "user_key": str(user_key or "").strip(),
+                "check_type": str(check_type or "").strip().lower(),
+                "save_only": bool(save_only),
+                "last_progress_at": self._utcNowIso(),
+            }
+
+    def _clearChecksStopRequest(self, *, user_key: str = "", check_type: str = "") -> None:
+        with self._checks_progress_lock:
+            if not hasattr(self, "_checks_stop_requests"):
+                self._checks_stop_requests = {}
+            for key in self._checksProgressKeys(user_key, check_type):
+                self._checks_stop_requests.pop(key, None)
+            self._checks_stop_requests.pop("*", None)
+
+    def requestStopChecks(self, user_key: str = "", check_type: str = "") -> Dict[str, Any]:
+        normalized_user = str(user_key or "").strip()
+        normalized_type = str(check_type or "").strip().lower()
+        now = self._utcNowIso()
+        with self._checks_progress_lock:
+            if not hasattr(self, "_checks_stop_requests"):
+                self._checks_stop_requests = {}
+            keys = self._checksProgressKeys(normalized_user, normalized_type)
+            if not keys:
+                keys = ["*"]
+            for key in keys:
+                self._checks_stop_requests[key] = now
+
+            updated_progress = {}
+            for key, progress in list(self._checks_progress.items()):
+                if not isinstance(progress, dict):
+                    continue
+                progress_type = str(progress.get("check_type") or "").strip().lower()
+                if normalized_type and progress_type and progress_type != normalized_type:
+                    continue
+                progress["stop_requested"] = True
+                progress["stop_requested_at"] = now
+                progress["last_progress_at"] = now
+                updated_progress[key] = dict(progress)
+            return {
+                "stop_requested": True,
+                "check_type": normalized_type,
+                "updated_progress": updated_progress,
+            }
+
+    def _isChecksStopRequested(self, *, user_key: str = "", check_type: str = "") -> bool:
+        with self._checks_progress_lock:
+            stop_requests = getattr(self, "_checks_stop_requests", {})
+            if stop_requests.get("*"):
+                return True
+            for key in self._checksProgressKeys(user_key, check_type):
+                if stop_requests.get(key):
+                    return True
+            context = getattr(self, "_checks_active_context", {})
+            context_user = str(context.get("user_key") or "").strip() if isinstance(context, dict) else ""
+            context_type = str(context.get("check_type") or "").strip().lower() if isinstance(context, dict) else ""
+            for key in self._checksProgressKeys(context_user, context_type):
+                if stop_requests.get(key):
+                    return True
+            return False
+
+    def _raiseIfChecksStopRequested(self) -> None:
+        context = getattr(self, "_checks_active_context", {})
+        user_key = str(context.get("user_key") or "").strip() if isinstance(context, dict) else ""
+        check_type = str(context.get("check_type") or "").strip().lower() if isinstance(context, dict) else ""
+        if not self._isChecksStopRequested(user_key=user_key, check_type=check_type):
+            return
+        raise ImgDataOperationError(
+            "checks_stop_requested",
+            {
+                "code": "checks_stop_requested",
+                "message_key": "checks_stop_requested",
+                "check_type": check_type,
+                "retryable": False,
+            },
+        )
+
+    def _updateChecksProgressHeartbeat(self, *, current_path: str = "", finding_delta: int = 0, flush: bool = False) -> None:
+        context = getattr(self, "_checks_active_context", {})
+        if not isinstance(context, dict):
+            return
+        user_key = str(context.get("user_key") or "").strip()
+        check_type = str(context.get("check_type") or "").strip().lower()
+        if not user_key and not check_type:
+            return
+        now = self._utcNowIso()
+        normalized_path = str(current_path or "").strip()
+        with self._checks_progress_lock:
+            for key in self._checksProgressKeys(user_key, check_type):
+                progress = self._checks_progress.get(key)
+                if not isinstance(progress, dict):
+                    continue
+                progress["last_progress_at"] = now
+                progress["heartbeat_at"] = now
+                progress["running"] = True
+                progress["finished"] = False
+                if normalized_path:
+                    progress["current_path"] = normalized_path
+                if finding_delta:
+                    progress["findings_count"] = max(0, int(progress.get("findings_count") or 0) + int(finding_delta))
+                    progress["last_finding_at"] = now
+                if flush:
+                    progress["last_flush_at"] = now
+                    progress["last_flush_count"] = int(progress.get("findings_count") or 0)
+                self.file_analysis.writeRuntimeState("checks_progress", key, dict(progress))
+
     def update_session_context(
         self,
         *,
@@ -360,6 +489,8 @@ class ImgDataService:
         return self.exiftool.removeInstalled()
 
     def _readImageMetadata(self, image_path: str, *, include_unnamed_acd: bool = False) -> MetadataPayload:
+        self._raiseIfChecksStopRequested()
+        self._updateChecksProgressHeartbeat(current_path=image_path)
         config = self.config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
         use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
@@ -4016,6 +4147,8 @@ class ImgDataService:
         auto_apply_suggested_duplicates: bool = False,
         advance_current_result: bool = False,
     ) -> Dict[str, Any]:
+        self._clearChecksStopRequest(user_key=user_key, check_type=check_type)
+        self._setActiveChecksContext(user_key=user_key, check_type=check_type, save_only=save_only)
         source_mode_normalized = str(source_mode or "findings").strip().lower()
         if source_mode_normalized not in {"findings", "scan"}:
             source_mode_normalized = "findings"
@@ -4266,6 +4399,66 @@ class ImgDataService:
         if not save_only and not metrics_trusted:
             findings_count = self._countOpenChecksScanFindings(None, pending_entries)
         saved_entries: List[Dict[str, Any]] = []
+        last_checks_findings_flush_at = 0.0
+        last_checks_findings_flush_count = 0
+
+        def flush_saved_checks_findings(*, force: bool = False, status: str = "running", reason: str = "") -> bool:
+            nonlocal last_checks_findings_flush_at, last_checks_findings_flush_count
+
+            if not save_only:
+                return False
+            if not saved_entries and not force:
+                return False
+
+            now = monotonic()
+            entries_delta = len(saved_entries) - int(last_checks_findings_flush_count or 0)
+            if (
+                not force
+                and last_checks_findings_flush_count > 0
+                and entries_delta < self.CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL
+                and (now - last_checks_findings_flush_at) < self.CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS
+            ):
+                return False
+
+            self._writeChecksFindings(
+                check_type=check_type,
+                status=status,
+                shared_folder=shared_folder,
+                source_mode="scan",
+                save_only=True,
+                entries=saved_entries,
+            )
+            last_checks_findings_flush_at = now
+            last_checks_findings_flush_count = len(saved_entries)
+            progress_key = self._checksStateKey(user_key, check_type)
+            self._updateChecksProgressHeartbeat(flush=True)
+            with self._checks_progress_lock:
+                progress = self._checks_progress.get(progress_key)
+                if not isinstance(progress, dict):
+                    progress = self.file_analysis.readRuntimeState("checks_progress", progress_key)
+                if not isinstance(progress, dict):
+                    progress = {}
+                progress = dict(progress)
+                progress["check_type"] = check_type
+                progress["source_mode"] = "scan"
+                progress["save_only"] = True
+                progress["running"] = status not in {"finished", "stopped", "failed"}
+                progress["finished"] = status in {"finished", "stopped", "failed"}
+                progress["last_progress_at"] = self._utcNowIso()
+                progress["heartbeat_at"] = progress["last_progress_at"]
+                progress["last_flush_at"] = progress["last_progress_at"]
+                progress["last_flush_count"] = len(saved_entries)
+                progress["findings_count"] = len(saved_entries)
+                progress["message_params"] = {
+                    **(progress.get("message_params") if isinstance(progress.get("message_params"), dict) else {}),
+                    "count": len(saved_entries),
+                    "findings": len(saved_entries),
+                }
+                progress["last_flush_reason"] = str(reason or "save_only_findings_flush")
+                self._checks_progress[progress_key] = progress
+                self.file_analysis.writeRuntimeState("checks_progress", progress_key, dict(progress))
+            return True
+
         candidate_paths = self._getChecksCandidatePaths(
             user_key=user_key,
             check_type=check_type,
@@ -4486,6 +4679,7 @@ class ImgDataService:
                 if resolved.get("auto_apply_warning"):
                     saved_entries.extend(entries)
                     findings_count = len(saved_entries)
+                    flush_saved_checks_findings(force=True, reason="auto_apply_warning")
                     self._setChecksProgressMessage(
                         user_key,
                         check_type,
@@ -4529,6 +4723,7 @@ class ImgDataService:
 
                 if refreshed_entries:
                     saved_entries.extend(refreshed_entries)
+                    flush_saved_checks_findings(reason="save_only_result")
                 self._setChecksProgressMessage(
                     user_key,
                     check_type,
@@ -4647,14 +4842,7 @@ class ImgDataService:
             )
 
         if save_only:
-            self._writeChecksFindings(
-                check_type=check_type,
-                status="finished",
-                shared_folder=shared_folder,
-                source_mode="scan",
-                save_only=True,
-                entries=saved_entries,
-            )
+            flush_saved_checks_findings(force=True, status="finished", reason="final")
             return self._buildChecksScanPayload(
                 check_type=check_type,
                 save_only=True,

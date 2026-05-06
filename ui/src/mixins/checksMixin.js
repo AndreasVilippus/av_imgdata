@@ -515,6 +515,96 @@ export default {
 			this.checksCurrentIndex = Math.min(this.checksCurrentIndex, this.checksEntries.length - 1);
 			return true;
 		},
+		formatChecksStatusCounter(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return '';
+			}
+			const label = String(counter.label || '').replace(/:$/, '').trim();
+			const value = counter.value;
+			return label ? `${label}: ${value}` : String(value);
+		},
+		getChecksCountersStatusSuffix() {
+			const counters = this.getRelevantChecksStatusCounters();
+			if (!Array.isArray(counters) || !counters.length) {
+				return '';
+			}
+			return counters
+				.map((counter) => this.formatChecksStatusCounter(counter))
+				.filter(Boolean)
+				.join(' · ');
+		},
+		getChecksProgressStatusText() {
+			const progress = this.checksProgress && typeof this.checksProgress === 'object' ? this.checksProgress : {};
+			const sourceMode = String(progress.source_mode || '').trim().toLowerCase();
+			const action = String(this.selectedChecksAction || '').trim().toLowerCase();
+			const isSaveOnlyScan = (action === 'scan' || sourceMode === 'scan') && (this.checksSaveOnly || !!progress.save_only);
+			const headline = String(this.getChecksStatusHeadline() || '').trim();
+			if (!isSaveOnlyScan) {
+				return headline;
+			}
+			const findings = this.getChecksSaveOnlyFindingsCount(progress);
+			const skipped = Math.max(0, Number(progress.skipped_count || progress.skip_count) || 0);
+			const findingsLabel = this.$avt('checks:counter_findings', 'Findings').replace(/:$/, '').trim();
+			const skippedLabel = this.$avt('checks:counter_skipped', 'Skipped').replace(/:$/, '').trim();
+			const parts = [`${findingsLabel}: ${findings}`];
+			if (skipped > 0) {
+				parts.push(`${skippedLabel}: ${skipped}`);
+			}
+			const base = headline || this.$avt('checks:status_scan_running', 'Check scan is running.');
+			return `${base} | ${parts.join(' | ')}`;
+		},
+		getRelevantChecksStatusCounters() {
+			const progress = this.checksProgress && typeof this.checksProgress === 'object' ? this.checksProgress : {};
+			const sourceMode = String(progress.source_mode || '').trim().toLowerCase();
+			const action = String(this.selectedChecksAction || '').trim().toLowerCase();
+			const isScan = action === 'scan' || sourceMode === 'scan';
+			const saveOnly = isScan && (this.checksSaveOnly || !!progress.save_only);
+			const numberFrom = (...values) => {
+				for (const value of values) {
+					const numeric = Number(value);
+					if (Number.isFinite(numeric)) {
+						return Math.max(0, numeric);
+					}
+				}
+				return null;
+			};
+			const addCounter = (counters, key, labelKey, fallback, value, { showWhenZero = false } = {}) => {
+				const numeric = Number(value);
+				if (!Number.isFinite(numeric)) {
+					return;
+				}
+				if (!showWhenZero && numeric <= 0) {
+					return;
+				}
+				counters.push({ key, label: this.$avt(labelKey, fallback), value: numeric });
+			};
+			const counters = [];
+			if (isScan && saveOnly) {
+				addCounter(counters, 'processed', 'checks:counter_processed', 'Processed', numberFrom(progress.files_scanned, progress.processed_count, progress.scanned_count), { showWhenZero: true });
+				addCounter(counters, 'findings', 'checks:counter_findings', 'Findings', numberFrom(progress.findings_count, progress.saved_findings_count, progress.found_count), { showWhenZero: true });
+				addCounter(counters, 'skipped', 'checks:counter_skipped', 'Skipped', numberFrom(progress.skipped_count, progress.skip_count));
+				addCounter(counters, 'errors', 'checks:counter_errors', 'Errors', numberFrom(progress.error_count, progress.errors_count));
+				return counters;
+			}
+			if (isScan) {
+				addCounter(counters, 'processed', 'checks:counter_processed', 'Processed', numberFrom(progress.files_scanned, progress.processed_count, progress.scanned_count), { showWhenZero: true });
+				addCounter(counters, 'skipped', 'checks:counter_skipped', 'Skipped', numberFrom(progress.skipped_count, progress.skip_count));
+				addCounter(counters, 'errors', 'checks:counter_errors', 'Errors', numberFrom(progress.error_count, progress.errors_count));
+				return counters;
+			}
+			if (action === 'findings') {
+				addCounter(counters, 'open', 'checks:counter_open', 'Open', this.checksEntries.length, { showWhenZero: true });
+				addCounter(counters, 'resolved', 'checks:counter_resolved', 'Resolved', numberFrom(progress.resolved_count));
+				addCounter(counters, 'ignored', 'checks:counter_ignored', 'Ignored', numberFrom(progress.ignored_count));
+				addCounter(counters, 'skipped', 'checks:counter_skipped', 'Skipped', numberFrom(progress.skipped_count));
+				addCounter(counters, 'total', 'checks:counter_total', 'Total', this.getChecksListTotalCount(), { showWhenZero: this.checksEntries.length > 0 });
+				return counters;
+			}
+			if (this.hasChecksStoredFindings) {
+				addCounter(counters, 'stored_findings', 'checks:counter_stored_findings', 'Saved findings', this.checksStoredFindingsCount);
+			}
+			return counters;
+		},
 		getChecksListResolvedCount() {
 			const progress = this.checksProgress && typeof this.checksProgress === 'object'
 				? this.checksProgress
@@ -800,6 +890,28 @@ export default {
 				return withCounts(this.$avt('checks:progress_findings_saved_short', 'Findings list saved.'));
 			}
 			return withCounts(this.checksStatusMessage);
+		},
+		async stopChecksReview() {
+			if (this.checksLoading && !this.isChecksScanRunning) {
+				return;
+			}
+			this.checksLoading = true;
+			try {
+				await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_stop', {
+					check_type: this.selectedChecksType,
+				});
+				this.checksProgress = {
+					...(this.checksProgress || {}),
+					stop_requested: true,
+					running: false,
+				};
+				this.checksStatusMessage = this.$avt('checks:status_stop_requested', 'Stop requested. The current check scan will stop shortly.');
+			} catch (err) {
+				this.checksStatusMessage = this.getApiErrorMessage(err, this.$avt('checks:status_stop_failed', 'Could not stop the current check scan.'));
+			} finally {
+				this.checksLoading = false;
+				this.stopChecksProgressPolling();
+			}
 		},
 		async startChecksReview() {
 			if (this.isChecksScanRunning) {
