@@ -869,13 +869,14 @@ class FileHandler:
                         except Exception:
                             pass
 
+                    if code == 0xE1 and segment_data.startswith(b"Exif\x00\x00"):
+                        tiff_start = 6
+                        orientation = FileHandler._readExifOrientationFromTiff(segment_data, tiff_start, len(segment_data))
+                        if orientation is not None:
+                            context["orientation"] = orientation
+
                     if include_xmp and code == 0xE1:
-                        if segment_data.startswith(b"Exif\x00\x00"):
-                            tiff_start = 6
-                            orientation = FileHandler._readExifOrientationFromTiff(segment_data, tiff_start, len(segment_data))
-                            if orientation is not None:
-                                context["orientation"] = orientation
-                        elif segment_data.startswith(b"http://ns.adobe.com/xap/1.0/\x00"):
+                        if segment_data.startswith(b"http://ns.adobe.com/xap/1.0/\x00"):
                             try:
                                 xmp_payload = segment_data[len(b"http://ns.adobe.com/xap/1.0/\x00"):]
                                 context["xmp_content"] = xmp_payload.decode("utf-8", errors="replace")

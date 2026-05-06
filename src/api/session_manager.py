@@ -27,6 +27,7 @@ class SessionManager:
         self.verify_ssl = verify_ssl
         self.timeout = timeout
         self._sessions: Dict[str, Dict[str, Any]] = {}
+        self._http_sessions: Dict[str, requests.Session] = {}
         self._locks: Dict[str, threading.RLock] = {}
         self._locks_guard = threading.Lock()
 
@@ -57,6 +58,26 @@ class SessionManager:
             }
             self._sessions[user_key] = state
         return state
+
+    def _get_http_session(self, user_key: str, cookies: Dict[str, str]) -> requests.Session:
+        session = self._http_sessions.get(user_key)
+        if session is None:
+            session = requests.Session()
+            session.verify = self.verify_ssl
+            self._http_sessions[user_key] = session
+        else:
+            session.verify = self.verify_ssl
+        if cookies:
+            session.cookies.update(cookies)
+        return session
+
+    def _reset_http_session(self, user_key: str) -> None:
+        session = self._http_sessions.pop(user_key, None)
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
 
     @staticmethod
     def _timestamp_now() -> str:
@@ -274,18 +295,21 @@ class SessionManager:
         if state.get("synotoken"):
             headers["X-SYNO-TOKEN"] = state.get("synotoken")
 
-        session = requests.Session()
-        session.verify = self.verify_ssl
-        session.cookies.update(cookies)
-        response = session.post(
-            f"{base_url}/webapi/entry.cgi",
-            params={"api": "SYNO.API.Auth"},
-            data=payload,
-            headers=headers,
-            timeout=self.timeout,
-        )
+        session = self._get_http_session(user_key, cookies)
+        try:
+            response = session.post(
+                f"{base_url}/webapi/entry.cgi",
+                params={"api": "SYNO.API.Auth"},
+                data=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+        except requests.RequestException:
+            self._reset_http_session(user_key)
+            raise
         data = self._safe_json(response)
         if not data.get("success"):
+            self._reset_http_session(user_key)
             raise SessionManagerError({"error": "resume_failed", "resume": data}, status_code=401)
 
         resume_data = data.get("data") if isinstance(data.get("data"), dict) else {}
@@ -353,9 +377,7 @@ class SessionManager:
             if state.get("synotoken"):
                 headers["X-SYNO-TOKEN"] = state.get("synotoken")
 
-            session = requests.Session()
-            session.verify = self.verify_ssl
-            session.cookies.update(cookies)
+            session = self._get_http_session(user_key, cookies)
             response = self._get_with_transient_retry(
                 session,
                 f"{base_url}/webapi/entry.cgi",
@@ -421,9 +443,7 @@ class SessionManager:
             if state.get("synotoken"):
                 headers["X-SYNO-TOKEN"] = state.get("synotoken")
 
-            session = requests.Session()
-            session.verify = self.verify_ssl
-            session.cookies.update(cookies)
+            session = self._get_http_session(user_key, cookies)
             response = self._post_without_retry(
                 session,
                 f"{base_url}/webapi/entry.cgi",

@@ -21,7 +21,7 @@ from api.session_manager import SessionBootstrapRequired, SessionManager, Sessio
 from handler.core_handler import CoreHandler
 from handler.exiftool_handler import ExifToolHandler
 from handler.file_handler import FileHandler
-from handler.photos_handler import PhotosHandler
+from handler.photos_handler import PhotosHandler, PhotosLookupCache
 from models.file_face import FileFace
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
@@ -7264,6 +7264,7 @@ class ImgDataService:
                     "searched": False,
                     "error": "shared_folder_not_found",
                 }
+            photos_lookup_cache = PhotosLookupCache()
 
             self._setFaceMatchingProgressMessage(
                 user_key,
@@ -7400,6 +7401,7 @@ class ImgDataService:
                     shared_folder=shared_folder,
                     image_path=image_path,
                     additional=["thumbnail"],
+                    lookup_cache=photos_lookup_cache,
                 )
                 item_id = item.get("id") if isinstance(item, dict) else None
                 if item_id is None:
@@ -7719,6 +7721,7 @@ class ImgDataService:
                     "searched": False,
                     "error": "shared_folder_not_found",
                 }
+            photos_lookup_cache = PhotosLookupCache()
 
             detector = InsightFaceDetector(
                 model_name=self._configuredInsightFaceModelName(),
@@ -7869,6 +7872,7 @@ class ImgDataService:
                     shared_folder=shared_folder,
                     image_path=image_path,
                     additional=["thumbnail"],
+                    lookup_cache=photos_lookup_cache,
                 )
                 item_id = item.get("id") if isinstance(item, dict) else None
                 if item_id is None:
