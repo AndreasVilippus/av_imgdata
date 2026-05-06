@@ -488,13 +488,19 @@ class ImgDataService:
     def remove_exiftool(self) -> Dict[str, Any]:
         return self.exiftool.removeInstalled()
 
-    def _readImageMetadata(self, image_path: str, *, include_unnamed_acd: bool = False) -> MetadataPayload:
+    def _readImageMetadata(self, image_path: str, *, include_unnamed_acd: bool = False, metadata_context_cache: Optional[Dict[str, Dict[str, Any]]] = None) -> MetadataPayload:
         self._raiseIfChecksStopRequested()
         self._updateChecksProgressHeartbeat(current_path=image_path)
         config = self.config.readMergedConfig()
-        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        files_config = dict(config.get("files") if isinstance(config.get("files"), dict) else {})
         use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
-        use_exiftool_for_sidecars = bool(files_config.get("USE_EXIFTOOL_FOR_SIDECARS", False))
+        use_exiftool_for_sidecars = bool(
+            files_config.get("USE_EXIFTOOL_FOR_SIDECARS", files_config.get("USE_EXIFTOOL_FOR_SIDECARDS", False))
+        )
+        sidecar_exiftool_fallback_enabled = bool(files_config.get("SIDECAR_EXIFTOOL_FALLBACK_ENABLED", False))
+        sidecar_read_mode = str(files_config.get("SIDECAR_READ_MODE", "") or "").strip().lower()
+        if sidecar_read_mode not in {"direct_first", "direct_only", "exiftool_first", "exiftool_only"}:
+            sidecar_read_mode = "direct_first" if (use_exiftool_for_sidecars or sidecar_exiftool_fallback_enabled) else "direct_only"
         prefer_exiftool_for_context = bool(files_config.get("PREFER_EXIFTOOL_FOR_CONTEXT", False))
         exiftool_available = use_exiftool and self.exiftool_handler.isAvailable()
 
@@ -502,13 +508,28 @@ class ImgDataService:
         xmp_content = None
         xmp_source = ""
 
+        exiftool_context: Optional[Dict[str, Any]] = None
+
         if xmp_path:
-            xmp_content = self.files.loadXmpFromFile(xmp_path)
-            if xmp_content:
-                xmp_source = "xmp_file"
-            elif use_exiftool_for_sidecars and exiftool_available:
-                xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
-                xmp_source = "xmp_file" if xmp_content else ""
+            if sidecar_read_mode == "exiftool_only":
+                if exiftool_available:
+                    xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
+                    xmp_source = "xmp_file" if xmp_content else ""
+            elif sidecar_read_mode == "exiftool_first":
+                if exiftool_available:
+                    xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
+                    xmp_source = "xmp_file" if xmp_content else ""
+                if not xmp_content:
+                    xmp_content = self.files.loadXmpFromFile(xmp_path)
+                    if xmp_content:
+                        xmp_source = "xmp_file"
+            else:
+                xmp_content = self.files.loadXmpFromFile(xmp_path)
+                if xmp_content:
+                    xmp_source = "xmp_file"
+                elif sidecar_read_mode == "direct_first" and exiftool_available:
+                    xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
+                    xmp_source = "xmp_file" if xmp_content else ""
 
         jpeg_context: Dict[str, Any] = {}
         if Path(image_path).suffix.lower() in {".jpg", ".jpeg"} and not prefer_exiftool_for_context:
@@ -518,16 +539,42 @@ class ImgDataService:
                 xmp_source = jpeg_context.get("xmp_source") or "embedded_xmp_parsed"
 
         if not xmp_content and exiftool_available:
-            xmp_content = self.exiftool_handler.loadEmbeddedXmp(image_path)
-            xmp_source = "embedded_xmp_exiftool" if xmp_content else ""
+            # XMP wird jetzt über readMetadataContext geladen, wenn nötig
+            if exiftool_context and exiftool_context.get("success") and exiftool_context.get("xmp_content"):
+                xmp_content = exiftool_context["xmp_content"]
+                xmp_source = "embedded_xmp_exiftool"
+            else:
+                xmp_content = self.exiftool_handler.loadEmbeddedXmp(image_path)
+                xmp_source = "embedded_xmp_exiftool" if xmp_content else ""
 
         if not xmp_content:
-            xmp_content = self.files.loadXmpFromImageParsed(image_path)
-            xmp_source = "embedded_xmp_parsed" if xmp_content else ""
+            embedded_xmp_full_scan_enabled = bool(files_config.get("EMBEDDED_XMP_FULL_SCAN_ENABLED", False))
+            embedded_xmp_full_scan_max_bytes = int(files_config.get("EMBEDDED_XMP_FULL_SCAN_MAX_BYTES", 67108864))
+            
+            if embedded_xmp_full_scan_enabled:
+                xmp_content = self.files.loadXmpFromImageParsed(image_path, max_bytes=embedded_xmp_full_scan_max_bytes)
+                xmp_source = "embedded_xmp_parsed" if xmp_content else ""
+
+        exiftool_context: Optional[Dict[str, Any]] = None
+        if exiftool_available and (prefer_exiftool_for_context or (not jpeg_context and not image_dimensions.get("width"))):
+            # Prüfe zuerst Cache, falls verfügbar
+            if metadata_context_cache and image_path in metadata_context_cache:
+                exiftool_context = metadata_context_cache[image_path]
+            else:
+                # Verwende gebündelten ExifTool-Aufruf für Kontext
+                exiftool_context = self.exiftool_handler.readMetadataContext(image_path, include_xmp=not xmp_content)
+            if exiftool_context.get("success"):
+                if not xmp_content and exiftool_context.get("xmp_content"):
+                    xmp_content = exiftool_context["xmp_content"]
+                    xmp_source = "embedded_xmp_exiftool"
 
         if prefer_exiftool_for_context and exiftool_available:
-            image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
-            image_orientation = self.exiftool_handler.readImageOrientation(image_path)
+            if exiftool_context and exiftool_context.get("success"):
+                image_dimensions = exiftool_context["image_dimensions"]
+                image_orientation = exiftool_context["image_orientation"]
+            else:
+                image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
+                image_orientation = self.exiftool_handler.readImageOrientation(image_path)
             if not image_dimensions.get("width") or not image_dimensions.get("height"):
                 image_dimensions = self.files.readImageDimensions(image_path)
             if image_orientation is None:
@@ -540,9 +587,23 @@ class ImgDataService:
             } if jpeg_context else self.files.readImageDimensions(image_path)
             image_orientation = jpeg_context.get("orientation") if jpeg_context else self.files.readJpegExifOrientation(image_path)
             if (not image_dimensions.get("width") or not image_dimensions.get("height")) and exiftool_available:
-                image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
+                if exiftool_context and exiftool_context.get("success"):
+                    image_dimensions = exiftool_context["image_dimensions"]
+                elif metadata_context_cache and image_path in metadata_context_cache:
+                    cached_context = metadata_context_cache[image_path]
+                    if cached_context.get("success"):
+                        image_dimensions = cached_context["image_dimensions"]
+                else:
+                    image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
             if image_orientation is None and exiftool_available:
-                image_orientation = self.exiftool_handler.readImageOrientation(image_path)
+                if exiftool_context and exiftool_context.get("success"):
+                    image_orientation = exiftool_context["image_orientation"]
+                elif metadata_context_cache and image_path in metadata_context_cache:
+                    cached_context = metadata_context_cache[image_path]
+                    if cached_context.get("success"):
+                        image_orientation = cached_context["image_orientation"]
+                else:
+                    image_orientation = self.exiftool_handler.readImageOrientation(image_path)
         schemas = self.files.configuredMetadataSchemas()
         return self.metadata_parser.parse(
             image_path=image_path,

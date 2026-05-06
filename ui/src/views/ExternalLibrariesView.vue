@@ -200,6 +200,19 @@
 
 						<label
 							class="config-checkbox"
+							:title="vm.$avt('config:hint_sidecar_exiftool_fallback_enabled', 'Enable ExifTool as fallback for XMP sidecars when direct reading fails, even if ExifTool is not preferred for sidecars.')"
+						>
+							<input
+								:checked="vm.externalLibrariesConfigModel.files.SIDECAR_EXIFTOOL_FALLBACK_ENABLED"
+								type="checkbox"
+								:disabled="vm.externalLibrariesSaving"
+								@change="vm.setExternalLibrariesFileConfigValue('SIDECAR_EXIFTOOL_FALLBACK_ENABLED', $event.target.checked)"
+							/>
+							<span>{{ vm.$avt('config:label_sidecar_exiftool_fallback_enabled', 'Enable ExifTool fallback for XMP sidecars') }}</span>
+						</label>
+
+						<label
+							class="config-checkbox"
 							:title="vm.$avt('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.')"
 						>
 							<input

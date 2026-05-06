@@ -745,7 +745,16 @@ src/services/config_service.py
    - `False`: direkt lesen
    - `True`: erst direkt lesen, wenn fehlgeschlagen, ExifTool versuchen
 
-2. Optional neue Option einführen, falls vollständige alte Semantik nötig ist:
+2. Neue Option für Fallback-Modus:
+
+   ```python
+   SIDECAR_EXIFTOOL_FALLBACK_ENABLED
+   ```
+
+   - `False` (Standard): Kein Fallback auf ExifTool für Sidecars
+   - `True`: Bei fehlgeschlagenem Direktlesen wird ExifTool als Fallback verwendet, auch wenn `USE_EXIFTOOL_FOR_SIDECARS=False`
+
+3. Optional SIDECAR_READ_MODE:
 
    ```python
    "SIDECAR_READ_MODE": "direct_first"
@@ -758,7 +767,7 @@ src/services/config_service.py
    - `direct_only`
    - `exiftool_only`
 
-3. Minimal-invasive Empfehlung:
+4. Minimal-invasive Empfehlung:
 
    Keine neue Option, nur Verhalten verbessern:
 
@@ -768,7 +777,7 @@ src/services/config_service.py
        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
    ```
 
-4. Bestehende Tests anpassen oder ergänzen.
+5. Bestehende Tests anpassen oder ergänzen.
 
 ## Akzeptanzkriterien
 

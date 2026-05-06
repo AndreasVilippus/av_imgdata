@@ -73,6 +73,89 @@ class TestImgDataServiceSidecarExifToolFallback(unittest.TestCase):
         load_file_mock.assert_called_once_with(xmp_path)
         load_exiftool_mock.assert_not_called()
 
+    def test_sidecar_exiftool_fallback_enabled_allows_fallback_even_when_use_exiftool_for_sidecars_disabled(self):
+        """
+        Wenn SIDECAR_EXIFTOOL_FALLBACK_ENABLED=true, wird ExifTool als Fallback für Sidecars verwendet,
+        auch wenn USE_EXIFTOOL_FOR_SIDECARS=false.
+        """
+        xmp_path = "/tmp/test_sidecar.xmp"
+
+        with patch.object(self.service.config, "readMergedConfig", return_value={
+            "files": {
+                "USE_EXIFTOOL": True,
+                "USE_EXIFTOOL_FOR_SIDECARS": False,
+                "SIDECAR_EXIFTOOL_FALLBACK_ENABLED": True,
+                "PREFER_EXIFTOOL_FOR_CONTEXT": False,
+            },
+            "metadata": {
+                "SCHEMAS": {
+                    "ACD": False,
+                    "MICROSOFT": False,
+                    "MWG_REGIONS": False,
+                }
+            }
+        }), patch.object(self.service.files, "findXmpForImage", return_value=xmp_path), patch.object(self.service.files, "loadXmpFromFile", return_value=None) as load_file_mock, patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), patch.object(self.service.exiftool_handler, "loadXmpFile", return_value="<xmp>fallback</xmp>") as load_exiftool_mock, patch.object(self.service.files, "readImageDimensions", return_value={"width": 100, "height": 80, "unit": "pixel"}), patch.object(self.service.files, "readJpegExifOrientation", return_value=1), patch.object(self.service.metadata_parser, "parse", side_effect=lambda **kwargs: kwargs) as parse_mock:
+            metadata = self.service._readImageMetadata("/tmp/photo.jpg")
+
+        self.assertEqual(metadata.get("xmp_content"), "<xmp>fallback</xmp>")
+        self.assertEqual(metadata.get("xmp_source"), "xmp_file")
+        load_file_mock.assert_called_once_with(xmp_path)
+        load_exiftool_mock.assert_called_once_with(xmp_path)
+
+    def test_sidecar_read_mode_direct_only_never_falls_back(self):
+        """
+        Wenn SIDECAR_READ_MODE=direct_only, wird ExifTool selbst bei Direktlese-Ausfall nicht genutzt.
+        """
+        xmp_path = "/tmp/test_sidecar.xmp"
+
+        with patch.object(self.service.config, "readMergedConfig", return_value={
+            "files": {
+                "USE_EXIFTOOL": True,
+                "USE_EXIFTOOL_FOR_SIDECARS": True,
+                "SIDECAR_READ_MODE": "direct_only",
+                "PREFER_EXIFTOOL_FOR_CONTEXT": False,
+            },
+            "metadata": {
+                "SCHEMAS": {
+                    "ACD": False,
+                    "MICROSOFT": False,
+                    "MWG_REGIONS": False,
+                }
+            }
+        }), patch.object(self.service.files, "findXmpForImage", return_value=xmp_path), patch.object(self.service.files, "loadXmpFromFile", return_value=None) as load_file_mock, patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), patch.object(self.service.exiftool_handler, "loadXmpFile", return_value="<xmp>fallback</xmp>") as load_exiftool_mock, patch.object(self.service.files, "readImageDimensions", return_value={"width": 100, "height": 80, "unit": "pixel"}), patch.object(self.service.files, "readJpegExifOrientation", return_value=1), patch.object(self.service.metadata_parser, "parse", side_effect=lambda **kwargs: kwargs) as parse_mock:
+            metadata = self.service._readImageMetadata("/tmp/photo.jpg")
+
+        self.assertIsNone(metadata.get("xmp_content"))
+        load_file_mock.assert_called_once_with(xmp_path)
+        load_exiftool_mock.assert_not_called()
+
+    def test_sidecar_read_mode_exiftool_only_uses_exiftool(self):
+        """
+        Wenn SIDECAR_READ_MODE=exiftool_only, wird Sidecar-XMP nur über ExifTool geladen.
+        """
+        xmp_path = "/tmp/test_sidecar.xmp"
+
+        with patch.object(self.service.config, "readMergedConfig", return_value={
+            "files": {
+                "USE_EXIFTOOL": True,
+                "USE_EXIFTOOL_FOR_SIDECARS": False,
+                "SIDECAR_READ_MODE": "exiftool_only",
+                "PREFER_EXIFTOOL_FOR_CONTEXT": False,
+            },
+            "metadata": {
+                "SCHEMAS": {
+                    "ACD": False,
+                    "MICROSOFT": False,
+                    "MWG_REGIONS": False,
+                }
+            }
+        }), patch.object(self.service.files, "findXmpForImage", return_value=xmp_path), patch.object(self.service.files, "loadXmpFromFile", return_value="<xmp>direct</xmp>") as load_file_mock, patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), patch.object(self.service.exiftool_handler, "loadXmpFile", return_value="<xmp>exiftool</xmp>") as load_exiftool_mock, patch.object(self.service.files, "readImageDimensions", return_value={"width": 100, "height": 80, "unit": "pixel"}), patch.object(self.service.files, "readJpegExifOrientation", return_value=1), patch.object(self.service.metadata_parser, "parse", side_effect=lambda **kwargs: kwargs) as parse_mock:
+            metadata = self.service._readImageMetadata("/tmp/photo.jpg")
+
+        self.assertEqual(metadata.get("xmp_content"), "<xmp>exiftool</xmp>")
+        load_file_mock.assert_not_called()
+        load_exiftool_mock.assert_called_once_with(xmp_path)
+
     def _create_minimal_jpeg_with_xmp(self, path: str, orientation: int = 6, width: int = 800, height: int = 600, xmp_payload: str = "<xmpmeta></xmpmeta>") -> None:
         exif_header = b"Exif\x00\x00"
         tiff_header = b"II*\x00\x08\x00\x00\x00"

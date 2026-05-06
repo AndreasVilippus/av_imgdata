@@ -77,6 +77,12 @@ class ConfigService:
                     "xmp_dir_stem",
                     "xmp_dir_filename",
                 ],
+                "SIDECAR_READ_MODE": "direct_first",
+                "SIDECAR_EXIFTOOL_FALLBACK_ENABLED": False,
+                "EMBEDDED_XMP_FULL_SCAN_ENABLED": False,
+                "EMBEDDED_XMP_FULL_SCAN_MAX_BYTES": 67108864,
+                "EXIFTOOL_BATCH_READ_ENABLED": False,
+                "EXIFTOOL_BATCH_SIZE": 100,
             },
             "metadata": {
                 "SCHEMAS": {
@@ -321,7 +327,33 @@ class ConfigService:
             "NAME_CONFLICTS_ENABLED": bool(review_ignore.get("NAME_CONFLICTS_ENABLED", True)),
         }
         root["review"] = review
+
+        files = root.get("files") if isinstance(root.get("files"), dict) else {}
+        use_exiftool_for_sidecars = bool(files.get("USE_EXIFTOOL_FOR_SIDECARS", files.get("USE_EXIFTOOL_FOR_SIDECARDS", False)))
+        sidecar_exiftool_fallback_enabled = bool(files.get("SIDECAR_EXIFTOOL_FALLBACK_ENABLED", False))
+        files["USE_EXIFTOOL_FOR_SIDECARS"] = use_exiftool_for_sidecars
+        files["SIDECAR_EXIFTOOL_FALLBACK_ENABLED"] = sidecar_exiftool_fallback_enabled
+        sidcar_read_mode = str(files.get("SIDECAR_READ_MODE", "") or "").strip().lower()
+        if sidcar_read_mode not in {"direct_first", "direct_only", "exiftool_first", "exiftool_only"}:
+            sidcar_read_mode = "direct_first" if (use_exiftool_for_sidecars or sidecar_exiftool_fallback_enabled) else "direct_only"
+        files["SIDECAR_READ_MODE"] = sidcar_read_mode
+        files["EMBEDDED_XMP_FULL_SCAN_ENABLED"] = bool(files.get("EMBEDDED_XMP_FULL_SCAN_ENABLED", False))
+        files["EMBEDDED_XMP_FULL_SCAN_MAX_BYTES"] = cls._clamp_int(files.get("EMBEDDED_XMP_FULL_SCAN_MAX_BYTES", 67108864), 1048576, 536870912, 67108864)
+        root["files"] = files
+
         return root
+
+    @staticmethod
+    def _clamp_int(value: Any, minimum: int, maximum: int, default: int) -> int:
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return int(default)
+        if numeric < minimum:
+            return int(minimum)
+        if numeric > maximum:
+            return int(maximum)
+        return numeric
 
     @staticmethod
     def _clamp_float(value: Any, minimum: float, maximum: float, default: float) -> float:

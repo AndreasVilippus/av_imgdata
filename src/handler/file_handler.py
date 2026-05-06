@@ -580,13 +580,16 @@ class FileHandler:
             return None
 
     @staticmethod
-    def loadXmpFromImageParsed(image_path: str) -> Optional[str]:
+    def loadXmpFromImageParsed(image_path: str, max_bytes: Optional[int] = None) -> Optional[str]:
         if not os.path.isfile(image_path):
             return None
 
         try:
             with open(image_path, "rb") as handle:
-                data = handle.read()
+                if max_bytes is not None:
+                    data = handle.read(max_bytes)
+                else:
+                    data = handle.read()
         except Exception:
             return None
 
