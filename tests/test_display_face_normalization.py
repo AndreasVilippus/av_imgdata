@@ -2279,14 +2279,20 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                  patch.object(
                      imgdata_api,
                      "_refresh_checks_mutation_state",
-                     side_effect=SessionManagerError({"error": "resume_failed"}),
-                 ):
+                     side_effect=AssertionError("name_conflicts must not re-read changed image"),
+                 ), \
+                 patch.object(
+                     imgdata_api,
+                     "_snapshot_name_conflicts_mutation_state",
+                     return_value=(None, {"message": "session_manager_error", "details": {"error": "resume_failed"}}),
+                 ) as snapshot_mock:
                 response = await imgdata_api.checks_replace_metadata_face_name(object())
                 payload = json.loads(response.body.decode("utf-8"))
                 self.assertTrue(payload["success"])
                 self.assertTrue(payload["data"]["updated"])
                 self.assertIsNone(payload["data"]["findings_update"])
                 self.assertEqual(payload["data"]["refresh_error"]["message"], "session_manager_error")
+                self.assertIsNotNone(snapshot_mock.call_args)
 
         asyncio.run(run_test())
 
@@ -3035,17 +3041,26 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                  "resolved_name": "Person Current",
                  "target_person": {"id": 42},
              }), \
-             patch.object(imgdata_api, "_refresh_checks_mutation_state", return_value={"entries": []}) as refresh_mock:
+             patch.object(
+                 imgdata_api,
+                 "_refresh_checks_mutation_state",
+                 side_effect=AssertionError("name_conflicts must not re-read changed image"),
+             ) as refresh_mock, \
+             patch.object(
+                 imgdata_api,
+                 "_snapshot_name_conflicts_mutation_state",
+                 return_value=({"entries": [], "snapshot_update": True}, None),
+             ) as snapshot_mock:
             response = asyncio.run(imgdata_api.checks_replace_metadata_face_name(None))
 
         payload = json.loads(response.body)
         self.assertTrue(payload["success"])
-        kwargs = refresh_mock.call_args.kwargs
+        self.assertIsNone(refresh_mock.call_args)
+        kwargs = snapshot_mock.call_args.kwargs
         self.assertEqual(kwargs["check_type"], "name_conflicts")
         self.assertEqual(kwargs["image_path"], "photo/test.jpg")
-        self.assertEqual(kwargs["original_face_data"]["name"], "Person Legacy")
+        self.assertEqual(kwargs["original_face_data"]["face_id"], 77)
         self.assertEqual(kwargs["replacement_face_data"]["name"], "Person Current")
-        self.assertEqual(kwargs["replacement_face_data"]["person_id"], 42)
 
     def test_checks_replace_metadata_face_name_route_forwards_create_missing_person(self):
         face = {
@@ -3079,15 +3094,27 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                  "resolved_name": "Person Current",
                  "target_person": {"id": 42},
              }) as replace_mock, \
-             patch.object(imgdata_api, "_refresh_checks_mutation_state", return_value={"entries": []}) as refresh_mock:
+             patch.object(
+                 imgdata_api,
+                 "_refresh_checks_mutation_state",
+                 side_effect=AssertionError("name_conflicts must not re-read changed image"),
+             ) as refresh_mock, \
+             patch.object(
+                 imgdata_api,
+                 "_snapshot_name_conflicts_mutation_state",
+                 return_value=({"entries": [], "snapshot_update": True}, None),
+             ) as snapshot_mock:
             response = asyncio.run(imgdata_api.checks_replace_metadata_face_name(None))
 
         payload = json.loads(response.body)
         self.assertTrue(payload["success"])
         self.assertTrue(replace_mock.call_args.kwargs["create_missing_person"])
-        kwargs = refresh_mock.call_args.kwargs
+        self.assertIsNone(refresh_mock.call_args)
+        kwargs = snapshot_mock.call_args.kwargs
+        self.assertEqual(kwargs["check_type"], "name_conflicts")
+        self.assertEqual(kwargs["image_path"], "photo/test.jpg")
+        self.assertEqual(kwargs["original_face_data"]["face_id"], 77)
         self.assertEqual(kwargs["replacement_face_data"]["name"], "Person Current")
-        self.assertEqual(kwargs["replacement_face_data"]["person_id"], 42)
 
     def test_checks_replace_metadata_face_position_route_refreshes_without_override(self):
         face = {

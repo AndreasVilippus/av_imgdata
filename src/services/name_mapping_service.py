@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
+import copy
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class NameMappingService:
@@ -15,45 +16,89 @@ class NameMappingService:
         else:
             package_var = os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")
             self._mapping_path = Path(package_var) / "name_mappings.json"
+        
+        # Cache für Mappings und Lookup-Index
+        self._cache_signature: Optional[Tuple[Any, ...]] = None
+        self._cache_mappings: Optional[List[Dict[str, Any]]] = None
+        self._cache_index: Optional[Dict[str, Dict[str, Any]]] = None
 
     @staticmethod
     def _normalize_name_value(name: Any) -> str:
         return " ".join(str(name or "").strip().casefold().split())
 
-    def readNameMappings(self) -> List[Dict[str, Any]]:
+    def _mapping_signature(self) -> Tuple[Any, ...]:
+        """
+        Berechne eine Signatur der Mapping-Datei.
+        Enthält Pfad, mtime_ns und Größe.
+        """
+        try:
+            stat = self._mapping_path.stat()
+            return (str(self._mapping_path), stat.st_mtime_ns, stat.st_size)
+        except (FileNotFoundError, OSError):
+            return (str(self._mapping_path), 0, 0)
+
+    def _load_cached(self) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        """
+        Lade Mappings mit Cache.
+        Rückgabe: (mappings_list, lookup_index)
+        """
+        signature = self._mapping_signature()
+        
+        # Cache nutzen wenn Signatur identisch
+        if (self._cache_mappings is not None and 
+            self._cache_index is not None and 
+            signature == self._cache_signature):
+            return (copy.deepcopy(self._cache_mappings), copy.deepcopy(self._cache_index))
+        
+        # Cache ungültig - neu laden
         self._last_read_error = ""
         candidate = self._mapping_path
-        if not candidate.exists() or not candidate.is_file():
-            return []
-        try:
-            with candidate.open("r", encoding="utf-8") as handle:
-                raw = json.load(handle)
-        except Exception as exc:
-            self._last_read_error = str(exc)
-            return []
-
-        if isinstance(raw, dict):
-            mappings = raw.get("name_mappings")
-        else:
-            mappings = raw
-        if not isinstance(mappings, list):
-            return []
-
-        normalized: List[Dict[str, Any]] = []
+        
+        mappings: List[Dict[str, Any]] = []
+        
+        if candidate.exists() and candidate.is_file():
+            try:
+                with candidate.open("r", encoding="utf-8") as handle:
+                    raw = json.load(handle)
+            except Exception as exc:
+                self._last_read_error = str(exc)
+                # Fallback: leere Liste
+                mappings = []
+            else:
+                if isinstance(raw, dict):
+                    raw_mappings = raw.get("name_mappings")
+                else:
+                    raw_mappings = raw
+                if isinstance(raw_mappings, list):
+                    for item in raw_mappings:
+                        if not isinstance(item, dict):
+                            continue
+                        source_name = str(item.get("source_name") or "").strip()
+                        target_name = str(item.get("target_name") or "").strip()
+                        if not source_name or not target_name:
+                            continue
+                        mappings.append({
+                            "source_name": source_name,
+                            "target_name": target_name,
+                        })
+        
+        # Build index für schnelle Lookups
+        index: Dict[str, Dict[str, Any]] = {}
         for item in mappings:
-            if not isinstance(item, dict):
-                continue
-            source_name = str(item.get("source_name") or "").strip()
-            target_name = str(item.get("target_name") or "").strip()
-            if not source_name or not target_name:
-                continue
-            normalized.append(
-                {
-                    "source_name": source_name,
-                    "target_name": target_name,
-                }
-            )
-        return normalized
+            source_key = self._normalize_name_value(item.get("source_name"))
+            if source_key:
+                index[source_key] = item
+        
+        # Cache aktualisieren
+        self._cache_signature = signature
+        self._cache_mappings = mappings
+        self._cache_index = index
+        
+        return (copy.deepcopy(mappings), copy.deepcopy(index))
+
+    def readNameMappings(self) -> List[Dict[str, Any]]:
+        mappings, _ = self._load_cached()
+        return mappings
 
     def getDebugInfo(self) -> Dict[str, Any]:
         mappings = self.readNameMappings()
@@ -94,18 +139,91 @@ class NameMappingService:
         candidate = self._mapping_path
         try:
             candidate.parent.mkdir(parents=True, exist_ok=True)
-            with candidate.open("w", encoding="utf-8") as handle:
+            # Atomar schreiben: temporäre Datei dann replace
+            temp_path = candidate.parent / f"{candidate.name}.tmp"
+            with temp_path.open("w", encoding="utf-8") as handle:
                 json.dump({"name_mappings": mappings}, handle, ensure_ascii=False, indent=2, sort_keys=True)
                 handle.write("\n")
+                handle.flush()
+            temp_path.replace(candidate)
         except Exception:
             return False
+        
+        # Cache invalidieren damit nächster Load neu liest
+        self._cache_signature = None
+        self._cache_mappings = None
+        self._cache_index = None
         return True
 
     def findNameMapping(self, source_name: str) -> Optional[Dict[str, Any]]:
         source_key = self._normalize_name_value(source_name)
         if not source_key:
             return None
-        for item in self.readNameMappings():
-            if self._normalize_name_value(item.get("source_name")) == source_key:
-                return item
-        return None
+        _, index = self._load_cached()
+        return copy.deepcopy(index.get(source_key))
+
+    def saveNameMappingsBatch(self, mappings: List[Dict[str, str]]) -> bool:
+        """
+        Speichere mehrere Name-Mappings auf einmal.
+        Nützlich für Batch-Operationen während Scanläufen.
+        
+        Args:
+            mappings: Liste von {"source_name": str, "target_name": str} Dicts
+        
+        Returns:
+            True wenn erfolgreich, False bei Fehler
+        """
+        if not isinstance(mappings, list):
+            return False
+        
+        # Aktuellen Cache laden
+        current_mappings = self.readNameMappings()
+        source_key_to_idx: Dict[str, int] = {}
+        
+        # Bestehende Mappings indexieren
+        for idx, item in enumerate(current_mappings):
+            source_key = self._normalize_name_value(item.get("source_name"))
+            if source_key:
+                source_key_to_idx[source_key] = idx
+        
+        # Neue Mappings aktualisieren oder hinzufügen
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            source_value = str(mapping.get("source_name") or "").strip()
+            target_value = str(mapping.get("target_name") or "").strip()
+            if not source_value or not target_value:
+                continue
+            
+            source_key = self._normalize_name_value(source_value)
+            if source_key in source_key_to_idx:
+                # Update existierendes Mapping
+                idx = source_key_to_idx[source_key]
+                current_mappings[idx]["source_name"] = source_value
+                current_mappings[idx]["target_name"] = target_value
+            else:
+                # Neues Mapping hinzufügen
+                current_mappings.append({
+                    "source_name": source_value,
+                    "target_name": target_value,
+                })
+                source_key_to_idx[source_key] = len(current_mappings) - 1
+        
+        # Atomar schreiben
+        candidate = self._mapping_path
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = candidate.parent / f"{candidate.name}.tmp"
+            with temp_path.open("w", encoding="utf-8") as handle:
+                json.dump({"name_mappings": current_mappings}, handle, ensure_ascii=False, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+            temp_path.replace(candidate)
+        except Exception:
+            return False
+        
+        # Cache invalidieren
+        self._cache_signature = None
+        self._cache_mappings = None
+        self._cache_index = None
+        return True

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import threading
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -7,6 +8,14 @@ from api.session_manager import SessionManager
 from services.config_service import ConfigService
 
 DEFAULT_MAX_PHOTOS_PERSONS = ConfigService.defaultConfig()["photos"]["MAX_PHOTOS_PERSONS"]
+
+
+class PhotosLookupCache:
+    def __init__(self):
+        self.folder_id_by_path: Dict[str, int] = {}
+        self.items_by_folder_id: Dict[tuple, Dict[str, Dict[str, Any]]] = {}
+        self._folders_by_parent_id: Dict[Optional[int], List[Dict[str, Any]]] = {}
+        self.lock = threading.Lock()
 
 
 class PhotosHandler:
@@ -511,6 +520,7 @@ class PhotosHandler:
         shared_folder: str,
         image_path: str,
         additional: Optional[List[str]] = None,
+        lookup_cache: Optional[PhotosLookupCache] = None,
     ) -> Optional[Dict[str, Any]]:
         try:
             relative_path = Path(str(image_path or "").strip()).relative_to(Path(str(shared_folder or "").strip()))
@@ -537,12 +547,34 @@ class PhotosHandler:
         current_folder: Optional[Dict[str, Any]] = None
 
         for folder_key in folder_keys:
-            folders = self.listFotoTeamFolders(
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                parent_id=current_parent_id,
-            )
+            cached_folder_id: Optional[int] = None
+            if lookup_cache is not None:
+                with lookup_cache.lock:
+                    cached_folder_id = lookup_cache.folder_id_by_path.get(folder_key)
+            if cached_folder_id is not None:
+                current_parent_id = cached_folder_id
+                current_folder = {"id": cached_folder_id, "name": folder_key}
+                continue
+
+            folders: Optional[List[Dict[str, Any]]] = None
+            if lookup_cache is not None:
+                with lookup_cache.lock:
+                    cached_folders = lookup_cache._folders_by_parent_id.get(current_parent_id)
+                    if cached_folders is not None:
+                        folders = [dict(folder) for folder in cached_folders if isinstance(folder, dict)]
+            if folders is None:
+                folders = self.listFotoTeamFolders(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    parent_id=current_parent_id,
+                )
+                if lookup_cache is not None:
+                    with lookup_cache.lock:
+                        lookup_cache._folders_by_parent_id[current_parent_id] = [
+                            dict(folder) for folder in folders if isinstance(folder, dict)
+                        ]
+
             next_folder = next(
                 (
                     folder for folder in folders
@@ -557,13 +589,28 @@ class PhotosHandler:
                 current_parent_id = int(next_folder.get("id"))
             except (TypeError, ValueError):
                 return None
+            if lookup_cache is not None:
+                with lookup_cache.lock:
+                    lookup_cache.folder_id_by_path[folder_key] = current_parent_id
 
         if current_parent_id is None:
             return None
 
         filename = relative_path.name
+        effective_additional = additional or ["thumbnail"]
+        cache_key = (current_parent_id, tuple(str(value) for value in effective_additional))
+        if lookup_cache is not None:
+            with lookup_cache.lock:
+                cached_items = lookup_cache.items_by_folder_id.get(cache_key)
+                if cached_items is not None:
+                    matched_item = cached_items.get(filename)
+                    if isinstance(matched_item, dict):
+                        return dict(matched_item)
+                    return None
+
         offset = 0
         page_size = 200
+        indexed_items: Dict[str, Dict[str, Any]] = {}
         while True:
             items = self.listFotoTeamItems(
                 user_key=user_key,
@@ -572,26 +619,31 @@ class PhotosHandler:
                 folder_id=current_parent_id,
                 offset=offset,
                 limit=page_size,
-                additional=additional or ["thumbnail"],
+                additional=effective_additional,
             )
             if not items:
+                if lookup_cache is not None:
+                    with lookup_cache.lock:
+                        lookup_cache.items_by_folder_id[cache_key] = indexed_items
                 return None
 
-            matched_item = next(
-                (
-                    item for item in items
-                    if isinstance(item, dict) and str(item.get("filename") or "").strip() == filename
-                ),
-                None,
-            )
-            if isinstance(matched_item, dict):
-                if current_folder and "folder_id" not in matched_item:
-                    matched_item = dict(matched_item)
-                    matched_item["folder_id"] = current_parent_id
-                return matched_item
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                item_filename = str(item.get("filename") or "").strip()
+                if not item_filename:
+                    continue
+                cached_item = dict(item)
+                if current_folder and "folder_id" not in cached_item:
+                    cached_item["folder_id"] = current_parent_id
+                indexed_items[item_filename] = cached_item
 
             if len(items) < page_size:
-                return None
+                if lookup_cache is not None:
+                    with lookup_cache.lock:
+                        lookup_cache.items_by_folder_id[cache_key] = indexed_items
+                matched_item = indexed_items.get(filename)
+                return dict(matched_item) if isinstance(matched_item, dict) else None
             offset += page_size
 
     def assignFaceToPerson(

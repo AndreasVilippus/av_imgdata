@@ -7,6 +7,8 @@ export default {
 			checksAutoApplySuggestedNames: false,
 			checksAutoApplySuggestedDuplicates: false,
 			checksLoading: false,
+			checksStopRequested: false,
+			checksFindingsActionRunning: false,
 			checksEntries: [],
 			checksCurrentIndex: 0,
 			checksStatusMessage: '',
@@ -35,8 +37,12 @@ export default {
 				&& String(progress.source_mode || '').trim().toLowerCase() === 'scan'
 				&& String(progress.check_type || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase();
 		},
+		isChecksFindingsActionRunning() {
+			return this.selectedChecksAction === 'findings'
+				&& !!this.checksFindingsActionRunning;
+		},
 		checksPrimaryButtonLabel() {
-			if (this.isChecksScanRunning) {
+			if (this.isChecksScanRunning || this.isChecksFindingsActionRunning) {
 				return this.$avt('checks:button_stop', 'Stop');
 			}
 			return this.checksLoading
@@ -95,6 +101,8 @@ export default {
 			this.checksProgress = {};
 			this.checksStatusMessage = '';
 			this.checksLoading = false;
+			this.checksStopRequested = false;
+			this.checksFindingsActionRunning = false;
 			this.checksSkipNameMappingConfirm = false;
 			this.resetChecksDuplicateAssignmentState();
 		},
@@ -671,6 +679,9 @@ export default {
 			}
 			if (matchesCurrentSelection || !progress.running) {
 				this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 				this.stopChecksProgressPolling();
 			}
 		},
@@ -830,6 +841,9 @@ export default {
 				}
 				if (!progress.running) {
 					this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 					this.stopChecksProgressPolling();
 				}
 				return progress;
@@ -842,6 +856,9 @@ export default {
 					: {};
 				if (!progress.running) {
 					this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 					this.stopChecksProgressPolling();
 				}
 				return {};
@@ -892,28 +909,28 @@ export default {
 			return withCounts(this.checksStatusMessage);
 		},
 		async stopChecksReview() {
-			if (this.checksLoading && !this.isChecksScanRunning) {
-				return;
-			}
-			this.checksLoading = true;
+			this.checksStopRequested = true;
+			this.checksFindingsActionRunning = false;
+			this.checksActionLocked = false;
+			this.checksLoading = false;
+			this.checksStatusMessage = this.$avt('checks:status_stop_requested', 'Stop requested. The current check action will stop shortly.');
 			try {
-				await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_stop', {
-					check_type: this.selectedChecksType,
-				});
-				this.checksProgress = {
-					...(this.checksProgress || {}),
-					stop_requested: true,
-					running: false,
-				};
-				this.checksStatusMessage = this.$avt('checks:status_stop_requested', 'Stop requested. The current check scan will stop shortly.');
+				await this.callChecksApi(
+					'/webman/3rdparty/AV_ImgData/index.cgi/api/checks_stop',
+					{ check_type: this.selectedChecksType },
+					{ resume: false, requireSynoToken: false }
+				);
 			} catch (err) {
-				this.checksStatusMessage = this.getApiErrorMessage(err, this.$avt('checks:status_stop_failed', 'Could not stop the current check scan.'));
-			} finally {
-				this.checksLoading = false;
-				this.stopChecksProgressPolling();
+				// For findings-list processing the local stop flag is decisive.
 			}
+			return null;
 		},
 		async startChecksReview() {
+			if (this.isChecksScanRunning || this.isChecksFindingsActionRunning) {
+				return this.stopChecksReview();
+			}
+			this.checksStopRequested = false;
+
 			if (this.isChecksScanRunning) {
 				await this.stopChecksScan();
 				return;
@@ -931,6 +948,9 @@ export default {
 			this.checksActionLocked = false;
 			this.resetChecksDuplicateAssignmentState();
 			this.checksLoading = true;
+			if (this.selectedChecksAction === 'findings') {
+				this.checksFindingsActionRunning = true;
+			}
 			this.checksStatusMessage = this.$avt('checks:status_loading', 'Loading checks...');
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_start', {
@@ -961,6 +981,9 @@ export default {
 			} finally {
 				this.checksActionLocked = false;
 				this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 			}
 		},
 		async loadChecksItemAtIndex(index) {
@@ -1070,10 +1093,16 @@ export default {
 					this.startChecksProgressPolling();
 				} else {
 					this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 					this.stopChecksProgressPolling();
 				}
 			} catch (err) {
 				this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 				this.stopChecksProgressPolling();
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			}
@@ -1107,6 +1136,9 @@ export default {
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 			}
 		},
 		async ignoreChecksCurrentItem() {
@@ -1147,6 +1179,9 @@ export default {
 				this.checksActionLocked = false;
 				if (!keepLoadingState) {
 					this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 				}
 			}
 		},
@@ -1183,6 +1218,9 @@ export default {
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 			}
 		},
 		async replaceChecksMetadataFaceName(face, newName, options = {}) {
@@ -1258,6 +1296,9 @@ export default {
 				this.checksActionLocked = false;
 				if (!keepLoadingState) {
 					this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 				}
 			}
 		},
@@ -1308,6 +1349,9 @@ export default {
 				this.checksActionLocked = false;
 				if (!keepLoadingState) {
 					this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 				}
 			}
 		},
@@ -1365,6 +1409,9 @@ export default {
 				this.checksActionLocked = false;
 				if (!keepLoadingState) {
 					this.checksLoading = false;
+				if (this.selectedChecksAction === 'findings') {
+					this.checksFindingsActionRunning = false;
+				}
 				}
 			}
 		},

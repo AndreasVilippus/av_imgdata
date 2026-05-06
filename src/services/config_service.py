@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
+import copy
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 class ConfigService:
@@ -32,6 +33,10 @@ class ConfigService:
         else:
             package_var = os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")
             self._config_path = Path(package_var) / "config.json"
+        
+        # Cache für readMergedConfig()
+        self._merged_config_cache: Optional[Dict[str, Any]] = None
+        self._merged_config_cache_signature: Optional[Tuple[Any, ...]] = None
 
     @staticmethod
     def defaultConfig() -> Dict[str, Any]:
@@ -72,6 +77,12 @@ class ConfigService:
                     "xmp_dir_stem",
                     "xmp_dir_filename",
                 ],
+                "SIDECAR_READ_MODE": "direct_first",
+                "SIDECAR_EXIFTOOL_FALLBACK_ENABLED": False,
+                "EMBEDDED_XMP_FULL_SCAN_ENABLED": False,
+                "EMBEDDED_XMP_FULL_SCAN_MAX_BYTES": 67108864,
+                "EXIFTOOL_BATCH_READ_ENABLED": False,
+                "EXIFTOOL_BATCH_SIZE": 100,
             },
             "metadata": {
                 "SCHEMAS": {
@@ -94,6 +105,12 @@ class ConfigService:
                     "SINGLE_SOURCE_OF_TRUTH": "",
                 },
             },
+            "runtime": {
+                "FINDINGS_STORAGE_FORMAT": "json",
+            },
+            "debug": {
+                "IO_METRICS_ENABLED": False,
+            },
             "review": {
                 "OPTIONS": {
                     "DUPLICATE_FACE_SUGGESTIONS": True,
@@ -107,9 +124,22 @@ class ConfigService:
         }
 
     def readMergedConfig(self) -> Dict[str, Any]:
+        signature = self._config_signature()
+        
+        # Cache nutzen wenn Signatur identisch ist
+        if self._merged_config_cache is not None and signature == self._merged_config_cache_signature:
+            return copy.deepcopy(self._merged_config_cache)
+        
+        # Cache ungültig - neu laden und cachen
         config = self.readConfig()
         self.migrateLegacyChecksIgnoreLists(config)
-        return self._deep_merge_dict(self.defaultConfig(), self.normalizeConfig(config))
+        merged = self._deep_merge_dict(self.defaultConfig(), self.normalizeConfig(config))
+        
+        # Cache aktualisieren
+        self._merged_config_cache = merged
+        self._merged_config_cache_signature = signature
+        
+        return copy.deepcopy(merged)
 
     def readConfig(self) -> Dict[str, Any]:
         candidate = self._config_path
@@ -135,6 +165,10 @@ class ConfigService:
                 handle.write("\n")
         except Exception:
             return False
+        
+        # Cache invalidieren
+        self._merged_config_cache = None
+        self._merged_config_cache_signature = None
         return True
 
     @staticmethod
@@ -190,6 +224,10 @@ class ConfigService:
                     handle.write("\n")
         except Exception:
             return False
+        
+        # Cache invalidieren
+        self._merged_config_cache = None
+        self._merged_config_cache_signature = None
         return True
 
     def appendChecksIgnoreToken(self, review_type: Any, token: Any) -> Dict[str, Any]:
@@ -208,7 +246,8 @@ class ConfigService:
         }
 
     def clearChecksIgnoreList(self, review_type: Any) -> bool:
-        return self.writeChecksIgnoreList(review_type, [])
+        result = self.writeChecksIgnoreList(review_type, [])
+        return result
 
     def getChecksIgnoreListsStatus(self) -> Dict[str, Dict[str, Any]]:
         status: Dict[str, Dict[str, Any]] = {}
@@ -234,6 +273,33 @@ class ConfigService:
             merged_values = self._normalize_checks_ignore_list([*current_values, *legacy_values])
             self.writeChecksIgnoreList(review_type, merged_values)
 
+    def _config_signature(self) -> Tuple[Any, ...]:
+        """
+        Berechne eine Signatur aller relevanten Config-Dateien.
+        Enthält mtime und Größe der Hauptconfig-Datei sowie aller Ignore-List-Dateien.
+        """
+        signature_parts: list = [
+            str(self._config_path),
+        ]
+        
+        # Hauptconfig-Datei
+        try:
+            stat = self._config_path.stat()
+            signature_parts.append((stat.st_mtime_ns, stat.st_size))
+        except (FileNotFoundError, OSError):
+            signature_parts.append((0, 0))
+        
+        # Ignore-List-Dateien
+        for review_type in sorted(self.CHECKS_IGNORE_LISTS.keys()):
+            candidate = self.checksIgnoreListPath(review_type)
+            try:
+                stat = candidate.stat()
+                signature_parts.append((review_type, stat.st_mtime_ns, stat.st_size))
+            except (FileNotFoundError, OSError, AttributeError):
+                signature_parts.append((review_type, 0, 0))
+        
+        return tuple(signature_parts)
+
     @classmethod
     def normalizeConfig(cls, config: Dict[str, Any]) -> Dict[str, Any]:
         root = cls._deep_merge_dict(cls.defaultConfig(), config if isinstance(config, dict) else {})
@@ -253,6 +319,17 @@ class ConfigService:
         }
         root["analysis"] = analysis
 
+        runtime = root.get("runtime") if isinstance(root.get("runtime"), dict) else {}
+        findings_storage_format = str(runtime.get("FINDINGS_STORAGE_FORMAT", "json") or "").strip().lower()
+        if findings_storage_format not in {"json"}:
+            findings_storage_format = "json"
+        runtime["FINDINGS_STORAGE_FORMAT"] = findings_storage_format
+        root["runtime"] = runtime
+
+        debug = root.get("debug") if isinstance(root.get("debug"), dict) else {}
+        debug["IO_METRICS_ENABLED"] = bool(debug.get("IO_METRICS_ENABLED", False))
+        root["debug"] = debug
+
         review = root.get("review") if isinstance(root.get("review"), dict) else {}
         review_options = review.get("OPTIONS") if isinstance(review.get("OPTIONS"), dict) else {}
         review_ignore = review.get("CHECKS_IGNORE_LISTS") if isinstance(review.get("CHECKS_IGNORE_LISTS"), dict) else {}
@@ -267,7 +344,35 @@ class ConfigService:
             "NAME_CONFLICTS_ENABLED": bool(review_ignore.get("NAME_CONFLICTS_ENABLED", True)),
         }
         root["review"] = review
+
+        files = root.get("files") if isinstance(root.get("files"), dict) else {}
+        use_exiftool_for_sidecars = bool(files.get("USE_EXIFTOOL_FOR_SIDECARS", files.get("USE_EXIFTOOL_FOR_SIDECARDS", False)))
+        sidecar_exiftool_fallback_enabled = bool(files.get("SIDECAR_EXIFTOOL_FALLBACK_ENABLED", False))
+        files["USE_EXIFTOOL_FOR_SIDECARS"] = use_exiftool_for_sidecars
+        files["SIDECAR_EXIFTOOL_FALLBACK_ENABLED"] = sidecar_exiftool_fallback_enabled
+        sidcar_read_mode = str(files.get("SIDECAR_READ_MODE", "") or "").strip().lower()
+        if sidcar_read_mode not in {"direct_first", "direct_only", "exiftool_first", "exiftool_only"}:
+            sidcar_read_mode = "direct_first" if (use_exiftool_for_sidecars or sidecar_exiftool_fallback_enabled) else "direct_only"
+        files["SIDECAR_READ_MODE"] = sidcar_read_mode
+        files["EMBEDDED_XMP_FULL_SCAN_ENABLED"] = bool(files.get("EMBEDDED_XMP_FULL_SCAN_ENABLED", False))
+        files["EMBEDDED_XMP_FULL_SCAN_MAX_BYTES"] = cls._clamp_int(files.get("EMBEDDED_XMP_FULL_SCAN_MAX_BYTES", 67108864), 1048576, 536870912, 67108864)
+        files["EXIFTOOL_BATCH_READ_ENABLED"] = bool(files.get("EXIFTOOL_BATCH_READ_ENABLED", False))
+        files["EXIFTOOL_BATCH_SIZE"] = cls._clamp_int(files.get("EXIFTOOL_BATCH_SIZE", 100), 1, 1000, 100)
+        root["files"] = files
+
         return root
+
+    @staticmethod
+    def _clamp_int(value: Any, minimum: int, maximum: int, default: int) -> int:
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return int(default)
+        if numeric < minimum:
+            return int(minimum)
+        if numeric > maximum:
+            return int(maximum)
+        return numeric
 
     @staticmethod
     def _clamp_float(value: Any, minimum: float, maximum: float, default: float) -> float:

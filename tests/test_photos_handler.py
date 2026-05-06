@@ -6,7 +6,7 @@ from copy import deepcopy
 
 sys.path.insert(0, os.path.abspath("src"))
 
-from handler.photos_handler import PhotosHandler
+from handler.photos_handler import PhotosHandler, PhotosLookupCache
 
 
 class DummyConfigService:
@@ -136,6 +136,107 @@ class PhotosHandlerSortTests(unittest.TestCase):
         self.assertEqual(session_manager.get_calls[1]["params"]["id"], "10")
         self.assertEqual(session_manager.get_calls[2]["api"], "SYNO.FotoTeam.Browse.Item")
         self.assertEqual(session_manager.get_calls[2]["params"]["folder_id"], "11")
+
+    def test_find_item_by_path_reuses_lookup_cache_for_same_folder(self):
+        session_manager = DummySessionManager(get_payloads=[
+            {"success": True, "data": {"list": [{"id": 10, "name": "/trip"}]}},
+            {"success": True, "data": {"list": [{"id": 11, "name": "/trip/day1"}]}},
+            {"success": True, "data": {"list": [
+                {"id": 77, "filename": "IMG_0001.JPG"},
+                {"id": 78, "filename": "IMG_0002.JPG"},
+            ]}},
+        ])
+        handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))
+        cache = PhotosLookupCache()
+
+        first = handler.findFotoTeamItemByPath(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            shared_folder="/volume1/photo",
+            image_path="/volume1/photo/trip/day1/IMG_0001.JPG",
+            lookup_cache=cache,
+        )
+        second = handler.findFotoTeamItemByPath(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            shared_folder="/volume1/photo",
+            image_path="/volume1/photo/trip/day1/IMG_0002.JPG",
+            lookup_cache=cache,
+        )
+
+        self.assertEqual(first["id"], 77)
+        self.assertEqual(second["id"], 78)
+        folder_calls = [call for call in session_manager.get_calls if call["api"] == "SYNO.FotoTeam.Browse.Folder"]
+        item_calls = [call for call in session_manager.get_calls if call["api"] == "SYNO.FotoTeam.Browse.Item"]
+        self.assertEqual(len(folder_calls), 2)
+        self.assertEqual(len(item_calls), 1)
+
+    def test_find_item_by_path_cache_handles_missing_file(self):
+        session_manager = DummySessionManager(get_payloads=[
+            {"success": True, "data": {"list": [{"id": 10, "name": "/trip"}]}},
+            {"success": True, "data": {"list": [{"id": 11, "name": "/trip/day1"}]}},
+            {"success": True, "data": {"list": [{"id": 77, "filename": "IMG_0001.JPG"}]}},
+        ])
+        handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))
+        cache = PhotosLookupCache()
+
+        missing = handler.findFotoTeamItemByPath(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            shared_folder="/volume1/photo",
+            image_path="/volume1/photo/trip/day1/MISSING.JPG",
+            lookup_cache=cache,
+        )
+        existing = handler.findFotoTeamItemByPath(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            shared_folder="/volume1/photo",
+            image_path="/volume1/photo/trip/day1/IMG_0001.JPG",
+            lookup_cache=cache,
+        )
+
+        self.assertIsNone(missing)
+        self.assertEqual(existing["id"], 77)
+        item_calls = [call for call in session_manager.get_calls if call["api"] == "SYNO.FotoTeam.Browse.Item"]
+        self.assertEqual(len(item_calls), 1)
+
+    def test_find_item_by_path_cache_is_not_global(self):
+        handler = PhotosHandler(
+            session_manager=DummySessionManager(get_payloads=[
+                {"success": True, "data": {"list": [{"id": 10, "name": "/trip"}]}},
+                {"success": True, "data": {"list": [{"id": 11, "name": "/trip/day1"}]}},
+                {"success": True, "data": {"list": [{"id": 77, "filename": "IMG_0001.JPG"}]}},
+                {"success": True, "data": {"list": [{"id": 10, "name": "/trip"}]}},
+                {"success": True, "data": {"list": [{"id": 11, "name": "/trip/day1"}]}},
+                {"success": True, "data": {"list": [{"id": 77, "filename": "IMG_0001.JPG"}]}},
+            ]),
+            config_service=DummyConfigService("id_desc"),
+        )
+
+        first = handler.findFotoTeamItemByPath(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            shared_folder="/volume1/photo",
+            image_path="/volume1/photo/trip/day1/IMG_0001.JPG",
+            lookup_cache=PhotosLookupCache(),
+        )
+        second = handler.findFotoTeamItemByPath(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            shared_folder="/volume1/photo",
+            image_path="/volume1/photo/trip/day1/IMG_0001.JPG",
+            lookup_cache=PhotosLookupCache(),
+        )
+
+        self.assertEqual(first["id"], 77)
+        self.assertEqual(second["id"], 77)
+        self.assertEqual(len(handler._session_manager.get_calls), 6)
 
 
 if __name__ == "__main__":

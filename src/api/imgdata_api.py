@@ -283,6 +283,129 @@ def _refresh_checks_mutation_state(
     return findings_update
 
 
+
+def _snapshot_name_conflicts_mutation_state(
+    session_ctx: Dict[str, Any],
+    *,
+    check_type: str,
+    image_path: str,
+    original_face_data: Optional[Dict[str, Any]] = None,
+    replacement_face_data: Optional[Dict[str, Any]] = None,
+    resolved_delta: int = 0,
+    ignored_delta: int = 0,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Update name-conflict findings from the existing snapshot without re-reading the image."""
+    normalized_type = str(check_type or "").strip().lower()
+    normalized_path = str(image_path or "").strip()
+    if normalized_type != "name_conflicts" or not normalized_path:
+        return None, None
+
+    try:
+        findings = IMGDATA.file_analysis.readCheckFindings(normalized_type)
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+
+        original = original_face_data if isinstance(original_face_data, dict) else {}
+        replacement = replacement_face_data if isinstance(replacement_face_data, dict) else {}
+        candidate_names = {
+            str(original.get("name") or original.get("face_name") or "").strip(),
+            str(original.get("old_name") or "").strip(),
+            str(replacement.get("name") or replacement.get("face_name") or "").strip(),
+            str(replacement.get("new_name") or "").strip(),
+        }
+        candidate_names = {value for value in candidate_names if value}
+        candidate_signatures = {
+            str(original.get("left_face_signature") or "").strip(),
+            str(original.get("right_face_signature") or "").strip(),
+            str(original.get("face_signature") or "").strip(),
+            str(original.get("signature") or "").strip(),
+            str(replacement.get("left_face_signature") or "").strip(),
+            str(replacement.get("right_face_signature") or "").strip(),
+            str(replacement.get("face_signature") or "").strip(),
+            str(replacement.get("signature") or "").strip(),
+        }
+        candidate_signatures = {value for value in candidate_signatures if value}
+
+        def matches_mutated_snapshot_entry(entry: Any) -> bool:
+            if not isinstance(entry, dict):
+                return False
+            if str(entry.get("image_path") or "").strip() != normalized_path:
+                return False
+            if candidate_signatures:
+                entry_signatures = {
+                    str(entry.get("left_face_signature") or "").strip(),
+                    str(entry.get("right_face_signature") or "").strip(),
+                    str(entry.get("face_signature") or "").strip(),
+                    str(entry.get("signature") or "").strip(),
+                }
+                if any(value and value in candidate_signatures for value in entry_signatures):
+                    return True
+            if candidate_names:
+                entry_names = {
+                    str(entry.get("face_name") or "").strip(),
+                    str(entry.get("name") or "").strip(),
+                    str(entry.get("left_name") or "").strip(),
+                    str(entry.get("right_name") or "").strip(),
+                }
+                if any(value and value in candidate_names for value in entry_names):
+                    return True
+            # If the request does not carry a stable token, remove all snapshot
+            # findings for the changed image. This preserves the no-re-read
+            # invariant and prevents same-image combination loops.
+            return not candidate_signatures and not candidate_names
+
+        remaining_entries = [entry for entry in entries if not matches_mutated_snapshot_entry(entry)]
+        removed_count = max(0, len(entries) - len(remaining_entries))
+
+        updated_payload = dict(findings) if isinstance(findings, dict) else {}
+        updated_payload["check_type"] = normalized_type
+        updated_payload["source_mode"] = str(updated_payload.get("source_mode") or "findings")
+        updated_payload["save_only"] = bool(updated_payload.get("save_only", False))
+        updated_payload["entries"] = remaining_entries
+        updated_payload["count"] = len(remaining_entries)
+        if resolved_delta:
+            updated_payload["resolved_count"] = max(0, int(updated_payload.get("resolved_count") or 0) + int(resolved_delta))
+        if ignored_delta:
+            updated_payload["ignored_count"] = max(0, int(updated_payload.get("ignored_count") or 0) + int(ignored_delta))
+        IMGDATA.file_analysis.writeCheckFindings(normalized_type, updated_payload)
+
+        progress = IMGDATA.getChecksProgress(session_ctx["user_key"], normalized_type)
+        if isinstance(progress, dict):
+            progress = dict(progress)
+            progress["findings_count"] = len(remaining_entries)
+            progress["last_updated_at"] = IMGDATA._utcNowIso()
+            progress["resolved_count"] = max(0, int(progress.get("resolved_count") or 0) + int(resolved_delta or 0))
+            progress["ignored_count"] = max(0, int(progress.get("ignored_count") or 0) + int(ignored_delta or 0))
+            resume_cursor = progress.get("resume_cursor")
+            if isinstance(resume_cursor, dict):
+                resume_cursor = dict(resume_cursor)
+                resume_cursor["findings_count"] = len(remaining_entries)
+                resume_cursor["resolved_count"] = progress["resolved_count"]
+                resume_cursor["ignored_count"] = progress["ignored_count"]
+                pending_entries = resume_cursor.get("pending_entries")
+                if isinstance(pending_entries, list):
+                    resume_cursor["pending_entries"] = [
+                        entry for entry in pending_entries
+                        if not matches_mutated_snapshot_entry(entry)
+                    ]
+                else:
+                    resume_cursor["pending_entries"] = []
+                progress["resume_cursor"] = resume_cursor
+            state_key = IMGDATA._checksStateKey(session_ctx["user_key"], normalized_type)
+            with IMGDATA._checks_progress_lock:
+                IMGDATA._checks_progress[state_key] = progress
+            IMGDATA.file_analysis.writeRuntimeState("checks_progress", state_key, progress)
+
+        compact = _compact_checks_findings_update(updated_payload, image_path=normalized_path)
+        if isinstance(compact, dict):
+            compact["removed_count"] = removed_count
+            compact["snapshot_update"] = True
+        return compact, None
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return None, _session_exception_response(exc, bootstrap_message="checks_mutation_snapshot_bootstrap_required")["error"]
+    except Exception as exc:
+        return None, _operation_exception_response(exc, message="checks_mutation_snapshot_failed")["error"]
+
+
 def _safe_refresh_checks_mutation_state(
     session_ctx: Dict[str, Any],
     *,
@@ -295,11 +418,19 @@ def _safe_refresh_checks_mutation_state(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     normalized_type = str(check_type or "").strip().lower()
 
-    # Name-conflict mutation refresh must not re-read the changed image.
-    # The current review list is a snapshot. Returning an empty findings_update
-    # would clear the UI list and look like an aborted check.
+    # Name-conflict mutations must not re-read the changed image.
+    # They update the persisted snapshot/finding list only, so same-image
+    # combinations cannot re-enter the active review flow.
     if normalized_type == "name_conflicts":
-        return None, None
+        return _snapshot_name_conflicts_mutation_state(
+            session_ctx,
+            check_type=check_type,
+            image_path=image_path,
+            original_face_data=original_face_data,
+            replacement_face_data=replacement_face_data,
+            resolved_delta=resolved_delta,
+            ignored_delta=ignored_delta,
+        )
 
     try:
         refresh_kwargs = {

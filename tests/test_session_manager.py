@@ -22,7 +22,11 @@ class FakeResponse:
 
 
 class FakeCookies:
-    def update(self, _cookies):
+    def __init__(self):
+        self.values = {}
+
+    def update(self, cookies):
+        self.values.update(cookies)
         return None
 
 
@@ -31,10 +35,16 @@ class FakeSession:
     post_results = []
     get_calls = []
     post_calls = []
+    instances = []
 
     def __init__(self):
         self.verify = False
         self.cookies = FakeCookies()
+        self.closed = False
+        self.__class__.instances.append(self)
+
+    def close(self):
+        self.closed = True
 
     def get(self, *args, **kwargs):
         if args:
@@ -75,6 +85,7 @@ class SessionManagerRetryTests(unittest.TestCase):
         FakeSession.post_results = []
         FakeSession.get_calls = []
         FakeSession.post_calls = []
+        FakeSession.instances = []
 
     def test_get_retries_once_on_transient_http_status(self):
         FakeSession.get_results = [
@@ -129,6 +140,79 @@ class SessionManagerRetryTests(unittest.TestCase):
         self.assertEqual(context.exception.detail["error"], "transient_post_failed")
         self.assertFalse(context.exception.detail["retryable"])
         self.assertEqual(context.exception.detail["attempts"], 1)
+
+    def test_reuses_http_session_for_same_user(self):
+        FakeSession.get_results = [
+            FakeResponse(status_code=200, payload={"success": True, "data": {"first": True}}),
+            FakeResponse(status_code=200, payload={"success": True, "data": {"second": True}}),
+        ]
+        manager = build_manager()
+
+        with patch("api.session_manager.requests.Session", FakeSession):
+            manager.call_api(
+                user_key="user",
+                cookies={"id": "cookie1"},
+                base_url="https://example.test",
+                api="SYNO.Test.Read",
+                params={"method": "first"},
+            )
+            manager.call_api(
+                user_key="user",
+                cookies={"id": "cookie2"},
+                base_url="https://example.test",
+                api="SYNO.Test.Read",
+                params={"method": "second"},
+            )
+
+        self.assertEqual(len(FakeSession.instances), 1)
+        self.assertEqual(len(FakeSession.get_calls), 2)
+        self.assertEqual(FakeSession.instances[0].cookies.values["id"], "cookie2")
+
+    def test_uses_separate_http_sessions_for_different_users(self):
+        FakeSession.get_results = [
+            FakeResponse(status_code=200, payload={"success": True, "data": {"user": 1}}),
+            FakeResponse(status_code=200, payload={"success": True, "data": {"user": 2}}),
+        ]
+        manager = build_manager()
+        manager._sessions["other"] = {
+            "sid": "other_sid",
+            "synotoken": "other_token",
+            "kk_message": "kk",
+            "account": None,
+            "base_url": "https://example.test",
+            "cookies": {},
+            "last_seen_at": "",
+        }
+
+        with patch("api.session_manager.requests.Session", FakeSession):
+            manager.call_api(
+                user_key="user",
+                cookies={"id": "cookie1"},
+                base_url="https://example.test",
+                api="SYNO.Test.Read",
+                params={"method": "first"},
+            )
+            manager.call_api(
+                user_key="other",
+                cookies={"id": "cookie2"},
+                base_url="https://example.test",
+                api="SYNO.Test.Read",
+                params={"method": "second"},
+            )
+
+        self.assertEqual(len(FakeSession.instances), 2)
+        self.assertEqual(FakeSession.instances[0].cookies.values["id"], "cookie1")
+        self.assertEqual(FakeSession.instances[1].cookies.values["id"], "cookie2")
+
+    def test_reset_http_session_closes_and_removes_session(self):
+        manager = build_manager()
+
+        with patch("api.session_manager.requests.Session", FakeSession):
+            session = manager._get_http_session("user", {"id": "cookie"})
+            manager._reset_http_session("user")
+
+        self.assertTrue(session.closed)
+        self.assertNotIn("user", manager._http_sessions)
 
 
 if __name__ == "__main__":

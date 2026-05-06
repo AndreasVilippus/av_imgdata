@@ -20,8 +20,8 @@ from uuid import uuid4
 from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
 from handler.core_handler import CoreHandler
 from handler.exiftool_handler import ExifToolHandler
-from handler.file_handler import FileHandler
-from handler.photos_handler import PhotosHandler
+from handler.file_handler import FileHandler, SidecarLookupCache
+from handler.photos_handler import PhotosHandler, PhotosLookupCache
 from models.file_face import FileFace
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
@@ -40,6 +40,82 @@ class ImgDataOperationError(Exception):
     def __init__(self, message: str, details: Dict[str, Any]):
         super().__init__(message)
         self.details = details
+
+
+class WriteDebouncer:
+    def __init__(
+        self,
+        min_interval_seconds: int,
+        min_entry_delta: int,
+        *,
+        now_func: Callable[[], float] = monotonic,
+    ):
+        self.min_interval_seconds = max(0, int(min_interval_seconds))
+        self.min_entry_delta = max(1, int(min_entry_delta))
+        self._now_func = now_func
+        self._last_flush_at = 0.0
+        self._last_entry_count = 0
+
+    def should_flush(self, *, force: bool = False, entry_count: int = 0) -> bool:
+        if force:
+            return True
+        normalized_entry_count = max(0, int(entry_count or 0))
+        if normalized_entry_count <= self._last_entry_count:
+            return False
+        if self._last_entry_count <= 0:
+            return True
+        if normalized_entry_count - self._last_entry_count >= self.min_entry_delta:
+            return True
+        return (self._now_func() - self._last_flush_at) >= self.min_interval_seconds
+
+    def mark_flushed(self, entry_count: int) -> None:
+        self._last_entry_count = max(0, int(entry_count or 0))
+        self._last_flush_at = self._now_func()
+
+
+class IoMetrics:
+    def __init__(self):
+        self.file_reads = 0
+        self.file_read_bytes = 0
+        self.file_writes = 0
+        self.file_write_bytes = 0
+        self.exiftool_calls = 0
+        self.photos_api_calls = 0
+        self.cache_hits: Dict[str, int] = {}
+        self.cache_misses: Dict[str, int] = {}
+
+    def increment_cache_hit(self, key: str) -> None:
+        normalized = str(key or "").strip()
+        if normalized:
+            self.cache_hits[normalized] = self.cache_hits.get(normalized, 0) + 1
+
+    def increment_cache_miss(self, key: str) -> None:
+        normalized = str(key or "").strip()
+        if normalized:
+            self.cache_misses[normalized] = self.cache_misses.get(normalized, 0) + 1
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "file_reads": self.file_reads,
+            "file_read_bytes": self.file_read_bytes,
+            "file_writes": self.file_writes,
+            "file_write_bytes": self.file_write_bytes,
+            "exiftool_calls": self.exiftool_calls,
+            "photos_api_calls": self.photos_api_calls,
+            "cache_hits": dict(self.cache_hits),
+            "cache_misses": dict(self.cache_misses),
+        }
+
+
+class ScanContext:
+    def __init__(self, config: Dict[str, Any]):
+        self.config = dict(config) if isinstance(config, dict) else {}
+        self.sidecar_cache = SidecarLookupCache()
+        self.photos_lookup_cache = PhotosLookupCache()
+        self.metadata_context_cache: Dict[str, Dict[str, Any]] = {}
+        self.name_mapping_index: Dict[str, Dict[str, Any]] = {}
+        debug_config = self.config.get("debug") if isinstance(self.config.get("debug"), dict) else {}
+        self.io_metrics: Optional[IoMetrics] = IoMetrics() if bool(debug_config.get("IO_METRICS_ENABLED", False)) else None
 
 
 class ImgDataService:
@@ -488,43 +564,195 @@ class ImgDataService:
     def remove_exiftool(self) -> Dict[str, Any]:
         return self.exiftool.removeInstalled()
 
-    def _readImageMetadata(self, image_path: str, *, include_unnamed_acd: bool = False) -> MetadataPayload:
+    def _readImageMetadata(
+        self,
+        image_path: str,
+        *,
+        include_unnamed_acd: bool = False,
+        metadata_context_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+        scan_context: Optional[ScanContext] = None,
+    ) -> MetadataPayload:
         self._raiseIfChecksStopRequested()
         self._updateChecksProgressHeartbeat(current_path=image_path)
-        config = self.config.readMergedConfig()
-        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        config = scan_context.config if scan_context is not None else self.config.readMergedConfig()
+        if metadata_context_cache is None and scan_context is not None:
+            metadata_context_cache = scan_context.metadata_context_cache
+        io_metrics = scan_context.io_metrics if scan_context is not None else None
+        files_config = dict(config.get("files") if isinstance(config.get("files"), dict) else {})
         use_exiftool = bool(files_config.get("USE_EXIFTOOL", False))
-        use_exiftool_for_sidecars = bool(files_config.get("USE_EXIFTOOL_FOR_SIDECARS", False))
+        use_exiftool_for_sidecars = bool(
+            files_config.get("USE_EXIFTOOL_FOR_SIDECARS", files_config.get("USE_EXIFTOOL_FOR_SIDECARDS", False))
+        )
+        sidecar_exiftool_fallback_enabled = bool(files_config.get("SIDECAR_EXIFTOOL_FALLBACK_ENABLED", False))
+        sidecar_read_mode = str(files_config.get("SIDECAR_READ_MODE", "") or "").strip().lower()
+        if sidecar_read_mode not in {"direct_first", "direct_only", "exiftool_first", "exiftool_only"}:
+            sidecar_read_mode = "direct_first" if (use_exiftool_for_sidecars or sidecar_exiftool_fallback_enabled) else "direct_only"
         prefer_exiftool_for_context = bool(files_config.get("PREFER_EXIFTOOL_FOR_CONTEXT", False))
         exiftool_available = use_exiftool and self.exiftool_handler.isAvailable()
 
-        xmp_path = self.files.findXmpForImage(image_path)
-        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path and use_exiftool_for_sidecars and exiftool_available else self.files.loadXmpFromFile(xmp_path)
-        xmp_source = "xmp_file" if xmp_content else ""
+        sidecar_cache = scan_context.sidecar_cache if scan_context is not None else None
+        xmp_path = self.files.findXmpForImage(image_path, lookup_cache=sidecar_cache)
+        xmp_content = None
+        xmp_source = ""
+
+        exiftool_context: Optional[Dict[str, Any]] = None
+
+        if xmp_path:
+            if sidecar_read_mode == "exiftool_only":
+                if exiftool_available:
+                    if io_metrics:
+                        io_metrics.exiftool_calls += 1
+                    xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
+                    xmp_source = "xmp_file" if xmp_content else ""
+            elif sidecar_read_mode == "exiftool_first":
+                if exiftool_available:
+                    if io_metrics:
+                        io_metrics.exiftool_calls += 1
+                    xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
+                    xmp_source = "xmp_file" if xmp_content else ""
+                if not xmp_content:
+                    if io_metrics:
+                        io_metrics.file_reads += 1
+                    xmp_content = self.files.loadXmpFromFile(xmp_path)
+                    if xmp_content:
+                        xmp_source = "xmp_file"
+            else:
+                if io_metrics:
+                    io_metrics.file_reads += 1
+                xmp_content = self.files.loadXmpFromFile(xmp_path)
+                if xmp_content:
+                    xmp_source = "xmp_file"
+                elif sidecar_read_mode == "direct_first" and exiftool_available:
+                    if io_metrics:
+                        io_metrics.exiftool_calls += 1
+                    xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
+                    xmp_source = "xmp_file" if xmp_content else ""
+
+        jpeg_context: Dict[str, Any] = {}
+        if Path(image_path).suffix.lower() in {".jpg", ".jpeg"} and not prefer_exiftool_for_context:
+            if io_metrics:
+                io_metrics.file_reads += 1
+            jpeg_context = self.files.readJpegContext(image_path)
+            if not xmp_content and jpeg_context.get("xmp_content"):
+                xmp_content = jpeg_context.get("xmp_content")
+                xmp_source = jpeg_context.get("xmp_source") or "embedded_xmp_parsed"
 
         if not xmp_content and exiftool_available:
-            xmp_content = self.exiftool_handler.loadEmbeddedXmp(image_path)
-            xmp_source = "embedded_xmp_exiftool" if xmp_content else ""
+            # XMP wird jetzt über readMetadataContext geladen, wenn nötig
+            if exiftool_context and exiftool_context.get("success") and exiftool_context.get("xmp_content"):
+                xmp_content = exiftool_context["xmp_content"]
+                xmp_source = "embedded_xmp_exiftool"
+            cached_context_handled = False
+            if not xmp_content and metadata_context_cache and image_path in metadata_context_cache:
+                if io_metrics:
+                    io_metrics.increment_cache_hit("metadata_context")
+                cached_context = metadata_context_cache[image_path]
+                if cached_context.get("success") and cached_context.get("xmp_content"):
+                    exiftool_context = cached_context
+                    xmp_content = cached_context["xmp_content"]
+                    xmp_source = "embedded_xmp_exiftool"
+                    cached_context_handled = True
+                elif cached_context.get("success"):
+                    exiftool_context = cached_context
+                    cached_context_handled = True
+            if not xmp_content and not cached_context_handled:
+                if io_metrics:
+                    io_metrics.exiftool_calls += 1
+                xmp_content = self.exiftool_handler.loadEmbeddedXmp(image_path)
+                xmp_source = "embedded_xmp_exiftool" if xmp_content else ""
 
         if not xmp_content:
-            xmp_content = self.files.loadXmpFromImageParsed(image_path)
-            xmp_source = "embedded_xmp_parsed" if xmp_content else ""
+            embedded_xmp_full_scan_enabled = bool(files_config.get("EMBEDDED_XMP_FULL_SCAN_ENABLED", False))
+            embedded_xmp_full_scan_max_bytes = int(files_config.get("EMBEDDED_XMP_FULL_SCAN_MAX_BYTES", 67108864))
+            
+            if embedded_xmp_full_scan_enabled:
+                if io_metrics:
+                    io_metrics.file_reads += 1
+                xmp_content = self.files.loadXmpFromImageParsed(image_path, max_bytes=embedded_xmp_full_scan_max_bytes)
+                xmp_source = "embedded_xmp_parsed" if xmp_content else ""
+
+        image_dimensions = {
+            "width": jpeg_context.get("width"),
+            "height": jpeg_context.get("height"),
+            "unit": "pixel",
+        } if jpeg_context else {"width": None, "height": None, "unit": "pixel"}
+        image_orientation = jpeg_context.get("orientation") if jpeg_context else None
+
+        if exiftool_available and prefer_exiftool_for_context:
+            # Prüfe zuerst Cache, falls verfügbar
+            if metadata_context_cache and image_path in metadata_context_cache:
+                if io_metrics:
+                    io_metrics.increment_cache_hit("metadata_context")
+                exiftool_context = metadata_context_cache[image_path]
+            else:
+                # Verwende gebündelten ExifTool-Aufruf für Kontext
+                if io_metrics:
+                    io_metrics.increment_cache_miss("metadata_context")
+                    io_metrics.exiftool_calls += 1
+                exiftool_context = self.exiftool_handler.readMetadataContext(image_path, include_xmp=not xmp_content)
+            if exiftool_context.get("success"):
+                if not xmp_content and exiftool_context.get("xmp_content"):
+                    xmp_content = exiftool_context["xmp_content"]
+                    xmp_source = "embedded_xmp_exiftool"
 
         if prefer_exiftool_for_context and exiftool_available:
-            image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
-            image_orientation = self.exiftool_handler.readImageOrientation(image_path)
+            if exiftool_context and exiftool_context.get("success"):
+                image_dimensions = exiftool_context["image_dimensions"]
+                image_orientation = exiftool_context["image_orientation"]
+            else:
+                if io_metrics:
+                    io_metrics.exiftool_calls += 2
+                image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
+                image_orientation = self.exiftool_handler.readImageOrientation(image_path)
             if not image_dimensions.get("width") or not image_dimensions.get("height"):
+                if io_metrics:
+                    io_metrics.file_reads += 1
                 image_dimensions = self.files.readImageDimensions(image_path)
             if image_orientation is None:
+                if io_metrics:
+                    io_metrics.file_reads += 1
                 image_orientation = self.files.readJpegExifOrientation(image_path)
         else:
-            image_dimensions = self.files.readImageDimensions(image_path)
-            image_orientation = self.files.readJpegExifOrientation(image_path)
+            image_dimensions = {
+                "width": jpeg_context.get("width"),
+                "height": jpeg_context.get("height"),
+                "unit": "pixel",
+            } if jpeg_context else self.files.readImageDimensions(image_path)
+            image_orientation = jpeg_context.get("orientation") if jpeg_context else self.files.readJpegExifOrientation(image_path)
             if (not image_dimensions.get("width") or not image_dimensions.get("height")) and exiftool_available:
-                image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
+                if exiftool_context and exiftool_context.get("success"):
+                    image_dimensions = exiftool_context["image_dimensions"]
+                elif metadata_context_cache and image_path in metadata_context_cache:
+                    if io_metrics:
+                        io_metrics.increment_cache_hit("metadata_context")
+                    cached_context = metadata_context_cache[image_path]
+                    if cached_context.get("success"):
+                        image_dimensions = cached_context["image_dimensions"]
+                else:
+                    if io_metrics:
+                        io_metrics.exiftool_calls += 1
+                    image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
             if image_orientation is None and exiftool_available:
-                image_orientation = self.exiftool_handler.readImageOrientation(image_path)
-        schemas = self.files.configuredMetadataSchemas()
+                if exiftool_context and exiftool_context.get("success"):
+                    image_orientation = exiftool_context["image_orientation"]
+                elif metadata_context_cache and image_path in metadata_context_cache:
+                    if io_metrics:
+                        io_metrics.increment_cache_hit("metadata_context")
+                    cached_context = metadata_context_cache[image_path]
+                    if cached_context.get("success"):
+                        image_orientation = cached_context["image_orientation"]
+                else:
+                    if io_metrics:
+                        io_metrics.exiftool_calls += 1
+                    image_orientation = self.exiftool_handler.readImageOrientation(image_path)
+        metadata_config = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
+        configured_schemas = metadata_config.get("SCHEMAS") if isinstance(metadata_config.get("SCHEMAS"), dict) else {}
+        default_schemas = ConfigService.defaultConfig()["metadata"]["SCHEMAS"]
+        schemas = {
+            "ACD": bool(configured_schemas.get("ACD", default_schemas["ACD"])),
+            "MICROSOFT": bool(configured_schemas.get("MICROSOFT", default_schemas["MICROSOFT"])),
+            "MWG_REGIONS": bool(configured_schemas.get("MWG_REGIONS", default_schemas["MWG_REGIONS"])),
+        }
         return self.metadata_parser.parse(
             image_path=image_path,
             xmp_content=xmp_content,
@@ -2541,13 +2769,13 @@ class ImgDataService:
         last_flush_count: int,
         last_flush_at: float,
     ) -> bool:
-        if entries_count <= last_flush_count:
-            return False
-        if last_flush_count <= 0:
-            return True
-        if entries_count - last_flush_count >= self.FACE_MATCH_FINDINGS_FLUSH_ENTRY_INTERVAL:
-            return True
-        return monotonic() - last_flush_at >= self.FACE_MATCH_FINDINGS_FLUSH_INTERVAL_SECONDS
+        debouncer = WriteDebouncer(
+            self.FACE_MATCH_FINDINGS_FLUSH_INTERVAL_SECONDS,
+            self.FACE_MATCH_FINDINGS_FLUSH_ENTRY_INTERVAL,
+        )
+        debouncer._last_entry_count = max(0, int(last_flush_count or 0))
+        debouncer._last_flush_at = max(0.0, float(last_flush_at or 0.0))
+        return debouncer.should_flush(entry_count=entries_count)
 
     def _writeReverseFaceMatchCandidates(
         self,
@@ -3877,6 +4105,7 @@ class ImgDataService:
         base_url: str,
         shared_folder: str,
         image_path: str,
+        photos_lookup_cache: Optional[PhotosLookupCache] = None,
     ) -> List[MetadataFace]:
         normalized_path = str(image_path or "").strip()
         if not user_key or not isinstance(cookies, dict) or not base_url or not normalized_path:
@@ -3899,6 +4128,7 @@ class ImgDataService:
                 shared_folder=resolved_shared_folder,
                 image_path=normalized_path,
                 additional=["thumbnail"],
+                lookup_cache=photos_lookup_cache,
             )
             item_id = item.get("id") if isinstance(item, dict) else None
             item_id_int = int(item_id)
@@ -4399,25 +4629,18 @@ class ImgDataService:
         if not save_only and not metrics_trusted:
             findings_count = self._countOpenChecksScanFindings(None, pending_entries)
         saved_entries: List[Dict[str, Any]] = []
-        last_checks_findings_flush_at = 0.0
-        last_checks_findings_flush_count = 0
+        checks_findings_debouncer = WriteDebouncer(
+            self.CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS,
+            self.CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL,
+        )
 
         def flush_saved_checks_findings(*, force: bool = False, status: str = "running", reason: str = "") -> bool:
-            nonlocal last_checks_findings_flush_at, last_checks_findings_flush_count
-
             if not save_only:
                 return False
             if not saved_entries and not force:
                 return False
 
-            now = monotonic()
-            entries_delta = len(saved_entries) - int(last_checks_findings_flush_count or 0)
-            if (
-                not force
-                and last_checks_findings_flush_count > 0
-                and entries_delta < self.CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL
-                and (now - last_checks_findings_flush_at) < self.CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS
-            ):
+            if not checks_findings_debouncer.should_flush(force=force, entry_count=len(saved_entries)):
                 return False
 
             self._writeChecksFindings(
@@ -4428,8 +4651,7 @@ class ImgDataService:
                 save_only=True,
                 entries=saved_entries,
             )
-            last_checks_findings_flush_at = now
-            last_checks_findings_flush_count = len(saved_entries)
+            checks_findings_debouncer.mark_flushed(len(saved_entries))
             progress_key = self._checksStateKey(user_key, check_type)
             self._updateChecksProgressHeartbeat(flush=True)
             with self._checks_progress_lock:
@@ -4991,6 +5213,7 @@ class ImgDataService:
         stopped: bool,
         stop_requested: bool,
         error: Optional[str] = None,
+        io_metrics: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "job_id": job_id,
@@ -5031,6 +5254,8 @@ class ImgDataService:
             "formats": self._nonZeroCounters(formats),
             "sources": self._nonZeroCounters(sources),
         }
+        if isinstance(io_metrics, dict):
+            payload["io_metrics"] = io_metrics
         if error:
             payload["error"] = error
         return payload
@@ -5065,6 +5290,31 @@ class ImgDataService:
             ),
         }
 
+    def _populateScanMetadataContextBatch(self, scan_context: ScanContext, image_paths: List[str]) -> None:
+        if not image_paths:
+            return
+        files_config = scan_context.config.get("files") if isinstance(scan_context.config.get("files"), dict) else {}
+        if not bool(files_config.get("USE_EXIFTOOL", False)):
+            return
+        if not bool(files_config.get("EXIFTOOL_BATCH_READ_ENABLED", False)):
+            return
+        if not self.exiftool_handler.isAvailable():
+            return
+        try:
+            batch_size = int(files_config.get("EXIFTOOL_BATCH_SIZE", 100) or 100)
+        except (TypeError, ValueError):
+            batch_size = 100
+        batch_size = max(1, min(1000, batch_size))
+        result = self.exiftool_handler.readMetadataContextBatch(
+            list(image_paths),
+            include_xmp=True,
+            batch_size=batch_size,
+        )
+        if isinstance(result, dict):
+            scan_context.metadata_context_cache.update(result)
+        if scan_context.io_metrics:
+            scan_context.io_metrics.exiftool_calls += (len(image_paths) + batch_size - 1) // batch_size
+
     def _runFileAnalysis(
         self,
         *,
@@ -5080,6 +5330,7 @@ class ImgDataService:
             base_url=base_url,
             folder_name="photo",
         )
+        scan_context = ScanContext(self.config.readMergedConfig())
         configured_extensions = self.files.effectiveImageExtensions()
         analysis_checks = self._configuredAnalysisChecks()
         extension_counts: Dict[str, int] = {ext: 0 for ext in configured_extensions}
@@ -5173,6 +5424,7 @@ class ImgDataService:
                     finished=True,
                     stopped=False,
                     stop_requested=False,
+                    io_metrics=scan_context.io_metrics.snapshot() if scan_context.io_metrics else None,
                 )
             )
             self._file_analysis_thread = None
@@ -5427,6 +5679,7 @@ class ImgDataService:
                     stop_requested=self._shouldStopFileAnalysis(),
                 )
             )
+            self._populateScanMetadataContextBatch(scan_context, matching_files)
 
             for image_path in matching_files:
                 if self._shouldStopFileAnalysis():
@@ -5492,7 +5745,11 @@ class ImgDataService:
                     self._file_analysis_thread = None
                     return
 
-                metadata_payload = self._readImageMetadata(image_path, include_unnamed_acd=True)
+                metadata_payload = self._readImageMetadata(
+                    image_path,
+                    include_unnamed_acd=True,
+                    scan_context=scan_context,
+                )
                 include_photos_for_position_deviations = bool(analysis_checks.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS"))
                 include_photos_for_name_conflicts = bool(analysis_checks.get("NAME_CONFLICTS_INCLUDE_PHOTOS"))
                 include_photos_for_checks = include_photos_for_position_deviations or include_photos_for_name_conflicts
@@ -5502,6 +5759,7 @@ class ImgDataService:
                     base_url=base_url,
                     shared_folder=shared_folder,
                     image_path=image_path,
+                    photos_lookup_cache=scan_context.photos_lookup_cache,
                 ) if include_photos_for_checks else []
                 analysis = self.files.analyzeMetadata(
                     metadata_payload,
@@ -7184,6 +7442,7 @@ class ImgDataService:
                     "searched": False,
                     "error": "shared_folder_not_found",
                 }
+            photos_lookup_cache = PhotosLookupCache()
 
             self._setFaceMatchingProgressMessage(
                 user_key,
@@ -7320,6 +7579,7 @@ class ImgDataService:
                     shared_folder=shared_folder,
                     image_path=image_path,
                     additional=["thumbnail"],
+                    lookup_cache=photos_lookup_cache,
                 )
                 item_id = item.get("id") if isinstance(item, dict) else None
                 if item_id is None:
@@ -7639,6 +7899,7 @@ class ImgDataService:
                     "searched": False,
                     "error": "shared_folder_not_found",
                 }
+            photos_lookup_cache = PhotosLookupCache()
 
             detector = InsightFaceDetector(
                 model_name=self._configuredInsightFaceModelName(),
@@ -7789,6 +8050,7 @@ class ImgDataService:
                     shared_folder=shared_folder,
                     image_path=image_path,
                     additional=["thumbnail"],
+                    lookup_cache=photos_lookup_cache,
                 )
                 item_id = item.get("id") if isinstance(item, dict) else None
                 if item_id is None:
@@ -8936,7 +9198,7 @@ class ImgDataService:
         person_id: int,
     ) -> List[int]:
         face_ids: List[int] = []
-        seen: set[int] = set()
+        seen = set()
         for item in self._listAllPhotoItemsForPerson(
             user_key=user_key,
             cookies=cookies,
