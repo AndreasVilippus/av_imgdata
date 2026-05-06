@@ -26,6 +26,61 @@ class FileAnalysisService:
         self._findings_dir = self._result_path.parent / "analysis_findings"
         self._runtime_dir = self._result_path.parent / "runtime_state"
 
+    def _json_bytes(self, payload: Dict[str, Any], *, pretty: bool = True) -> bytes:
+        """
+        Serialisiere Payload zu JSON-Bytes.
+        """
+        if pretty:
+            json_str = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+        else:
+            json_str = json.dumps(payload, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
+        return (json_str + "\n").encode("utf-8")
+
+    def _write_json_if_changed(self, path: Path, payload: Dict[str, Any], *, pretty: bool = True) -> bool:
+        """
+        Schreibe JSON-Datei nur wenn Inhalt sich ändert.
+        Atomar mit temporärer Datei.
+        
+        Returns:
+            True wenn erfolgreich (geschrieben oder unverändert), False bei Fehler
+        """
+        if not isinstance(payload, dict):
+            return False
+        
+        new_bytes = self._json_bytes(payload, pretty=pretty)
+        
+        # Prüfe ob Datei existiert und unverändert ist
+        if path.exists() and path.is_file():
+            try:
+                existing_bytes = path.read_bytes()
+                if existing_bytes == new_bytes:
+                    # Inhalt unverändert - nicht schreiben
+                    return True
+            except (FileNotFoundError, OSError):
+                pass
+        
+        # Atomar schreiben: temporäre Datei dann replace
+        temp_path = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.parent / f"{path.name}.tmp"
+            
+            # Schreibe in temporäre Datei (atomar durch write_bytes)
+            temp_path.write_bytes(new_bytes)
+            
+            # Ersetze original
+            temp_path.replace(path)
+        except Exception:
+            # Cleanup temporäre Datei falls sie noch existiert
+            if temp_path is not None:
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
+            return False
+        
+        return True
+
     def readLatestResult(self) -> Dict[str, Any]:
         candidate = self._result_path
         if not candidate.exists() or not candidate.is_file():
@@ -40,15 +95,7 @@ class FileAnalysisService:
     def writeLatestResult(self, result: Dict[str, Any]) -> bool:
         if not isinstance(result, dict):
             return False
-        candidate = self._result_path
-        try:
-            candidate.parent.mkdir(parents=True, exist_ok=True)
-            with candidate.open("w", encoding="utf-8") as handle:
-                json.dump(result, handle, ensure_ascii=False, indent=2, sort_keys=True)
-                handle.write("\n")
-        except Exception:
-            return False
-        return True
+        return self._write_json_if_changed(self._result_path, result, pretty=True)
 
     def readCheckFindings(self, finding_type: str) -> Dict[str, Any]:
         candidate = self._finding_path(finding_type)
@@ -65,14 +112,7 @@ class FileAnalysisService:
         if not isinstance(payload, dict):
             return False
         candidate = self._finding_path(finding_type)
-        try:
-            candidate.parent.mkdir(parents=True, exist_ok=True)
-            with candidate.open("w", encoding="utf-8") as handle:
-                json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-                handle.write("\n")
-        except Exception:
-            return False
-        return True
+        return self._write_json_if_changed(candidate, payload, pretty=True)
 
     def deleteCheckFindings(self, finding_type: str) -> bool:
         candidate = self._finding_path(finding_type)
@@ -99,14 +139,7 @@ class FileAnalysisService:
         if not isinstance(payload, dict):
             return False
         candidate = self._runtime_state_path(state_type, state_key)
-        try:
-            candidate.parent.mkdir(parents=True, exist_ok=True)
-            with candidate.open("w", encoding="utf-8") as handle:
-                json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-                handle.write("\n")
-        except Exception:
-            return False
-        return True
+        return self._write_json_if_changed(candidate, payload, pretty=True)
 
     def deleteRuntimeState(self, state_type: str, state_key: str) -> bool:
         candidate = self._runtime_state_path(state_type, state_key)

@@ -4,11 +4,123 @@ import re
 import struct
 import mmap
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 from services.config_service import ConfigService
 from services.exiftool_service import ExifToolService
 from models.metadata_payload import MetadataPayload
 from services.bbox_normalizer import normalize_xmp_face
+
+
+class SidecarLookupCache:
+    """
+    Cache für Sidecar-Lookups pro Scanlauf.
+    Indexiert Verzeichnisse und ermöglicht Case-insensitive Lookups ohne wiederholte Verzeichnis-Scans.
+    """
+    
+    def __init__(self):
+        self._dir_cache: Dict[str, Dict[str, str]] = {}  # dir_path -> {filename_lower: full_path}
+        self._lock = Lock()
+    
+    def find_xmp_for_image(
+        self, 
+        image_path: str, 
+        variants: List[str],
+        find_case_insensitive_func
+    ) -> Optional[str]:
+        """
+        Suche XMP-Sidecar für Image mit Cache.
+        
+        Args:
+            image_path: Pfad zum Bild
+            variants: Configurierte Lookup-Varianten
+            find_case_insensitive_func: Callback für Case-insensitive Path-Suche
+        
+        Returns:
+            Pfad zur XMP-Datei oder None
+        """
+        directory = os.path.dirname(image_path)
+        filename = os.path.basename(image_path)
+        name_no_ext, _ = os.path.splitext(filename)
+        
+        if not os.path.isdir(directory):
+            return None
+        
+        candidate_parts: List[List[str]] = []
+        if "same_dir_stem" in variants:
+            candidate_parts.append([f"{name_no_ext}.xmp"])
+        if "same_dir_filename" in variants:
+            candidate_parts.append([f"{filename}.xmp"])
+        if "xmp_dir_stem" in variants:
+            candidate_parts.append(["xmp", f"{name_no_ext}.xmp"])
+        if "xmp_dir_filename" in variants:
+            candidate_parts.append(["xmp", f"{filename}.xmp"])
+        
+        for parts in candidate_parts:
+            matched = self._find_with_cache(directory, parts, find_case_insensitive_func)
+            if matched and os.path.isfile(matched):
+                return matched
+        return None
+    
+    def _find_with_cache(self, directory: str, parts: List[str], find_func) -> Optional[str]:
+        """
+        Suche Pfad mit Cache für das erste Verzeichnis.
+        """
+        if not parts:
+            return None
+        
+        # Für mehrstufige Pfade (z.B. xmp/file.xmp) nur das top-level Dir cachen
+        top_dir = directory
+        remaining_parts = parts
+        
+        # Wenn mehrere parts (z.B. xmp-Verzeichnis), suche zuerst das xmp-Dir
+        if len(parts) > 1:
+            xmp_subdir = parts[0]
+            with self._lock:
+                if top_dir not in self._dir_cache:
+                    self._dir_cache[top_dir] = self._index_directory(top_dir)
+                dir_cache = self._dir_cache[top_dir]
+            
+            xmp_dir_lower = xmp_subdir.lower()
+            xmp_dir_full = None
+            for cached_name, cached_path in dir_cache.items():
+                if cached_name == xmp_dir_lower:
+                    xmp_dir_full = cached_path
+                    break
+            
+            if not xmp_dir_full or not os.path.isdir(xmp_dir_full):
+                return None
+            
+            # Jetzt suche Datei im xmp-Verzeichnis
+            top_dir = xmp_dir_full
+            remaining_parts = parts[1:]
+        
+        # Indexiere das aktuelle Verzeichnis falls noch nicht geschehen
+        with self._lock:
+            if top_dir not in self._dir_cache:
+                self._dir_cache[top_dir] = self._index_directory(top_dir)
+            dir_cache = self._dir_cache[top_dir]
+        
+        # Suche Datei im Cache (case-insensitive)
+        if len(remaining_parts) == 1:
+            filename_lower = remaining_parts[0].lower()
+            return dir_cache.get(filename_lower)
+        
+        return None
+    
+    def _index_directory(self, directory: str) -> Dict[str, str]:
+        """
+        Indexiere ein Verzeichnis: {filename_lower: full_path}.
+        """
+        index: Dict[str, str] = {}
+        try:
+            for entry in os.listdir(directory):
+                full_path = os.path.join(directory, entry)
+                entry_lower = entry.lower()
+                index[entry_lower] = full_path
+        except (FileNotFoundError, PermissionError, OSError):
+            pass
+        return index
 
 
 class FileHandler:
@@ -422,7 +534,7 @@ class FileHandler:
 
         return str(current) if current.exists() else None
 
-    def findXmpForImage(self, image_path: str) -> Optional[str]:
+    def findXmpForImage(self, image_path: str, lookup_cache: Optional[SidecarLookupCache] = None) -> Optional[str]:
         directory = os.path.dirname(image_path)
         filename = os.path.basename(image_path)
         name_no_ext, _ = os.path.splitext(filename)
@@ -430,6 +542,16 @@ class FileHandler:
             return None
 
         variants = self.configuredSidecarLookupVariants()
+        
+        # Nutze Cache wenn verfügbar
+        if lookup_cache is not None:
+            return lookup_cache.find_xmp_for_image(
+                image_path,
+                variants,
+                self._findCaseInsensitivePath
+            )
+        
+        # Fallback auf direkte Suche ohne Cache
         candidate_parts: List[List[str]] = []
         if "same_dir_stem" in variants:
             candidate_parts.append([f"{name_no_ext}.xmp"])
@@ -654,6 +776,118 @@ class FileHandler:
         if suffix == ".png":
             return FileHandler._readPngDimensions(image_path)
         return {"width": None, "height": None, "unit": "pixel"}
+
+    @staticmethod
+    def readJpegContext(image_path: str, *, include_xmp: bool = True, max_scan_bytes: int = 64 * 1024 * 1024) -> Dict[str, Any]:
+        context = {
+            "width": None,
+            "height": None,
+            "unit": "pixel",
+            "orientation": None,
+            "xmp_content": None,
+            "xmp_source": "",
+            "scanned_bytes": 0,
+            "complete": False,
+        }
+
+        suffix = Path(image_path).suffix.lower()
+        if suffix not in {".jpg", ".jpeg"}:
+            return context
+
+        try:
+            with open(image_path, "rb") as handle:
+                header = handle.read(2)
+                context["scanned_bytes"] = len(header)
+                if len(header) < 2 or header != b"\xff\xd8":
+                    return context
+
+                sof_markers = {
+                    0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                    0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+                }
+
+                while True:
+                    if max_scan_bytes is not None and context["scanned_bytes"] >= max_scan_bytes:
+                        context["complete"] = False
+                        return context
+
+                    prefix = handle.read(1)
+                    if not prefix:
+                        context["complete"] = True
+                        return context
+                    context["scanned_bytes"] += 1
+                    if prefix != b"\xff":
+                        continue
+
+                    marker = handle.read(1)
+                    if not marker:
+                        context["complete"] = True
+                        return context
+                    context["scanned_bytes"] += 1
+                    while marker == b"\xff":
+                        marker = handle.read(1)
+                        if not marker:
+                            context["complete"] = True
+                            return context
+                        context["scanned_bytes"] += 1
+
+                    if marker == b"\x00":
+                        continue
+
+                    code = marker[0]
+                    if code in {0xD8, 0xD9}:
+                        continue
+                    if code == 0xDA:
+                        context["complete"] = True
+                        return context
+
+                    length_bytes = handle.read(2)
+                    if len(length_bytes) < 2:
+                        context["complete"] = True
+                        return context
+                    context["scanned_bytes"] += 2
+
+                    segment_length = struct.unpack(">H", length_bytes)[0]
+                    if segment_length < 2:
+                        context["complete"] = True
+                        return context
+
+                    segment_size = segment_length - 2
+                    segment_data = handle.read(segment_size)
+                    context["scanned_bytes"] += len(segment_data)
+                    if len(segment_data) != segment_size:
+                        context["complete"] = True
+                        return context
+
+                    if code in sof_markers and segment_size >= 7:
+                        try:
+                            context["height"] = struct.unpack(">H", segment_data[1:3])[0]
+                            context["width"] = struct.unpack(">H", segment_data[3:5])[0]
+                        except Exception:
+                            pass
+
+                    if include_xmp and code == 0xE1:
+                        if segment_data.startswith(b"Exif\x00\x00"):
+                            tiff_start = 6
+                            orientation = FileHandler._readExifOrientationFromTiff(segment_data, tiff_start, len(segment_data))
+                            if orientation is not None:
+                                context["orientation"] = orientation
+                        elif segment_data.startswith(b"http://ns.adobe.com/xap/1.0/\x00"):
+                            try:
+                                xmp_payload = segment_data[len(b"http://ns.adobe.com/xap/1.0/\x00"):]
+                                context["xmp_content"] = xmp_payload.decode("utf-8", errors="replace")
+                                context["xmp_source"] = "embedded_xmp_parsed"
+                            except Exception:
+                                pass
+
+                    if context["width"] is not None and context["height"] is not None and context["orientation"] is not None and (not include_xmp or context["xmp_content"] is not None):
+                        context["complete"] = True
+                        return context
+
+        except Exception:
+            return context
+
+        return context
 
     @staticmethod
     def _readPngDimensions(image_path: str) -> Dict[str, Any]:

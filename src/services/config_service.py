@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
+import copy
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 class ConfigService:
@@ -32,6 +33,10 @@ class ConfigService:
         else:
             package_var = os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")
             self._config_path = Path(package_var) / "config.json"
+        
+        # Cache für readMergedConfig()
+        self._merged_config_cache: Optional[Dict[str, Any]] = None
+        self._merged_config_cache_signature: Optional[Tuple[Any, ...]] = None
 
     @staticmethod
     def defaultConfig() -> Dict[str, Any]:
@@ -107,9 +112,22 @@ class ConfigService:
         }
 
     def readMergedConfig(self) -> Dict[str, Any]:
+        signature = self._config_signature()
+        
+        # Cache nutzen wenn Signatur identisch ist
+        if self._merged_config_cache is not None and signature == self._merged_config_cache_signature:
+            return copy.deepcopy(self._merged_config_cache)
+        
+        # Cache ungültig - neu laden und cachen
         config = self.readConfig()
         self.migrateLegacyChecksIgnoreLists(config)
-        return self._deep_merge_dict(self.defaultConfig(), self.normalizeConfig(config))
+        merged = self._deep_merge_dict(self.defaultConfig(), self.normalizeConfig(config))
+        
+        # Cache aktualisieren
+        self._merged_config_cache = merged
+        self._merged_config_cache_signature = signature
+        
+        return copy.deepcopy(merged)
 
     def readConfig(self) -> Dict[str, Any]:
         candidate = self._config_path
@@ -135,6 +153,10 @@ class ConfigService:
                 handle.write("\n")
         except Exception:
             return False
+        
+        # Cache invalidieren
+        self._merged_config_cache = None
+        self._merged_config_cache_signature = None
         return True
 
     @staticmethod
@@ -190,6 +212,10 @@ class ConfigService:
                     handle.write("\n")
         except Exception:
             return False
+        
+        # Cache invalidieren
+        self._merged_config_cache = None
+        self._merged_config_cache_signature = None
         return True
 
     def appendChecksIgnoreToken(self, review_type: Any, token: Any) -> Dict[str, Any]:
@@ -208,7 +234,8 @@ class ConfigService:
         }
 
     def clearChecksIgnoreList(self, review_type: Any) -> bool:
-        return self.writeChecksIgnoreList(review_type, [])
+        result = self.writeChecksIgnoreList(review_type, [])
+        return result
 
     def getChecksIgnoreListsStatus(self) -> Dict[str, Dict[str, Any]]:
         status: Dict[str, Dict[str, Any]] = {}
@@ -233,6 +260,33 @@ class ConfigService:
             current_values = self.readChecksIgnoreList(review_type)
             merged_values = self._normalize_checks_ignore_list([*current_values, *legacy_values])
             self.writeChecksIgnoreList(review_type, merged_values)
+
+    def _config_signature(self) -> Tuple[Any, ...]:
+        """
+        Berechne eine Signatur aller relevanten Config-Dateien.
+        Enthält mtime und Größe der Hauptconfig-Datei sowie aller Ignore-List-Dateien.
+        """
+        signature_parts: list[Any] = [
+            str(self._config_path),
+        ]
+        
+        # Hauptconfig-Datei
+        try:
+            stat = self._config_path.stat()
+            signature_parts.append((stat.st_mtime_ns, stat.st_size))
+        except (FileNotFoundError, OSError):
+            signature_parts.append((0, 0))
+        
+        # Ignore-List-Dateien
+        for review_type in sorted(self.CHECKS_IGNORE_LISTS.keys()):
+            candidate = self.checksIgnoreListPath(review_type)
+            try:
+                stat = candidate.stat()
+                signature_parts.append((review_type, stat.st_mtime_ns, stat.st_size))
+            except (FileNotFoundError, OSError, AttributeError):
+                signature_parts.append((review_type, 0, 0))
+        
+        return tuple(signature_parts)
 
     @classmethod
     def normalizeConfig(cls, config: Dict[str, Any]) -> Dict[str, Any]:

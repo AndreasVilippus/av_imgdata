@@ -499,8 +499,23 @@ class ImgDataService:
         exiftool_available = use_exiftool and self.exiftool_handler.isAvailable()
 
         xmp_path = self.files.findXmpForImage(image_path)
-        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path and use_exiftool_for_sidecars and exiftool_available else self.files.loadXmpFromFile(xmp_path)
-        xmp_source = "xmp_file" if xmp_content else ""
+        xmp_content = None
+        xmp_source = ""
+
+        if xmp_path:
+            xmp_content = self.files.loadXmpFromFile(xmp_path)
+            if xmp_content:
+                xmp_source = "xmp_file"
+            elif use_exiftool_for_sidecars and exiftool_available:
+                xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
+                xmp_source = "xmp_file" if xmp_content else ""
+
+        jpeg_context: Dict[str, Any] = {}
+        if Path(image_path).suffix.lower() in {".jpg", ".jpeg"} and not prefer_exiftool_for_context:
+            jpeg_context = self.files.readJpegContext(image_path)
+            if not xmp_content and jpeg_context.get("xmp_content"):
+                xmp_content = jpeg_context.get("xmp_content")
+                xmp_source = jpeg_context.get("xmp_source") or "embedded_xmp_parsed"
 
         if not xmp_content and exiftool_available:
             xmp_content = self.exiftool_handler.loadEmbeddedXmp(image_path)
@@ -518,8 +533,12 @@ class ImgDataService:
             if image_orientation is None:
                 image_orientation = self.files.readJpegExifOrientation(image_path)
         else:
-            image_dimensions = self.files.readImageDimensions(image_path)
-            image_orientation = self.files.readJpegExifOrientation(image_path)
+            image_dimensions = {
+                "width": jpeg_context.get("width"),
+                "height": jpeg_context.get("height"),
+                "unit": "pixel",
+            } if jpeg_context else self.files.readImageDimensions(image_path)
+            image_orientation = jpeg_context.get("orientation") if jpeg_context else self.files.readJpegExifOrientation(image_path)
             if (not image_dimensions.get("width") or not image_dimensions.get("height")) and exiftool_available:
                 image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
             if image_orientation is None and exiftool_available:
