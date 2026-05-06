@@ -285,6 +285,16 @@ class TestConfigServiceDefaults(unittest.TestCase):
 
         self.assertFalse(config["debug"]["IO_METRICS_ENABLED"])
 
+    def test_exiftool_batch_size_is_normalized(self):
+        service = ConfigService(str(self.config_file))
+        with self.config_file.open("w") as f:
+            json.dump({"files": {"EXIFTOOL_BATCH_READ_ENABLED": True, "EXIFTOOL_BATCH_SIZE": 5000}}, f)
+
+        config = service.readMergedConfig()
+
+        self.assertTrue(config["files"]["EXIFTOOL_BATCH_READ_ENABLED"])
+        self.assertEqual(config["files"]["EXIFTOOL_BATCH_SIZE"], 1000)
+
 
 if __name__ == "__main__":
     unittest.main()

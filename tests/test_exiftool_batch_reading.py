@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath("src"))
 
 from api.session_manager import SessionManager
 from handler.exiftool_handler import ExifToolHandler
-from imgdata import ImgDataService
+from imgdata import ImgDataService, ScanContext
 
 
 class TestExifToolBatchReading(unittest.TestCase):
@@ -254,6 +254,8 @@ class TestExifToolBatchReading(unittest.TestCase):
                 }
             }), patch.object(self.service.files, "findXmpForImage", return_value=None), \
                  patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
+                 patch.object(self.service.exiftool_handler, "loadEmbeddedXmp", side_effect=AssertionError("batch cache should provide XMP")), \
+                 patch.object(self.service.exiftool_handler, "readMetadataContext", side_effect=AssertionError("batch cache should provide context")), \
                  patch.object(self.service.metadata_parser, "parse", side_effect=lambda **kwargs: kwargs) as parse_mock:
                 
                 metadata = self.service._readImageMetadata(path, metadata_context_cache=cache)
@@ -265,6 +267,61 @@ class TestExifToolBatchReading(unittest.TestCase):
             self.assertEqual(metadata.get("image_orientation"), 6)
         finally:
             os.unlink(path)
+
+    def test_populateScanMetadataContextBatch_uses_configured_batch(self):
+        config = {
+            "files": {
+                "USE_EXIFTOOL": True,
+                "EXIFTOOL_BATCH_READ_ENABLED": True,
+                "EXIFTOOL_BATCH_SIZE": 2,
+            },
+            "metadata": {
+                "SCHEMAS": {
+                    "ACD": False,
+                    "MICROSOFT": False,
+                    "MWG_REGIONS": False,
+                }
+            },
+            "debug": {
+                "IO_METRICS_ENABLED": True,
+            },
+        }
+        context = ScanContext(config)
+        expected = {
+            "/tmp/test1.jpg": {"success": True, "image_dimensions": {"width": 1, "height": 1, "unit": "pixel"}},
+            "/tmp/test2.jpg": {"success": True, "image_dimensions": {"width": 2, "height": 2, "unit": "pixel"}},
+            "/tmp/test3.jpg": {"success": True, "image_dimensions": {"width": 3, "height": 3, "unit": "pixel"}},
+        }
+
+        with patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
+             patch.object(self.service.exiftool_handler, "readMetadataContextBatch", return_value=expected) as batch_mock:
+            self.service._populateScanMetadataContextBatch(
+                context,
+                ["/tmp/test1.jpg", "/tmp/test2.jpg", "/tmp/test3.jpg"],
+            )
+
+        batch_mock.assert_called_once_with(
+            ["/tmp/test1.jpg", "/tmp/test2.jpg", "/tmp/test3.jpg"],
+            include_xmp=True,
+            batch_size=2,
+        )
+        self.assertEqual(context.metadata_context_cache, expected)
+        self.assertEqual(context.io_metrics.snapshot()["exiftool_calls"], 2)
+
+    def test_populateScanMetadataContextBatch_stays_disabled_by_default(self):
+        context = ScanContext({
+            "files": {
+                "USE_EXIFTOOL": True,
+                "EXIFTOOL_BATCH_READ_ENABLED": False,
+                "EXIFTOOL_BATCH_SIZE": 2,
+            }
+        })
+
+        with patch.object(self.service.exiftool_handler, "readMetadataContextBatch") as batch_mock:
+            self.service._populateScanMetadataContextBatch(context, ["/tmp/test1.jpg"])
+
+        batch_mock.assert_not_called()
+        self.assertEqual(context.metadata_context_cache, {})
 
 
 if __name__ == "__main__":

@@ -356,6 +356,8 @@ class ConfigService:
         files["SIDECAR_READ_MODE"] = sidcar_read_mode
         files["EMBEDDED_XMP_FULL_SCAN_ENABLED"] = bool(files.get("EMBEDDED_XMP_FULL_SCAN_ENABLED", False))
         files["EMBEDDED_XMP_FULL_SCAN_MAX_BYTES"] = cls._clamp_int(files.get("EMBEDDED_XMP_FULL_SCAN_MAX_BYTES", 67108864), 1048576, 536870912, 67108864)
+        files["EXIFTOOL_BATCH_READ_ENABLED"] = bool(files.get("EXIFTOOL_BATCH_READ_ENABLED", False))
+        files["EXIFTOOL_BATCH_SIZE"] = cls._clamp_int(files.get("EXIFTOOL_BATCH_SIZE", 100), 1, 1000, 100)
         root["files"] = files
 
         return root

@@ -100,6 +100,23 @@ class ScanContextTests(unittest.TestCase):
         self.assertEqual(metadata["image_dimensions"], {"width": 50, "height": 40, "unit": "pixel"})
         self.assertEqual(metadata["image_orientation"], 6)
 
+    def test_loadPhotoFacesForImage_forwards_photos_lookup_cache(self):
+        context = ScanContext(scan_config())
+
+        with patch.object(self.service.photos, "findFotoTeamItemByPath", return_value={"id": 42}) as find_mock, \
+             patch.object(self.service.photos, "list_faceFotoTeamItems", return_value=[]):
+            faces = self.service._loadPhotoFacesForImage(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                shared_folder="/volume1/photo",
+                image_path="/volume1/photo/trip/image.jpg",
+                photos_lookup_cache=context.photos_lookup_cache,
+            )
+
+        self.assertEqual(faces, [])
+        self.assertIs(find_mock.call_args.kwargs["lookup_cache"], context.photos_lookup_cache)
+
 
 if __name__ == "__main__":
     unittest.main()
