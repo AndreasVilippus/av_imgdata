@@ -268,6 +268,41 @@ class TestExifToolBatchReading(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_readImageMetadata_falls_back_when_batch_cache_failed(self):
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:
+            path = handle.name
+            handle.write(b"\xff\xd8\xff\xd9")
+
+        try:
+            cache = {path: {"success": False, "xmp_content": None, "error": "failed"}}
+
+            with patch.object(self.service.config, "readMergedConfig", return_value={
+                "files": {
+                    "USE_EXIFTOOL": True,
+                    "USE_EXIFTOOL_FOR_SIDECARS": False,
+                    "PREFER_EXIFTOOL_FOR_CONTEXT": False,
+                    "EXIFTOOL_BATCH_READ_ENABLED": True,
+                },
+                "metadata": {
+                    "SCHEMAS": {
+                        "ACD": False,
+                        "MICROSOFT": False,
+                        "MWG_REGIONS": False,
+                    }
+                }
+            }), patch.object(self.service.files, "findXmpForImage", return_value=None), \
+                 patch.object(self.service.files, "readJpegContext", return_value={"width": 10, "height": 10, "unit": "pixel", "orientation": 1}), \
+                 patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
+                 patch.object(self.service.exiftool_handler, "loadEmbeddedXmp", return_value="<xmp>fallback</xmp>") as fallback_mock, \
+                 patch.object(self.service.metadata_parser, "parse", side_effect=lambda **kwargs: kwargs):
+                metadata = self.service._readImageMetadata(path, metadata_context_cache=cache)
+
+            fallback_mock.assert_called_once_with(path)
+            self.assertEqual(metadata.get("xmp_content"), "<xmp>fallback</xmp>")
+            self.assertEqual(metadata.get("xmp_source"), "embedded_xmp_exiftool")
+        finally:
+            os.unlink(path)
+
     def test_populateScanMetadataContextBatch_uses_configured_batch(self):
         config = {
             "files": {

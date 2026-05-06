@@ -642,7 +642,8 @@ class ImgDataService:
             if exiftool_context and exiftool_context.get("success") and exiftool_context.get("xmp_content"):
                 xmp_content = exiftool_context["xmp_content"]
                 xmp_source = "embedded_xmp_exiftool"
-            elif metadata_context_cache and image_path in metadata_context_cache:
+            cached_context_handled = False
+            if not xmp_content and metadata_context_cache and image_path in metadata_context_cache:
                 if io_metrics:
                     io_metrics.increment_cache_hit("metadata_context")
                 cached_context = metadata_context_cache[image_path]
@@ -650,7 +651,11 @@ class ImgDataService:
                     exiftool_context = cached_context
                     xmp_content = cached_context["xmp_content"]
                     xmp_source = "embedded_xmp_exiftool"
-            else:
+                    cached_context_handled = True
+                elif cached_context.get("success"):
+                    exiftool_context = cached_context
+                    cached_context_handled = True
+            if not xmp_content and not cached_context_handled:
                 if io_metrics:
                     io_metrics.exiftool_calls += 1
                 xmp_content = self.exiftool_handler.loadEmbeddedXmp(image_path)
