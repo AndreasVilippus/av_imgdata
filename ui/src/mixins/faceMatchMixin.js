@@ -105,6 +105,64 @@ export default {
 				return acc;
 			}, {});
 		},
+		faceMatchHasActiveProgressState() {
+			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
+				? this.faceMatchProgress
+				: {};
+			return !!(
+				this.faceMatchLoading
+				|| progress.running
+				|| progress.stop_requested
+				|| progress.message_key
+				|| progress.message
+				|| Object.keys(progress).length
+			);
+		},
+		faceMatchNumberFrom(...values) {
+			for (const value of values) {
+				const numeric = Number(value);
+				if (Number.isFinite(numeric) && numeric > 0) {
+					return numeric;
+				}
+			}
+			return 0;
+		},
+		faceMatchFileProgressTotal() {
+			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
+				? this.faceMatchProgress
+				: {};
+			const displayed = this.faceMatchDisplayedProgress || {};
+			const current = this.faceMatchFileProgressCurrent;
+			return Math.max(
+				current,
+				this.faceMatchNumberFrom(
+					progress.total_images,
+					progress.files_total,
+					progress.total_files,
+					progress.images_total,
+					progress.target_faces_total,
+					progress.metadata_faces_total,
+					displayed.images_read,
+					displayed.target_faces_read,
+					displayed.metadata_faces_read
+				)
+			);
+		},
+		faceMatchFileProgressCurrent() {
+			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
+				? this.faceMatchProgress
+				: {};
+			const displayed = this.faceMatchDisplayedProgress || {};
+			return this.faceMatchNumberFrom(
+				progress.images_read,
+				progress.files_scanned,
+				progress.files_read,
+				progress.current,
+				displayed.images_read,
+				displayed.target_faces_read,
+				displayed.metadata_faces_read
+			);
+		},
 		faceMatchPersonsTotal() {
 			return Math.max(0, Number(this.faceMatchProgress && this.faceMatchProgress.persons_total) || 0);
 		},
@@ -114,13 +172,20 @@ export default {
 			return total > 0 ? Math.min(checked, total) : checked;
 		},
 		faceMatchShowPersonsProgress() {
-			return !this.faceMatchShowStoredFindingsProgress && this.faceMatchPersonsTotal > 0 && !this.faceMatchIsFileSourceAction;
+			return !this.faceMatchShowStoredFindingsProgress
+				&& !this.faceMatchIsFileSourceAction
+				&& (
+					this.faceMatchPersonsTotal > 0
+					|| this.faceMatchHasActiveProgressState
+				);
 		},
 		faceMatchShowFileProgress() {
-			return !this.faceMatchShowStoredFindingsProgress && this.faceMatchIsFileSourceAction && (
-				this.faceMatchLoading
-				|| !!(this.faceMatchProgress && Object.keys(this.faceMatchProgress).length)
-			);
+			return !this.faceMatchShowStoredFindingsProgress
+				&& this.faceMatchIsFileSourceAction
+				&& (
+					this.faceMatchFileProgressTotal > 0
+					|| this.faceMatchHasActiveProgressState
+				);
 		},
 		faceMatchShowStoredFindingsProgress() {
 			return this.faceMatchReviewingStoredFindings && this.faceMatchStoredFindingsTotal > 0;

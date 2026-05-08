@@ -35,8 +35,7 @@ export default {
 				? this.checksProgress
 				: {};
 			return !!progress.running
-				&& String(progress.source_mode || '').trim().toLowerCase() === 'scan'
-				&& String(progress.check_type || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase();
+				&& String(progress.source_mode || '').trim().toLowerCase() === 'scan';
 		},
 		isChecksFindingsActionRunning() {
 			return this.selectedChecksAction === 'findings'
@@ -176,8 +175,42 @@ export default {
 			this.checksDuplicateAssignments.left.name = String(item && item.left_name || '').trim();
 			this.checksDuplicateAssignments.right.name = String(item && item.right_name || '').trim();
 		},
+		applyChecksProgressUpdate(progress) {
+			if (!progress || typeof progress !== 'object') {
+				return false;
+			}
+			const sourceMode = String(progress.source_mode || '').trim().toLowerCase();
+			const checkType = String(progress.check_type || '').trim().toLowerCase();
+			this.checksProgress = {
+				...(this.checksProgress && typeof this.checksProgress === 'object' ? this.checksProgress : {}),
+				...progress,
+			};
+			if (sourceMode === 'scan' && progress.running) {
+				if (checkType) {
+					this.selectedChecksType = checkType;
+				}
+				if (this.selectedChecksAction !== 'scan') {
+					this.selectedChecksAction = 'scan';
+				}
+				this.checksLoading = false;
+				this.checksStartRequestInFlight = false;
+				this.checksFindingsActionRunning = false;
+				this.startChecksProgressPolling();
+			}
+			return true;
+		},
 		async callChecksApi(apiPath, body = {}, options = {}) {
-			return this.callDsmApi(apiPath, body, options);
+			const response = await this.callDsmApi(apiPath, body, options);
+			const apiPathText = String(apiPath || '');
+			if (apiPathText.includes('checks_start') || apiPathText.includes('checks_progress')) {
+				try {
+					const root = this.getResponseData(response);
+					this.applyChecksProgressUpdate(root);
+				} catch (err) {
+					// Keep the original API response behavior unchanged.
+				}
+			}
+			return response;
 		},
 		getChecksImageUrl(item) {
 			const imagePath = item && item.image_path ? String(item.image_path).trim() : '';
@@ -561,6 +594,25 @@ export default {
 				.map((counter) => this.formatChecksStatusCounter(counter))
 				.filter(Boolean)
 				.join(' · ');
+		},
+		getChecksSaveOnlyFindingsCount(progress = this.checksProgress) {
+			const current = progress && typeof progress === 'object' ? progress : {};
+			const sourceMode = String(current.source_mode || '').trim().toLowerCase();
+			const isRunningSaveOnlyScan = sourceMode === 'scan' && !!current.running && !!current.save_only;
+			const scanValues = [
+				Number(current.findings_count),
+				Number(current.last_flush_count),
+				Number(current.saved_findings_count),
+				Number(current.found_count),
+			].filter((value) => Number.isFinite(value));
+			if (isRunningSaveOnlyScan) {
+				return scanValues.length ? Math.max(0, ...scanValues) : 0;
+			}
+			const values = [
+				...scanValues,
+				Number(this.checksStoredFindingsCount),
+			].filter((value) => Number.isFinite(value));
+			return values.length ? Math.max(0, ...values) : 0;
 		},
 		getChecksProgressStatusText() {
 			const progress = this.checksProgress && typeof this.checksProgress === 'object' ? this.checksProgress : {};

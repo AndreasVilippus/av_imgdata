@@ -70,7 +70,7 @@
 				<div class="sm-section-title">{{ vm.$avt('checks:status_title', 'Status') }}</div>
 			</div>
 			<div
-				v-if="vm.selectedChecksAction === 'scan' && (vm.checksLoading || (vm.checksProgress && Object.keys(vm.checksProgress).length))"
+				v-if="vm.isChecksScanRunning || (vm.selectedChecksAction === 'scan' && (vm.checksLoading || (vm.checksProgress && Object.keys(vm.checksProgress).length)))"
 				class="sm-status-progress"
 			>
 				<ProgressOverviewCard

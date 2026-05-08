@@ -92,9 +92,9 @@
 						<div v-if="vm.faceMatchShowFileProgress" class="sm-status-progress">
 							<ProgressOverviewCard
 								:title="vm.$avt('face_match:label_images', 'Images')"
-								:count="Number(vm.faceMatchProgress.total_images) || 0"
-								:current="Number(vm.faceMatchProgress.images_read) || 0"
-								:total="Number(vm.faceMatchProgress.total_images) || 0"
+								:count="vm.faceMatchFileProgressTotal"
+								:current="vm.faceMatchFileProgressCurrent"
+								:total="vm.faceMatchFileProgressTotal"
 								:primary-label="vm.$avt('cleanup:label_scanned', 'scanned')"
 								:secondary-label="vm.$avt('checks:label_remaining', 'remaining')"
 								:status-text="vm.faceMatchStatusHeadline"

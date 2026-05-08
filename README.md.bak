@@ -42,45 +42,16 @@ ExifTool can also be installed from within the package UI, but this is optional.
 
 The package is built with the Synology toolkit and `pkgscripts-ng`.
 
-The expected toolkit workspace layout is:
+To build it, clone this repository into the toolkit's `source/` directory so that the package is available as `source/av_imgdata`.
 
-```text
-toolkit/
-├── pkgscripts-ng/
-└── source/
-    └── av_imgdata/
-```
+At installation time, the package creates and uses its own Python virtual environment for backend dependencies.
 
-Use the package build wrapper from the toolkit root:
-
-```bash
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake -c av_imgdata
-```
-
-The wrapper performs the required preflight steps before invoking the Synology
-toolkit package build:
-
-1. run the Python test suite
-2. install UI dependencies with `pnpm`
-3. build the UI
-4. invoke `pkgscripts-ng/PkgCreate.py` with the provided arguments
-
-If any Python test or the UI build fails, the package build is not started.
-
-Arguments passed to `build-package.sh` are forwarded to `PkgCreate.py`.
-For example:
-
-```bash
-source/av_imgdata/tools/build-package.sh -v 7.3 -p apollolake -c av_imgdata
-```
-
-Before the first build, prepare the Synology toolkit environment, for example:
+Example setup flow from the toolkit root:
 
 ```bash
 cd pkgscripts-ng
 ./EnvDeploy -v 7.3 -p geminilake
-cd ..
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake -c av_imgdata
+./PkgCreate.py -v 7.3 -p geminilake -c av_imgdata
 ```
 
 Generated packages are collected by the toolkit in:
@@ -89,36 +60,23 @@ Generated packages are collected by the toolkit in:
 result_spk/
 ```
 
-Depending on the toolkit configuration, both a regular package and a
-`_debug.spk` may be generated.
+Depending on the toolkit configuration, both a regular package and a `_debug.spk` may be generated.
 
 ## UI Development
 
-The package UI is located in [`ui/`](./ui) and is based on Vue 2 with Synology
-DSM UI components.
+The package UI is located in [`ui/`](./ui) and is based on Vue 2 with Synology DSM UI components.
 
-Useful commands for UI-only development:
+Useful commands:
 
 ```bash
-cd ui
+cd source/av_imgdata/ui
 pnpm install
 pnpm run build
 ```
 
-For package builds, use the package build wrapper instead:
+Note:
 
-```bash
-cd ../..
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake -c av_imgdata
-```
-
-The wrapper runs the Python tests and UI build before invoking the Synology
-toolkit. This keeps local package builds aligned with the expected release
-preflight checks.
-
-Notes:
-
-- The package build itself is driven by the Synology toolkit.
+- The package build itself is still driven by the Synology toolkit.
 - The DSM desktop app configuration is defined in [`ui/app.config`](./ui/app.config).
 - UI texts follow Synology's `texts/<locale>/strings` structure.
 
