@@ -70,7 +70,7 @@ log "Building Synology package"
 cd "${TOOLKIT_ROOT}"
 
 if [[ "$#" -gt 0 ]]; then
-  python3 "${PKGCREATE}" "$@"
+  python3 "${PKGCREATE}" "$@" av_imgdata
 else
   python3 "${PKGCREATE}" "${DEFAULT_ARGS[@]}"
 fi

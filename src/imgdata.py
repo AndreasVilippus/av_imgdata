@@ -1629,16 +1629,30 @@ class ImgDataService:
 
     def _runningChecksScanProgress(self, user_key: str, *, exclude_check_type: Any = "") -> Optional[Dict[str, Any]]:
         excluded_type = self._normalizeChecksType(exclude_check_type) if str(exclude_check_type or "").strip() else ""
+
+        def is_running_scan(progress: Any, candidate_type: str) -> bool:
+            return (
+                isinstance(progress, dict)
+                and bool(progress.get("running"))
+                and str(progress.get("source_mode") or "").strip().lower() == "scan"
+                and str(progress.get("check_type") or "").strip().lower() == candidate_type
+            )
+
         for candidate_type in self._checksTypeOptions():
             if excluded_type and candidate_type == excluded_type:
                 continue
+
+            state_key = self._checksStateKey(user_key, candidate_type)
+            with self._checks_progress_lock:
+                memory_progress = dict(self._checks_progress.get(state_key, {}))
+
+            if is_running_scan(memory_progress, candidate_type):
+                return memory_progress
+
             progress = self.getChecksProgress(user_key, candidate_type)
-            if (
-                progress.get("running")
-                and str(progress.get("source_mode") or "").strip().lower() == "scan"
-                and str(progress.get("check_type") or "").strip().lower() == candidate_type
-            ):
+            if is_running_scan(progress, candidate_type):
                 return progress
+
         return None
 
     def _buildChecksStartBlockedPayload(self, running_progress: Dict[str, Any], *, requested_check_type: str) -> Dict[str, Any]:
@@ -4549,7 +4563,8 @@ class ImgDataService:
             current = self.getChecksProgress(user_key, check_type)
             state_key = self._checksStateKey(user_key, check_type)
             worker = self._checks_threads.get(state_key)
-            if current.get("running") and worker and worker.is_alive():
+            current_source_mode = str(current.get("source_mode") or "").strip().lower() if isinstance(current, dict) else ""
+            if current.get("running") and current_source_mode == "scan":
                 return self._buildChecksStartBlockedPayload(
                     current,
                     requested_check_type=check_type,
