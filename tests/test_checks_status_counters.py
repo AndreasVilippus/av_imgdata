@@ -6,6 +6,7 @@ def test_checks_status_counter_ui_is_wired():
     mixin = Path('ui/src/mixins/checksMixin.js').read_text(encoding='utf-8')
 
     assert 'getChecksProgressStatusText()' in view
+    assert 'class="face-match-status-message">{{ vm.getChecksProgressStatusText() }}</div>' in view
     assert 'face-match-status-counters' not in view
     assert 'getRelevantChecksStatusCounters()' in mixin
     assert 'getChecksCountersStatusSuffix()' in mixin

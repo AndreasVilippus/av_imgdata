@@ -126,6 +126,7 @@ class ImgDataService:
     FACE_MATCH_FINDINGS_FLUSH_ENTRY_INTERVAL = 25
     CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS = 60
     CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL = 25
+    CHECKS_AUTO_APPLY_MAX_ACTIONS_PER_CALL = 25
 
     def __init__(self, session_manager: SessionManager):
         self.session_manager = session_manager
@@ -409,12 +410,34 @@ class ImgDataService:
             }
 
     def _clearChecksStopRequest(self, *, user_key: str = "", check_type: str = "") -> None:
+        normalized_user = str(user_key or "").strip()
+        normalized_type = self._normalizeChecksType(check_type) if str(check_type or "").strip() else ""
+        progress_state_keys: List[str] = []
+        if normalized_user and normalized_type:
+            progress_state_keys.append(self._checksStateKey(normalized_user, normalized_type))
+        elif normalized_user:
+            progress_state_keys.extend(
+                self._checksStateKey(normalized_user, candidate_type)
+                for candidate_type in self._checksTypeOptions()
+            )
         with self._checks_progress_lock:
             if not hasattr(self, "_checks_stop_requests"):
                 self._checks_stop_requests = {}
             for key in self._checksProgressKeys(user_key, check_type):
                 self._checks_stop_requests.pop(key, None)
             self._checks_stop_requests.pop("*", None)
+            for state_key in progress_state_keys:
+                progress = dict(self._checks_progress.get(state_key, {}))
+                if not progress:
+                    progress = self.file_analysis.readRuntimeState("checks_progress", state_key)
+                    progress = dict(progress) if isinstance(progress, dict) else {}
+                if not isinstance(progress, dict) or not progress.get("stop_requested"):
+                    continue
+                progress["stop_requested"] = False
+                progress.pop("stop_requested_at", None)
+                progress["last_updated_at"] = self._timestamp_now()
+                self._checks_progress[state_key] = progress
+                self.file_analysis.writeRuntimeState("checks_progress", state_key, progress)
 
     def requestStopChecks(self, user_key: str = "", check_type: str = "") -> Dict[str, Any]:
         normalized_user = str(user_key or "").strip()
@@ -2295,14 +2318,31 @@ class ImgDataService:
         auto_applied_count = 0
         seen_entry_tokens = set()
         try:
-            auto_apply_limit = int(max_auto_apply_actions) if max_auto_apply_actions is not None else 0
+            auto_apply_limit = int(max_auto_apply_actions) if max_auto_apply_actions is not None else self.CHECKS_AUTO_APPLY_MAX_ACTIONS_PER_CALL
         except (TypeError, ValueError):
-            auto_apply_limit = 0
+            auto_apply_limit = self.CHECKS_AUTO_APPLY_MAX_ACTIONS_PER_CALL
+        auto_apply_limit = max(1, auto_apply_limit)
 
         def auto_apply_limit_reached() -> bool:
             return auto_apply_limit > 0 and auto_applied_count >= auto_apply_limit
 
+        def stop_requested() -> bool:
+            review_type = str(normalized_entry.get("review_type") or "").strip().lower()
+            return self._shouldStopChecks(str(user_key or ""), review_type)
+
+        def stopped_result() -> Dict[str, Any]:
+            return {
+                "entry": None,
+                "item": None,
+                "auto_applied_count": auto_applied_count,
+                "processed_entry_tokens": list(seen_entry_tokens),
+                "stop_requested": True,
+                "finished": True,
+            }
+
         while True:
+            if stop_requested():
+                return stopped_result()
             if not include_item and not auto_apply_suggested_names and not auto_apply_suggested_duplicates:
                 return {
                     "entry": normalized_entry,
@@ -2318,7 +2358,13 @@ class ImgDataService:
                 shared_folder=shared_folder,
             )
             if not item:
-                break
+                return {
+                    "entry": None,
+                    "item": None,
+                    "auto_applied_count": auto_applied_count,
+                    "processed_entry_tokens": list(seen_entry_tokens),
+                    "finished": True,
+                }
 
             action = (
                 self._getSuggestedNameConflictRename(item)
@@ -2332,7 +2378,13 @@ class ImgDataService:
             )
             if not action:
                 if not delete_action:
-                    continue
+                    return {
+                        "entry": normalized_entry,
+                        "item": item,
+                        "auto_applied_count": auto_applied_count,
+                        "processed_entry_tokens": list(seen_entry_tokens),
+                        "finished": True,
+                    }
             if delete_action:
                 current_entry_token = self._checksEntryToken(normalized_entry)
                 if current_entry_token:
@@ -2359,6 +2411,42 @@ class ImgDataService:
                         "auto_apply_limit_reached": True,
                         "finished": True,
                     }
+                if stop_requested():
+                    return stopped_result()
+                if (
+                    self._isChecksFacePairType(item.get("review_type"))
+                    and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
+                ):
+                    return {
+                        "entry": None,
+                        "item": None,
+                        "auto_applied_count": auto_applied_count,
+                        "processed_entry_tokens": list(seen_entry_tokens),
+                    }
+                next_entry = next(
+                    (
+                        candidate
+                        for candidate in self._buildCheckEntriesForType(
+                            image_path=str(item.get("image_path") or ""),
+                            review_type=str(item.get("review_type") or ""),
+                            user_key=user_key,
+                            cookies=cookies,
+                            base_url=base_url,
+                            shared_folder=shared_folder,
+                        )
+                        if self._checksEntryToken(candidate) not in seen_entry_tokens
+                    ),
+                    None,
+                )
+                if not next_entry:
+                    return {
+                        "entry": None,
+                        "item": None,
+                        "auto_applied_count": auto_applied_count,
+                        "processed_entry_tokens": list(seen_entry_tokens),
+                    }
+                normalized_entry = next_entry
+                continue
             if not action:
                 return {
                     "entry": normalized_entry,
@@ -2378,7 +2466,13 @@ class ImgDataService:
             if current_entry_token:
                 seen_entry_tokens.add(current_entry_token)
             if not result.get("updated"):
-                continue
+                return {
+                    "entry": normalized_entry,
+                    "item": item,
+                    "auto_applied_count": auto_applied_count,
+                    "auto_apply_warning": str(result.get("warning") or ""),
+                    "finished": True,
+                }
 
             auto_applied_count += 1
             if auto_apply_limit_reached():
@@ -2389,16 +2483,49 @@ class ImgDataService:
                     "processed_entry_tokens": list(seen_entry_tokens),
                     "auto_apply_limit_reached": True,
                 }
+            if stop_requested():
+                return stopped_result()
+            if str(item.get("review_type") or "").strip().lower() == "name_conflicts":
+                return {
+                    "entry": None,
+                    "item": None,
+                    "auto_applied_count": auto_applied_count,
+                    "processed_entry_tokens": list(seen_entry_tokens),
+                    "finished": True,
+                }
             if (
                 self._isChecksFacePairType(item.get("review_type"))
+                and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
             ):
-                print(f"DEBUG: returning because face pair type, review_type={item.get('review_type')}")
                 return {
                     "entry": None,
                     "item": None,
                     "auto_applied_count": auto_applied_count,
                     "processed_entry_tokens": list(seen_entry_tokens),
                 }
+            next_entry = next(
+                (
+                    candidate
+                    for candidate in self._buildCheckEntriesForType(
+                        image_path=str(item.get("image_path") or ""),
+                        review_type=str(item.get("review_type") or ""),
+                        user_key=user_key,
+                        cookies=cookies,
+                        base_url=base_url,
+                        shared_folder=shared_folder,
+                    )
+                    if self._checksEntryToken(candidate) not in seen_entry_tokens
+                ),
+                None,
+            )
+            if not next_entry:
+                return {
+                    "entry": None,
+                    "item": None,
+                    "auto_applied_count": auto_applied_count,
+                    "processed_entry_tokens": list(seen_entry_tokens),
+                }
+            normalized_entry = next_entry
 
     def _runFaceMatching(
         self,
@@ -3740,9 +3867,11 @@ class ImgDataService:
 
         entries: List[Dict[str, Any]] = []
         for (_, _), grouped_faces in grouped.items():
+            self._raiseIfChecksStopRequested()
             if len(grouped_faces) < 2:
                 continue
             for index in range(len(grouped_faces) - 1):
+                self._raiseIfChecksStopRequested()
                 left = grouped_faces[index]
                 right = grouped_faces[index + 1]
                 entries.append(
@@ -4146,12 +4275,14 @@ class ImgDataService:
             faces.extend(photo_faces)
         entries: List[Dict[str, Any]] = []
         for index, left in enumerate(faces):
+            self._raiseIfChecksStopRequested()
             left_name = str(left.name or "").strip().casefold()
             left_format = str(left.source_format or "").strip().upper()
             if not left_name or not left_format:
                 continue
             normalized_left = to_display_face(left)
             for right in faces[index + 1:]:
+                self._raiseIfChecksStopRequested()
                 right_name = str(right.name or "").strip().casefold()
                 right_format = str(right.source_format or "").strip().upper()
                 if left_name != right_name or left_format == right_format:
@@ -4222,28 +4353,74 @@ class ImgDataService:
         faces = list(payload.faces)
         if photo_faces:
             faces.extend(photo_faces)
+        analysis_checks = self._configuredAnalysisChecks()
+        overlap_threshold = float(analysis_checks.get("NAME_CONFLICT_OVERLAP_THRESHOLD", 0.75))
+        require_mutual_best_match = bool(analysis_checks.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH", True))
+        min_best_match_margin = float(analysis_checks.get("NAME_CONFLICT_MIN_BEST_MATCH_MARGIN", 0.05))
+        normalized_faces = [to_display_face(face) for face in faces]
+        best_matches: Dict[int, Tuple[int, float, float]] = {}
+        if require_mutual_best_match:
+            for index, left in enumerate(faces):
+                self._raiseIfChecksStopRequested()
+                left_name = str(left.name or "").strip()
+                left_format = str(left.source_format or "").strip().upper()
+                if not left_name or not left_format:
+                    continue
+                scored: List[Tuple[int, float]] = []
+                for other_index, right in enumerate(faces):
+                    self._raiseIfChecksStopRequested()
+                    if index == other_index:
+                        continue
+                    right_name = str(right.name or "").strip()
+                    right_format = str(right.source_format or "").strip().upper()
+                    if not right_name or not right_format or left_format == right_format:
+                        continue
+                    score = self.files._faceOverlapScore(normalized_faces[index], normalized_faces[other_index])
+                    if score > 0:
+                        scored.append((other_index, score))
+                scored.sort(key=lambda item: item[1], reverse=True)
+                if scored:
+                    best_score = scored[0][1]
+                    second_score = scored[1][1] if len(scored) > 1 else 0.0
+                    best_matches[index] = (scored[0][0], best_score, best_score - second_score)
+
         entries: List[Dict[str, Any]] = []
+        seen_tokens = set()
         for index, left in enumerate(faces):
+            self._raiseIfChecksStopRequested()
             left_name = str(left.name or "").strip()
             if not left_name:
                 continue
-            normalized_left = to_display_face(left)
-            for right in faces[index + 1:]:
+            for other_index, right in enumerate(faces[index + 1:], start=index + 1):
+                self._raiseIfChecksStopRequested()
                 right_name = str(right.name or "").strip()
                 if not right_name or left_name.casefold() == right_name.casefold():
                     continue
-                normalized_right = to_display_face(right)
-                if not self.files._boxesOverlapStrongly(normalized_left, normalized_right):
+                score = self.files._faceOverlapScore(normalized_faces[index], normalized_faces[other_index])
+                if score < overlap_threshold:
                     continue
-                entries.append(
-                    self._buildCheckEntry(
-                        review_type="name_conflicts",
-                        image_path=image_path,
-                        face_name=left_name,
-                        left_face=left,
-                        right_face=right,
-                    )
+                if require_mutual_best_match:
+                    left_best = best_matches.get(index)
+                    right_best = best_matches.get(other_index)
+                    if not left_best or not right_best:
+                        continue
+                    if left_best[0] != other_index or right_best[0] != index:
+                        continue
+                    if left_best[2] < min_best_match_margin or right_best[2] < min_best_match_margin:
+                        continue
+                entry = self._buildCheckEntry(
+                    review_type="name_conflicts",
+                    image_path=image_path,
+                    face_name=left_name,
+                    left_face=left,
+                    right_face=right,
                 )
+                token = self._checksEntryToken(entry)
+                if token and token in seen_tokens:
+                    continue
+                if token:
+                    seen_tokens.add(token)
+                entries.append(entry)
         return entries
 
     def _buildNameConflictReviewItem(
@@ -4505,6 +4682,40 @@ class ImgDataService:
                     ignored_count=0,
                 ),
             )
+        except ImgDataOperationError as exc:
+            details = exc.details if isinstance(exc.details, dict) else {}
+            if str(details.get("code") or "") == "checks_stop_requested":
+                current_progress = self.getChecksProgress(user_key, check_type)
+                current_resume_cursor = current_progress.get("resume_cursor") if isinstance(current_progress.get("resume_cursor"), dict) else {}
+                self._setChecksProgressMessage(
+                    user_key,
+                    check_type,
+                    "checks:progress_stopped",
+                    message="Checks scan stopped.",
+                    running=False,
+                    finished=True,
+                    stop_requested=True,
+                    save_only=save_only,
+                    source_mode="scan",
+                    files_scanned=int(current_progress.get("files_scanned") or 0),
+                    total_files=int(current_progress.get("total_files") or 0),
+                    findings_count=int(current_progress.get("findings_count") or 0),
+                    resolved_count=int(current_progress.get("resolved_count") or 0),
+                    ignored_count=int(current_progress.get("ignored_count") or 0),
+                    current_path=str(current_progress.get("current_path") or ""),
+                    resume_cursor=current_resume_cursor or resume_cursor or self._buildChecksResumeCursor(
+                        path_index=0,
+                        pending_entries=[],
+                        source_mode="scan",
+                        check_type=check_type,
+                        save_only=save_only,
+                        findings_count=0,
+                        resolved_count=0,
+                        ignored_count=0,
+                    ),
+                )
+                return
+            raise
         except Exception as exc:
             self._setChecksProgressMessage(
                 user_key,
@@ -4663,6 +4874,22 @@ class ImgDataService:
                 base_url=base_url,
                 shared_folder=shared_folder,
             )
+            if resolved.get("stop_requested"):
+                return self._buildChecksScanPayload(
+                    check_type=check_type,
+                    save_only=save_only,
+                    files_scanned=min(path_index, total_files),
+                    total_files=total_files,
+                    findings_count=findings_count,
+                    resolved_count=resolved_count + int(resolved.get("auto_applied_count") or 0),
+                    ignored_count=ignored_count,
+                    path_index=path_index,
+                    pending_entries=[entry] + remaining_entries if entry else remaining_entries,
+                    current_path=str((entry or {}).get("image_path") or ""),
+                    message_key="checks:progress_stopped",
+                    message="Checks scan stopped.",
+                    message_params={"count": findings_count},
+                )
             entry = resolved.get("entry")
             item = resolved.get("item")
             auto_applied_count = int(resolved.get("auto_applied_count") or 0)
@@ -4676,15 +4903,25 @@ class ImgDataService:
                     resolved_count += auto_applied_count
                 target_entry = entry or pending_entries[0]
                 target_image_path = str(target_entry.get("image_path") or "").strip()
-                rebuilt_same_image_entries = self._rebuildChecksEntriesForImageAfterMutation(
-                    image_path=target_image_path,
-                    review_type=str(target_entry.get("review_type") or check_type),
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    shared_folder=shared_folder,
-                    excluded_tokens=processed_entry_tokens,
-                )
+                if check_type == "name_conflicts":
+                    rebuilt_same_image_entries = self._excludeChecksEntriesByTokens(
+                        [
+                            candidate
+                            for candidate in remaining_entries
+                            if str(candidate.get("image_path") or "").strip() == target_image_path
+                        ],
+                        processed_entry_tokens,
+                    )
+                else:
+                    rebuilt_same_image_entries = self._rebuildChecksEntriesForImageAfterMutation(
+                        image_path=target_image_path,
+                        review_type=str(target_entry.get("review_type") or check_type),
+                        user_key=user_key,
+                        cookies=cookies,
+                        base_url=base_url,
+                        shared_folder=shared_folder,
+                        excluded_tokens=processed_entry_tokens,
+                    )
                 other_remaining_entries = [
                     candidate
                     for candidate in remaining_entries
@@ -4699,13 +4936,16 @@ class ImgDataService:
                 if refreshed_pending_entries:
                     entry = refreshed_pending_entries[0]
                     remaining_entries = refreshed_pending_entries[1:]
-                    item = self.getChecksReviewItem(
-                        entry=entry,
-                        user_key=user_key,
-                        cookies=cookies,
-                        base_url=base_url,
-                        shared_folder=shared_folder,
-                    )
+                    if check_type == "name_conflicts":
+                        item = None
+                    else:
+                        item = self.getChecksReviewItem(
+                            entry=entry,
+                            user_key=user_key,
+                            cookies=cookies,
+                            base_url=base_url,
+                            shared_folder=shared_folder,
+                        )
                 else:
                     entry = None
                     item = None
@@ -4827,7 +5067,28 @@ class ImgDataService:
                     base_url=base_url,
                     shared_folder=shared_folder,
                 )
+                if resolved.get("stop_requested"):
+                    return self._buildChecksScanPayload(
+                        check_type=check_type,
+                        save_only=save_only,
+                        files_scanned=scanned_count,
+                        total_files=total_files,
+                        findings_count=findings_count,
+                        resolved_count=resolved_count + int(resolved.get("auto_applied_count") or 0),
+                        ignored_count=ignored_count,
+                        path_index=index + 1,
+                        pending_entries=entries,
+                        current_path=image_path,
+                        message_key="checks:progress_stopped",
+                        message="Checks scan stopped.",
+                        message_params={"count": findings_count},
+                    )
                 auto_applied_count = int(resolved.get("auto_applied_count") or 0)
+                processed_entry_tokens = [
+                    str(token or "").strip()
+                    for token in resolved.get("processed_entry_tokens") or []
+                    if str(token or "").strip()
+                ]
                 if auto_applied_count:
                     if check_type == "name_conflicts":
                         resolved_count += auto_applied_count
@@ -4867,14 +5128,17 @@ class ImgDataService:
 
                 refreshed_entries = entries
                 if auto_applied_count:
-                    refreshed_entries = self._buildCheckEntriesForType(
-                        image_path=image_path,
-                        review_type=check_type,
-                        user_key=user_key,
-                        cookies=cookies,
-                        base_url=base_url,
-                        shared_folder=shared_folder,
-                    )
+                    if check_type == "name_conflicts":
+                        refreshed_entries = self._excludeChecksEntriesByTokens(entries[1:], processed_entry_tokens)
+                    else:
+                        refreshed_entries = self._buildCheckEntriesForType(
+                            image_path=image_path,
+                            review_type=check_type,
+                            user_key=user_key,
+                            cookies=cookies,
+                            base_url=base_url,
+                            shared_folder=shared_folder,
+                        )
 
                 if refreshed_entries:
                     saved_entries.extend(refreshed_entries)
@@ -4920,6 +5184,22 @@ class ImgDataService:
                 base_url=base_url,
                 shared_folder=shared_folder,
             )
+            if resolved.get("stop_requested"):
+                return self._buildChecksScanPayload(
+                    check_type=check_type,
+                    save_only=False,
+                    files_scanned=scanned_count,
+                    total_files=total_files,
+                    findings_count=findings_count,
+                    resolved_count=resolved_count + int(resolved.get("auto_applied_count") or 0),
+                    ignored_count=ignored_count,
+                    path_index=index + 1,
+                    pending_entries=[entry] + remaining_entries if entry else remaining_entries,
+                    current_path=image_path,
+                    message_key="checks:progress_stopped",
+                    message="Checks scan stopped.",
+                    message_params={"count": findings_count},
+                )
             entry = resolved.get("entry")
             item = resolved.get("item")
             auto_applied_count = int(resolved.get("auto_applied_count") or 0)
@@ -4931,15 +5211,18 @@ class ImgDataService:
             if auto_applied_count:
                 if check_type == "name_conflicts":
                     resolved_count += auto_applied_count
-                refreshed_entries = self._rebuildChecksEntriesForImageAfterMutation(
-                    image_path=image_path,
-                    review_type=check_type,
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    shared_folder=shared_folder,
-                    excluded_tokens=processed_entry_tokens,
-                )
+                if check_type == "name_conflicts":
+                    refreshed_entries = self._excludeChecksEntriesByTokens(remaining_entries, processed_entry_tokens)
+                else:
+                    refreshed_entries = self._rebuildChecksEntriesForImageAfterMutation(
+                        image_path=image_path,
+                        review_type=check_type,
+                        user_key=user_key,
+                        cookies=cookies,
+                        base_url=base_url,
+                        shared_folder=shared_folder,
+                        excluded_tokens=processed_entry_tokens,
+                    )
                 findings_count = self._countOpenChecksScanFindings(
                     refreshed_entries[0] if refreshed_entries else None,
                     refreshed_entries[1:] if refreshed_entries else [],
@@ -4948,13 +5231,16 @@ class ImgDataService:
                     continue
                 entry = refreshed_entries[0]
                 remaining_entries = refreshed_entries[1:]
-                item = self.getChecksReviewItem(
-                    entry=entry,
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    shared_folder=shared_folder,
-                )
+                if check_type == "name_conflicts":
+                    item = None
+                else:
+                    item = self.getChecksReviewItem(
+                        entry=entry,
+                        user_key=user_key,
+                        cookies=cookies,
+                        base_url=base_url,
+                        shared_folder=shared_folder,
+                    )
             if resolved.get("auto_apply_warning"):
                 return self._buildChecksScanPayload(
                     check_type=check_type,

@@ -92,7 +92,14 @@ export default {
 			await this.startCleanupRun();
 		},
 		async startCleanupRun() {
+			this.stopCleanupProgressPolling();
+			this.cleanupProgressRequestId += 1;
 			this.cleanupLoading = true;
+			this.cleanupProgress = {
+				running: true,
+				action: this.selectedCleanupAction,
+				message: this.$avt('cleanup:status_preparing', 'Cleanup starts. Preparing run...'),
+			};
 			this.cleanupStatusMessage = this.$avt('cleanup:status_preparing', 'Cleanup starts. Preparing run...');
 			try {
 				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_start', {
@@ -108,6 +115,12 @@ export default {
 				}
 			} catch (err) {
 				this.cleanupLoading = false;
+				this.cleanupProgress = {
+					...(this.cleanupProgress || {}),
+					running: false,
+					status: 'failed',
+					message: `Error: ${err.message}`,
+				};
 				this.cleanupStatusMessage = `Error: ${err.message}`;
 			}
 		},

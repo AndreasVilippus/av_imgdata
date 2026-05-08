@@ -1249,6 +1249,7 @@ async def checks_item(request: Request):
     except Exception as exc:
         return JSONResponse(_operation_exception_response(exc, message="checks_item_failed"))
 
+    resolved = resolved if isinstance(resolved, dict) else {}
     response_payload = {
         "success": True,
         "data": {
@@ -1258,8 +1259,17 @@ async def checks_item(request: Request):
             "findings_update": None,
         },
     }
+    if resolved.get("stop_requested") or IMGDATA._shouldStopChecks(
+        session_ctx["user_key"],
+        str(entry.get("review_type") or ""),
+    ):
+        response_payload["data"]["stop_requested"] = True
+        return JSONResponse(response_payload)
+
+    review_type = str(entry.get("review_type") or "").strip().lower()
     refresh_required = (
-        str(entry.get("review_type") or "").strip()
+        review_type
+        and review_type != "name_conflicts"
         and (
             int(resolved.get("auto_applied_count") or 0) > 0
             or resolved.get("item") is None

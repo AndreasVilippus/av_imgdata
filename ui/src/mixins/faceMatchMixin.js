@@ -1238,6 +1238,8 @@ export default {
 			if (this.faceMatchLoading) {
 				return;
 			}
+			this.stopFaceMatchProgressPolling();
+			this.faceMatchProgressRequestId += 1;
 			if (this.faceMatchReviewingStoredFindings) {
 				this.faceMatchLoading = true;
 				this.faceMatchResult = null;

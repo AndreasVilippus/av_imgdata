@@ -7,6 +7,8 @@ export default {
 			checksAutoApplySuggestedNames: false,
 			checksAutoApplySuggestedDuplicates: false,
 			checksLoading: false,
+			checksStartRequestInFlight: false,
+			checksStopRequestInFlight: false,
 			checksStopRequested: false,
 			checksFindingsActionRunning: false,
 			checksEntries: [],
@@ -32,8 +34,7 @@ export default {
 			const progress = this.checksProgress && typeof this.checksProgress === 'object'
 				? this.checksProgress
 				: {};
-			return this.selectedChecksAction === 'scan'
-				&& !!progress.running
+			return !!progress.running
 				&& String(progress.source_mode || '').trim().toLowerCase() === 'scan'
 				&& String(progress.check_type || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase();
 		},
@@ -41,8 +42,26 @@ export default {
 			return this.selectedChecksAction === 'findings'
 				&& !!this.checksFindingsActionRunning;
 		},
+		isChecksReviewStopping() {
+			const progress = this.checksProgress && typeof this.checksProgress === 'object'
+				? this.checksProgress
+				: {};
+			return !!(
+				this.checksStopRequested
+				|| this.checksStopRequestInFlight
+				|| (progress.running && progress.stop_requested)
+			);
+		},
+		isChecksReviewActive() {
+			return !!(
+				this.isChecksScanRunning
+				|| this.isChecksFindingsActionRunning
+				|| this.checksStartRequestInFlight
+				|| (this.selectedChecksAction === 'findings' && this.checksLoading)
+			);
+		},
 		checksPrimaryButtonLabel() {
-			if (this.isChecksScanRunning || this.isChecksFindingsActionRunning) {
+			if (this.isChecksReviewActive || this.isChecksReviewStopping) {
 				return this.$avt('checks:button_stop', 'Stop');
 			}
 			return this.checksLoading
@@ -101,6 +120,8 @@ export default {
 			this.checksProgress = {};
 			this.checksStatusMessage = '';
 			this.checksLoading = false;
+			this.checksStartRequestInFlight = false;
+			this.checksStopRequestInFlight = false;
 			this.checksStopRequested = false;
 			this.checksFindingsActionRunning = false;
 			this.checksSkipNameMappingConfirm = false;
@@ -746,6 +767,15 @@ export default {
 			nextProgress.resolved_count = Number(nextProgress.resolved_count) || 0;
 			nextProgress.ignored_count = Number(nextProgress.ignored_count) || 0;
 			this.checksProgress = nextProgress;
+			if (nextProgress.running && nextProgress.stop_requested) {
+				this.checksStopRequested = true;
+				this.checksStopRequestInFlight = false;
+			}
+			if (!nextProgress.running) {
+				this.checksStopRequested = false;
+				this.checksStopRequestInFlight = false;
+				this.checksStartRequestInFlight = false;
+			}
 			const result = nextProgress.result && typeof nextProgress.result === 'object'
 				? nextProgress.result
 				: null;
@@ -793,6 +823,9 @@ export default {
 				&& nextRevision < currentRevision;
 		},
 		async ensureChecksResultItemLoaded(progress) {
+			if (this.checksStopRequested) {
+				return;
+			}
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
 			if (nextProgress.check_type && !this.matchesSelectedChecksType(nextProgress.check_type)) {
 				return;
@@ -815,6 +848,11 @@ export default {
 				auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
 			});
 			const root = this.getResponseData(data);
+			if (this.checksStopRequested || root.stop_requested) {
+				this.checksStopRequested = true;
+				this.checksStatusMessage = this.$avt('checks:status_stop_requested', 'Stop requested. The current check action will stop shortly.');
+				return;
+			}
 			this.applyChecksFindingsUpdate(root.findings_update);
 			const resolvedItem = root && root.item && typeof root.item === 'object' ? root.item : {};
 			if (Object.keys(resolvedItem).length && this.matchesSelectedChecksType(resolvedItem.review_type)) {
@@ -841,9 +879,9 @@ export default {
 				}
 				if (!progress.running) {
 					this.checksLoading = false;
-				if (this.selectedChecksAction === 'findings') {
-					this.checksFindingsActionRunning = false;
-				}
+					if (this.selectedChecksAction === 'findings') {
+						this.checksFindingsActionRunning = false;
+					}
 					this.stopChecksProgressPolling();
 				}
 				return progress;
@@ -856,9 +894,9 @@ export default {
 					: {};
 				if (!progress.running) {
 					this.checksLoading = false;
-				if (this.selectedChecksAction === 'findings') {
-					this.checksFindingsActionRunning = false;
-				}
+					if (this.selectedChecksAction === 'findings') {
+						this.checksFindingsActionRunning = false;
+					}
 					this.stopChecksProgressPolling();
 				}
 				return {};
@@ -909,27 +947,69 @@ export default {
 			return withCounts(this.checksStatusMessage);
 		},
 		async stopChecksReview() {
+			if (this.checksStopRequestInFlight || this.checksStopRequested) {
+				return null;
+			}
 			this.checksStopRequested = true;
+			this.checksStopRequestInFlight = true;
 			this.checksFindingsActionRunning = false;
 			this.checksActionLocked = false;
-			this.checksLoading = false;
+			this.checksStartRequestInFlight = false;
 			this.checksStatusMessage = this.$avt('checks:status_stop_requested', 'Stop requested. The current check action will stop shortly.');
 			try {
-				await this.callChecksApi(
+				const data = await this.callChecksApi(
 					'/webman/3rdparty/AV_ImgData/index.cgi/api/checks_stop',
 					{ check_type: this.selectedChecksType },
 					{ resume: false, requireSynoToken: false }
 				);
+				const progress = this.getResponseData(data);
+				if (progress && typeof progress === 'object' && Object.keys(progress).length) {
+					this.applyChecksProgress(progress, { adoptResultItem: false });
+					if (progress.running) {
+						this.checksLoading = true;
+						this.startChecksProgressPolling();
+						return null;
+					}
+				}
 			} catch (err) {
 				// For findings-list processing the local stop flag is decisive.
 			}
+			if (this.selectedChecksAction === 'scan') {
+				this.startChecksProgressPolling();
+			} else {
+				this.checksLoading = false;
+				this.checksStopRequestInFlight = false;
+				this.checksStopRequested = false;
+			}
 			return null;
 		},
+		applyChecksStartProgress(progress) {
+			if (!progress || typeof progress !== 'object') {
+				return;
+			}
+			const sourceMode = String(progress.source_mode || '').trim().toLowerCase();
+			const checkType = String(progress.check_type || '').trim().toLowerCase();
+			if (sourceMode !== 'scan' || checkType !== String(this.selectedChecksType || '').trim().toLowerCase()) {
+				return;
+			}
+			this.checksProgress = {
+				...(this.checksProgress && typeof this.checksProgress === 'object' ? this.checksProgress : {}),
+				...progress,
+			};
+			if (progress.running) {
+				this.checksLoading = false;
+				this.startChecksProgressPolling();
+			}
+		},
 		async startChecksReview() {
-			if (this.isChecksScanRunning || this.isChecksFindingsActionRunning) {
+			if (this.isChecksReviewStopping) {
+				return null;
+			}
+			if (this.isChecksReviewActive) {
 				return this.stopChecksReview();
 			}
 			this.checksStopRequested = false;
+			this.checksStopRequestInFlight = false;
 
 			if (this.isChecksScanRunning) {
 				await this.stopChecksScan();
@@ -958,6 +1038,7 @@ export default {
 					check_type: this.selectedChecksType,
 				});
 				const root = this.getResponseData(data);
+			this.applyChecksStartProgress(root);
 				const entries = Array.isArray(root.entries) ? root.entries : [];
 				this.checksEntries = entries;
 				this.checksCurrentIndex = 0;
@@ -981,6 +1062,8 @@ export default {
 			} finally {
 				this.checksActionLocked = false;
 				this.checksLoading = false;
+				this.checksStopRequestInFlight = false;
+				this.checksStopRequested = false;
 				if (this.selectedChecksAction === 'findings') {
 					this.checksFindingsActionRunning = false;
 				}
@@ -989,6 +1072,10 @@ export default {
 		async loadChecksItemAtIndex(index) {
 			let resolvedIndex = index;
 			while (resolvedIndex < this.checksEntries.length) {
+				if (this.checksStopRequested) {
+					this.checksStatusMessage = this.$avt('checks:status_stop_requested', 'Stop requested. The current check action will stop shortly.');
+					break;
+				}
 				const entry = this.checksEntries[resolvedIndex];
 				if (!entry) {
 					break;
@@ -1016,6 +1103,11 @@ export default {
 					auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
 				});
 				const root = this.getResponseData(data);
+				if (this.checksStopRequested || root.stop_requested) {
+					this.checksStopRequested = true;
+					this.checksStatusMessage = this.$avt('checks:status_stop_requested', 'Stop requested. The current check action will stop shortly.');
+					break;
+				}
 				const autoAppliedCount = Number(root && root.auto_applied_count || 0);
 				const item = root && root.item && typeof root.item === 'object' ? root.item : {};
 				const findingsUpdated = this.applyChecksFindingsUpdate(root.findings_update, {
@@ -1031,6 +1123,25 @@ export default {
 				}
 				if (!this.checksEntries.length) {
 					break;
+				}
+				if (!Object.keys(item).length && autoAppliedCount <= 0 && !findingsUpdated) {
+					const currentProgress = this.checksProgress && typeof this.checksProgress === 'object'
+						? this.checksProgress
+						: {};
+					this.checksProgress = {
+						...currentProgress,
+						source_mode: 'findings',
+						check_type: String(this.selectedChecksType || '').trim().toLowerCase(),
+						findings_count: Number(currentProgress.findings_count) || this.checksEntries.length,
+						skipped_count: (Number(currentProgress.skipped_count) || 0) + 1,
+					};
+					this.checksStatusMessage = this.$avt(
+						'checks:status_finding_skipped',
+						'Entry {current} skipped. Continuing with the next finding...',
+						{ current: resolvedIndex + 1 }
+					);
+					resolvedIndex += 1;
+					continue;
 				}
 				if (findingsUpdated && (autoAppliedCount > 0 || !Object.keys(item).length)) {
 					this.checksStatusMessage = this.$avt(
@@ -1051,17 +1162,19 @@ export default {
 		},
 		async startChecksScan({ resumeFromProgress = false, advanceCurrentResult = false } = {}) {
 			if (!resumeFromProgress) {
-				const runningProgress = await this.findRunningChecksScanProgress();
-				if (this.adoptRunningChecksScanProgress(runningProgress)) {
-					return;
-				}
-			}
-			this.checksLoading = true;
-			if (!resumeFromProgress) {
+				this.stopChecksProgressPolling();
+				this.checksProgressRequestId += 1;
+				this.checksLoading = true;
+				this.checksStartRequestInFlight = true;
+				this.checksStopRequestInFlight = false;
+				this.checksStopRequested = false;
 				this.checksEntries = [];
 				this.checksCurrentIndex = 0;
 				this.checksCurrentItem = null;
 				this.checksProgress = {
+					running: true,
+					source_mode: 'scan',
+					check_type: this.selectedChecksType,
 					message: this.$avt('checks:status_preparing_scan', 'Checks scan starting. Building file list...'),
 					files_scanned: 0,
 					total_files: 0,
@@ -1070,7 +1183,21 @@ export default {
 					ignored_count: 0,
 				};
 				this.checksStatusMessage = this.$avt('checks:status_preparing_scan', 'Checks scan starting. Building file list...');
+				let runningProgress = {};
+				try {
+					runningProgress = await this.findRunningChecksScanProgress();
+				} catch (err) {
+					this.checksLoading = false;
+					this.checksStartRequestInFlight = false;
+					this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
+					return;
+				}
+				if (this.adoptRunningChecksScanProgress(runningProgress)) {
+					this.checksStartRequestInFlight = false;
+					return;
+				}
 			}
+			this.checksLoading = true;
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_start', {
 					source_mode: 'scan',
@@ -1082,6 +1209,12 @@ export default {
 					auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
 				});
 				const progress = this.getResponseData(data);
+				this.checksStartRequestInFlight = false;
+				if (this.checksStopRequested) {
+					this.checksLoading = false;
+					this.stopChecksProgressPolling();
+					return;
+				}
 				if (progress.blocked_by_running_scan && this.adoptRunningChecksScanProgress(progress)) {
 					return;
 				}
@@ -1093,13 +1226,14 @@ export default {
 					this.startChecksProgressPolling();
 				} else {
 					this.checksLoading = false;
-				if (this.selectedChecksAction === 'findings') {
-					this.checksFindingsActionRunning = false;
-				}
+					if (this.selectedChecksAction === 'findings') {
+						this.checksFindingsActionRunning = false;
+					}
 					this.stopChecksProgressPolling();
 				}
 			} catch (err) {
 				this.checksLoading = false;
+				this.checksStartRequestInFlight = false;
 				if (this.selectedChecksAction === 'findings') {
 					this.checksFindingsActionRunning = false;
 				}

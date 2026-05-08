@@ -1304,19 +1304,18 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.service._getChecksCandidatePaths = lambda **kwargs: ["/volume1/photo/tests/test.jpg"]
         self.service.analyzeImageFaceMetadata = lambda image_path: {}
         self.service._buildCheckEntriesForType = lambda **kwargs: [
+            {"review_type": "name_conflicts", "image_path": kwargs["image_path"], "entry_id": "initial"},
             {"review_type": "name_conflicts", "image_path": kwargs["image_path"], "entry_id": "remaining"}
-        ] if captured.get("refreshed") else [
-            {"review_type": "name_conflicts", "image_path": kwargs["image_path"], "entry_id": "initial"}
         ]
         self.service._resolveChecksReviewEntry = lambda **kwargs: captured.update({
             "entry": kwargs["entry"],
             "auto_apply_suggested_names": kwargs["auto_apply_suggested_names"],
             "auto_apply_suggested_duplicates": kwargs["auto_apply_suggested_duplicates"],
-            "refreshed": True,
         }) or {
             "entry": None,
             "item": None,
             "auto_applied_count": 1,
+            "processed_entry_tokens": [],
         }
         self.service._writeChecksFindings = lambda **kwargs: captured.update({"saved_findings": kwargs}) or True
 
@@ -1575,12 +1574,10 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.service._getChecksCandidatePaths = lambda **kwargs: [image_path]
         self.service.analyzeImageFaceMetadata = lambda image_path: {}
         self.service._buildCheckEntriesForType = Mock(side_effect=[
-            [initial_entry],
-            [flipped_same_pair, remaining_entry],
-            [remaining_entry],
+            [initial_entry, flipped_same_pair, remaining_entry],
         ])
 
-        with patch.object(self.service, "getChecksReviewItem", side_effect=[initial_item, remaining_item, remaining_item]), \
+        with patch.object(self.service, "getChecksReviewItem", side_effect=[initial_item]) as review_mock, \
              patch.object(self.service, "replaceChecksFaceName", return_value={"updated": True, "operation": "metadata_write"}):
             result = self.service.searchNextChecksItem(
                 user_key="user",
@@ -1594,8 +1591,10 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         self.assertEqual(result["findings_count"], 1)
         self.assertEqual(result["result"]["entry"]["entry_id"], "remaining")
-        self.assertEqual(result["result"]["item"]["entry_id"], "remaining-item")
+        self.assertIsNone(result["result"]["item"])
         self.assertEqual(result["resume_cursor"]["pending_entries"], [])
+        self.assertEqual(self.service._buildCheckEntriesForType.call_count, 1)
+        self.assertEqual(review_mock.call_count, 1)
 
     def test_search_next_checks_item_auto_applies_rebuilt_suggested_name_conflicts(self):
         image_path = "/volume1/photo/tests/test.jpg"
@@ -1666,13 +1665,10 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.service._getChecksCandidatePaths = lambda **kwargs: [image_path]
         self.service.analyzeImageFaceMetadata = lambda image_path: {}
         self.service._buildCheckEntriesForType = Mock(side_effect=[
-            [first_entry],
             [first_entry, second_entry],
-            [],
-            [],
         ])
 
-        with patch.object(self.service, "getChecksReviewItem", side_effect=[first_item, second_item]), \
+        with patch.object(self.service, "getChecksReviewItem", side_effect=[first_item]) as review_mock, \
              patch.object(self.service, "replaceChecksFaceName", return_value={"updated": True, "operation": "metadata_write"}) as replace_mock:
             result = self.service.searchNextChecksItem(
                 user_key="user",
@@ -1684,10 +1680,12 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                 auto_apply_suggested_duplicates=False,
             )
 
-        self.assertEqual(replace_mock.call_count, 2)
-        self.assertTrue(result["finished"])
-        self.assertEqual(result["resolved_count"], 2)
-        self.assertIsNone(result["result"])
+        self.assertEqual(replace_mock.call_count, 1)
+        self.assertEqual(result["resolved_count"], 1)
+        self.assertEqual(result["result"]["entry"]["entry_id"], "second")
+        self.assertIsNone(result["result"]["item"])
+        self.assertEqual(self.service._buildCheckEntriesForType.call_count, 1)
+        self.assertEqual(review_mock.call_count, 1)
 
     def test_resolve_checks_review_entry_respects_auto_apply_limit(self):
         image_path = "/volume1/photo/tests/test.jpg"
@@ -2427,6 +2425,247 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertIsNone(result["item"])
         self.assertEqual(result["auto_applied_count"], 1)
         self.assertEqual(applied["count"], 1)
+
+    def test_resolve_checks_review_entry_returns_empty_item_for_stale_entry(self):
+        entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/stale.jpg",
+        }
+
+        with patch.object(self.service, "getChecksReviewItem", return_value=None):
+            result = self.service._resolveChecksReviewEntry(
+                entry=entry,
+                user_key="user",
+                cookies={"_SSID": "session"},
+                base_url="https://example.test",
+            )
+
+        self.assertIsNone(result["entry"])
+        self.assertIsNone(result["item"])
+        self.assertEqual(result["auto_applied_count"], 0)
+        self.assertTrue(result["finished"])
+
+    def test_resolve_checks_review_entry_returns_item_when_no_auto_action_applies(self):
+        entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/manual.jpg",
+        }
+        item = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/manual.jpg",
+            "left_state": "alert",
+            "right_state": "alert",
+        }
+
+        with patch.object(self.service, "getChecksReviewItem", return_value=item) as review_mock:
+            result = self.service._resolveChecksReviewEntry(
+                entry=entry,
+                auto_apply_suggested_names=True,
+                auto_apply_suggested_duplicates=True,
+                user_key="user",
+                cookies={"_SSID": "session"},
+                base_url="https://example.test",
+            )
+
+        self.assertEqual(review_mock.call_count, 1)
+        self.assertEqual(result["entry"], entry)
+        self.assertEqual(result["item"], item)
+        self.assertEqual(result["auto_applied_count"], 0)
+        self.assertTrue(result["finished"])
+
+    def test_resolve_checks_review_entry_does_not_rebuild_after_name_change(self):
+        entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/loop.jpg",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Person A",
+                "x": 0.5,
+                "y": 0.5,
+                "w": 0.2,
+                "h": 0.2,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Person B",
+                "x": 0.5,
+                "y": 0.5,
+                "w": 0.2,
+                "h": 0.2,
+            },
+        }
+        item = {
+            "review_type": "name_conflicts",
+            "image_path": entry["image_path"],
+            "left_name": "Person A",
+            "right_name": "Person B",
+            "left_state": "suggested",
+            "right_state": "alert",
+            "left_face_target": dict(entry["left_face_signature"]),
+            "right_face_target": dict(entry["right_face_signature"]),
+        }
+
+        with patch.object(self.service, "getChecksReviewItem", return_value=item), \
+             patch.object(self.service, "replaceChecksFaceName", return_value={"updated": True}), \
+             patch.object(self.service, "_buildCheckEntriesForType", side_effect=AssertionError("must not rebuild after name change")), \
+             patch.object(self.service, "_shouldStopChecks", return_value=False):
+            result = self.service._resolveChecksReviewEntry(
+                entry=entry,
+                auto_apply_suggested_names=True,
+            )
+
+        self.assertIsNone(result["entry"])
+        self.assertIsNone(result["item"])
+        self.assertEqual(result["auto_applied_count"], 1)
+        self.assertTrue(result["processed_entry_tokens"])
+
+    def test_resolve_checks_review_entry_stops_before_rebuild_after_mutation(self):
+        entry = {
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/stop.jpg",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "name": "Person A",
+                "x": 0.5,
+                "y": 0.5,
+                "w": 0.2,
+                "h": 0.2,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "name": "Person B",
+                "x": 0.5,
+                "y": 0.5,
+                "w": 0.2,
+                "h": 0.2,
+            },
+        }
+        item = {
+            "review_type": "name_conflicts",
+            "image_path": entry["image_path"],
+            "left_name": "Person A",
+            "right_name": "Person B",
+            "left_state": "suggested",
+            "right_state": "alert",
+            "left_face_target": dict(entry["left_face_signature"]),
+            "right_face_target": dict(entry["right_face_signature"]),
+        }
+
+        with patch.object(self.service, "getChecksReviewItem", return_value=item), \
+             patch.object(self.service, "replaceChecksFaceName", return_value={"updated": True}), \
+             patch.object(self.service, "_buildCheckEntriesForType", side_effect=AssertionError("must stop before rebuild")), \
+             patch.object(self.service, "_shouldStopChecks", side_effect=[False, True]):
+            result = self.service._resolveChecksReviewEntry(
+                entry=entry,
+                auto_apply_suggested_names=True,
+            )
+
+        self.assertTrue(result["stop_requested"])
+        self.assertEqual(result["auto_applied_count"], 1)
+
+    def test_build_name_conflict_entries_obeys_checks_stop_request(self):
+        faces = [
+            MetadataFace.from_center_box(
+                name="Person A",
+                x=0.5,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="ACD",
+            ),
+            MetadataFace.from_center_box(
+                name="Person B",
+                x=0.5,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="MWG_REGIONS",
+            ),
+        ]
+        self.service._readImageMetadata = lambda image_path: MetadataPayload(image_path=image_path, faces=faces)
+
+        with patch.object(self.service, "_raiseIfChecksStopRequested", side_effect=ImgDataOperationError(
+            "checks_stop_requested",
+            {"code": "checks_stop_requested"},
+        )):
+            with self.assertRaises(ImgDataOperationError):
+                self.service._buildNameConflictReviewEntries("/volume1/photo/tests/stop.jpg")
+
+    def test_build_name_conflict_entries_uses_only_mutual_best_position_match(self):
+        faces = [
+            MetadataFace.from_center_box(
+                name="Person Target",
+                x=0.5,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="ACD",
+            ),
+            MetadataFace.from_center_box(
+                name="Person Target",
+                x=0.5,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="MICROSOFT",
+            ),
+            MetadataFace.from_center_box(
+                name="Person Wrong",
+                x=0.57,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="MWG_REGIONS",
+            ),
+        ]
+        self.service._readImageMetadata = lambda image_path: MetadataPayload(image_path=image_path, faces=faces)
+
+        entries = self.service._buildNameConflictReviewEntries("/volume1/photo/tests/best.jpg")
+
+        self.assertEqual(entries, [])
+
+    def test_build_name_conflict_entries_keeps_best_conflicting_position_match_once(self):
+        faces = [
+            MetadataFace.from_center_box(
+                name="Person Target",
+                x=0.5,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="ACD",
+            ),
+            MetadataFace.from_center_box(
+                name="Person Match",
+                x=0.5,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="MICROSOFT",
+            ),
+            MetadataFace.from_center_box(
+                name="Person Other",
+                x=0.57,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="MWG_REGIONS",
+            ),
+        ]
+        self.service._readImageMetadata = lambda image_path: MetadataPayload(image_path=image_path, faces=faces)
+
+        entries = self.service._buildNameConflictReviewEntries("/volume1/photo/tests/best.jpg")
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["left_face_signature"]["name"], "Person Target")
+        self.assertEqual(entries[0]["right_face_signature"]["name"], "Person Match")
 
     def test_orientation_risk_fallback_prefers_non_risky_side(self):
         risky_face = MetadataFace.from_center_box(
@@ -3248,6 +3487,32 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["save_only"])
         self.assertEqual(result["count"], 2)
         self.assertEqual(result["entries"], stored_entries)
+
+    def test_start_checks_review_clears_persisted_stop_state_for_findings(self):
+        state_key = self.service._checksStateKey("user", "name_conflicts")
+        self.service._checks_progress[state_key] = {
+            "check_type": "name_conflicts",
+            "source_mode": "findings",
+            "stop_requested": True,
+            "stop_requested_at": "2026-05-08T00:00:00+00:00",
+        }
+
+        with patch.object(self.service, "getChecksFindingEntries", return_value={
+            "save_only": True,
+            "entries": [{"review_type": "name_conflicts", "image_path": "photo/a.jpg"}],
+        }):
+            result = self.service.startChecksReview(
+                user_key="user",
+                cookies={},
+                base_url="http://example.test",
+                source_mode="findings",
+                check_type="name_conflicts",
+            )
+
+        self.assertEqual(result["count"], 1)
+        progress = self.service._checks_progress[state_key]
+        self.assertFalse(progress["stop_requested"])
+        self.assertNotIn("stop_requested_at", progress)
 
     def test_start_checks_scan_blocks_parallel_running_scan(self):
         class AliveThread:

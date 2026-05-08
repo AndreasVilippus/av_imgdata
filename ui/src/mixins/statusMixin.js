@@ -90,6 +90,13 @@ export default {
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/exiftool_status', {}, { resume: false, requireSynoToken: false });
 				this.exiftoolStatus = this.getResponseData(data);
 			} catch (err) {
+				this.fileAnalysisProgress = {
+					...(this.fileAnalysisProgress || {}),
+					running: false,
+					finished: true,
+					status: 'failed',
+					message: `Error: ${err.message}`,
+				};
 				this.output = `Error: ${err.message}`;
 			}
 		},
@@ -253,6 +260,14 @@ export default {
 					await this.fetchFileAnalysisProgress();
 					return;
 				}
+				this.stopFileAnalysisProgressPolling();
+				this.fileAnalysisProgressRequestId += 1;
+				this.fileAnalysisProgress = {
+					running: true,
+					finished: false,
+					phase: 'discovery',
+					message: this.$avt('status:progress_discovery_running', 'Scanning files...'),
+				};
 				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_start');
 				this.fileAnalysisProgress = this.getResponseData(data);
 				if (this.fileAnalysisProgress && this.fileAnalysisProgress.running) {
