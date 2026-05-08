@@ -4550,7 +4550,10 @@ class ImgDataService:
             state_key = self._checksStateKey(user_key, check_type)
             worker = self._checks_threads.get(state_key)
             if current.get("running") and worker and worker.is_alive():
-                return current
+                return self._buildChecksStartBlockedPayload(
+                    current,
+                    requested_check_type=check_type,
+                )
 
             running_progress = self._runningChecksScanProgress(user_key, exclude_check_type=check_type)
             if running_progress:
