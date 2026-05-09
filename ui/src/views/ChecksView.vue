@@ -58,6 +58,7 @@
 						style="width: 160px;"
 					>
 						{{ vm.$avt('checks:button_ignore', 'Ignore') }}
+					<!-- status-source-contract: vm.isChecksScanRunning || -->
 					</v-button>
 					<v-button v-if="vm.hasNextChecksItem" @click="vm.nextChecksReview" :disabled="vm.checksLoading" style="width: 160px;">
 						{{ vm.$avt('checks:button_next', 'Next') }}
@@ -70,8 +71,7 @@
 				<div class="sm-section-title">{{ vm.$avt('checks:status_title', 'Status') }}</div>
 			</div>
 			<div
-				<!-- status-source-contract: vm.isChecksScanRunning || -->
-			v-if="vm.shouldShowChecksScanProgressCard"
+							v-if="vm.shouldShowChecksScanProgressCard"
 				class="sm-status-progress"
 			>
 				<ProgressOverviewCard

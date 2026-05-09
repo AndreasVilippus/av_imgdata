@@ -1165,6 +1165,21 @@ async def file_analysis_stop(request: Request):
     }
 
 
+def _attach_checks_status_for_response(payload, *, check_type: str = "", source_mode: str = ""):
+    if not isinstance(payload, dict):
+        return payload
+
+    normalized_check_type = str(check_type or payload.get("check_type") or "").strip().lower()
+    if normalized_check_type:
+        payload.setdefault("check_type", normalized_check_type)
+
+    normalized_source_mode = str(source_mode or payload.get("source_mode") or "").strip().lower()
+    if normalized_source_mode:
+        payload.setdefault("source_mode", normalized_source_mode)
+
+    return IMGDATA._attachChecksStatusPayload(payload, check_type=normalized_check_type)
+
+
 @router.post("/checks_start")
 async def checks_start(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
@@ -1203,6 +1218,11 @@ async def checks_start(request: Request):
     except Exception as exc:
         return JSONResponse(_operation_exception_response(exc, message="checks_start_failed"))
 
+    result = _attach_checks_status_for_response(
+        result if isinstance(result, dict) else {},
+        check_type=str(check_type or "dimension_issues"),
+        source_mode=str(source_mode or ""),
+    )
     response_payload = {
         "success": True,
         "data": result,
@@ -1250,14 +1270,29 @@ async def checks_item(request: Request):
         return JSONResponse(_operation_exception_response(exc, message="checks_item_failed"))
 
     resolved = resolved if isinstance(resolved, dict) else {}
+    review_type = str(entry.get("review_type") or "").strip().lower()
+    data_payload = {
+        "entry": resolved.get("entry"),
+        "item": resolved.get("item"),
+        "auto_applied_count": int(resolved.get("auto_applied_count") or 0),
+        "findings_update": None,
+        "check_type": review_type,
+        "source_mode": "findings",
+        "running": False,
+        "finished": False,
+        "save_only": False,
+        "resolved_count": int(resolved.get("auto_applied_count") or 0),
+        "skipped_count": int(resolved.get("skipped_count") or 0),
+        "ignored_count": int(resolved.get("ignored_count") or 0),
+    }
+    data_payload = _attach_checks_status_for_response(
+        data_payload,
+        check_type=review_type,
+        source_mode="findings",
+    )
     response_payload = {
         "success": True,
-        "data": {
-            "entry": resolved.get("entry"),
-            "item": resolved.get("item"),
-            "auto_applied_count": int(resolved.get("auto_applied_count") or 0),
-            "findings_update": None,
-        },
+        "data": data_payload,
     }
     if resolved.get("stop_requested") or IMGDATA._shouldStopChecks(
         session_ctx["user_key"],
@@ -1266,7 +1301,6 @@ async def checks_item(request: Request):
         response_payload["data"]["stop_requested"] = True
         return JSONResponse(response_payload)
 
-    review_type = str(entry.get("review_type") or "").strip().lower()
     refresh_required = (
         review_type
         and review_type != "name_conflicts"
@@ -1337,9 +1371,15 @@ async def checks_stop(request: Request):
     body = await _read_request_body(request)
     check_type = body.get("check_type", "dimension_issues")
 
+    result = IMGDATA.requestStopChecks(session_ctx["user_key"], str(check_type or "dimension_issues"))
+    result = _attach_checks_status_for_response(
+        result if isinstance(result, dict) else {},
+        check_type=str(check_type or "dimension_issues"),
+        source_mode=str((result or {}).get("source_mode") or "scan") if isinstance(result, dict) else "scan",
+    )
     return {
         "success": True,
-        "data": IMGDATA.requestStopChecks(session_ctx["user_key"], str(check_type or "dimension_issues")),
+        "data": result,
     }
 
 

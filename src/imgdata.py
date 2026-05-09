@@ -7061,6 +7061,7 @@ class ImgDataService:
                         base_url=base_url,
                         id_item=image_id_int
                     )
+                    result_entry = None
                     for face in faces:
                         last_keepalive_at = self._refreshFaceMatchingSessionIfNeeded(
                             user_key=user_key,
@@ -7216,7 +7217,6 @@ class ImgDataService:
                         if not isinstance(file_face_index, int) or file_face_index < 0 or file_face_index >= len(indexed_file_faces):
                             continue
                         metadata_face_index = indexed_file_faces[file_face_index][0]
-                        result_entry = None
                         matched_person = None
                         mapped_assignment = None
                         lookup_debug: Dict[str, Any] = {}
