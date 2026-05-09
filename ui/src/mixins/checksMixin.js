@@ -67,6 +67,25 @@ export default {
 				? this.$avt('checks:button_loading', 'Loading...')
 				: this.$avt('checks:button_start', 'Start');
 		},
+		shouldShowChecksScanProgressCard() {
+			return !!(
+				this.isChecksScanRunning
+				|| (
+					this.selectedChecksAction === 'scan'
+					&& (
+						this.checksLoading
+						|| (this.checksProgress && Object.keys(this.checksProgress).length)
+					)
+				)
+			);
+		},
+		shouldShowChecksListProgressCard() {
+			return this.selectedChecksAction !== 'scan' && this.checksEntries.length > 0;
+		},
+		shouldShowChecksStandaloneStatusMessage() {
+			return !this.shouldShowChecksScanProgressCard
+				&& !this.shouldShowChecksListProgressCard;
+		},
 		hasNextChecksItem() {
 			if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
 				return !!this.checksCurrentItem;

@@ -70,7 +70,7 @@
 				<div class="sm-section-title">{{ vm.$avt('checks:status_title', 'Status') }}</div>
 			</div>
 			<div
-				v-if="vm.isChecksScanRunning || (vm.selectedChecksAction === 'scan' && (vm.checksLoading || (vm.checksProgress && Object.keys(vm.checksProgress).length)))"
+				v-if="vm.shouldShowChecksScanProgressCard"
 				class="sm-status-progress"
 			>
 				<ProgressOverviewCard
@@ -84,7 +84,7 @@
 					:icon-url="vm.getChecksProgressIconUrl()"
 				/>
 			</div>
-			<div v-if="vm.selectedChecksAction !== 'scan' && vm.checksEntries.length > 0" class="sm-status-progress">
+			<div v-if="vm.shouldShowChecksListProgressCard" class="sm-status-progress">
 				<ProgressOverviewCard
 					:title="vm.$avt('checks:label_list_entries', 'Entries')"
 					:count="vm.getChecksListTotalCount()"
@@ -95,7 +95,7 @@
 					:status-text="vm.getChecksProgressStatusText()"
 				/>
 			</div>
-			<div v-if="vm.getChecksProgressStatusText()" class="face-match-status-message">{{ vm.getChecksProgressStatusText() }}</div>
+			<div v-if="vm.shouldShowChecksStandaloneStatusMessage && vm.getChecksProgressStatusText()" class="face-match-status-message">{{ vm.getChecksProgressStatusText() }}</div>
 			<div v-if="vm.checksCurrentItem" class="face-match-status-stats">
 				<div><strong>{{ vm.$avt('checks:label_file', 'File:') }}</strong> {{ vm.checksCurrentItem.image_name }}</div>
 				<div><strong>{{ vm.$avt('checks:label_face_name', 'Face:') }}</strong> {{ vm.checksCurrentItem.face_name || vm.$avt('face_match:unknown_name', '(unnamed)') }}</div>

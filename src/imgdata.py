@@ -1519,13 +1519,74 @@ class ImgDataService:
             "resume_cursor": resume_cursor,
         }
 
+    def _normalizeFaceMatchingProgressForDisplay(self, user_key: str, progress: Dict[str, Any]) -> Dict[str, Any]:
+        display_progress = dict(progress) if isinstance(progress, dict) else {}
+
+        if not display_progress:
+            return {
+                "running": False,
+                "finished": False,
+                "stop_requested": False,
+                "active": False,
+                "stale": False,
+                "message_key": "",
+                "message_params": {},
+                "persons_read": 0,
+                "persons_total": 0,
+                "images_read": 0,
+                "faces_read": 0,
+                "target_faces_read": 0,
+                "metadata_faces_read": 0,
+                "transferred_count": 0,
+                "findings_count": 0,
+                "current_person_id": None,
+                "current_image_id": None,
+                "current_face_id": None,
+                "operation_id": "",
+                "action": "",
+                "auto": False,
+                "save_only": False,
+                "resume_available": False,
+                "resume_cursor": {},
+            }
+
+        thread = None
+        with self._face_matching_progress_lock:
+            thread = self._face_matching_threads.get(str(user_key or "").strip())
+        thread_alive = bool(thread and thread.is_alive())
+
+        resume_cursor = display_progress.get("resume_cursor") if isinstance(display_progress.get("resume_cursor"), dict) else {}
+        display_progress["resume_available"] = bool(resume_cursor)
+        display_progress["resume_cursor"] = resume_cursor
+
+        if display_progress.get("running") and thread_alive:
+            display_progress["active"] = True
+            display_progress["stale"] = False
+            return display_progress
+
+        if display_progress.get("running") and not thread_alive:
+            display_progress["running"] = False
+            display_progress["finished"] = True
+            display_progress["stop_requested"] = False
+            display_progress["active"] = False
+            display_progress["stale"] = True
+            if not display_progress.get("message_key"):
+                display_progress["message_key"] = "face_match:progress_interrupted"
+            return display_progress
+
+        display_progress["running"] = False
+        display_progress["active"] = False
+        display_progress["stale"] = True
+        display_progress["stop_requested"] = False
+        return display_progress
+
     def getFaceMatchingProgress(self, user_key: str) -> Dict[str, Any]:
         current = self.file_analysis.readRuntimeState("face_match_progress", user_key)
         if not isinstance(current, dict) or not current:
             with self._face_matching_progress_lock:
                 current = self._face_matching_progress.get(user_key, {})
         payload = dict(current) if isinstance(current, dict) else {}
-        return self._normalizeFaceMatchingProgress(user_key, payload)
+        return self._normalizeFaceMatchingProgressForDisplay(user_key, self._normalizeFaceMatchingProgress(user_key, payload))
 
     def _normalizeFaceMatchingProgress(self, user_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
@@ -6927,10 +6988,13 @@ class ImgDataService:
                         if not isinstance(file_face_index, int) or file_face_index < 0 or file_face_index >= len(indexed_file_faces):
                             continue
                         metadata_face_index = indexed_file_faces[file_face_index][0]
+                        result_entry = None
                         matched_person = None
                         mapped_assignment = None
                         lookup_debug: Dict[str, Any] = {}
                         matched_name = str(matched.get("file_name") or "").strip()
+                        if not matched_name:
+                            continue
                         if matched_name:
                             if known_persons_cache is None:
                                 known_persons_cache = self.photos.sortPersonsForFaceMatch(
@@ -7025,6 +7089,8 @@ class ImgDataService:
                                 findings_count=findings_count + 1,
                             ),
                         }
+                    if result_entry is None:
+                        continue
                     if save_only:
                         saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
                         findings_count += 1

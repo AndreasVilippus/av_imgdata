@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-#!/usr/bin/env bash
-set -Eeuo pipefail
-
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,6 +49,10 @@ cd "${PACKAGE_ROOT}"
 [[ -f "${PKGCREATE}" ]] || fail "PkgCreate.py not found: ${PKGCREATE}"
 
 log "Running Python tests"
+TEST_PKGVAR="$(mktemp -d)"
+trap 'rm -rf "${TEST_PKGVAR}"' EXIT
+export SYNOPKG_PKGVAR="${TEST_PKGVAR}"
+
 python3 -m unittest discover -s tests -p 'test_*.py'
 
 log "Installing UI dependencies"
