@@ -11,17 +11,23 @@ def test_checks_counters_are_integrated_into_progress_status_text():
     assert "face-match-status-counters" not in view
 
 
+
 def test_save_only_counters_only_include_relevant_scan_values():
     mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
 
-    save_only_block_start = mixin.find("if (isScan && saveOnly)")
-    save_only_block_end = mixin.find("if (isScan)", save_only_block_start + 1)
-    assert save_only_block_start >= 0
-    assert save_only_block_end > save_only_block_start
-    save_only_block = mixin[save_only_block_start:save_only_block_end]
+    start = mixin.find("\t\tgetRelevantChecksStatusCounters()")
+    assert start >= 0
+    end = mixin.find("\n\t\t},", start)
+    assert end > start
+    method = mixin[start:end]
 
-    assert "counter_processed" in save_only_block
-    assert "counter_findings" in save_only_block
-    assert "counter_resolved" not in save_only_block
-    assert "counter_ignored" not in save_only_block
-    assert "counter_total" not in save_only_block
+    assert "status.schema_version === 1" in method
+    assert "status.counters" in method
+    assert "return []" in method
+    assert "if (isScan && saveOnly)" not in method
+    assert "counter_processed" not in method
+    assert "counter_findings" not in method
+    assert "counter_resolved" not in method
+    assert "counter_ignored" not in method
+    assert "counter_skipped" not in method
+

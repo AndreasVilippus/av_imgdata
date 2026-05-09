@@ -34,8 +34,10 @@ export default {
 			const progress = this.checksProgress && typeof this.checksProgress === 'object'
 				? this.checksProgress
 				: {};
+			const progressType = String(progress.check_type || '').trim().toLowerCase();
 			return !!progress.running
-				&& String(progress.source_mode || '').trim().toLowerCase() === 'scan';
+				&& String(progress.source_mode || '').trim().toLowerCase() === 'scan'
+				&& progressType !== '__never__';
 		},
 		isChecksFindingsActionRunning() {
 			return this.selectedChecksAction === 'findings'
@@ -596,11 +598,63 @@ export default {
 			this.checksCurrentIndex = Math.min(this.checksCurrentIndex, this.checksEntries.length - 1);
 			return true;
 		},
+		getStatusCounterLabel(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return '';
+			}
+			const labelKey = String(counter.label_key || '').trim();
+			const fallback = String(counter.fallback_label || counter.key || '').trim();
+			return labelKey ? this.$avt(labelKey, fallback) : fallback;
+		},
+		normalizeStatusCounter(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return null;
+			}
+			const key = String(counter.key || '').trim();
+			const value = Number(counter.value);
+			if (!key || !Number.isFinite(value)) {
+				return null;
+			}
+			if (!counter.show_when_zero && value <= 0) {
+				return null;
+			}
+			return {
+				key,
+				label: this.getStatusCounterLabel(counter),
+				value: Math.max(0, value),
+				show_when_zero: !!counter.show_when_zero,
+			};
+		},
+		getChecksStatusProgress() {
+			const progress = this.checksProgress && typeof this.checksProgress === 'object'
+				? this.checksProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			if (status.schema_version === 1 && status.progress && typeof status.progress === 'object') {
+				return status.progress;
+			}
+			return {};
+		},
+		getChecksStatusProgressTitle() {
+			const progress = this.getChecksStatusProgress();
+			return progress.title_key ? this.$avt(progress.title_key, progress.fallback_title || progress.kind) : (progress.fallback_title || progress.kind);
+		},
+		getChecksStatusProgressPrimaryLabel() {
+			const progress = this.getChecksStatusProgress();
+			const fallback = String(progress.fallback_primary_label || '').replace(':', '').toLowerCase();
+			return progress.primary_label_key ? this.$avt(progress.primary_label_key, fallback).replace(':', '').toLowerCase() : fallback;
+		},
+		getChecksStatusProgressSecondaryLabel() {
+			const progress = this.getChecksStatusProgress();
+			return progress.secondary_label_key ? this.$avt(progress.secondary_label_key, progress.fallback_secondary_label || '') : (progress.fallback_secondary_label || '');
+		},
 		formatChecksStatusCounter(counter) {
 			if (!counter || typeof counter !== 'object') {
 				return '';
 			}
-			const label = String(counter.label || '').replace(/:$/, '').trim();
+			const label = String(counter.label || this.getStatusCounterLabel(counter) || '').replace(/:$/, '').trim();
 			const value = counter.value;
 			return label ? `${label}: ${value}` : String(value);
 		},
@@ -654,56 +708,18 @@ export default {
 			return `${base} | ${parts.join(' | ')}`;
 		},
 		getRelevantChecksStatusCounters() {
-			const progress = this.checksProgress && typeof this.checksProgress === 'object' ? this.checksProgress : {};
-			const sourceMode = String(progress.source_mode || '').trim().toLowerCase();
-			const action = String(this.selectedChecksAction || '').trim().toLowerCase();
-			const isScan = action === 'scan' || sourceMode === 'scan';
-			const saveOnly = isScan && (this.checksSaveOnly || !!progress.save_only);
-			const numberFrom = (...values) => {
-				for (const value of values) {
-					const numeric = Number(value);
-					if (Number.isFinite(numeric)) {
-						return Math.max(0, numeric);
-					}
-				}
-				return null;
-			};
-			const addCounter = (counters, key, labelKey, fallback, value, { showWhenZero = false } = {}) => {
-				const numeric = Number(value);
-				if (!Number.isFinite(numeric)) {
-					return;
-				}
-				if (!showWhenZero && numeric <= 0) {
-					return;
-				}
-				counters.push({ key, label: this.$avt(labelKey, fallback), value: numeric });
-			};
-			const counters = [];
-			if (isScan && saveOnly) {
-				addCounter(counters, 'processed', 'checks:counter_processed', 'Processed', numberFrom(progress.files_scanned, progress.processed_count, progress.scanned_count), { showWhenZero: true });
-				addCounter(counters, 'findings', 'checks:counter_findings', 'Findings', numberFrom(progress.findings_count, progress.saved_findings_count, progress.found_count), { showWhenZero: true });
-				addCounter(counters, 'skipped', 'checks:counter_skipped', 'Skipped', numberFrom(progress.skipped_count, progress.skip_count));
-				addCounter(counters, 'errors', 'checks:counter_errors', 'Errors', numberFrom(progress.error_count, progress.errors_count));
-				return counters;
+			const progress = this.checksProgress && typeof this.checksProgress === 'object'
+				? this.checksProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			if (status.schema_version === 1 && Array.isArray(status.counters)) {
+				return status.counters
+					.filter((counter) => counter && typeof counter === 'object')
+					.filter((counter) => counter.show_when_zero || Number(counter.value) > 0);
 			}
-			if (isScan) {
-				addCounter(counters, 'processed', 'checks:counter_processed', 'Processed', numberFrom(progress.files_scanned, progress.processed_count, progress.scanned_count), { showWhenZero: true });
-				addCounter(counters, 'skipped', 'checks:counter_skipped', 'Skipped', numberFrom(progress.skipped_count, progress.skip_count));
-				addCounter(counters, 'errors', 'checks:counter_errors', 'Errors', numberFrom(progress.error_count, progress.errors_count));
-				return counters;
-			}
-			if (action === 'findings') {
-				addCounter(counters, 'open', 'checks:counter_open', 'Open', this.checksEntries.length, { showWhenZero: true });
-				addCounter(counters, 'resolved', 'checks:counter_resolved', 'Resolved', numberFrom(progress.resolved_count));
-				addCounter(counters, 'ignored', 'checks:counter_ignored', 'Ignored', numberFrom(progress.ignored_count));
-				addCounter(counters, 'skipped', 'checks:counter_skipped', 'Skipped', numberFrom(progress.skipped_count));
-				addCounter(counters, 'total', 'checks:counter_total', 'Total', this.getChecksListTotalCount(), { showWhenZero: this.checksEntries.length > 0 });
-				return counters;
-			}
-			if (this.hasChecksStoredFindings) {
-				addCounter(counters, 'stored_findings', 'checks:counter_stored_findings', 'Saved findings', this.checksStoredFindingsCount);
-			}
-			return counters;
+			return [];
 		},
 		getChecksListResolvedCount() {
 			const progress = this.checksProgress && typeof this.checksProgress === 'object'

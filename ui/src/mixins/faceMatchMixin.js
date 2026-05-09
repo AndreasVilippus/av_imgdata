@@ -455,6 +455,59 @@ export default {
 		this.stopFaceMatchProgressPolling();
 	},
 	methods: {
+		getFaceMatchStatusCounterLabel(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return '';
+			}
+			const labelKey = String(counter.label_key || '').trim();
+			const fallback = String(counter.fallback_label || counter.key || '').trim();
+			return labelKey ? this.$avt(labelKey, fallback) : fallback;
+		},
+		normalizeFaceMatchStatusCounter(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return null;
+			}
+			const key = String(counter.key || '').trim();
+			const value = Number(counter.value);
+			if (!key || !Number.isFinite(value)) {
+				return null;
+			}
+			if (!counter.show_when_zero && value <= 0) {
+				return null;
+			}
+			return {
+				key,
+				label: this.getFaceMatchStatusCounterLabel(counter),
+				value: Math.max(0, value),
+				show_when_zero: !!counter.show_when_zero,
+			};
+		},
+		getFaceMatchStatusCounters() {
+			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
+				? this.faceMatchProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			if (status.schema_version === 1 && Array.isArray(status.counters)) {
+				return status.counters
+					.filter((counter) => counter && typeof counter === 'object')
+					.filter((counter) => counter.show_when_zero || Number(counter.value) > 0);
+			}
+			return [];
+		},
+		getFaceMatchStatusProgress() {
+			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
+				? this.faceMatchProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			if (status.schema_version === 1 && status.progress && typeof status.progress === 'object') {
+				return status.progress;
+			}
+			return {};
+		},
 		async refreshFaceMatchSessionState() {
 			await this.fetchFaceMatchFindingsStatus();
 			if (typeof this.fetchPipPackagesStatus === 'function') {
@@ -1135,10 +1188,19 @@ export default {
 			segments.push(`${this.$avt('face_match:label_transferred', 'Transferred')}: ${this.faceMatchDisplayedTransferredCount}`);
 			return segments;
 		},
-		withFaceMatchStatusCounts(text) {
-			const segments = this.getFaceMatchStatusCountSegments();
-			const normalized = String(text || '').trim();
-			return normalized ? `${normalized} | ${segments.join(' | ')}` : segments.join(' | ');
+		withFaceMatchStatusCounts(message) {
+			const counters = this.getFaceMatchStatusCounters();
+			if (!Array.isArray(counters) || !counters.length) {
+				return message;
+			}
+			const suffix = counters
+				.map((counter) => {
+					const label = String(counter.label || this.getFaceMatchStatusCounterLabel(counter) || '').replace(/:$/, '').trim();
+					return label ? `${label}: ${counter.value}` : String(counter.value);
+				})
+				.filter(Boolean)
+				.join(' · ');
+			return suffix ? `${message} | ${suffix}` : message;
 		},
 		async loadNextFaceMatch() {
 			if (this.faceMatchReviewingStoredFindings) {

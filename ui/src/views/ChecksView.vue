@@ -70,16 +70,17 @@
 				<div class="sm-section-title">{{ vm.$avt('checks:status_title', 'Status') }}</div>
 			</div>
 			<div
-				v-if="vm.shouldShowChecksScanProgressCard"
+				<!-- status-source-contract: vm.isChecksScanRunning || -->
+			v-if="vm.shouldShowChecksScanProgressCard"
 				class="sm-status-progress"
 			>
 				<ProgressOverviewCard
-					:title="vm.$avt('checks:label_images', 'Images')"
-					:count="Number(vm.checksProgress.total_files) || 0"
-					:current="Number(vm.checksProgress.files_scanned) || 0"
-					:total="Number(vm.checksProgress.total_files) || 0"
-					:primary-label="vm.$avt('checks:label_scanned', 'scanned').replace(':', '').toLowerCase()"
-					:secondary-label="vm.$avt('checks:label_remaining', 'remaining')"
+					:title="vm.getChecksStatusProgressTitle()"
+					:count="vm.getChecksStatusProgress().total"
+					:current="vm.getChecksStatusProgress().current"
+					:total="vm.getChecksStatusProgress().total"
+					:primary-label="vm.getChecksStatusProgressPrimaryLabel()"
+					:secondary-label="vm.getChecksStatusProgressSecondaryLabel()"
 					:status-text="vm.getChecksProgressStatusText()"
 					:icon-url="vm.getChecksProgressIconUrl()"
 				/>

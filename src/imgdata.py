@@ -1716,10 +1716,238 @@ class ImgDataService:
 
         return None
 
+    def _normalizeStatusChecksType(self, check_type: Any) -> str:
+        normalized = str(check_type or "").strip().lower()
+        options = {"dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts"}
+        return normalized if normalized in options else "dimension_issues"
+
+    def _deriveStatusPhase(self, *, running: Any = False, finished: Any = False, stop_requested: Any = False, message_key: str = "", status: str = "") -> str:
+        normalized_status = str(status or "").strip().lower()
+        normalized_message = str(message_key or "").strip().lower()
+        if normalized_status in {"failed", "error"} or "failed" in normalized_message or "error" in normalized_message:
+            return "failed"
+        if normalized_status in {"blocked"} or "blocked" in normalized_message:
+            return "blocked"
+        if bool(stop_requested) or normalized_status in {"stopping"} or "stopping" in normalized_message:
+            return "stopping" if bool(running) else "stopped"
+        if "empty" in normalized_message or normalized_status in {"empty"}:
+            return "empty"
+        if bool(finished) or normalized_status in {"finished", "done", "saved"}:
+            return "finished"
+        if "preparing" in normalized_message or "listing" in normalized_message:
+            return "preparing"
+        if bool(running):
+            return "running"
+        return "idle"
+
+    def _buildStatusCounter(self, key: str, *, value: Any, label_key: str = "", fallback_label: str = "", show_when_zero: bool = False) -> Dict[str, Any]:
+        try:
+            counter_value = max(0, int(value))
+        except Exception:
+            counter_value = 0
+        return {
+            "key": str(key or "").strip(),
+            "value": counter_value,
+            "label_key": str(label_key or "").strip(),
+            "fallback_label": str(fallback_label or "").strip(),
+            "show_when_zero": bool(show_when_zero),
+        }
+
+    def _buildStatusProgress(
+        self,
+        *,
+        kind: str,
+        current: Any = 0,
+        total: Any = 0,
+        title_key: str = "",
+        fallback_title: str = "",
+        primary_label_key: str = "",
+        fallback_primary_label: str = "",
+        secondary_label_key: str = "",
+        fallback_secondary_label: str = "",
+    ) -> Dict[str, Any]:
+        def to_int(value: Any) -> int:
+            try:
+                return max(0, int(value))
+            except Exception:
+                return 0
+        progress_current = to_int(current)
+        progress_total = to_int(total)
+        return {
+            "kind": str(kind or "").strip(),
+            "current": progress_current,
+            "total": progress_total,
+            "title_key": str(title_key or "").strip(),
+            "fallback_title": str(fallback_title or "").strip(),
+            "primary_label_key": str(primary_label_key or "").strip(),
+            "fallback_primary_label": str(fallback_primary_label or "").strip(),
+            "secondary_label_key": str(secondary_label_key or "").strip(),
+            "fallback_secondary_label": str(fallback_secondary_label or "").strip(),
+        }
+
+    def _buildStatusPayload(
+        self,
+        *,
+        operation: str,
+        action: str,
+        mode: str,
+        phase: str,
+        save_only: bool = False,
+        progress: Optional[Dict[str, Any]] = None,
+        counters: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        visible_counters: List[Dict[str, Any]] = []
+        for counter in counters or []:
+            if not isinstance(counter, dict):
+                continue
+            try:
+                value = int(counter.get("value") or 0)
+            except Exception:
+                value = 0
+            if value > 0 or bool(counter.get("show_when_zero")):
+                visible_counters.append(counter)
+        return {
+            "schema_version": 1,
+            "operation": str(operation or "").strip(),
+            "action": str(action or "").strip(),
+            "mode": str(mode or "").strip(),
+            "phase": str(phase or "").strip(),
+            "save_only": bool(save_only),
+            "progress": progress if isinstance(progress, dict) else {},
+            "counters": visible_counters,
+        }
+
+    def _buildChecksStatusPayload(
+        self,
+        *,
+        check_type: str,
+        source_mode: str,
+        phase: str,
+        save_only: bool = False,
+        files_scanned: Any = 0,
+        total_files: Any = 0,
+        findings_count: Any = 0,
+        resolved_count: Any = 0,
+        ignored_count: Any = 0,
+        skipped_count: Any = 0,
+        errors_count: Any = 0,
+        entries_current: Any = 0,
+        entries_total: Any = 0,
+        stored_findings_count: Any = 0,
+        transferred_count: Any = 0,
+        **_ignored: Any,
+    ) -> Dict[str, Any]:
+        def to_int(value: Any) -> int:
+            try:
+                return max(0, int(value))
+            except Exception:
+                return 0
+        normalized_type = self._normalizeStatusChecksType(check_type)
+        mode = str(source_mode or "").strip().lower() or "scan"
+        counters: List[Dict[str, Any]] = []
+        if mode == "findings":
+            progress = self._buildStatusProgress(kind="entries", current=entries_current, total=entries_total, title_key="checks:label_list_entries", fallback_title="Einträge", primary_label_key="checks:label_index", fallback_primary_label="Eintrag", secondary_label_key="checks:label_entries_remaining", fallback_secondary_label="verbleibend")
+            for key, value, label_key, fallback in (("resolved", resolved_count, "checks:counter_resolved", "Aufgelöst"), ("ignored", ignored_count, "checks:counter_ignored", "Ignoriert"), ("skipped", skipped_count, "checks:counter_skipped", "Übersprungen"), ("errors", errors_count, "checks:counter_errors", "Fehler")):
+                if to_int(value) > 0:
+                    counters.append(self._buildStatusCounter(key, value=value, label_key=label_key, fallback_label=fallback))
+        else:
+            progress = self._buildStatusProgress(kind="files", current=files_scanned, total=total_files, title_key="checks:label_images", fallback_title="Bilder", primary_label_key="checks:label_scanned", fallback_primary_label="geprüft", secondary_label_key="checks:label_remaining", fallback_secondary_label="verbleibend")
+            if save_only:
+                counters.append(self._buildStatusCounter("findings", value=findings_count, label_key="checks:counter_findings", fallback_label="Funde", show_when_zero=True))
+            else:
+                for key, value, label_key, fallback in (("findings", findings_count, "checks:counter_findings", "Funde"), ("resolved", resolved_count, "checks:counter_resolved", "Aufgelöst"), ("ignored", ignored_count, "checks:counter_ignored", "Ignoriert"), ("skipped", skipped_count, "checks:counter_skipped", "Übersprungen"), ("errors", errors_count, "checks:counter_errors", "Fehler")):
+                    if to_int(value) > 0:
+                        counters.append(self._buildStatusCounter(key, value=value, label_key=label_key, fallback_label=fallback))
+        return self._buildStatusPayload(operation="checks", action=normalized_type, mode=mode, phase=phase, save_only=save_only, progress=progress, counters=counters)
+
+    def _buildFaceMatchStatusPayload(
+        self,
+        *,
+        action: str,
+        source_mode: str = "scan",
+        phase: str = "running",
+        save_only: bool = False,
+        progress_kind: str = "",
+        current: Any = 0,
+        total: Any = 0,
+        findings_count: Any = 0,
+        transferred_count: Any = 0,
+        skipped_count: Any = 0,
+        errors_count: Any = 0,
+        created_count: Any = 0,
+        assigned_count: Any = 0,
+        updated_count: Any = 0,
+        **_ignored: Any,
+    ) -> Dict[str, Any]:
+        def to_int(value: Any) -> int:
+            try:
+                return max(0, int(value))
+            except Exception:
+                return 0
+        normalized_action = str(action or "").strip().lower()
+        mode = str(source_mode or "").strip().lower() or "scan"
+        kind = str(progress_kind or "").strip().lower()
+        if not kind:
+            kind = "entries" if mode == "findings" else "persons"
+        title_by_kind = {"entries": ("face_match:label_list_entries", "Einträge"), "files": ("face_match:label_files", "Dateien"), "images": ("face_match:label_images", "Bilder"), "persons": ("face_match:label_persons", "Personen"), "faces": ("face_match:label_faces", "Gesichter"), "metadata_faces": ("face_match:label_metadata_faces", "Metadaten-Gesichter"), "target_faces": ("face_match:label_target_faces", "Ziel-Gesichter")}
+        title_key, fallback_title = title_by_kind.get(kind, ("face_match:label_progress", "Fortschritt"))
+        progress = self._buildStatusProgress(kind=kind, current=current, total=total, title_key=title_key, fallback_title=fallback_title, primary_label_key="face_match:label_checked", fallback_primary_label="geprüft", secondary_label_key="face_match:label_remaining", fallback_secondary_label="verbleibend")
+        counters: List[Dict[str, Any]] = []
+        if mode == "findings":
+            for key, value, label_key, fallback in (("transferred", transferred_count, "face_match:counter_transferred", "Übertragen"), ("skipped", skipped_count, "face_match:counter_skipped", "Übersprungen"), ("errors", errors_count, "face_match:counter_errors", "Fehler")):
+                if to_int(value) > 0:
+                    counters.append(self._buildStatusCounter(key, value=value, label_key=label_key, fallback_label=fallback))
+        elif save_only:
+            counters.append(self._buildStatusCounter("findings", value=findings_count, label_key="face_match:counter_findings", fallback_label="Funde", show_when_zero=True))
+        else:
+            for key, value, label_key, fallback in (("transferred", transferred_count, "face_match:counter_transferred", "Übertragen"), ("skipped", skipped_count, "face_match:counter_skipped", "Übersprungen"), ("created", created_count, "face_match:counter_created", "Erstellt"), ("assigned", assigned_count, "face_match:counter_assigned", "Zugewiesen"), ("updated", updated_count, "face_match:counter_updated", "Geändert"), ("errors", errors_count, "face_match:counter_errors", "Fehler")):
+                if to_int(value) > 0:
+                    counters.append(self._buildStatusCounter(key, value=value, label_key=label_key, fallback_label=fallback))
+        return self._buildStatusPayload(operation="face_match", action=normalized_action, mode=mode, phase=phase, save_only=save_only, progress=progress, counters=counters)
+
+    def _attachChecksStatusPayload(self, payload: Dict[str, Any], *, check_type: str = "") -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+        existing_status = payload.get("status")
+        existing_status_text = existing_status if isinstance(existing_status, str) else ""
+        normalized_type = self._normalizeStatusChecksType(check_type or payload.get("check_type") or "")
+        source_mode = str(payload.get("source_mode") or "scan").strip().lower() or "scan"
+        phase = self._deriveStatusPhase(running=payload.get("running"), finished=payload.get("finished"), stop_requested=payload.get("stop_requested"), message_key=str(payload.get("message_key") or payload.get("message") or ""), status=existing_status_text)
+        payload["status"] = self._buildChecksStatusPayload(check_type=normalized_type, source_mode=source_mode, phase=phase, save_only=bool(payload.get("save_only")), files_scanned=payload.get("files_scanned", 0), total_files=payload.get("total_files", 0), findings_count=payload.get("findings_count", 0), resolved_count=payload.get("resolved_count", 0), ignored_count=payload.get("ignored_count", 0), skipped_count=payload.get("skipped_count", 0), errors_count=payload.get("errors_count", 0), entries_current=payload.get("entries_current", payload.get("current", 0)), entries_total=payload.get("entries_total", payload.get("count", payload.get("total", 0))))
+        return payload
+
+    def _attachFaceMatchStatusPayload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+        existing_status = payload.get("status")
+        if isinstance(existing_status, dict) and existing_status.get("schema_version") == 1:
+            return payload
+        action = str(payload.get("action") or payload.get("operation") or "").strip().lower()
+        source_mode = str(payload.get("source_mode") or payload.get("mode") or "scan").strip().lower() or "scan"
+        phase = self._deriveStatusPhase(running=payload.get("running"), finished=payload.get("finished"), stop_requested=payload.get("stop_requested"), message_key=str(payload.get("message_key") or payload.get("message") or payload.get("status") or ""), status=str(existing_status or "") if not isinstance(existing_status, dict) else "")
+        current = payload.get("entries_current", payload.get("persons_read", payload.get("images_read", payload.get("files_read", 0))))
+        total = payload.get("entries_total", payload.get("persons_total", payload.get("images_total", payload.get("files_total", 0))))
+        payload["status"] = self._buildFaceMatchStatusPayload(action=action, source_mode=source_mode, phase=phase, save_only=bool(payload.get("save_only")), progress_kind="entries" if source_mode == "findings" else "", current=current, total=total, findings_count=payload.get("findings_count", 0), transferred_count=payload.get("transferred_count", 0), skipped_count=payload.get("skipped_count", 0), errors_count=payload.get("errors_count", 0))
+        return payload
+
     def _buildChecksStartBlockedPayload(self, running_progress: Dict[str, Any], *, requested_check_type: str) -> Dict[str, Any]:
         payload = dict(running_progress) if isinstance(running_progress, dict) else {}
+        requested_type = self._normalizeStatusChecksType(requested_check_type)
         payload["blocked_by_running_scan"] = True
-        payload["requested_check_type"] = self._normalizeChecksType(requested_check_type)
+        payload["requested_check_type"] = requested_type
+        payload["status"] = self._buildChecksStatusPayload(
+            check_type=str(payload.get("check_type") or requested_type or ""),
+            source_mode=str(payload.get("source_mode") or "scan"),
+            phase="blocked",
+            save_only=bool(payload.get("save_only")),
+            files_scanned=payload.get("files_scanned", 0),
+            total_files=payload.get("total_files", 0),
+            findings_count=payload.get("findings_count", 0),
+            resolved_count=payload.get("resolved_count", 0),
+            ignored_count=payload.get("ignored_count", 0),
+            skipped_count=payload.get("skipped_count", 0),
+            errors_count=payload.get("errors_count", 0),
+        )
         return payload
 
     def _invalidateChecksCandidatePathsCache(self, user_key: str, check_type: Any) -> None:
