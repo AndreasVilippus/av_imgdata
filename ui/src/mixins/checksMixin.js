@@ -61,13 +61,26 @@ export default {
 				|| (this.selectedChecksAction === 'findings' && this.checksLoading)
 			);
 		},
+		checksCanRestartSavedScan() {
+			return !!(
+				this.selectedChecksAction === 'scan'
+				&& (this.checksSaveOnly || this.hasChecksStoredFindings)
+				&& !this.isChecksReviewActive
+				&& !this.isChecksReviewStopping
+				&& !this.checksLoading
+			);
+		},
 		checksPrimaryButtonLabel() {
 			if (this.isChecksReviewActive || this.isChecksReviewStopping) {
 				return this.$avt('checks:button_stop', 'Stop');
 			}
-			return this.checksLoading
-				? this.$avt('checks:button_loading', 'Loading...')
-				: this.$avt('checks:button_start', 'Start');
+			if (this.checksLoading) {
+				return this.$avt('checks:button_loading', 'Loading...');
+			}
+			if (this.checksCanRestartSavedScan) {
+				return this.$avt('checks:button_restart', 'Restart');
+			}
+			return this.$avt('checks:button_start', 'Start');
 		},
 		shouldShowChecksScanProgressCard() {
 			return !!(

@@ -48,12 +48,15 @@ cd "${PACKAGE_ROOT}"
 [[ -d "ui" ]] || fail "Required directory not found: ui"
 [[ -f "${PKGCREATE}" ]] || fail "PkgCreate.py not found: ${PKGCREATE}"
 
+log "Running structure checks"
+python3 tools/check_syntax_and_structure.py
+
 log "Running Python tests"
 TEST_PKGVAR="$(mktemp -d)"
 trap 'rm -rf "${TEST_PKGVAR}"' EXIT
 export SYNOPKG_PKGVAR="${TEST_PKGVAR}"
 
-python3 -m unittest discover -s tests -p 'test_*.py'
+PYTHONPATH=src python3 -m pytest tests/test_*.py
 
 log "Installing UI dependencies"
 cd "${PACKAGE_ROOT}/ui"

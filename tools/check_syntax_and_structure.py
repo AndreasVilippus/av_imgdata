@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import ast
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+PY_DIRS = [ROOT / "src", ROOT / "tests"]
+JS_DIRS = [ROOT / "ui" / "src"]
+
+
+def fail(message: str) -> None:
+    print(f"FAIL: {message}")
+
+
+def check_python_ast() -> int:
+    errors = 0
+    for base in PY_DIRS:
+        for path in base.rglob("*.py"):
+            try:
+                ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except SyntaxError as exc:
+                errors += 1
+                fail(f"Python syntax: {path}:{exc.lineno}:{exc.offset}: {exc.msg}")
+    return errors
+
+
+def check_imgdata_class_boundaries() -> int:
+    path = ROOT / "src" / "imgdata.py"
+    if not path.exists():
+        return 0
+
+    source = path.read_text(encoding="utf-8")
+    errors = 0
+
+    class_match = re.search(r"^class ImgDataService:\n", source, re.M)
+    if not class_match:
+        fail("src/imgdata.py: class ImgDataService not found")
+        return 1
+
+    # In imgdata.py sollten Service-Methoden mit vier Leerzeichen eingerückt sein.
+    suspicious_defs = []
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        if re.match(r"^def [A-Za-z_]", line):
+            suspicious_defs.append((lineno, line.strip()))
+
+    allowed_top_level = {
+        "def _attach_checks_status_for_response",  # nur falls in API-Datei, nicht hier
+    }
+    for lineno, text in suspicious_defs:
+        if not any(text.startswith(prefix) for prefix in allowed_top_level):
+            errors += 1
+            fail(f"src/imgdata.py:{lineno}: top-level def found, possible lost class indentation: {text}")
+
+    # Doppelte direkt aufeinanderfolgende Initialisierungen wie result_entry = None.
+    lines = source.splitlines()
+    for index in range(len(lines) - 1):
+        if lines[index].strip() and lines[index].strip() == lines[index + 1].strip():
+            if re.match(r"[A-Za-z_][A-Za-z0-9_]*\s*=\s*(None|{}|\[\]|0|False|True)$", lines[index].strip()):
+                errors += 1
+                fail(
+                    f"src/imgdata.py:{index + 1}: duplicated adjacent assignment: "
+                    f"{lines[index].strip()}"
+                )
+
+    return errors
+
+
+def check_vue_computed_parameter_functions() -> int:
+    errors = 0
+
+    for base in JS_DIRS:
+        for path in base.rglob("*.js"):
+            source = path.read_text(encoding="utf-8")
+
+            computed_match = re.search(r"\n\tcomputed:\s*\{(?P<body>.*?)\n\twatch:\s*\{", source, re.S)
+            if not computed_match:
+                continue
+
+            body = computed_match.group("body")
+            for match in re.finditer(r"\n\t\t([A-Za-z_$][\w$]*)\s*\(([^)]*[^\s)])\)\s*\{", body):
+                name = match.group(1)
+                params = match.group(2).strip()
+                if params:
+                    errors += 1
+                    line = source[:computed_match.start("body") + match.start()].count("\n") + 1
+                    fail(
+                        f"{path.relative_to(ROOT)}:{line}: computed property has parameters; "
+                        f"move to methods: {name}({params})"
+                    )
+
+    return errors
+
+
+def check_js_parse_with_build() -> int:
+    # Webpack/Babel fängt JS/Vue-Syntaxfehler zuverlässig ab.
+    result = subprocess.run(
+        ["npm", "--prefix", "ui", "run", "build"],
+        cwd=ROOT,
+        text=True,
+    )
+    return 0 if result.returncode == 0 else 1
+
+
+def main() -> int:
+    errors = 0
+    errors += check_python_ast()
+    errors += check_imgdata_class_boundaries()
+    errors += check_vue_computed_parameter_functions()
+
+    if errors:
+        print(f"\nStatic checks failed: {errors}")
+        return 1
+
+    print("Static Python/Vue structure checks passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

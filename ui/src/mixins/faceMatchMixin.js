@@ -118,15 +118,6 @@ export default {
 				|| Object.keys(progress).length
 			);
 		},
-		faceMatchNumberFrom(...values) {
-			for (const value of values) {
-				const numeric = Number(value);
-				if (Number.isFinite(numeric) && numeric > 0) {
-					return numeric;
-				}
-			}
-			return 0;
-		},
 		faceMatchFileProgressTotal() {
 			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
 				? this.faceMatchProgress
@@ -282,6 +273,16 @@ export default {
 				|| !!(this.faceMatchProgress && this.faceMatchProgress.paused)
 			);
 		},
+		faceMatchCanRestartSavedFileSearch() {
+			return !!(
+				this.selectedFaceMatchingAction === 'search_photo_face_in_file'
+				&& !this.faceMatchUseStoredFindings
+				&& (this.faceMatchSaveOnly || this.hasFaceMatchStoredFindings)
+				&& this.faceMatchIsPaused
+				&& !this.faceMatchLoading
+				&& !this.faceMatchAuthRequired
+			);
+		},
 		faceMatchPrimaryButtonLabel() {
 			if (this.faceMatchLoading) {
 				return this.$avt('face_match:button_stop', 'Stop');
@@ -289,7 +290,7 @@ export default {
 			if (this.faceMatchAuthRequired) {
 				return this.$avt('face_match:button_resume_login', 'Resume after login');
 			}
-			if (this.faceMatchIsPaused) {
+			if (this.faceMatchCanRestartSavedFileSearch) {
 				return this.$avt('face_match:button_restart', 'Restart');
 			}
 			return this.$avt('face_match:button_start', 'Start');
@@ -439,6 +440,11 @@ export default {
 				this.resetFaceMatchFindingsReview();
 			}
 		},
+		faceMatchSaveOnly(saveOnly) {
+			if (saveOnly) {
+				this.faceMatchUseStoredFindings = false;
+			}
+		},
 	},
 	mounted() {
 		this.addIconUrl = this.resolveLocalIconUrl('add_icon.png');
@@ -455,6 +461,15 @@ export default {
 		this.stopFaceMatchProgressPolling();
 	},
 	methods: {
+		faceMatchNumberFrom(...values) {
+			for (const value of values) {
+				const numeric = Number(value);
+				if (Number.isFinite(numeric) && numeric > 0) {
+					return numeric;
+				}
+			}
+			return 0;
+		},
 		getFaceMatchStatusCounterLabel(counter) {
 			if (!counter || typeof counter !== 'object') {
 				return '';
