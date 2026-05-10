@@ -24,7 +24,7 @@ def test_face_match_restart_button_is_limited_to_saved_file_search():
     assert "selectedFaceMatchingAction === 'search_photo_face_in_file'" in guard
     assert "!this.faceMatchUseStoredFindings" in guard
     assert "faceMatchSaveOnly" in guard
-    assert "hasFaceMatchStoredFindings" in guard
+    assert "hasFaceMatchStoredFindings" not in guard
     assert "faceMatchIsPaused" in guard
     assert "!this.faceMatchLoading" in guard
     assert "!this.faceMatchAuthRequired" in guard
@@ -70,7 +70,7 @@ def test_checks_restart_button_is_limited_to_saved_scan():
     guard = _computed_method(source, "checksCanRestartSavedScan")
     assert "selectedChecksAction === 'scan'" in guard
     assert "checksSaveOnly" in guard
-    assert "hasChecksStoredFindings" in guard
+    assert "hasChecksStoredFindings" not in guard
     assert "!this.isChecksReviewActive" in guard
     assert "!this.isChecksReviewStopping" in guard
     assert "!this.checksLoading" in guard
@@ -91,3 +91,14 @@ def test_checks_restart_button_does_not_depend_on_generic_progress_presence():
     assert "checksCurrentItem" not in guard
     assert "checksEntries.length" not in guard
     assert "selectedChecksAction === 'findings'" not in guard
+
+
+
+def test_checks_restart_translation_exists_for_german_ui():
+    source = Path("ui/texts/ger/strings").read_text(encoding="utf-8")
+    checks_start = source.find("\n[checks]\n")
+    assert checks_start >= 0
+    next_section = source.find("\n[", checks_start + len("\n[checks]\n"))
+    checks = source[checks_start: next_section if next_section >= 0 else len(source)]
+
+    assert 'button_restart="Neustart"' in checks

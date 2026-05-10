@@ -1581,6 +1581,47 @@ class ImgDataService:
         return display_progress
 
     def getFaceMatchingProgress(self, user_key: str) -> Dict[str, Any]:
+        normalized_user = str(user_key or "").strip()
+
+        candidate_keys: List[str] = []
+        for method_name in (
+            "_faceMatchingStateKey",
+            "_faceMatchStateKey",
+            "_faceMatchingProgressStateKey",
+        ):
+            method = getattr(self, method_name, None)
+            if callable(method):
+                try:
+                    candidate_keys.append(method(normalized_user))
+                except Exception:
+                    pass
+        if normalized_user:
+            candidate_keys.extend([
+                normalized_user,
+                f"{normalized_user}:face_match",
+                f"{normalized_user}_face_match",
+            ])
+        candidate_keys.append("face_match")
+
+        memory_progress: Dict[str, Any] = {}
+        with self._face_matching_progress_lock:
+            for key in candidate_keys:
+                progress = self._face_matching_progress.get(key)
+                if isinstance(progress, dict) and progress:
+                    memory_progress = dict(progress)
+                    break
+            if not memory_progress and len(self._face_matching_progress) == 1:
+                only_progress = next(iter(self._face_matching_progress.values()))
+                if isinstance(only_progress, dict) and only_progress:
+                    memory_progress = dict(only_progress)
+
+        if memory_progress:
+            return self._attachFaceMatchStatusPayload(memory_progress)
+
+        return self._getFaceMatchingProgressCore(user_key)
+
+
+    def _getFaceMatchingProgressCore(self, user_key: str) -> Dict[str, Any]:
         current = self.file_analysis.readRuntimeState("face_match_progress", user_key)
         if not isinstance(current, dict) or not current:
             with self._face_matching_progress_lock:
@@ -2004,6 +2045,48 @@ class ImgDataService:
         return current
 
     def getChecksProgress(self, user_key: str, check_type: str) -> Dict[str, Any]:
+        normalized_user = str(user_key or "").strip()
+        try:
+            normalized_type = self._normalizeChecksType(check_type)
+        except Exception:
+            normalized_type = str(check_type or "").strip().lower()
+
+        candidate_keys: List[str] = []
+        try:
+            candidate_keys.append(self._checksStateKey(normalized_user, normalized_type))
+        except Exception:
+            pass
+        if normalized_user and normalized_type:
+            candidate_keys.extend([
+                f"{normalized_user}_{normalized_type}",
+                f"{normalized_user}:{normalized_type}",
+            ])
+        if normalized_type:
+            candidate_keys.append(normalized_type)
+        if normalized_user:
+            candidate_keys.append(normalized_user)
+
+        memory_progress: Dict[str, Any] = {}
+        with self._checks_progress_lock:
+            for key in candidate_keys:
+                progress = self._checks_progress.get(key)
+                if isinstance(progress, dict) and progress:
+                    memory_progress = dict(progress)
+                    break
+            if not memory_progress and len(self._checks_progress) == 1:
+                only_progress = next(iter(self._checks_progress.values()))
+                if isinstance(only_progress, dict) and only_progress:
+                    progress_type = str(only_progress.get("check_type") or "").strip().lower()
+                    if not normalized_type or not progress_type or progress_type == normalized_type:
+                        memory_progress = dict(only_progress)
+
+        if memory_progress:
+            return self._attachChecksStatusPayload(memory_progress, check_type=normalized_type)
+
+        return self._getChecksProgressCore(user_key, check_type)
+
+
+    def _getChecksProgressCore(self, user_key: str, check_type: str) -> Dict[str, Any]:
         normalized_type = self._normalizeChecksType(check_type)
         state_key = self._checksStateKey(user_key, normalized_type)
         current = self.file_analysis.readRuntimeState("checks_progress", state_key)
@@ -2604,7 +2687,91 @@ class ImgDataService:
             }
         return None
 
-    def _resolveChecksReviewEntry(
+    @staticmethod
+    def _storedChecksFaceFromEntry(face: Any) -> Dict[str, Any]:
+        if isinstance(face, MetadataFace):
+            face = face.to_dict()
+        if not isinstance(face, dict):
+            return {}
+        return dict(face)
+
+    def _buildStoredChecksReviewItemFromEntry(self, entry: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(entry, dict):
+            return None
+        review_type = str(entry.get("review_type") or "").strip().lower()
+        image_path = str(entry.get("image_path") or "").strip()
+        if not review_type or not image_path:
+            return None
+
+        if review_type in {"name_conflicts", "duplicate_faces", "position_deviations"}:
+            left_face = self._storedChecksFaceFromEntry(
+                entry.get("left_face_target")
+                or entry.get("left_face_signature")
+                or entry.get("left_face")
+            )
+            right_face = self._storedChecksFaceFromEntry(
+                entry.get("right_face_target")
+                or entry.get("right_face_signature")
+                or entry.get("right_face")
+            )
+            if not left_face or not right_face:
+                return None
+
+            left_name = str(entry.get("left_name") or left_face.get("name") or entry.get("face_name") or "").strip()
+            right_name = str(entry.get("right_name") or right_face.get("name") or entry.get("face_name") or "").strip()
+
+            item = dict(entry)
+            item.update({
+                "review_type": review_type,
+                "image_path": image_path,
+                "left_name": left_name,
+                "right_name": right_name,
+                "left_format": str(left_face.get("source_format") or entry.get("left_format") or "").strip(),
+                "right_format": str(right_face.get("source_format") or entry.get("right_format") or "").strip(),
+                "left_source": str(left_face.get("source") or entry.get("left_source") or "").strip(),
+                "right_source": str(right_face.get("source") or entry.get("right_source") or "").strip(),
+                "left_face_target": left_face,
+                "right_face_target": right_face,
+                "left_face_signature": left_face,
+                "right_face_signature": right_face,
+                "left_state": str(entry.get("left_state") or "alert").strip() or "alert",
+                "right_state": str(entry.get("right_state") or "alert").strip() or "alert",
+                "from_stored_finding": True,
+            })
+            return item
+
+        if review_type == "dimension_issues":
+            item = dict(entry)
+            item.setdefault("review_type", review_type)
+            item.setdefault("image_path", image_path)
+            item["from_stored_finding"] = True
+            return item
+
+        return None
+
+    def _resolveChecksReviewEntry(self, *, entry: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        resolved = self._resolveChecksReviewEntryCore(entry=entry, **kwargs)
+        if not isinstance(resolved, dict):
+            return resolved
+
+        if (
+            resolved.get("entry") is None
+            and resolved.get("item") is None
+            and int(resolved.get("auto_applied_count") or 0) == 0
+            and not resolved.get("stop_requested")
+        ):
+            stored_item = self._buildStoredChecksReviewItemFromEntry(entry)
+            if stored_item is not None:
+                next_resolved = dict(resolved)
+                next_resolved["entry"] = entry
+                next_resolved["item"] = stored_item
+                next_resolved["stale"] = False
+                next_resolved["from_stored_finding"] = True
+                return next_resolved
+
+        return resolved
+
+    def _resolveChecksReviewEntryCore(
         self,
         *,
         entry: Dict[str, Any],

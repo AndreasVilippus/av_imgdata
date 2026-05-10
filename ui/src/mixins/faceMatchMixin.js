@@ -277,7 +277,7 @@ export default {
 			return !!(
 				this.selectedFaceMatchingAction === 'search_photo_face_in_file'
 				&& !this.faceMatchUseStoredFindings
-				&& (this.faceMatchSaveOnly || this.hasFaceMatchStoredFindings)
+				&& this.faceMatchSaveOnly
 				&& this.faceMatchIsPaused
 				&& !this.faceMatchLoading
 				&& !this.faceMatchAuthRequired

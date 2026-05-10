@@ -64,7 +64,7 @@ export default {
 		checksCanRestartSavedScan() {
 			return !!(
 				this.selectedChecksAction === 'scan'
-				&& (this.checksSaveOnly || this.hasChecksStoredFindings)
+				&& this.checksSaveOnly
 				&& !this.isChecksReviewActive
 				&& !this.isChecksReviewStopping
 				&& !this.checksLoading
