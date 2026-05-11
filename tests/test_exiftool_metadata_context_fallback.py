@@ -52,9 +52,8 @@ def test_heic_metadata_fallback_uses_single_exiftool_context_when_native_values_
 
         native_dimensions.assert_called_once()
         native_orientation.assert_called_once()
-        read_context.assert_called_once_with(image_path, include_xmp=True)
-        assert metadata["xmp_content"] == "<xmpmeta><rdf:RDF/></xmpmeta>"
-        assert metadata["xmp_source"] == "embedded_xmp_exiftool"
+        read_context.assert_called_once_with(image_path, include_xmp=False)
+        assert metadata.get("xmp_content") in (None, "")
         assert metadata["image_dimensions"] == {"width": 4032, "height": 3024, "unit": "pixel"}
         assert metadata["image_orientation"] == 6
     finally:
@@ -69,3 +68,28 @@ def test_metadata_context_label_distinguishes_orientation_and_size_from_face_met
     assert "Metadaten (Orientierung, Größe, ...)" in german
     assert "metadata (orientation, size, ...)" in english
     assert "metadata (orientation, size, ...)" in view
+
+
+
+def test_metadata_context_is_not_called_when_only_xmp_is_missing_and_native_context_is_complete():
+    service = ImgDataService(SessionManager())
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+        image_path = handle.name
+        handle.write(b"\xff\xd8\xff\xd9")
+
+    try:
+        with patch.object(service.config, "readMergedConfig", return_value=_config(prefer_context=False)), \
+             patch.object(service.files, "findXmpForImage", return_value=None), \
+             patch.object(service.files, "readImageDimensions", return_value={"width": 50, "height": 40, "unit": "pixel"}), \
+             patch.object(service.files, "readJpegExifOrientation", return_value=1), \
+             patch.object(service.files, "loadXmpFromImageParsed", return_value=None), \
+             patch.object(service.exiftool_handler, "isAvailable", return_value=True), \
+             patch.object(service.exiftool_handler, "readMetadataContext", side_effect=AssertionError("must not call ExifTool context for XMP-only miss")), \
+             patch.object(service.metadata_parser, "parse", side_effect=lambda **kwargs: kwargs):
+            metadata = service._readImageMetadata(image_path)
+
+        assert metadata["image_dimensions"] == {"width": 50, "height": 40, "unit": "pixel"}
+        assert metadata["image_orientation"] == 1
+    finally:
+        Path(image_path).unlink(missing_ok=True)

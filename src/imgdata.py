@@ -685,7 +685,8 @@ class ImgDataService:
                 xmp_source = jpeg_context.get("xmp_source") or "embedded_xmp_parsed"
 
         if not xmp_content and exiftool_available:
-            # XMP wird jetzt über readMetadataContext geladen, wenn nötig
+            # Do not start ExifTool only to prove that embedded XMP is absent.
+            # Reuse XMP only if a context was already loaded for another reason.
             if exiftool_context and exiftool_context.get("success") and exiftool_context.get("xmp_content"):
                 xmp_content = exiftool_context["xmp_content"]
                 xmp_source = "embedded_xmp_exiftool"
@@ -703,7 +704,8 @@ class ImgDataService:
                     exiftool_context = cached_context
                     cached_context_handled = True
             if not xmp_content and not cached_context_handled:
-                exiftool_context = get_exiftool_metadata_context(include_xmp=True)
+                # Do not start ExifTool only to prove that embedded XMP is absent.
+                # If a context was already loaded for size/orientation, reuse its XMP.
                 if exiftool_context and exiftool_context.get("success") and exiftool_context.get("xmp_content"):
                     xmp_content = exiftool_context["xmp_content"]
                     xmp_source = "embedded_xmp_exiftool"
@@ -758,12 +760,12 @@ class ImgDataService:
             image_orientation = jpeg_context.get("orientation") if jpeg_context else self.files.readJpegExifOrientation(image_path)
             missing_dimensions = not image_dimensions.get("width") or not image_dimensions.get("height")
             missing_orientation = image_orientation is None
-            if exiftool_available and (missing_dimensions or missing_orientation or not xmp_content):
-                fallback_context = get_exiftool_metadata_context(include_xmp=not xmp_content)
+            if exiftool_available and (missing_dimensions or missing_orientation):
+                fallback_context = get_exiftool_metadata_context(include_xmp=False)
                 if fallback_context and fallback_context.get("success"):
-                    if not xmp_content and fallback_context.get("xmp_content"):
-                        xmp_content = fallback_context["xmp_content"]
-                        xmp_source = "embedded_xmp_exiftool"
+                    # Fallback context is requested with include_xmp=False here.
+                    # Do not copy XMP from mocks or unexpected ExifTool output in this path;
+                    # this fallback is only for missing size/orientation.
                     fallback_dimensions = fallback_context.get("image_dimensions")
                     if (
                         missing_dimensions
