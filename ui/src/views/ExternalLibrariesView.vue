@@ -191,14 +191,14 @@
 						<span class="config-card-desc">{{ vm.$avt('config:hint_sidecar_read_mode', 'This replaces the older overlapping sidecar checkboxes. Direct reading is fastest; ExifTool can be used first, only, or as fallback.') }}</span>
 					</label>
 
-					<label class="config-checkbox" :title="vm.$avt('config:hint_prefer_exiftool_for_context', 'Prefer ExifTool for bundled metadata context: embedded XMP, dimensions and orientation.')">
+					<label class="config-checkbox" :title="vm.$avt('config:hint_prefer_exiftool_for_context', 'Prefer ExifTool for bundled metadata context: embedded XMP, size and orientation. Face data is not read preferentially from ExifTool by this option.')">
 						<input
 							:checked="vm.externalLibrariesConfigModel.files.PREFER_EXIFTOOL_FOR_CONTEXT"
 							type="checkbox"
 							:disabled="vm.externalLibrariesSaving || !vm.canConfigureExiftoolReadOptions"
 							@change="vm.setExternalLibrariesFileConfigValue('PREFER_EXIFTOOL_FOR_CONTEXT', $event.target.checked)"
 						/>
-						<span>{{ vm.$avt('config:label_prefer_exiftool_for_context', 'Prefer ExifTool for metadata context') }}</span>
+						<span>{{ vm.$avt('config:label_prefer_exiftool_for_context', 'Prefer ExifTool for metadata (orientation, size, ...)') }}</span>
 					</label>
 
 					<label class="config-checkbox" :title="vm.$avt('config:hint_embedded_xmp_full_scan_enabled', 'Use the native embedded-XMP full scan as an extended fallback when ExifTool does not provide embedded XMP.')">

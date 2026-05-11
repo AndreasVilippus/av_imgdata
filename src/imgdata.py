@@ -620,6 +620,24 @@ class ImgDataService:
 
         exiftool_context: Optional[Dict[str, Any]] = None
 
+        def get_exiftool_metadata_context(*, include_xmp: bool = True) -> Optional[Dict[str, Any]]:
+            nonlocal exiftool_context
+            if not exiftool_available:
+                return None
+            if exiftool_context is not None:
+                return exiftool_context
+            if metadata_context_cache and image_path in metadata_context_cache:
+                if io_metrics:
+                    io_metrics.increment_cache_hit("metadata_context")
+                exiftool_context = metadata_context_cache[image_path]
+                return exiftool_context
+            if io_metrics:
+                io_metrics.increment_cache_miss("metadata_context")
+                io_metrics.exiftool_calls += 1
+            exiftool_context = self.exiftool_handler.readMetadataContext(image_path, include_xmp=include_xmp)
+            return exiftool_context
+
+
         if xmp_path:
             if sidecar_read_mode == "exiftool_only":
                 if exiftool_available:
@@ -679,10 +697,10 @@ class ImgDataService:
                     exiftool_context = cached_context
                     cached_context_handled = True
             if not xmp_content and not cached_context_handled:
-                if io_metrics:
-                    io_metrics.exiftool_calls += 1
-                xmp_content = self.exiftool_handler.loadEmbeddedXmp(image_path)
-                xmp_source = "embedded_xmp_exiftool" if xmp_content else ""
+                exiftool_context = get_exiftool_metadata_context(include_xmp=True)
+                if exiftool_context and exiftool_context.get("success") and exiftool_context.get("xmp_content"):
+                    xmp_content = exiftool_context["xmp_content"]
+                    xmp_source = "embedded_xmp_exiftool"
 
         if not xmp_content:
             embedded_xmp_full_scan_enabled = bool(files_config.get("EMBEDDED_XMP_FULL_SCAN_ENABLED", False))
@@ -702,17 +720,7 @@ class ImgDataService:
         image_orientation = jpeg_context.get("orientation") if jpeg_context else None
 
         if exiftool_available and prefer_exiftool_for_context:
-            # Prüfe zuerst Cache, falls verfügbar
-            if metadata_context_cache and image_path in metadata_context_cache:
-                if io_metrics:
-                    io_metrics.increment_cache_hit("metadata_context")
-                exiftool_context = metadata_context_cache[image_path]
-            else:
-                # Verwende gebündelten ExifTool-Aufruf für Kontext
-                if io_metrics:
-                    io_metrics.increment_cache_miss("metadata_context")
-                    io_metrics.exiftool_calls += 1
-                exiftool_context = self.exiftool_handler.readMetadataContext(image_path, include_xmp=not xmp_content)
+            exiftool_context = get_exiftool_metadata_context(include_xmp=not xmp_content)
             if exiftool_context.get("success"):
                 if not xmp_content and exiftool_context.get("xmp_content"):
                     xmp_content = exiftool_context["xmp_content"]
@@ -742,29 +750,33 @@ class ImgDataService:
                 "unit": "pixel",
             } if jpeg_context else self.files.readImageDimensions(image_path)
             image_orientation = jpeg_context.get("orientation") if jpeg_context else self.files.readJpegExifOrientation(image_path)
-            if (not image_dimensions.get("width") or not image_dimensions.get("height")) and exiftool_available:
-                if exiftool_context and exiftool_context.get("success"):
-                    image_dimensions = exiftool_context["image_dimensions"]
-                elif metadata_context_cache and image_path in metadata_context_cache:
-                    if io_metrics:
-                        io_metrics.increment_cache_hit("metadata_context")
-                    cached_context = metadata_context_cache[image_path]
-                    if cached_context.get("success"):
-                        image_dimensions = cached_context["image_dimensions"]
-                else:
+            missing_dimensions = not image_dimensions.get("width") or not image_dimensions.get("height")
+            missing_orientation = image_orientation is None
+            if exiftool_available and (missing_dimensions or missing_orientation or not xmp_content):
+                fallback_context = get_exiftool_metadata_context(include_xmp=not xmp_content)
+                if fallback_context and fallback_context.get("success"):
+                    if not xmp_content and fallback_context.get("xmp_content"):
+                        xmp_content = fallback_context["xmp_content"]
+                        xmp_source = "embedded_xmp_exiftool"
+                    fallback_dimensions = fallback_context.get("image_dimensions")
+                    if (
+                        missing_dimensions
+                        and isinstance(fallback_dimensions, dict)
+                        and fallback_dimensions.get("width")
+                        and fallback_dimensions.get("height")
+                    ):
+                        image_dimensions = fallback_dimensions
+                    if missing_orientation and fallback_context.get("image_orientation") is not None:
+                        image_orientation = fallback_context.get("image_orientation")
+
+                # Compatibility fallback: keep the previous single-value ExifTool readers as a
+                # last resort if the bundled context call fails or omits a value. This preserves
+                # existing behavior for formats/tests where only the old fallback is mocked.
+                if missing_dimensions and (not image_dimensions.get("width") or not image_dimensions.get("height")):
                     if io_metrics:
                         io_metrics.exiftool_calls += 1
                     image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
-            if image_orientation is None and exiftool_available:
-                if exiftool_context and exiftool_context.get("success"):
-                    image_orientation = exiftool_context["image_orientation"]
-                elif metadata_context_cache and image_path in metadata_context_cache:
-                    if io_metrics:
-                        io_metrics.increment_cache_hit("metadata_context")
-                    cached_context = metadata_context_cache[image_path]
-                    if cached_context.get("success"):
-                        image_orientation = cached_context["image_orientation"]
-                else:
+                if missing_orientation and image_orientation is None:
                     if io_metrics:
                         io_metrics.exiftool_calls += 1
                     image_orientation = self.exiftool_handler.readImageOrientation(image_path)
