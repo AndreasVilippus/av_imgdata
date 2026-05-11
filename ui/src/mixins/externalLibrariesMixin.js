@@ -49,6 +49,29 @@ export default {
 				{ value: 'xmp_dir_filename', label: this.$avt('config:label_sidecar_variant_xmp_dir_filename', 'xmp subfolder: xmp/image.jpg.xmp') },
 			];
 		},
+		externalLibrariesSidecarReadModeOptions() {
+			return [
+				{ value: 'direct_only', label: this.$avt('config:sidecar_read_mode_direct_only', 'Direct reader only') },
+				{ value: 'direct_first', label: this.$avt('config:sidecar_read_mode_direct_first', 'Direct reader, ExifTool fallback') },
+				{ value: 'exiftool_first', label: this.$avt('config:sidecar_read_mode_exiftool_first', 'ExifTool first, direct fallback') },
+				{ value: 'exiftool_only', label: this.$avt('config:sidecar_read_mode_exiftool_only', 'ExifTool only') },
+			];
+		},
+		isExiftoolEnabled() {
+			return !!(this.externalLibrariesConfigModel.files && this.externalLibrariesConfigModel.files.USE_EXIFTOOL);
+		},
+		canConfigureExiftoolReadOptions() {
+			return this.isExiftoolEnabled;
+		},
+		canConfigureExiftoolPersistentMode() {
+			return this.isExiftoolEnabled;
+		},
+		canConfigureManualExiftoolPath() {
+			return !!(this.externalLibrariesConfigModel.files && this.externalLibrariesConfigModel.files.USE_MANUAL_PATHEXIFTOOL);
+		},
+		canConfigureExiftoolExtensions() {
+			return this.isExiftoolEnabled;
+		},
 		insightFacePipPackageStatus() {
 			const packages = this.pipPackagesStatus && typeof this.pipPackagesStatus.packages === 'object'
 				? this.pipPackagesStatus.packages
@@ -83,7 +106,11 @@ export default {
 					CHECK_EXIFTOOL_UPDATES: true,
 					USE_EXIFTOOL_FOR_SIDECARS: false,
 					SIDECAR_EXIFTOOL_FALLBACK_ENABLED: false,
+					SIDECAR_READ_MODE: 'direct_only',
 					PREFER_EXIFTOOL_FOR_CONTEXT: false,
+					EMBEDDED_XMP_FULL_SCAN_ENABLED: false,
+					EXIFTOOL_PERSISTENT_ENABLED: true,
+					EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS: 30,
 					PATHEXIFTOOL: 'exiftool',
 					USE_MANUAL_PATHEXIFTOOL: false,
 					MANUAL_PATHEXIFTOOL: '',
@@ -156,6 +183,31 @@ export default {
 				.filter((entry, index, arr) => entry && allowed.includes(entry) && arr.indexOf(entry) === index);
 			return normalized.length ? normalized : [...fallback];
 		},
+		normalizeExternalLibrariesSidecarReadMode(value, files = {}) {
+			const normalized = String(value || '').trim().toLowerCase();
+			if (['direct_only', 'direct_first', 'exiftool_first', 'exiftool_only'].includes(normalized)) {
+				return normalized;
+			}
+			const useExiftool = Boolean(files && files.USE_EXIFTOOL_FOR_SIDECARS);
+			const fallback = Boolean(files && files.SIDECAR_EXIFTOOL_FALLBACK_ENABLED);
+			if (useExiftool && fallback) {
+				return 'exiftool_first';
+			}
+			if (useExiftool) {
+				return 'exiftool_only';
+			}
+			if (fallback) {
+				return 'direct_first';
+			}
+			return 'direct_only';
+		},
+		getExternalLibrariesSidecarModeFlags(mode) {
+			const normalized = this.normalizeExternalLibrariesSidecarReadMode(mode);
+			return {
+				USE_EXIFTOOL_FOR_SIDECARS: ['exiftool_first', 'exiftool_only'].includes(normalized),
+				SIDECAR_EXIFTOOL_FALLBACK_ENABLED: ['direct_first', 'exiftool_first'].includes(normalized),
+			};
+		},
 		normalizeExternalLibrariesChecksSingleSourceOfTruth(value, fallback = '') {
 			const normalized = String(value || '').trim().toLowerCase();
 			if (normalized === 'photos') {
@@ -173,6 +225,18 @@ export default {
 		},
 		formatExternalLibrariesImageExtensionsMultiline(value) {
 			return this.normalizeExternalLibrariesImageExtensions(value, []).join(',\n');
+		},
+		setExternalLibrariesSidecarReadMode(mode) {
+			const normalizedMode = this.normalizeExternalLibrariesSidecarReadMode(mode);
+			const flags = this.getExternalLibrariesSidecarModeFlags(normalizedMode);
+			this.externalLibrariesConfigModel = {
+				...this.externalLibrariesConfigModel,
+				files: {
+					...this.externalLibrariesConfigModel.files,
+					SIDECAR_READ_MODE: normalizedMode,
+					...flags,
+				},
+			};
 		},
 		setExternalLibrariesFileConfigValue(key, value) {
 			this.externalLibrariesConfigModel = {
@@ -278,6 +342,9 @@ export default {
 
 			const imageExtensions = this.normalizeExternalLibrariesImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
 			const exiftoolImageExtensions = this.normalizeExternalLibrariesImageExtensions(files.EXIFTOOL_IMAGE_EXTENSIONS, []);
+			const sidecarReadMode = this.normalizeExternalLibrariesSidecarReadMode(files.SIDECAR_READ_MODE, files);
+			const sidecarModeFlags = this.getExternalLibrariesSidecarModeFlags(sidecarReadMode);
+			const persistentTimeoutSeconds = Math.max(1, Math.min(300, Number(files.EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS) || defaults.files.EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS));
 			const sidecarLookupVariants = this.normalizeExternalLibrariesSelectionList(
 				files.SIDECAR_LOOKUP_VARIANTS,
 				this.externalLibrariesSidecarLookupOptions.map((option) => option.value),
@@ -290,9 +357,13 @@ export default {
 					...files,
 					USE_EXIFTOOL: Boolean(files.USE_EXIFTOOL ?? defaults.files.USE_EXIFTOOL),
 					CHECK_EXIFTOOL_UPDATES: Boolean(files.CHECK_EXIFTOOL_UPDATES ?? defaults.files.CHECK_EXIFTOOL_UPDATES),
-					USE_EXIFTOOL_FOR_SIDECARS: Boolean(files.USE_EXIFTOOL_FOR_SIDECARS ?? defaults.files.USE_EXIFTOOL_FOR_SIDECARS),
-					SIDECAR_EXIFTOOL_FALLBACK_ENABLED: Boolean(files.SIDECAR_EXIFTOOL_FALLBACK_ENABLED ?? defaults.files.SIDECAR_EXIFTOOL_FALLBACK_ENABLED),
+					USE_EXIFTOOL_FOR_SIDECARS: sidecarModeFlags.USE_EXIFTOOL_FOR_SIDECARS,
+					SIDECAR_EXIFTOOL_FALLBACK_ENABLED: sidecarModeFlags.SIDECAR_EXIFTOOL_FALLBACK_ENABLED,
+					SIDECAR_READ_MODE: sidecarReadMode,
 					PREFER_EXIFTOOL_FOR_CONTEXT: Boolean(files.PREFER_EXIFTOOL_FOR_CONTEXT ?? defaults.files.PREFER_EXIFTOOL_FOR_CONTEXT),
+					EMBEDDED_XMP_FULL_SCAN_ENABLED: Boolean(files.EMBEDDED_XMP_FULL_SCAN_ENABLED ?? defaults.files.EMBEDDED_XMP_FULL_SCAN_ENABLED),
+					EXIFTOOL_PERSISTENT_ENABLED: Boolean(files.EXIFTOOL_PERSISTENT_ENABLED ?? defaults.files.EXIFTOOL_PERSISTENT_ENABLED),
+					EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS: persistentTimeoutSeconds,
 					PATHEXIFTOOL: String(files.PATHEXIFTOOL || defaults.files.PATHEXIFTOOL),
 					USE_MANUAL_PATHEXIFTOOL: Boolean(files.USE_MANUAL_PATHEXIFTOOL ?? defaults.files.USE_MANUAL_PATHEXIFTOOL),
 					MANUAL_PATHEXIFTOOL: String(files.MANUAL_PATHEXIFTOOL || defaults.files.MANUAL_PATHEXIFTOOL),
@@ -391,7 +462,11 @@ export default {
 					CHECK_EXIFTOOL_UPDATES: defaults.files.CHECK_EXIFTOOL_UPDATES,
 					USE_EXIFTOOL_FOR_SIDECARS: defaults.files.USE_EXIFTOOL_FOR_SIDECARS,
 					SIDECAR_EXIFTOOL_FALLBACK_ENABLED: defaults.files.SIDECAR_EXIFTOOL_FALLBACK_ENABLED,
+					SIDECAR_READ_MODE: defaults.files.SIDECAR_READ_MODE,
 					PREFER_EXIFTOOL_FOR_CONTEXT: defaults.files.PREFER_EXIFTOOL_FOR_CONTEXT,
+					EMBEDDED_XMP_FULL_SCAN_ENABLED: defaults.files.EMBEDDED_XMP_FULL_SCAN_ENABLED,
+					EXIFTOOL_PERSISTENT_ENABLED: defaults.files.EXIFTOOL_PERSISTENT_ENABLED,
+					EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS: defaults.files.EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS,
 					PATHEXIFTOOL: defaults.files.PATHEXIFTOOL,
 					USE_MANUAL_PATHEXIFTOOL: defaults.files.USE_MANUAL_PATHEXIFTOOL,
 					MANUAL_PATHEXIFTOOL: defaults.files.MANUAL_PATHEXIFTOOL,

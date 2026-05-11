@@ -285,15 +285,17 @@ class TestConfigServiceDefaults(unittest.TestCase):
 
         self.assertFalse(config["debug"]["IO_METRICS_ENABLED"])
 
-    def test_exiftool_batch_size_is_normalized(self):
+    def test_exiftool_persistent_timeout_is_normalized(self):
         service = ConfigService(str(self.config_file))
         with self.config_file.open("w") as f:
-            json.dump({"files": {"EXIFTOOL_BATCH_READ_ENABLED": True, "EXIFTOOL_BATCH_SIZE": 5000}}, f)
+            json.dump({"files": {"EXIFTOOL_PERSISTENT_ENABLED": False, "EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS": 5000}}, f)
 
         config = service.readMergedConfig()
 
-        self.assertTrue(config["files"]["EXIFTOOL_BATCH_READ_ENABLED"])
-        self.assertEqual(config["files"]["EXIFTOOL_BATCH_SIZE"], 1000)
+        self.assertFalse(config["files"]["EXIFTOOL_PERSISTENT_ENABLED"])
+        self.assertEqual(config["files"]["EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS"], 300)
+        self.assertNotIn("EXIFTOOL_BATCH_READ_ENABLED", ConfigService.defaultConfig()["files"])
+        self.assertNotIn("EXIFTOOL_BATCH_SIZE", ConfigService.defaultConfig()["files"])
 
 
 if __name__ == "__main__":

@@ -5983,31 +5983,6 @@ class ImgDataService:
             ),
         }
 
-    def _populateScanMetadataContextBatch(self, scan_context: ScanContext, image_paths: List[str]) -> None:
-        if not image_paths:
-            return
-        files_config = scan_context.config.get("files") if isinstance(scan_context.config.get("files"), dict) else {}
-        if not bool(files_config.get("USE_EXIFTOOL", False)):
-            return
-        if not bool(files_config.get("EXIFTOOL_BATCH_READ_ENABLED", False)):
-            return
-        if not self.exiftool_handler.isAvailable():
-            return
-        try:
-            batch_size = int(files_config.get("EXIFTOOL_BATCH_SIZE", 100) or 100)
-        except (TypeError, ValueError):
-            batch_size = 100
-        batch_size = max(1, min(1000, batch_size))
-        result = self.exiftool_handler.readMetadataContextBatch(
-            list(image_paths),
-            include_xmp=True,
-            batch_size=batch_size,
-        )
-        if isinstance(result, dict):
-            scan_context.metadata_context_cache.update(result)
-        if scan_context.io_metrics:
-            scan_context.io_metrics.exiftool_calls += (len(image_paths) + batch_size - 1) // batch_size
-
     def _runFileAnalysis(
         self,
         *,
@@ -6372,7 +6347,6 @@ class ImgDataService:
                     stop_requested=self._shouldStopFileAnalysis(),
                 )
             )
-            self._populateScanMetadataContextBatch(scan_context, matching_files)
 
             for image_path in matching_files:
                 if self._shouldStopFileAnalysis():

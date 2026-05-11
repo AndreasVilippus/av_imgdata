@@ -123,15 +123,23 @@
 
 			<section v-if="isExiftoolConfigView" class="config-card">
 				<div class="config-form-grid">
-					<label v-if="vm.hasUsableExiftool" class="config-checkbox">
+					<div class="sm-section-title">{{ vm.$avt('config:exiftool_group_activation', 'ExifTool activation and path') }}</div>
+
+					<label class="config-checkbox">
 						<input
 							:checked="vm.externalLibrariesConfigModel.files.USE_EXIFTOOL"
 							type="checkbox"
 							:disabled="vm.externalLibrariesSaving"
 							@change="vm.setExternalLibrariesFileConfigValue('USE_EXIFTOOL', $event.target.checked)"
 						/>
-						<span>{{ vm.$avt('config:label_use_exiftool', 'Use ExifTool for embedded XMP') }}</span>
+						<span>{{ vm.$avt('config:label_use_exiftool', 'Use ExifTool for metadata reading') }}</span>
 					</label>
+
+					<div class="config-card-desc">
+						{{ vm.hasUsableExiftool
+							? vm.$avt('config:hint_exiftool_available', 'ExifTool is available.')
+							: vm.$avt('config:hint_exiftool_missing', 'ExifTool is not currently available. Install the bundled ExifTool or configure a manual path before enabling ExifTool-dependent readers.') }}
+					</div>
 
 					<label class="config-checkbox">
 						<input
@@ -143,110 +151,120 @@
 						<span>{{ vm.$avt('config:label_check_exiftool_updates', 'Check for newer ExifTool versions') }}</span>
 					</label>
 
-					<template v-if="vm.externalLibrariesConfigModel.files.USE_EXIFTOOL">
-						<label class="config-checkbox">
-							<input
-								:checked="vm.externalLibrariesConfigModel.files.USE_MANUAL_PATHEXIFTOOL"
-								type="checkbox"
-								:disabled="vm.externalLibrariesSaving"
-								@change="vm.setExternalLibrariesFileConfigValue('USE_MANUAL_PATHEXIFTOOL', $event.target.checked)"
-							/>
-							<span>{{ vm.$avt('config:label_use_manual_exiftool_path', 'Use manual path to ExifTool') }}</span>
-						</label>
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.files.USE_MANUAL_PATHEXIFTOOL"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving"
+							@change="vm.setExternalLibrariesFileConfigValue('USE_MANUAL_PATHEXIFTOOL', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_use_manual_exiftool_path', 'Use manual path to ExifTool') }}</span>
+					</label>
 
-						<label
-							v-if="vm.externalLibrariesConfigModel.files.USE_MANUAL_PATHEXIFTOOL"
-							class="config-field"
+					<label v-if="vm.canConfigureManualExiftoolPath" class="config-field">
+						<span class="config-field-label">{{ vm.$avt('config:label_manual_exiftool_path', 'Path to ExifTool') }}</span>
+						<input
+							:value="vm.externalLibrariesConfigModel.files.MANUAL_PATHEXIFTOOL"
+							type="text"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving"
+							:placeholder="vm.$avt('config:placeholder_manual_exiftool_path', '/usr/local/bin/exiftool')"
+							@input="vm.setExternalLibrariesFileConfigValue('MANUAL_PATHEXIFTOOL', $event.target.value)"
+						/>
+						<span class="config-card-desc">
+							{{ vm.$avt('config:hint_manual_exiftool_path', 'When enabled, this path is used instead of the bundled ExifTool path and is not changed by install or remove actions.') }}
+						</span>
+					</label>
+
+					<div class="sm-section-title">{{ vm.$avt('config:exiftool_group_reading', 'ExifTool reading behavior') }}</div>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$avt('config:label_sidecar_read_mode', 'XMP sidecar reading') }}</span>
+						<select
+							:value="vm.externalLibrariesConfigModel.files.SIDECAR_READ_MODE"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving || !vm.canConfigureExiftoolReadOptions"
+							@change="vm.setExternalLibrariesSidecarReadMode($event.target.value)"
 						>
-							<span class="config-field-label">{{ vm.$avt('config:label_manual_exiftool_path', 'Path to ExifTool') }}</span>
-							<input
-								:value="vm.externalLibrariesConfigModel.files.MANUAL_PATHEXIFTOOL"
-								type="text"
-								class="config-input"
-								:disabled="vm.externalLibrariesSaving"
-								:placeholder="vm.$avt('config:placeholder_manual_exiftool_path', '/usr/local/bin/exiftool')"
-								@input="vm.setExternalLibrariesFileConfigValue('MANUAL_PATHEXIFTOOL', $event.target.value)"
-							/>
-							<span class="config-card-desc">
-								{{ vm.$avt('config:hint_manual_exiftool_path', 'When enabled, this path is used instead of the bundled ExifTool path and is not changed by install or remove actions.') }}
-							</span>
-						</label>
+							<option v-for="option in vm.externalLibrariesSidecarReadModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+						</select>
+						<span class="config-card-desc">{{ vm.$avt('config:hint_sidecar_read_mode', 'This replaces the older overlapping sidecar checkboxes. Direct reading is fastest; ExifTool can be used first, only, or as fallback.') }}</span>
+					</label>
 
-						<label
-							class="config-checkbox"
-							:title="vm.$avt('config:hint_image_extensions_native_only', 'If enabled, the file extension list for metadata scanning is only used by native readers. ExifTool uses its own extension list instead.')"
-						>
-							<input
-								:checked="vm.externalLibrariesConfigModel.files.IMAGE_EXTENSIONS_NATIVE_ONLY"
-								type="checkbox"
-								:disabled="vm.externalLibrariesSaving"
-								@change="vm.setExternalLibrariesFileConfigValue('IMAGE_EXTENSIONS_NATIVE_ONLY', $event.target.checked)"
-							/>
-							<span>{{ vm.$avt('config:label_image_extensions_native_only', 'Use metadata scan file extensions only for native readers') }}</span>
-						</label>
+					<label class="config-checkbox" :title="vm.$avt('config:hint_prefer_exiftool_for_context', 'Prefer ExifTool for bundled metadata context: embedded XMP, dimensions and orientation.')">
+						<input
+							:checked="vm.externalLibrariesConfigModel.files.PREFER_EXIFTOOL_FOR_CONTEXT"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving || !vm.canConfigureExiftoolReadOptions"
+							@change="vm.setExternalLibrariesFileConfigValue('PREFER_EXIFTOOL_FOR_CONTEXT', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_prefer_exiftool_for_context', 'Prefer ExifTool for metadata context') }}</span>
+					</label>
 
-						<label
-							class="config-checkbox"
-							:title="vm.$avt('config:hint_use_exiftool_for_sidecars', 'The native sidecar path usually works well and is faster. Only enable this when sidecar reading causes problems.')"
-						>
-							<input
-								:checked="vm.externalLibrariesConfigModel.files.USE_EXIFTOOL_FOR_SIDECARS"
-								type="checkbox"
-								:disabled="vm.externalLibrariesSaving"
-								@change="vm.setExternalLibrariesFileConfigValue('USE_EXIFTOOL_FOR_SIDECARS', $event.target.checked)"
-							/>
-							<span>{{ vm.$avt('config:label_use_exiftool_for_sidecars', 'Use ExifTool for XMP sidecars') }}</span>
-						</label>
+					<label class="config-checkbox" :title="vm.$avt('config:hint_embedded_xmp_full_scan_enabled', 'Use the native embedded-XMP full scan as an extended fallback when ExifTool does not provide embedded XMP.')">
+						<input
+							:checked="vm.externalLibrariesConfigModel.files.EMBEDDED_XMP_FULL_SCAN_ENABLED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving"
+							@change="vm.setExternalLibrariesFileConfigValue('EMBEDDED_XMP_FULL_SCAN_ENABLED', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_embedded_xmp_full_scan_enabled', 'Use native embedded-XMP full-scan fallback') }}</span>
+					</label>
 
-						<label
-							class="config-checkbox"
-							:title="vm.$avt('config:hint_sidecar_exiftool_fallback_enabled', 'Enable ExifTool as fallback for XMP sidecars when direct reading fails, even if ExifTool is not preferred for sidecars.')"
-						>
-							<input
-								:checked="vm.externalLibrariesConfigModel.files.SIDECAR_EXIFTOOL_FALLBACK_ENABLED"
-								type="checkbox"
-								:disabled="vm.externalLibrariesSaving"
-								@change="vm.setExternalLibrariesFileConfigValue('SIDECAR_EXIFTOOL_FALLBACK_ENABLED', $event.target.checked)"
-							/>
-							<span>{{ vm.$avt('config:label_sidecar_exiftool_fallback_enabled', 'Enable ExifTool fallback for XMP sidecars') }}</span>
-						</label>
+					<div class="sm-section-title">{{ vm.$avt('config:exiftool_group_process', 'ExifTool performance and process') }}</div>
 
-						<label
-							class="config-checkbox"
-							:title="vm.$avt('config:hint_prefer_exiftool_for_context', 'Native context readers are usually faster. Enable this only if ExifTool should be preferred for dimensions and orientation, otherwise ExifTool is only used as a fallback.')"
-						>
-							<input
-								:checked="vm.externalLibrariesConfigModel.files.PREFER_EXIFTOOL_FOR_CONTEXT"
-								type="checkbox"
-								:disabled="vm.externalLibrariesSaving"
-								@change="vm.setExternalLibrariesFileConfigValue('PREFER_EXIFTOOL_FOR_CONTEXT', $event.target.checked)"
-							/>
-							<span>{{ vm.$avt('config:label_prefer_exiftool_for_context', 'Prefer ExifTool for metadata context') }}</span>
-						</label>
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.files.EXIFTOOL_PERSISTENT_ENABLED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving || !vm.canConfigureExiftoolPersistentMode"
+							@change="vm.setExternalLibrariesFileConfigValue('EXIFTOOL_PERSISTENT_ENABLED', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_exiftool_persistent_enabled', 'Use persistent ExifTool process for reads') }}</span>
+					</label>
+					<span class="config-card-desc">{{ vm.$avt('config:hint_exiftool_persistent_enabled', 'Read operations use one serialized ExifTool stay-open process. Write operations still use isolated one-shot ExifTool calls.') }}</span>
 
-						<label class="config-field">
-							<span class="config-field-label">{{ vm.$avt('config:label_exiftool_image_extensions', 'ExifTool file extensions for metadata scan') }}</span>
-							<textarea
-								:value="vm.exiftoolImageExtensionsInput"
-								class="config-textarea"
-								:disabled="vm.externalLibrariesSaving || vm.exiftoolExtensionsLoading"
-								:placeholder="vm.$avt('config:placeholder_exiftool_image_extensions', 'Leave empty to use all readable extensions reported by ExifTool.')"
-								@input="vm.setExiftoolImageExtensionsInput($event.target.value)"
-							></textarea>
-							<span class="config-card-desc">
-								{{ vm.$avt('config:hint_exiftool_image_extensions', 'When the field is empty, all readable ExifTool extensions are queried automatically.') }}
-							</span>
-							<div class="config-inline-actions">
-								<v-button
-									@click="vm.loadExiftoolExtensions"
-									:disabled="vm.externalLibrariesSaving || vm.exiftoolExtensionsLoading"
-									style="width: 220px;"
-								>
-									{{ vm.exiftoolExtensionsLoading ? vm.$avt('config:button_exiftool_extensions_loading', 'Loading ExifTool extensions...') : vm.$avt('config:button_exiftool_extensions_load', 'Load all ExifTool extensions') }}
-								</v-button>
-							</div>
-						</label>
-					</template>
+					<label v-if="vm.externalLibrariesConfigModel.files.EXIFTOOL_PERSISTENT_ENABLED" class="config-field">
+						<span class="config-field-label">{{ vm.$avt('config:label_exiftool_persistent_timeout', 'Persistent ExifTool timeout in seconds') }}</span>
+						<input
+							:value="vm.externalLibrariesConfigModel.files.EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS"
+							type="number"
+							min="1"
+							max="300"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving || !vm.canConfigureExiftoolPersistentMode"
+							@input="vm.setExternalLibrariesFileConfigValue('EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS', Number($event.target.value) || 30)"
+						/>
+					</label>
+
+					<div class="sm-section-title">{{ vm.$avt('config:exiftool_group_extensions', 'ExifTool file extensions') }}</div>
+
+					<label class="config-checkbox" :title="vm.$avt('config:hint_image_extensions_native_only', 'If enabled, the general metadata scan extension list is only used by native readers. ExifTool uses its own extension list instead.')">
+						<input
+							:checked="vm.externalLibrariesConfigModel.files.IMAGE_EXTENSIONS_NATIVE_ONLY"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving"
+							@change="vm.setExternalLibrariesFileConfigValue('IMAGE_EXTENSIONS_NATIVE_ONLY', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_image_extensions_native_only', 'Use general file extensions only for native readers') }}</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$avt('config:label_exiftool_image_extensions', 'ExifTool file extensions for metadata scan') }}</span>
+						<textarea
+							:value="vm.exiftoolImageExtensionsInput"
+							class="config-textarea"
+							:disabled="vm.externalLibrariesSaving || vm.exiftoolExtensionsLoading || !vm.canConfigureExiftoolExtensions"
+							:placeholder="vm.$avt('config:placeholder_exiftool_image_extensions', 'Leave empty to use all readable extensions reported by ExifTool.')"
+							@input="vm.setExiftoolImageExtensionsInput($event.target.value)"
+						></textarea>
+						<span class="config-card-desc">{{ vm.$avt('config:hint_exiftool_image_extensions', 'When the field is empty, all readable ExifTool extensions are queried automatically.') }}</span>
+						<div class="config-inline-actions">
+							<v-button @click="vm.loadExiftoolExtensions" :disabled="vm.externalLibrariesSaving || vm.exiftoolExtensionsLoading || !vm.canConfigureExiftoolExtensions" style="width: 220px;">
+								{{ vm.exiftoolExtensionsLoading ? vm.$avt('config:button_exiftool_extensions_loading', 'Loading ExifTool extensions...') : vm.$avt('config:button_exiftool_extensions_load', 'Load all ExifTool extensions') }}
+							</v-button>
+						</div>
+					</label>
 				</div>
 
 				<div v-if="vm.exiftoolDownloadSourceUrl" class="config-card-desc">
@@ -257,12 +275,7 @@
 					<v-button @click="vm.installExiftool" :disabled="vm.externalLibrariesLoading || vm.externalLibrariesSaving || vm.exiftoolInstalling" style="width: 220px;">
 						{{ vm.exiftoolInstalling ? vm.$avt('config:button_exiftool_installing', 'Installing ExifTool...') : vm.$avt('config:button_exiftool_install', 'Download and install ExifTool') }}
 					</v-button>
-					<v-button
-						v-if="vm.hasBundledExiftool"
-						@click="vm.removeExiftool"
-						:disabled="vm.externalLibrariesLoading || vm.externalLibrariesSaving || vm.exiftoolInstalling || vm.exiftoolRemoving"
-						style="width: 220px;"
-					>
+					<v-button v-if="vm.hasBundledExiftool" @click="vm.removeExiftool" :disabled="vm.externalLibrariesLoading || vm.externalLibrariesSaving || vm.exiftoolInstalling || vm.exiftoolRemoving" style="width: 220px;">
 						{{ vm.exiftoolRemoving ? vm.$avt('config:button_exiftool_removing', 'Removing ExifTool...') : vm.$avt('config:button_exiftool_remove', 'Remove ExifTool') }}
 					</v-button>
 				</div>
