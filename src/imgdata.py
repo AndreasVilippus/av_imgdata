@@ -622,6 +622,12 @@ class ImgDataService:
 
         def get_exiftool_metadata_context(*, include_xmp: bool = True) -> Optional[Dict[str, Any]]:
             nonlocal exiftool_context
+            self._raiseIfChecksStopRequested()
+            checks_context = getattr(self, "_checks_active_context", {})
+            checks_user_key = str(checks_context.get("user_key") or "").strip() if isinstance(checks_context, dict) else ""
+            checks_type = str(checks_context.get("check_type") or "").strip().lower() if isinstance(checks_context, dict) else ""
+            if checks_user_key and checks_type and self._shouldStopChecks(checks_user_key, checks_type):
+                raise RuntimeError("checks_stop_requested")
             if not exiftool_available:
                 return None
             if exiftool_context is not None:
@@ -773,10 +779,12 @@ class ImgDataService:
                 # last resort if the bundled context call fails or omits a value. This preserves
                 # existing behavior for formats/tests where only the old fallback is mocked.
                 if missing_dimensions and (not image_dimensions.get("width") or not image_dimensions.get("height")):
+                    self._raiseIfChecksStopRequested()
                     if io_metrics:
                         io_metrics.exiftool_calls += 1
                     image_dimensions = self.exiftool_handler.readImageDimensions(image_path)
                 if missing_orientation and image_orientation is None:
+                    self._raiseIfChecksStopRequested()
                     if io_metrics:
                         io_metrics.exiftool_calls += 1
                     image_orientation = self.exiftool_handler.readImageOrientation(image_path)

@@ -59,7 +59,7 @@ class PersistentExifToolProcess:
             [self.executable_path, "-stay_open", "True", "-@", "-"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
             bufsize=1,
         )
@@ -184,7 +184,10 @@ class ExifToolHandler:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=max(1.0, self._persistentTimeoutSeconds()),
             )
+        except subprocess.TimeoutExpired:
+            return _ExifToolResult(124, "", "exiftool_execution_timeout")
         except FileNotFoundError:
             return _ExifToolResult(127, "", "exiftool_not_found")
         except OSError as exc:
@@ -364,7 +367,15 @@ class ExifToolHandler:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=max(1.0, self._persistentTimeoutSeconds()),
             )
+        except subprocess.TimeoutExpired:
+            return {
+                "updated": False,
+                "error": "exiftool_execution_timeout",
+                "target_path": target_path,
+                "executable_path": executable_path,
+            }
         except (FileNotFoundError, OSError):
             return {
                 "updated": False,
