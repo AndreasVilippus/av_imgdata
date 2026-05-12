@@ -8,8 +8,9 @@ PACKAGE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 WORKSPACE_ROOT="$(cd "${PACKAGE_ROOT}/../.." && pwd)"
 TOOLKIT_ROOT="${WORKSPACE_ROOT}/pkgscripts-ng"
 PKGCREATE="${TOOLKIT_ROOT}/PkgCreate.py"
+PACKAGE_NAME="av_imgdata"
 
-DEFAULT_ARGS=(-v 7.3 -p geminilake -c av_imgdata)
+DEFAULT_ARGS=(-v 7.3 -p geminilake)
 
 log() {
   printf '\n==> %s\n' "$*"
@@ -23,15 +24,16 @@ fail() {
 usage() {
   cat <<'EOF'
 Usage:
-  tools/build-package.sh [PkgCreate.py arguments...]
+  tools/build-package.sh [PkgCreate.py options...]
 
 Examples:
   tools/build-package.sh
-  tools/build-package.sh -v 7.3 -p geminilake -c av_imgdata
-  tools/build-package.sh -v 7.3 -p apollolake -c av_imgdata
+  tools/build-package.sh -v 7.3 -p geminilake
+  tools/build-package.sh -v 7.3 -p apollolake
 
-If no arguments are passed, the script uses:
-  -v 7.3 -p geminilake -c av_imgdata
+The script always builds the av_imgdata package. If no arguments are passed,
+it uses:
+  -v 7.3 -p geminilake
 EOF
 }
 
@@ -74,9 +76,9 @@ log "Building Synology package"
 cd "${TOOLKIT_ROOT}"
 
 if [[ "$#" -gt 0 ]]; then
-  python3 "${PKGCREATE}" "$@" av_imgdata
+  python3 "${PKGCREATE}" "$@" "${PACKAGE_NAME}"
 else
-  python3 "${PKGCREATE}" "${DEFAULT_ARGS[@]}"
+  python3 "${PKGCREATE}" "${DEFAULT_ARGS[@]}" "${PACKAGE_NAME}"
 fi
 
 log "Package build completed"
