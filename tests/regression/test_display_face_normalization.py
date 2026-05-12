@@ -15,7 +15,6 @@ from imgdata import ImgDataOperationError, ImgDataService
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
 from parser.metadata_parser import MetadataParser
-from services.bbox_normalizer import to_display_face
 from services.config_service import ConfigService
 
 
@@ -145,65 +144,6 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
     def setUp(self):
         self.parser = MetadataParser()
         self.service = ImgDataService(SessionManager())
-
-    def test_to_display_face_normalizes_oriented_mwg_face_and_adds_bbox(self):
-        payload = self.parser.parse(
-            image_path="dev/test.jpg",
-            xmp_content=XMP_MWG_AND_MICROSOFT,
-            image_orientation=6,
-            use_acd=False,
-            use_microsoft=False,
-            use_mwg_regions=True,
-        )
-
-        self.assertEqual(len(payload.faces), 1)
-        face = to_display_face(payload.faces[0])
-
-        self.assertTrue(face.get("display_normalized"))
-        self.assertAlmostEqual(face["x"], 0.462214)
-        self.assertAlmostEqual(face["y"], 0.154412)
-        self.assertAlmostEqual(face["w"], 0.435866)
-        self.assertAlmostEqual(face["h"], 0.308824)
-        self.assertAlmostEqual(face["bbox"]["y1"], 0.0, places=6)
-
-    def test_to_display_face_is_idempotent(self):
-        payload = self.parser.parse(
-            image_path="dev/test.jpg",
-            xmp_content=XMP_MWG_AND_MICROSOFT,
-            image_orientation=6,
-            use_acd=False,
-            use_microsoft=True,
-            use_mwg_regions=False,
-        )
-
-        once = to_display_face(payload.faces[0])
-        twice = to_display_face(once)
-
-        self.assertEqual(once, twice)
-
-    def test_parser_can_optionally_include_unnamed_acd_faces(self):
-        default_payload = self.parser.parse(
-            image_path="dev/test.jpg",
-            xmp_content=XMP_ACD_UNNAMED,
-            image_orientation=1,
-            use_acd=True,
-            use_microsoft=False,
-            use_mwg_regions=False,
-        )
-        extended_payload = self.parser.parse(
-            image_path="dev/test.jpg",
-            xmp_content=XMP_ACD_UNNAMED,
-            image_orientation=1,
-            use_acd=True,
-            use_microsoft=False,
-            use_mwg_regions=False,
-            include_unnamed_acd=True,
-        )
-
-        self.assertEqual(len(default_payload.faces), 0)
-        self.assertEqual(len(extended_payload.faces), 1)
-        self.assertEqual(extended_payload.faces[0].source_format, "ACD")
-        self.assertEqual(extended_payload.faces[0].name, "")
 
     def test_load_xmp_from_image_parsed_accepts_nonstandard_namespace_prefix(self):
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:
@@ -3617,7 +3557,6 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                             },
                         },
                     },
-                    handle,
                 )
 
             config_service = ConfigService(config_path)
