@@ -130,7 +130,6 @@ def test_face_create_metadata_match_creates_metadata_face_person_and_cleans_find
         base_url="https://dsm.example.test",
         image_path="photo/test.jpg",
         metadata_face=metadata_face,
-        person_name="Person Target",
     )
     create_person.assert_called_once_with(
         user_key="user-1",
@@ -261,4 +260,4 @@ def test_checks_assign_face_person_forwards_photos_override_to_refresh(monkeypat
     assert refresh_kwargs["replacement_face_data"]["face_id"] == 77
     assert refresh_kwargs["replacement_face_data"]["name"] == "Person Current"
     assert refresh_kwargs["replacement_face_data"]["person_id"] == 42
-    assert refresh_kwargs["resolved_delta"] == 1
+    assert "resolved_delta" not in refresh_kwargs
