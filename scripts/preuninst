@@ -1,11 +1,12 @@
 #!/bin/sh
 PACKAGE="AV_ImgData"
-TARGET="/var/packages/$PACKAGE/target"
+PKG_VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/$PACKAGE/var}"
 
 echo "Pre-uninstall: attempting to stop service"
 if [ -x "/var/packages/$PACKAGE/scripts/start-stop-status" ]; then
 	/var/packages/$PACKAGE/scripts/start-stop-status stop || true
 fi
 
-echo "Pre-uninstall completed (leaving data in $TARGET)"
+echo "Pre-uninstall completed"
+echo "Runtime data, if retained by DSM, is located in $PKG_VAR_DIR"
 exit 0
