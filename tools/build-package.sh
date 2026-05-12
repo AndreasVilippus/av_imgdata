@@ -58,7 +58,7 @@ TEST_PKGVAR="$(mktemp -d)"
 trap 'rm -rf "${TEST_PKGVAR}"' EXIT
 export SYNOPKG_PKGVAR="${TEST_PKGVAR}"
 
-PYTHONPATH=src python3 -m pytest tests/test_*.py
+PYTHONPATH=src python3 -m pytest tests
 
 log "Building Synology package"
 cd "${TOOLKIT_ROOT}"
