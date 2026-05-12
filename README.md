@@ -60,12 +60,16 @@ source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
 The wrapper performs the required preflight steps before invoking the Synology
 toolkit package build:
 
-1. run the Python test suite
-2. install UI dependencies with `pnpm`
-3. build the UI
-4. invoke `pkgscripts-ng/PkgCreate.py` for the `av_imgdata` package with the provided options
+1. run structure checks
+2. run the Python test suite
+3. invoke `pkgscripts-ng/PkgCreate.py` for the `av_imgdata` package with the provided options
 
-If any Python test or the UI build fails, the package build is not started.
+The UI build is intentionally executed by the Synology toolkit build chain via
+the package Makefiles. This keeps the tested package build path identical to the
+actual DSM package build path.
+
+If any structure check, Python test, UI build, or toolkit package build step fails,
+the package build fails.
 
 Arguments passed to `build-package.sh` are forwarded to `PkgCreate.py` as options.
 The package name is always appended by the wrapper as `av_imgdata`, so do not pass
@@ -113,9 +117,9 @@ cd ../..
 source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
 ```
 
-The wrapper runs the Python tests and UI build before invoking the Synology
-toolkit. This keeps local package builds aligned with the expected release
-preflight checks.
+The wrapper runs structure checks and Python tests before invoking the Synology
+toolkit. The UI is then built by the toolkit through the same Makefile path used
+for the final package.
 
 Notes:
 
