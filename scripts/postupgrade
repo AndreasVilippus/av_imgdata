@@ -43,6 +43,9 @@ else
   log "default config not found at $DEFAULT_CONFIG or $DEFAULT_CONFIG_TARGET"
 fi
 
+# ExifTool is installed into the persistent package-var directory and restored
+# into the package target on upgrade so repeated installs/upgrades can reuse the
+# existing installation without downloading it again.
 INSTALLED_EXIFTOOL="$(find_installed_exiftool)"
 if [ -n "$INSTALLED_EXIFTOOL" ] && [ -f "$INSTALLED_EXIFTOOL" ]; then
   INSTALLED_EXIFTOOL_DIR="$(dirname "$INSTALLED_EXIFTOOL")"
