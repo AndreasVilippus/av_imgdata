@@ -60,18 +60,6 @@ export SYNOPKG_PKGVAR="${TEST_PKGVAR}"
 
 PYTHONPATH=src python3 -m pytest tests/test_*.py
 
-log "Installing UI dependencies"
-cd "${PACKAGE_ROOT}/ui"
-
-if [[ -f pnpm-lock.yaml ]]; then
-  pnpm install --frozen-lockfile
-else
-  pnpm install
-fi
-
-log "Building UI"
-pnpm run build
-
 log "Building Synology package"
 cd "${TOOLKIT_ROOT}"
 
