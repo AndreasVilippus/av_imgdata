@@ -45,46 +45,22 @@ merge_runtime_config_with_defaults() {
   fi
 
   "$PYTHON_BIN" - "$default_config_path" "$RUNTIME_CONFIG" >>"$LOG" 2>&1 <<'PY'
+import copy
 import json
 import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
 
-OBSOLETE_KEY_PATHS = (
-    ("files", "USE_EXIFTOOL_FOR_SIDECARDS"),
-    ("analysis", "CHECKS", "IGNORE_LIST_DUPLICATE_FACES"),
-    ("analysis", "CHECKS", "IGNORE_LIST_POSITION_DEVIATIONS"),
-    ("analysis", "CHECKS", "IGNORE_LIST_NAME_CONFLICTS"),
-    ("name_mappings",),
-)
 
-
-def deep_merge(default, current):
-    if isinstance(default, dict) and isinstance(current, dict):
-        merged = dict(current)
-        for key, value in default.items():
-            if key in merged:
-                merged[key] = deep_merge(value, merged[key])
-            else:
-                merged[key] = value
-        return merged
-    return current
-
-
-def remove_obsolete_keys(config):
-    removed = False
-    for key_path in OBSOLETE_KEY_PATHS:
-        parent = config
-        for key in key_path[:-1]:
-            if not isinstance(parent, dict):
-                parent = None
-                break
-            parent = parent.get(key)
-        if isinstance(parent, dict) and key_path[-1] in parent:
-            parent.pop(key_path[-1], None)
-            removed = True
-    return removed
+def project_to_default_keys(default, current):
+    if isinstance(default, dict):
+        current_dict = current if isinstance(current, dict) else {}
+        return {
+            key: project_to_default_keys(value, current_dict.get(key))
+            for key, value in default.items()
+        }
+    return copy.deepcopy(current) if current is not None else copy.deepcopy(default)
 
 
 def read_json(path):
@@ -100,10 +76,9 @@ def main():
     runtime_path = Path(sys.argv[2])
     default_config = read_json(default_path)
     runtime_config = read_json(runtime_path)
-    merged = deep_merge(default_config, runtime_config)
-    remove_obsolete_keys(merged)
+    merged = project_to_default_keys(default_config, runtime_config)
     if merged == runtime_config:
-        print(f"runtime config already contains current defaults: {runtime_path}")
+        print(f"runtime config already matches current default key set: {runtime_path}")
         return 0
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -112,7 +87,7 @@ def main():
     tmp_path = runtime_path.with_name(f".{runtime_path.name}.tmp")
     tmp_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp_path.replace(runtime_path)
-    print(f"runtime config merged with defaults: {runtime_path}")
+    print(f"runtime config projected onto current default key set: {runtime_path}")
     print(f"runtime config backup written: {backup_path}")
     return 0
 
