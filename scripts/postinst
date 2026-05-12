@@ -14,32 +14,101 @@ mkdir -p "${PKG_VAR_DIR}" 2>/dev/null
 
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 
+select_python_bin() {
+  if [ -x "/var/packages/Python3/target/bin/python3" ]; then
+    echo "/var/packages/Python3/target/bin/python3"
+  else
+    echo "python3"
+  fi
+}
+
+merge_runtime_config_with_defaults() {
+  default_config_path=""
+  if [ -f "$DEFAULT_CONFIG" ]; then
+    default_config_path="$DEFAULT_CONFIG"
+  elif [ -f "$DEFAULT_CONFIG_TARGET" ]; then
+    default_config_path="$DEFAULT_CONFIG_TARGET"
+  fi
+
+  if [ -z "$default_config_path" ]; then
+    log "default config not found at $DEFAULT_CONFIG or $DEFAULT_CONFIG_TARGET"
+    return 0
+  fi
+
+  if [ ! -f "$RUNTIME_CONFIG" ]; then
+    if cp "$default_config_path" "$RUNTIME_CONFIG" >>"$LOG" 2>&1; then
+      log "runtime config initialized at $RUNTIME_CONFIG"
+    else
+      log "runtime config initialization failed"
+    fi
+    return 0
+  fi
+
+  "$PYTHON_BIN" - "$default_config_path" "$RUNTIME_CONFIG" >>"$LOG" 2>&1 <<'PY'
+import json
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+def deep_merge(default, current):
+    if isinstance(default, dict) and isinstance(current, dict):
+        merged = dict(current)
+        for key, value in default.items():
+            if key in merged:
+                merged[key] = deep_merge(value, merged[key])
+            else:
+                merged[key] = value
+        return merged
+    return current
+
+
+def read_json(path):
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise RuntimeError(f"config is not a JSON object: {path}")
+    return data
+
+
+def main():
+    default_path = Path(sys.argv[1])
+    runtime_path = Path(sys.argv[2])
+    default_config = read_json(default_path)
+    runtime_config = read_json(runtime_path)
+    merged = deep_merge(default_config, runtime_config)
+    if merged == runtime_config:
+        print(f"runtime config already contains current defaults: {runtime_path}")
+        return 0
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = runtime_path.with_name(f"{runtime_path.name}.bak-{timestamp}")
+    shutil.copy2(runtime_path, backup_path)
+    tmp_path = runtime_path.with_name(f".{runtime_path.name}.tmp")
+    tmp_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(runtime_path)
+    print(f"runtime config merged with defaults: {runtime_path}")
+    print(f"runtime config backup written: {backup_path}")
+    return 0
+
+
+try:
+    raise SystemExit(main())
+except Exception as exc:
+    print(f"runtime config merge failed: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+  if [ "$?" -ne 0 ]; then
+    log "runtime config merge failed; existing config left unchanged"
+  fi
+}
+
 log "postinst start"
 log "webservice handled by DSM resource acquisition"
 
-if [ ! -f "$RUNTIME_CONFIG" ] && [ -f "$DEFAULT_CONFIG" ]; then
-  if cp "$DEFAULT_CONFIG" "$RUNTIME_CONFIG" >>"$LOG" 2>&1; then
-    log "runtime config initialized at $RUNTIME_CONFIG"
-  else
-    log "runtime config initialization failed"
-  fi
-elif [ ! -f "$RUNTIME_CONFIG" ] && [ -f "$DEFAULT_CONFIG_TARGET" ]; then
-  if cp "$DEFAULT_CONFIG_TARGET" "$RUNTIME_CONFIG" >>"$LOG" 2>&1; then
-    log "runtime config initialized from target at $RUNTIME_CONFIG"
-  else
-    log "runtime config initialization from target failed"
-  fi
-elif [ -f "$RUNTIME_CONFIG" ]; then
-  log "runtime config already exists at $RUNTIME_CONFIG"
-else
-  log "default config not found at $DEFAULT_CONFIG or $DEFAULT_CONFIG_TARGET"
-fi
-
-if [ -x "/var/packages/Python3/target/bin/python3" ]; then
-  PYTHON_BIN="/var/packages/Python3/target/bin/python3"
-else
-  PYTHON_BIN="python3"
-fi
+PYTHON_BIN="$(select_python_bin)"
+merge_runtime_config_with_defaults
 
 if ! "$PYTHON_BIN" -m venv "$VENV_DIR" >>"$LOG" 2>&1; then
   log "venv creation failed; continue without venv"
