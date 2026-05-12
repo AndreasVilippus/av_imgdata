@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
+import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,6 +30,86 @@ def check_python_ast() -> int:
                 errors += 1
                 fail(f"Python syntax: {path}:{exc.lineno}:{exc.offset}: {exc.msg}")
     return errors
+
+
+def _load_config_service_default() -> dict[str, Any]:
+    path = ROOT / "src" / "services" / "config_service.py"
+    spec = importlib.util.spec_from_file_location("av_imgdata_config_service_check", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load ConfigService from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.ConfigService.defaultConfig()
+
+
+def _collect_key_paths(value: Any, prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
+    if not isinstance(value, dict):
+        return set()
+    paths: set[tuple[str, ...]] = set()
+    for key, child in value.items():
+        key_path = (*prefix, str(key))
+        paths.add(key_path)
+        paths.update(_collect_key_paths(child, key_path))
+    return paths
+
+
+def check_default_config_completeness() -> int:
+    errors = 0
+    shipped_path = ROOT / "var" / "config.json"
+
+    try:
+        service_default = _load_config_service_default()
+    except Exception as exc:
+        fail(f"src/services/config_service.py: could not read ConfigService.defaultConfig(): {exc}")
+        return 1
+
+    try:
+        shipped_default = json.loads(shipped_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        fail(f"var/config.json: could not parse shipped default config: {exc}")
+        return 1
+
+    if not isinstance(service_default, dict):
+        fail("ConfigService.defaultConfig() must return a dict")
+        errors += 1
+    if not isinstance(shipped_default, dict):
+        fail("var/config.json must contain a JSON object")
+        errors += 1
+    if errors:
+        return errors
+
+    service_paths = _collect_key_paths(service_default)
+    shipped_paths = _collect_key_paths(shipped_default)
+
+    missing_in_shipped = sorted(service_paths - shipped_paths)
+    extra_in_shipped = sorted(shipped_paths - service_paths)
+
+    for path in missing_in_shipped:
+        errors += 1
+        fail(f"var/config.json: missing default config key: {'.'.join(path)}")
+    for path in extra_in_shipped:
+        errors += 1
+        fail(f"var/config.json: key is not defined by ConfigService.defaultConfig(): {'.'.join(path)}")
+
+    if errors:
+        return errors
+
+    normalized_shipped = module_default_projection(service_default, shipped_default)
+    if normalized_shipped != shipped_default:
+        errors += 1
+        fail("var/config.json: shipped default config is not stable under default-key projection")
+
+    return errors
+
+
+def module_default_projection(default: Any, current: Any) -> Any:
+    if isinstance(default, dict):
+        current_dict = current if isinstance(current, dict) else {}
+        return {
+            key: module_default_projection(value, current_dict.get(key))
+            for key, value in default.items()
+        }
+    return current if current is not None else default
 
 
 def check_imgdata_class_boundaries() -> int:
@@ -196,6 +279,7 @@ def check_js_parse_with_build() -> int:
 def main() -> int:
     errors = 0
     errors += check_python_ast()
+    errors += check_default_config_completeness()
     errors += check_imgdata_class_boundaries()
     errors += check_session_cookie_alignment()
     errors += check_cgi_curl_argument_safety()
