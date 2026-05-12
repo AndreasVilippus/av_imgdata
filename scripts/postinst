@@ -51,6 +51,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+OBSOLETE_KEY_PATHS = (
+    ("files", "USE_EXIFTOOL_FOR_SIDECARDS"),
+    ("analysis", "CHECKS", "IGNORE_LIST_DUPLICATE_FACES"),
+    ("analysis", "CHECKS", "IGNORE_LIST_POSITION_DEVIATIONS"),
+    ("analysis", "CHECKS", "IGNORE_LIST_NAME_CONFLICTS"),
+    ("name_mappings",),
+)
+
 
 def deep_merge(default, current):
     if isinstance(default, dict) and isinstance(current, dict):
@@ -62,6 +70,21 @@ def deep_merge(default, current):
                 merged[key] = value
         return merged
     return current
+
+
+def remove_obsolete_keys(config):
+    removed = False
+    for key_path in OBSOLETE_KEY_PATHS:
+        parent = config
+        for key in key_path[:-1]:
+            if not isinstance(parent, dict):
+                parent = None
+                break
+            parent = parent.get(key)
+        if isinstance(parent, dict) and key_path[-1] in parent:
+            parent.pop(key_path[-1], None)
+            removed = True
+    return removed
 
 
 def read_json(path):
@@ -78,6 +101,7 @@ def main():
     default_config = read_json(default_path)
     runtime_config = read_json(runtime_path)
     merged = deep_merge(default_config, runtime_config)
+    remove_obsolete_keys(merged)
     if merged == runtime_config:
         print(f"runtime config already contains current defaults: {runtime_path}")
         return 0
