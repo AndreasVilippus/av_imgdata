@@ -18,7 +18,7 @@ class PipPackagesStatusTests(unittest.TestCase):
         insightface = ConfigService.defaultConfig()["pip_packages"]["INSIGHTFACE"]
 
         self.assertFalse(insightface["ENABLED"])
-        self.assertTrue(insightface["INSTALL_ON_START"])
+        self.assertFalse(insightface["INSTALL_ON_START"])
         self.assertEqual(insightface["REQUIREMENTS_FILE"], "requirements-optional-insightface.txt")
         self.assertTrue(insightface["WHEELHOUSE_ENABLED"])
         self.assertEqual(
