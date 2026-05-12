@@ -54,7 +54,7 @@ toolkit/
 Use the package build wrapper from the toolkit root:
 
 ```bash
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake -c av_imgdata
+source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
 ```
 
 The wrapper performs the required preflight steps before invoking the Synology
@@ -63,15 +63,16 @@ toolkit package build:
 1. run the Python test suite
 2. install UI dependencies with `pnpm`
 3. build the UI
-4. invoke `pkgscripts-ng/PkgCreate.py` with the provided arguments
+4. invoke `pkgscripts-ng/PkgCreate.py` for the `av_imgdata` package with the provided options
 
 If any Python test or the UI build fails, the package build is not started.
 
-Arguments passed to `build-package.sh` are forwarded to `PkgCreate.py`.
-For example:
+Arguments passed to `build-package.sh` are forwarded to `PkgCreate.py` as options.
+The package name is always appended by the wrapper as `av_imgdata`, so do not pass
+`-c av_imgdata` yourself. For example:
 
 ```bash
-source/av_imgdata/tools/build-package.sh -v 7.3 -p apollolake -c av_imgdata
+source/av_imgdata/tools/build-package.sh -v 7.3 -p apollolake
 ```
 
 Before the first build, prepare the Synology toolkit environment, for example:
@@ -80,7 +81,7 @@ Before the first build, prepare the Synology toolkit environment, for example:
 cd pkgscripts-ng
 ./EnvDeploy -v 7.3 -p geminilake
 cd ..
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake -c av_imgdata
+source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
 ```
 
 Generated packages are collected by the toolkit in:
@@ -109,7 +110,7 @@ For package builds, use the package build wrapper instead:
 
 ```bash
 cd ../..
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake -c av_imgdata
+source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
 ```
 
 The wrapper runs the Python tests and UI build before invoking the Synology
