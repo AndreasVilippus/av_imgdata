@@ -3557,6 +3557,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                             },
                         },
                     },
+                    handle,
                 )
 
             config_service = ConfigService(config_path)
