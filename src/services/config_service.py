@@ -27,14 +27,6 @@ class ConfigService:
         },
     }
 
-    OBSOLETE_CONFIG_KEY_PATHS = (
-        ("files", "USE_EXIFTOOL_FOR_SIDECARDS"),
-        ("analysis", "CHECKS", "IGNORE_LIST_DUPLICATE_FACES"),
-        ("analysis", "CHECKS", "IGNORE_LIST_POSITION_DEVIATIONS"),
-        ("analysis", "CHECKS", "IGNORE_LIST_NAME_CONFLICTS"),
-        ("name_mappings",),
-    )
-
     def __init__(self, config_path: Optional[str] = None):
         if config_path:
             self._config_path = Path(config_path)
@@ -137,7 +129,6 @@ class ConfigService:
 
         config = self.readConfig()
         self.migrateLegacyChecksIgnoreLists(config)
-        self.removeObsoleteConfigKeys(config)
         merged = self.normalizeConfig(config)
 
         self._merged_config_cache = merged
@@ -159,7 +150,6 @@ class ConfigService:
         if not isinstance(config, dict):
             return False
         self.migrateLegacyChecksIgnoreLists(config)
-        self.removeObsoleteConfigKeys(config)
         config = self.normalizeConfig(config)
         candidate = self._config_path
         try:
@@ -274,23 +264,6 @@ class ConfigService:
             merged_values = self._normalize_checks_ignore_list([*current_values, *legacy_values])
             self.writeChecksIgnoreList(review_type, merged_values)
 
-    @classmethod
-    def removeObsoleteConfigKeys(cls, config: Dict[str, Any]) -> bool:
-        if not isinstance(config, dict):
-            return False
-        removed = False
-        for key_path in cls.OBSOLETE_CONFIG_KEY_PATHS:
-            parent: Any = config
-            for key in key_path[:-1]:
-                if not isinstance(parent, dict):
-                    parent = None
-                    break
-                parent = parent.get(key)
-            if isinstance(parent, dict) and key_path[-1] in parent:
-                parent.pop(key_path[-1], None)
-                removed = True
-        return removed
-
     def _config_signature(self) -> Tuple[Any, ...]:
         signature_parts: list = [str(self._config_path)]
         try:
@@ -311,24 +284,20 @@ class ConfigService:
 
     @classmethod
     def normalizeConfig(cls, config: Dict[str, Any]) -> Dict[str, Any]:
-        root = cls._deep_merge_dict(cls.defaultConfig(), config if isinstance(config, dict) else {})
-        cls.removeObsoleteConfigKeys(root)
+        root = cls._merge_valid_config(cls.defaultConfig(), config if isinstance(config, dict) else {})
 
         analysis = root.get("analysis") if isinstance(root.get("analysis"), dict) else {}
         checks = analysis.get("CHECKS") if isinstance(analysis.get("CHECKS"), dict) else {}
-        checks = dict(checks)
-        checks.update({
-            "DUPLICATE_FACES": bool(checks.get("DUPLICATE_FACES", True)),
-            "POSITION_DEVIATIONS": bool(checks.get("POSITION_DEVIATIONS", True)),
-            "POSITION_DEVIATIONS_INCLUDE_PHOTOS": bool(checks.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS", True)),
-            "DIMENSION_ISSUES": bool(checks.get("DIMENSION_ISSUES", True)),
-            "NAME_CONFLICTS": bool(checks.get("NAME_CONFLICTS", True)),
-            "NAME_CONFLICTS_INCLUDE_PHOTOS": bool(checks.get("NAME_CONFLICTS_INCLUDE_PHOTOS", True)),
-            "NAME_CONFLICT_OVERLAP_THRESHOLD": cls._clamp_float(checks.get("NAME_CONFLICT_OVERLAP_THRESHOLD", 0.75), 0.0, 1.0, 0.75),
-            "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": bool(checks.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH", True)),
-            "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": cls._clamp_float(checks.get("NAME_CONFLICT_MIN_BEST_MATCH_MARGIN", 0.05), 0.0, 1.0, 0.05),
-            "SINGLE_SOURCE_OF_TRUTH": str(checks.get("SINGLE_SOURCE_OF_TRUTH", "")),
-        })
+        checks["DUPLICATE_FACES"] = bool(checks.get("DUPLICATE_FACES", True))
+        checks["POSITION_DEVIATIONS"] = bool(checks.get("POSITION_DEVIATIONS", True))
+        checks["POSITION_DEVIATIONS_INCLUDE_PHOTOS"] = bool(checks.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS", True))
+        checks["DIMENSION_ISSUES"] = bool(checks.get("DIMENSION_ISSUES", True))
+        checks["NAME_CONFLICTS"] = bool(checks.get("NAME_CONFLICTS", True))
+        checks["NAME_CONFLICTS_INCLUDE_PHOTOS"] = bool(checks.get("NAME_CONFLICTS_INCLUDE_PHOTOS", True))
+        checks["NAME_CONFLICT_OVERLAP_THRESHOLD"] = cls._clamp_float(checks.get("NAME_CONFLICT_OVERLAP_THRESHOLD", 0.75), 0.0, 1.0, 0.75)
+        checks["NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"] = bool(checks.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH", True))
+        checks["NAME_CONFLICT_MIN_BEST_MATCH_MARGIN"] = cls._clamp_float(checks.get("NAME_CONFLICT_MIN_BEST_MATCH_MARGIN", 0.05), 0.0, 1.0, 0.05)
+        checks["SINGLE_SOURCE_OF_TRUTH"] = str(checks.get("SINGLE_SOURCE_OF_TRUTH", ""))
         analysis["CHECKS"] = checks
         root["analysis"] = analysis
 
@@ -346,20 +315,16 @@ class ConfigService:
         review = root.get("review") if isinstance(root.get("review"), dict) else {}
         review_options = review.get("OPTIONS") if isinstance(review.get("OPTIONS"), dict) else {}
         review_ignore = review.get("CHECKS_IGNORE_LISTS") if isinstance(review.get("CHECKS_IGNORE_LISTS"), dict) else {}
-        review["OPTIONS"] = {
-            **review_options,
-            "DUPLICATE_FACE_SUGGESTIONS": bool(review_options.get("DUPLICATE_FACE_SUGGESTIONS", True)),
-        }
-        review["CHECKS_IGNORE_LISTS"] = {
-            **review_ignore,
-            "DUPLICATE_FACES_ENABLED": bool(review_ignore.get("DUPLICATE_FACES_ENABLED", True)),
-            "POSITION_DEVIATIONS_ENABLED": bool(review_ignore.get("POSITION_DEVIATIONS_ENABLED", True)),
-            "NAME_CONFLICTS_ENABLED": bool(review_ignore.get("NAME_CONFLICTS_ENABLED", True)),
-        }
+        review_options["DUPLICATE_FACE_SUGGESTIONS"] = bool(review_options.get("DUPLICATE_FACE_SUGGESTIONS", True))
+        review_ignore["DUPLICATE_FACES_ENABLED"] = bool(review_ignore.get("DUPLICATE_FACES_ENABLED", True))
+        review_ignore["POSITION_DEVIATIONS_ENABLED"] = bool(review_ignore.get("POSITION_DEVIATIONS_ENABLED", True))
+        review_ignore["NAME_CONFLICTS_ENABLED"] = bool(review_ignore.get("NAME_CONFLICTS_ENABLED", True))
+        review["OPTIONS"] = review_options
+        review["CHECKS_IGNORE_LISTS"] = review_ignore
         root["review"] = review
 
         files = root.get("files") if isinstance(root.get("files"), dict) else {}
-        use_exiftool_for_sidecars = bool(files.get("USE_EXIFTOOL_FOR_SIDECARS", files.get("USE_EXIFTOOL_FOR_SIDECARDS", False)))
+        use_exiftool_for_sidecars = bool(files.get("USE_EXIFTOOL_FOR_SIDECARS", False))
         sidecar_exiftool_fallback_enabled = bool(files.get("SIDECAR_EXIFTOOL_FALLBACK_ENABLED", False))
         files["USE_EXIFTOOL_FOR_SIDECARS"] = use_exiftool_for_sidecars
         files["SIDECAR_EXIFTOOL_FALLBACK_ENABLED"] = sidecar_exiftool_fallback_enabled
@@ -400,11 +365,11 @@ class ConfigService:
         return numeric
 
     @staticmethod
-    def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-        merged = dict(base)
-        for key, value in override.items():
-            if isinstance(value, dict) and isinstance(merged.get(key), dict):
-                merged[key] = ConfigService._deep_merge_dict(merged[key], value)
-            else:
-                merged[key] = value
-        return merged
+    def _merge_valid_config(default: Any, current: Any) -> Any:
+        if isinstance(default, dict):
+            current_dict = current if isinstance(current, dict) else {}
+            return {
+                key: ConfigService._merge_valid_config(value, current_dict.get(key))
+                for key, value in default.items()
+            }
+        return copy.deepcopy(current) if current is not None else copy.deepcopy(default)
