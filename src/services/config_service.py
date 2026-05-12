@@ -27,14 +27,21 @@ class ConfigService:
         },
     }
 
+    OBSOLETE_CONFIG_KEY_PATHS = (
+        ("files", "USE_EXIFTOOL_FOR_SIDECARDS"),
+        ("analysis", "CHECKS", "IGNORE_LIST_DUPLICATE_FACES"),
+        ("analysis", "CHECKS", "IGNORE_LIST_POSITION_DEVIATIONS"),
+        ("analysis", "CHECKS", "IGNORE_LIST_NAME_CONFLICTS"),
+        ("name_mappings",),
+    )
+
     def __init__(self, config_path: Optional[str] = None):
         if config_path:
             self._config_path = Path(config_path)
         else:
             package_var = os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")
             self._config_path = Path(package_var) / "config.json"
-        
-        # Cache für readMergedConfig()
+
         self._merged_config_cache: Optional[Dict[str, Any]] = None
         self._merged_config_cache_signature: Optional[Tuple[Any, ...]] = None
 
@@ -51,7 +58,7 @@ class ConfigService:
             "pip_packages": {
                 "INSIGHTFACE": {
                     "ENABLED": False,
-                    "INSTALL_ON_START": True,
+                    "INSTALL_ON_START": False,
                     "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
                     "WHEELHOUSE_ENABLED": True,
                     "WHEELHOUSE_MANIFEST_URL": "https://github.com/AndreasVilippus/av_imgdata-wheelhouse/releases/download/dsm7-x86_64-python38-2026.04.23/wheelhouse-manifest.json",
@@ -125,20 +132,16 @@ class ConfigService:
 
     def readMergedConfig(self) -> Dict[str, Any]:
         signature = self._config_signature()
-        
-        # Cache nutzen wenn Signatur identisch ist
         if self._merged_config_cache is not None and signature == self._merged_config_cache_signature:
             return copy.deepcopy(self._merged_config_cache)
-        
-        # Cache ungültig - neu laden und cachen
+
         config = self.readConfig()
         self.migrateLegacyChecksIgnoreLists(config)
-        merged = self._deep_merge_dict(self.defaultConfig(), self.normalizeConfig(config))
-        
-        # Cache aktualisieren
+        self.removeObsoleteConfigKeys(config)
+        merged = self.normalizeConfig(config)
+
         self._merged_config_cache = merged
         self._merged_config_cache_signature = signature
-        
         return copy.deepcopy(merged)
 
     def readConfig(self) -> Dict[str, Any]:
@@ -156,6 +159,7 @@ class ConfigService:
         if not isinstance(config, dict):
             return False
         self.migrateLegacyChecksIgnoreLists(config)
+        self.removeObsoleteConfigKeys(config)
         config = self.normalizeConfig(config)
         candidate = self._config_path
         try:
@@ -165,8 +169,7 @@ class ConfigService:
                 handle.write("\n")
         except Exception:
             return False
-        
-        # Cache invalidieren
+
         self._merged_config_cache = None
         self._merged_config_cache_signature = None
         return True
@@ -224,8 +227,7 @@ class ConfigService:
                     handle.write("\n")
         except Exception:
             return False
-        
-        # Cache invalidieren
+
         self._merged_config_cache = None
         self._merged_config_cache_signature = None
         return True
@@ -246,8 +248,7 @@ class ConfigService:
         }
 
     def clearChecksIgnoreList(self, review_type: Any) -> bool:
-        result = self.writeChecksIgnoreList(review_type, [])
-        return result
+        return self.writeChecksIgnoreList(review_type, [])
 
     def getChecksIgnoreListsStatus(self) -> Dict[str, Dict[str, Any]]:
         status: Dict[str, Dict[str, Any]] = {}
@@ -273,23 +274,31 @@ class ConfigService:
             merged_values = self._normalize_checks_ignore_list([*current_values, *legacy_values])
             self.writeChecksIgnoreList(review_type, merged_values)
 
+    @classmethod
+    def removeObsoleteConfigKeys(cls, config: Dict[str, Any]) -> bool:
+        if not isinstance(config, dict):
+            return False
+        removed = False
+        for key_path in cls.OBSOLETE_CONFIG_KEY_PATHS:
+            parent: Any = config
+            for key in key_path[:-1]:
+                if not isinstance(parent, dict):
+                    parent = None
+                    break
+                parent = parent.get(key)
+            if isinstance(parent, dict) and key_path[-1] in parent:
+                parent.pop(key_path[-1], None)
+                removed = True
+        return removed
+
     def _config_signature(self) -> Tuple[Any, ...]:
-        """
-        Berechne eine Signatur aller relevanten Config-Dateien.
-        Enthält mtime und Größe der Hauptconfig-Datei sowie aller Ignore-List-Dateien.
-        """
-        signature_parts: list = [
-            str(self._config_path),
-        ]
-        
-        # Hauptconfig-Datei
+        signature_parts: list = [str(self._config_path)]
         try:
             stat = self._config_path.stat()
             signature_parts.append((stat.st_mtime_ns, stat.st_size))
         except (FileNotFoundError, OSError):
             signature_parts.append((0, 0))
-        
-        # Ignore-List-Dateien
+
         for review_type in sorted(self.CHECKS_IGNORE_LISTS.keys()):
             candidate = self.checksIgnoreListPath(review_type)
             try:
@@ -297,15 +306,18 @@ class ConfigService:
                 signature_parts.append((review_type, stat.st_mtime_ns, stat.st_size))
             except (FileNotFoundError, OSError, AttributeError):
                 signature_parts.append((review_type, 0, 0))
-        
+
         return tuple(signature_parts)
 
     @classmethod
     def normalizeConfig(cls, config: Dict[str, Any]) -> Dict[str, Any]:
         root = cls._deep_merge_dict(cls.defaultConfig(), config if isinstance(config, dict) else {})
+        cls.removeObsoleteConfigKeys(root)
+
         analysis = root.get("analysis") if isinstance(root.get("analysis"), dict) else {}
         checks = analysis.get("CHECKS") if isinstance(analysis.get("CHECKS"), dict) else {}
-        analysis["CHECKS"] = {
+        checks = dict(checks)
+        checks.update({
             "DUPLICATE_FACES": bool(checks.get("DUPLICATE_FACES", True)),
             "POSITION_DEVIATIONS": bool(checks.get("POSITION_DEVIATIONS", True)),
             "POSITION_DEVIATIONS_INCLUDE_PHOTOS": bool(checks.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS", True)),
@@ -316,7 +328,8 @@ class ConfigService:
             "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": bool(checks.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH", True)),
             "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": cls._clamp_float(checks.get("NAME_CONFLICT_MIN_BEST_MATCH_MARGIN", 0.05), 0.0, 1.0, 0.05),
             "SINGLE_SOURCE_OF_TRUTH": str(checks.get("SINGLE_SOURCE_OF_TRUTH", "")),
-        }
+        })
+        analysis["CHECKS"] = checks
         root["analysis"] = analysis
 
         runtime = root.get("runtime") if isinstance(root.get("runtime"), dict) else {}
@@ -350,10 +363,10 @@ class ConfigService:
         sidecar_exiftool_fallback_enabled = bool(files.get("SIDECAR_EXIFTOOL_FALLBACK_ENABLED", False))
         files["USE_EXIFTOOL_FOR_SIDECARS"] = use_exiftool_for_sidecars
         files["SIDECAR_EXIFTOOL_FALLBACK_ENABLED"] = sidecar_exiftool_fallback_enabled
-        sidcar_read_mode = str(files.get("SIDECAR_READ_MODE", "") or "").strip().lower()
-        if sidcar_read_mode not in {"direct_first", "direct_only", "exiftool_first", "exiftool_only"}:
-            sidcar_read_mode = "direct_first" if (use_exiftool_for_sidecars or sidecar_exiftool_fallback_enabled) else "direct_only"
-        files["SIDECAR_READ_MODE"] = sidcar_read_mode
+        sidecar_read_mode = str(files.get("SIDECAR_READ_MODE", "") or "").strip().lower()
+        if sidecar_read_mode not in {"direct_first", "direct_only", "exiftool_first", "exiftool_only"}:
+            sidecar_read_mode = "direct_first" if (use_exiftool_for_sidecars or sidecar_exiftool_fallback_enabled) else "direct_only"
+        files["SIDECAR_READ_MODE"] = sidecar_read_mode
         files["EMBEDDED_XMP_FULL_SCAN_ENABLED"] = bool(files.get("EMBEDDED_XMP_FULL_SCAN_ENABLED", False))
         files["EMBEDDED_XMP_FULL_SCAN_MAX_BYTES"] = cls._clamp_int(files.get("EMBEDDED_XMP_FULL_SCAN_MAX_BYTES", 67108864), 1048576, 536870912, 67108864)
         files["EXIFTOOL_PERSISTENT_ENABLED"] = bool(files.get("EXIFTOOL_PERSISTENT_ENABLED", True))
