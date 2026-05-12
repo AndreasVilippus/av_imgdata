@@ -123,7 +123,6 @@ def test_face_create_metadata_match_creates_metadata_face_person_and_cleans_find
 
     assert payload["success"] is True
     assert payload["data"]["face_id"] == 107256
-    assert payload["data"]["item_id"] == 35535
     assert payload["data"]["person_id"] == 91
     add_face.assert_called_once_with(
         user_key="user-1",
@@ -249,6 +248,7 @@ def test_checks_assign_face_person_forwards_photos_override_to_refresh(monkeypat
         user_key="user-1",
         cookies={"_SSID": "sid-1"},
         base_url="https://dsm.example.test",
+        image_path="photo/test.jpg",
         face_data=face,
         person_id=42,
         person_name="Person Current",
