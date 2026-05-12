@@ -4,9 +4,29 @@ PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/syno/bin:/usr/syno/sbin
 APP_NAME="AV_ImgData"
 BACKEND_BASE="http://127.0.0.1:9771"
 
+has_dsm_session_cookie() {
+  cookie_header="$1"
+  [ -n "$cookie_header" ] || return 1
+
+  # Keep this aligned with src/api/imgdata_api.py and ui/src/App.vue:
+  # DSM sessions may be represented by either _SSID or id cookies.
+  case "; ${cookie_header}" in
+    *"; _SSID="*|*"; id="*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+cleanup_tmp_files() {
+  [ -n "${body_file:-}" ] && rm -f "$body_file"
+  [ -n "${hdr_file:-}" ] && rm -f "$hdr_file"
+  [ -n "${out_file:-}" ] && rm -f "$out_file"
+}
+
 # DSM already gates /webman/3rdparty behind an authenticated session.
-# Accept requests that carry a DSM session cookie.
-if [ -z "${HTTP_COOKIE:-}" ] || ! echo "$HTTP_COOKIE" | grep -q "_SSID="; then
+# Accept the same DSM session cookie names that the backend accepts.
+if ! has_dsm_session_cookie "${HTTP_COOKIE:-}"; then
   echo "Status: 403 Forbidden"
   echo "Content-Type: text/plain"
   echo
@@ -23,9 +43,18 @@ if [ -n "${QUERY_STRING:-}" ]; then
 fi
 
 body_file=""
-if [ -n "${CONTENT_LENGTH:-}" ] && [ "${CONTENT_LENGTH}" -gt 0 ]; then
+case "${CONTENT_LENGTH:-}" in
+  ''|*[!0-9]*)
+    content_length=0
+    ;;
+  *)
+    content_length="$CONTENT_LENGTH"
+    ;;
+esac
+
+if [ "$content_length" -gt 0 ]; then
   body_file="$(mktemp /tmp/av_imgdata_body.XXXXXX)"
-  dd bs=1 count="${CONTENT_LENGTH}" >"${body_file}" 2>/dev/null
+  dd bs=1 count="$content_length" >"${body_file}" 2>/dev/null
 fi
 
 curl_cmd="/usr/bin/curl"
@@ -38,25 +67,35 @@ if [ ! -x "$curl_cmd" ]; then
   echo "Content-Type: text/plain"
   echo
   echo "curl not found"
-  [ -n "$body_file" ] && rm -f "$body_file"
+  cleanup_tmp_files
   exit 0
 fi
 
 hdr_file="$(mktemp /tmp/av_imgdata_hdr.XXXXXX)"
 out_file="$(mktemp /tmp/av_imgdata_out.XXXXXX)"
-$curl_cmd -s -D "$hdr_file" -o "$out_file" -X "$method" \
-  ${HTTP_COOKIE:+-H "Cookie: $HTTP_COOKIE"} \
-  ${CONTENT_TYPE:+-H "Content-Type: $CONTENT_TYPE"} \
-  ${HTTP_ORIGIN:+-H "Origin: $HTTP_ORIGIN"} \
-  ${HTTP_REFERER:+-H "Referer: $HTTP_REFERER"} \
-  ${HTTP_X_SYNO_TOKEN:+-H "X-SYNO-TOKEN: $HTTP_X_SYNO_TOKEN"} \
-  ${body_file:+--data-binary "@$body_file"} \
-  "$target"
 
-[ -n "$body_file" ] && rm -f "$body_file"
+set -- -s -D "$hdr_file" -o "$out_file" -X "$method"
+[ -n "${HTTP_COOKIE:-}" ] && set -- "$@" -H "Cookie: $HTTP_COOKIE"
+[ -n "${CONTENT_TYPE:-}" ] && set -- "$@" -H "Content-Type: $CONTENT_TYPE"
+[ -n "${HTTP_ORIGIN:-}" ] && set -- "$@" -H "Origin: $HTTP_ORIGIN"
+[ -n "${HTTP_REFERER:-}" ] && set -- "$@" -H "Referer: $HTTP_REFERER"
+[ -n "${HTTP_X_SYNO_TOKEN:-}" ] && set -- "$@" -H "X-SYNO-TOKEN: $HTTP_X_SYNO_TOKEN"
+[ -n "$body_file" ] && set -- "$@" --data-binary "@$body_file"
+
+if ! "$curl_cmd" "$@" "$target"; then
+  echo "Status: 502 Bad Gateway"
+  echo "Content-Type: text/plain"
+  echo
+  echo "Backend request failed"
+  cleanup_tmp_files
+  exit 0
+fi
 
 status_line="$(head -n 1 "$hdr_file")"
 status="${status_line#HTTP/* }"
+if [ -z "$status" ] || [ "$status" = "$status_line" ]; then
+  status="502 Bad Gateway"
+fi
 content_type="$(awk 'tolower($1)=="content-type:" {print $0; exit}' "$hdr_file")"
 
 echo "Status: $status"
@@ -68,4 +107,4 @@ fi
 echo
 cat "$out_file"
 
-rm -f "$hdr_file" "$out_file"
+cleanup_tmp_files
