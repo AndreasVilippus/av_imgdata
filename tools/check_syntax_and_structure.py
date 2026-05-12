@@ -14,6 +14,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PY_DIRS = [ROOT / "src", ROOT / "tests"]
 JS_DIRS = [ROOT / "ui" / "src"]
+CONFIG_ROOT_NAMES = {
+    "config",
+    "cfg",
+    "root",
+    "settings",
+    "package_config",
+    "runtime_config",
+    "merged_config",
+    "current_config",
+}
 
 
 def fail(message: str) -> None:
@@ -51,6 +61,15 @@ def _collect_key_paths(value: Any, prefix: tuple[str, ...] = ()) -> set[tuple[st
         paths.add(key_path)
         paths.update(_collect_key_paths(child, key_path))
     return paths
+
+
+def _is_valid_config_path(default_config: dict[str, Any], path: tuple[str, ...]) -> bool:
+    node: Any = default_config
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return False
+        node = node[key]
+    return True
 
 
 def check_default_config_completeness() -> int:
@@ -112,6 +131,143 @@ def module_default_projection(default: Any, current: Any) -> Any:
     return current if current is not None else default
 
 
+def _string_constant(node: ast.AST) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _subscript_string_key(node: ast.Subscript) -> str | None:
+    return _string_constant(node.slice)
+
+
+def _call_string_arg(node: ast.Call, index: int = 0) -> str | None:
+    if len(node.args) <= index:
+        return None
+    return _string_constant(node.args[index])
+
+
+def _read_config_prefix(expr: ast.AST, prefixes: dict[str, tuple[str, ...]]) -> tuple[str, ...] | None:
+    if isinstance(expr, ast.Name):
+        return prefixes.get(expr.id)
+    if isinstance(expr, ast.Subscript):
+        base = _read_config_prefix(expr.value, prefixes)
+        key = _subscript_string_key(expr)
+        if base is not None and key:
+            return (*base, key)
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "get":
+        base = _read_config_prefix(expr.func.value, prefixes)
+        key = _call_string_arg(expr)
+        if base is not None and key:
+            return (*base, key)
+    return None
+
+
+class ConfigAccessVisitor(ast.NodeVisitor):
+    def __init__(self, rel_path: str, default_config: dict[str, Any]):
+        self.rel_path = rel_path
+        self.default_config = default_config
+        self.errors = 0
+        self._prefix_stack: list[dict[str, tuple[str, ...]]] = []
+
+    @property
+    def prefixes(self) -> dict[str, tuple[str, ...]]:
+        return self._prefix_stack[-1]
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        if node.name == "migrateLegacyChecksIgnoreLists":
+            return
+        self._prefix_stack.append({})
+        for arg in node.args.args:
+            if arg.arg in CONFIG_ROOT_NAMES:
+                self.prefixes[arg.arg] = ()
+        self.generic_visit(node)
+        self._prefix_stack.pop()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.visit_FunctionDef(node)  # type: ignore[arg-type]
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._prefix_stack.append({})
+        self.generic_visit(node)
+        self._prefix_stack.pop()
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        prefix = self._assigned_config_prefix(node.value)
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                if prefix is not None:
+                    self.prefixes[target.id] = prefix
+                elif target.id in self.prefixes:
+                    self.prefixes.pop(target.id, None)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if isinstance(node.target, ast.Name):
+            prefix = self._assigned_config_prefix(node.value) if node.value is not None else None
+            if prefix is not None:
+                self.prefixes[node.target.id] = prefix
+            elif node.target.id in self.prefixes:
+                self.prefixes.pop(node.target.id, None)
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        key = _subscript_string_key(node)
+        base = _read_config_prefix(node.value, self.prefixes)
+        if key and base is not None:
+            self._check_path((*base, key), node.lineno)
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+            key = _call_string_arg(node)
+            base = _read_config_prefix(node.func.value, self.prefixes)
+            if key and base is not None:
+                self._check_path((*base, key), node.lineno)
+        self.generic_visit(node)
+
+    def _assigned_config_prefix(self, value: ast.AST | None) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        prefix = _read_config_prefix(value, self.prefixes)
+        if prefix is not None:
+            return prefix
+        if isinstance(value, ast.Call):
+            func = value.func
+            if isinstance(func, ast.Attribute) and func.attr in {
+                "readConfig",
+                "readMergedConfig",
+                "defaultConfig",
+                "normalizeConfig",
+            }:
+                return ()
+        return None
+
+    def _check_path(self, path: tuple[str, ...], lineno: int) -> None:
+        if _is_valid_config_path(self.default_config, path):
+            return
+        self.errors += 1
+        fail(f"{self.rel_path}:{lineno}: config key is not defined by defaultConfig(): {'.'.join(path)}")
+
+
+def check_config_accesses_against_defaults() -> int:
+    try:
+        default_config = _load_config_service_default()
+    except Exception as exc:
+        fail(f"src/services/config_service.py: could not read ConfigService.defaultConfig(): {exc}")
+        return 1
+
+    errors = 0
+    for base in [ROOT / "src"]:
+        for path in base.rglob("*.py"):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except SyntaxError:
+                continue
+            visitor = ConfigAccessVisitor(str(path.relative_to(ROOT)), default_config)
+            visitor.visit(tree)
+            errors += visitor.errors
+    return errors
+
+
 def check_imgdata_class_boundaries() -> int:
     path = ROOT / "src" / "imgdata.py"
     if not path.exists():
@@ -125,21 +281,19 @@ def check_imgdata_class_boundaries() -> int:
         fail("src/imgdata.py: class ImgDataService not found")
         return 1
 
-    # In imgdata.py sollten Service-Methoden mit vier Leerzeichen eingerückt sein.
     suspicious_defs = []
     for lineno, line in enumerate(source.splitlines(), start=1):
         if re.match(r"^def [A-Za-z_]", line):
             suspicious_defs.append((lineno, line.strip()))
 
     allowed_top_level = {
-        "def _attach_checks_status_for_response",  # nur falls in API-Datei, nicht hier
+        "def _attach_checks_status_for_response",
     }
     for lineno, text in suspicious_defs:
         if not any(text.startswith(prefix) for prefix in allowed_top_level):
             errors += 1
             fail(f"src/imgdata.py:{lineno}: top-level def found, possible lost class indentation: {text}")
 
-    # Doppelte direkt aufeinanderfolgende Initialisierungen wie result_entry = None.
     lines = source.splitlines()
     for index in range(len(lines) - 1):
         if lines[index].strip() and lines[index].strip() == lines[index + 1].strip():
@@ -267,7 +421,6 @@ def check_vue_computed_parameter_functions() -> int:
 
 
 def check_js_parse_with_build() -> int:
-    # Webpack/Babel fängt JS/Vue-Syntaxfehler zuverlässig ab.
     result = subprocess.run(
         ["npm", "--prefix", "ui", "run", "build"],
         cwd=ROOT,
@@ -280,6 +433,7 @@ def main() -> int:
     errors = 0
     errors += check_python_ast()
     errors += check_default_config_completeness()
+    errors += check_config_accesses_against_defaults()
     errors += check_imgdata_class_boundaries()
     errors += check_session_cookie_alignment()
     errors += check_cgi_curl_argument_safety()
