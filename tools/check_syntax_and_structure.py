@@ -108,6 +108,55 @@ def check_session_cookie_alignment() -> int:
     return errors
 
 
+def check_cgi_curl_argument_safety() -> int:
+    path = ROOT / "ui" / "index.cgi"
+    source = path.read_text(encoding="utf-8")
+    errors = 0
+
+    forbidden_patterns = [
+        r"\$\{HTTP_COOKIE:\+-H\s+\"Cookie:",
+        r"\$\{CONTENT_TYPE:\+-H\s+\"Content-Type:",
+        r"\$\{HTTP_ORIGIN:\+-H\s+\"Origin:",
+        r"\$\{HTTP_REFERER:\+-H\s+\"Referer:",
+        r"\$\{HTTP_X_SYNO_TOKEN:\+-H\s+\"X-SYNO-TOKEN:",
+        r"\$\{body_file:\+--data-binary",
+    ]
+
+    for pattern in forbidden_patterns:
+        if re.search(pattern, source):
+            errors += 1
+            fail(
+                "ui/index.cgi: unsafe curl argument construction found; "
+                "build curl arguments with set -- instead"
+            )
+
+    required_fragments = {
+        'set -- -s -D "$hdr_file" -o "$out_file" -X "$method"':
+            "expected set -- based curl argument initialization not found",
+        'set -- "$@" -H "Cookie: $HTTP_COOKIE"':
+            "expected quoted Cookie header forwarding not found",
+        'set -- "$@" -H "Content-Type: $CONTENT_TYPE"':
+            "expected quoted Content-Type header forwarding not found",
+        'set -- "$@" -H "Origin: $HTTP_ORIGIN"':
+            "expected quoted Origin header forwarding not found",
+        'set -- "$@" -H "Referer: $HTTP_REFERER"':
+            "expected quoted Referer header forwarding not found",
+        'set -- "$@" -H "X-SYNO-TOKEN: $HTTP_X_SYNO_TOKEN"':
+            "expected quoted X-SYNO-TOKEN header forwarding not found",
+        'set -- "$@" --data-binary "@$body_file"':
+            "expected quoted request-body forwarding not found",
+        '"$curl_cmd" "$@" "$target"':
+            "expected quoted curl invocation not found",
+    }
+
+    for fragment, message in required_fragments.items():
+        if fragment not in source:
+            errors += 1
+            fail(f"ui/index.cgi: {message}")
+
+    return errors
+
+
 def check_vue_computed_parameter_functions() -> int:
     errors = 0
 
@@ -149,6 +198,7 @@ def main() -> int:
     errors += check_python_ast()
     errors += check_imgdata_class_boundaries()
     errors += check_session_cookie_alignment()
+    errors += check_cgi_curl_argument_safety()
     errors += check_vue_computed_parameter_functions()
 
     if errors:
