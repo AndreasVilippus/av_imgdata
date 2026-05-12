@@ -70,6 +70,44 @@ def check_imgdata_class_boundaries() -> int:
     return errors
 
 
+def check_session_cookie_alignment() -> int:
+    errors = 0
+    cgi_path = ROOT / "ui" / "index.cgi"
+    api_path = ROOT / "src" / "api" / "imgdata_api.py"
+    session_manager_path = ROOT / "src" / "api" / "session_manager.py"
+    app_path = ROOT / "ui" / "src" / "App.vue"
+
+    cgi_source = cgi_path.read_text(encoding="utf-8")
+    api_source = api_path.read_text(encoding="utf-8")
+    session_source = session_manager_path.read_text(encoding="utf-8")
+    app_source = app_path.read_text(encoding="utf-8")
+
+    expected_cookies = {"_SSID", "id"}
+
+    for cookie_name in expected_cookies:
+        if f"{cookie_name}: this.readCookie('{cookie_name}')" not in app_source:
+            errors += 1
+            fail(f"ui/src/App.vue: DSM cookie {cookie_name} is not collected for backend requests")
+        if f'"{cookie_name}" not in cookies' not in api_source and f'cookies.get("{cookie_name}")' not in session_source:
+            errors += 1
+            fail(f"backend session handling: DSM cookie {cookie_name} is not accepted")
+        if f"; {cookie_name}=" not in cgi_source:
+            errors += 1
+            fail(f"ui/index.cgi: DSM cookie {cookie_name} is not accepted by CGI gate")
+
+    if "if \"id\" not in cookies and \"_SSID\" not in cookies" not in api_source:
+        errors += 1
+        fail("src/api/imgdata_api.py: expected id/_SSID session-cookie gate not found")
+    if "raw_key = cookies.get(\"id\") or cookies.get(\"_SSID\")" not in session_source:
+        errors += 1
+        fail("src/api/session_manager.py: expected id/_SSID user-key precedence not found")
+    if "has_dsm_session_cookie" not in cgi_source:
+        errors += 1
+        fail("ui/index.cgi: central DSM session cookie check not found")
+
+    return errors
+
+
 def check_vue_computed_parameter_functions() -> int:
     errors = 0
 
@@ -110,6 +148,7 @@ def main() -> int:
     errors = 0
     errors += check_python_ast()
     errors += check_imgdata_class_boundaries()
+    errors += check_session_cookie_alignment()
     errors += check_vue_computed_parameter_functions()
 
     if errors:
