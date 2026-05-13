@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath("src"))
 
-from handler.exiftool_handler import ExifToolHandler
+from handler.exiftool_handler import ExifToolHandler, PersistentExifToolProcess
 from services.config_service import ConfigService
 
 
@@ -94,6 +94,38 @@ class ExifToolHandlerTests(unittest.TestCase):
             self.assertIn("-m", command)
             self.assertTrue(result["updated"])
             self.assertIn("Bad MakerNotes offset", result["stderr"])
+
+    def test_persistent_reader_handles_multiline_output_without_text_buffer_timeout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            executable = Path(tmpdir) / "fake_exiftool.py"
+            executable.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "for line in sys.stdin:\n"
+                "    if line.strip() == '-execute':\n"
+                "        sys.stdout.write('[{\\n')\n"
+                "        sys.stdout.write('  \"ImageWidth\": 4272,\\n')\n"
+                "        sys.stdout.write('  \"ImageHeight\": 2848,\\n')\n"
+                "        sys.stdout.write('  \"Orientation\": 1\\n')\n"
+                "        sys.stdout.write('}]\\n')\n"
+                "        sys.stdout.write('{ready}\\n')\n"
+                "        sys.stdout.flush()\n"
+                "    elif line.strip() == 'False':\n"
+                "        break\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            reader = PersistentExifToolProcess(str(executable), timeout_seconds=1)
+
+            try:
+                result = reader.run(["-j", "-n", "-ImageWidth", "/tmp/photo.jpg"])
+            finally:
+                reader.close()
+
+            self.assertEqual(result.returncode, 0)
+            self.assertIn('"ImageWidth": 4272', result.stdout)
+            self.assertIn('"ImageHeight": 2848', result.stdout)
+            self.assertIn('"Orientation": 1', result.stdout)
 
 
 if __name__ == "__main__":

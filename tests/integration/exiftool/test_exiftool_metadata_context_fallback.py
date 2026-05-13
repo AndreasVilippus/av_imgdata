@@ -95,6 +95,38 @@ def test_metadata_context_is_not_called_when_only_xmp_is_missing_and_native_cont
         Path(image_path).unlink(missing_ok=True)
 
 
+def test_jpeg_without_orientation_does_not_call_exiftool_context_when_dimensions_are_known():
+    service = ImgDataService(SessionManager())
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:
+        image_path = handle.name
+        handle.write(b"\xff\xd8\xff\xda")
+
+    try:
+        with patch.object(service.config, "readMergedConfig", return_value=_config(prefer_context=False)), \
+             patch.object(service.files, "findXmpForImage", return_value=None), \
+             patch.object(service.files, "readJpegContext", return_value={
+                 "width": 100,
+                 "height": 80,
+                 "unit": "pixel",
+                 "orientation": None,
+                 "xmp_content": None,
+                 "xmp_source": "",
+                 "complete": True,
+             }), \
+             patch.object(service.files, "loadXmpFromImageParsed", return_value=None), \
+             patch.object(service.exiftool_handler, "isAvailable", return_value=True), \
+             patch.object(service.exiftool_handler, "readMetadataContext", side_effect=AssertionError("normal JPEG orientation absence must not call ExifTool")), \
+             patch.object(service.exiftool_handler, "readImageOrientation", side_effect=AssertionError("normal JPEG orientation absence must not call ExifTool orientation")), \
+             patch.object(service.metadata_parser, "parse", side_effect=lambda **kwargs: kwargs):
+            metadata = service._readImageMetadata(image_path)
+
+        assert metadata["image_dimensions"] == {"width": 100, "height": 80, "unit": "pixel"}
+        assert metadata["image_orientation"] == 1
+    finally:
+        Path(image_path).unlink(missing_ok=True)
+
+
 def test_metadata_context_fallback_can_be_disabled_for_scan_face_checks():
     service = ImgDataService(SessionManager())
 

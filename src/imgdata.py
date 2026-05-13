@@ -788,6 +788,15 @@ class ImgDataService:
                 "unit": "pixel",
             } if jpeg_context else self.files.readImageDimensions(image_path)
             image_orientation = jpeg_context.get("orientation") if jpeg_context else self.files.readJpegExifOrientation(image_path)
+            if (
+                jpeg_context
+                and Path(image_path).suffix.lower() in {".jpg", ".jpeg"}
+                and jpeg_context.get("complete") is True
+                and image_dimensions.get("width")
+                and image_dimensions.get("height")
+                and image_orientation is None
+            ):
+                image_orientation = 1
             missing_dimensions = not image_dimensions.get("width") or not image_dimensions.get("height")
             missing_orientation = image_orientation is None
             if allow_exiftool_context_fallback and exiftool_available and (missing_dimensions or missing_orientation):

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import select
 import subprocess
 import tempfile
@@ -36,7 +37,7 @@ class PersistentExifToolProcess:
                 return
             try:
                 if process.stdin:
-                    process.stdin.write("-stay_open\nFalse\n")
+                    process.stdin.write(b"-stay_open\nFalse\n")
                     process.stdin.flush()
             except Exception:
                 pass
@@ -60,10 +61,17 @@ class PersistentExifToolProcess:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
+            bufsize=0,
         )
         return self._process
+
+    @staticmethod
+    def _split_ready_response(buffer: bytes) -> Tuple[Optional[bytes], bytes]:
+        lines = buffer.splitlines(keepends=True)
+        for index, line in enumerate(lines):
+            if line.strip() == b"{ready}":
+                return b"".join(lines[:index]), b"".join(lines[index + 1 :])
+        return None, buffer
 
     def run(self, args: List[str]) -> _ExifToolResult:
         with self._lock:
@@ -78,17 +86,21 @@ class PersistentExifToolProcess:
             command += "-execute\n"
 
             try:
-                process.stdin.write(command)
+                process.stdin.write(command.encode("utf-8"))
                 process.stdin.flush()
             except (BrokenPipeError, OSError):
                 self.close()
                 raise
 
-            output_lines: List[str] = []
+            output_buffer = b""
             deadline = time.monotonic() + max(1.0, self.timeout_seconds)
             stdout_fd = process.stdout.fileno()
 
             while True:
+                response, output_buffer = self._split_ready_response(output_buffer)
+                if response is not None:
+                    return _ExifToolResult(0, response.decode("utf-8", errors="replace"), "")
+
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     self.close()
@@ -99,15 +111,11 @@ class PersistentExifToolProcess:
                     self.close()
                     raise TimeoutError("exiftool stay_open request timed out")
 
-                line = process.stdout.readline()
-                if line == "":
+                chunk = os.read(stdout_fd, 8192)
+                if not chunk:
                     self.close()
                     raise OSError("exiftool stay_open process ended")
-                if line.strip() == "{ready}":
-                    break
-                output_lines.append(line)
-
-            return _ExifToolResult(0, "".join(output_lines), "")
+                output_buffer += chunk
 
 
 class ExifToolHandler:
