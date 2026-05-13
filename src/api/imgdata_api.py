@@ -1194,6 +1194,10 @@ async def checks_start(request: Request):
     auto_apply_suggested_names = bool(body.get("auto_apply_suggested_names"))
     auto_apply_suggested_duplicates = bool(body.get("auto_apply_suggested_duplicates"))
     advance_current_result = bool(body.get("advance_current_result"))
+    try:
+        changed_since_days = max(0, int(body.get("changed_since_days") or 0)) if str(source_mode or "").strip().lower() == "scan" else 0
+    except (TypeError, ValueError):
+        changed_since_days = 0
 
     try:
         loop = asyncio.get_running_loop()
@@ -1210,6 +1214,7 @@ async def checks_start(request: Request):
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
                 advance_current_result=advance_current_result,
+                changed_since_days=changed_since_days,
             ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:

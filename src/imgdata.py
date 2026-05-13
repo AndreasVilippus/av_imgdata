@@ -344,6 +344,16 @@ class ImgDataService:
             return False
         return before.get("mtime_ns") != after.get("mtime_ns") or before.get("size") != after.get("size")
 
+    @staticmethod
+    def _fileChangedSince(path: Any, cutoff_mtime_ns: int) -> bool:
+        normalized_path = str(path or "").strip()
+        if not normalized_path or cutoff_mtime_ns <= 0:
+            return False
+        try:
+            return int(Path(normalized_path).stat().st_mtime_ns) >= int(cutoff_mtime_ns)
+        except OSError:
+            return False
+
     def _raiseIfFileChangedDuringOperation(
         self,
         *,
@@ -594,6 +604,10 @@ class ImgDataService:
         include_unnamed_acd: bool = False,
         metadata_context_cache: Optional[Dict[str, Dict[str, Any]]] = None,
         scan_context: Optional[ScanContext] = None,
+        allow_exiftool_context_fallback: bool = True,
+        allow_exiftool_sidecar_read: bool = True,
+        jpeg_context_override: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> MetadataPayload:
         self._raiseIfChecksStopRequested()
         self._updateChecksProgressHeartbeat(current_path=image_path)
@@ -610,10 +624,21 @@ class ImgDataService:
         sidecar_read_mode = str(files_config.get("SIDECAR_READ_MODE", "") or "").strip().lower()
         if sidecar_read_mode not in {"direct_first", "direct_only", "exiftool_first", "exiftool_only"}:
             sidecar_read_mode = "direct_first" if (use_exiftool_for_sidecars or sidecar_exiftool_fallback_enabled) else "direct_only"
+        if not allow_exiftool_sidecar_read:
+            sidecar_read_mode = "direct_only"
         prefer_exiftool_for_context = bool(files_config.get("PREFER_EXIFTOOL_FOR_CONTEXT", False))
         exiftool_available = use_exiftool and self.exiftool_handler.isAvailable()
 
+        def report_progress(stage: str) -> None:
+            if progress_callback is None:
+                return
+            try:
+                progress_callback(stage)
+            except Exception:
+                pass
+
         sidecar_cache = scan_context.sidecar_cache if scan_context is not None else None
+        report_progress("sidecar_lookup")
         xmp_path = self.files.findXmpForImage(image_path, lookup_cache=sidecar_cache)
         xmp_content = None
         xmp_source = ""
@@ -645,6 +670,7 @@ class ImgDataService:
 
 
         if xmp_path:
+            report_progress("sidecar_read")
             if sidecar_read_mode == "exiftool_only":
                 if exiftool_available:
                     if io_metrics:
@@ -675,11 +701,13 @@ class ImgDataService:
                     xmp_content = self.exiftool_handler.loadXmpFile(xmp_path)
                     xmp_source = "xmp_file" if xmp_content else ""
 
-        jpeg_context: Dict[str, Any] = {}
+        jpeg_context: Dict[str, Any] = dict(jpeg_context_override or {})
         if Path(image_path).suffix.lower() in {".jpg", ".jpeg"} and not prefer_exiftool_for_context:
-            if io_metrics:
+            report_progress("jpeg_context")
+            if not jpeg_context and io_metrics:
                 io_metrics.file_reads += 1
-            jpeg_context = self.files.readJpegContext(image_path)
+            if not jpeg_context:
+                jpeg_context = self.files.readJpegContext(image_path)
             if not xmp_content and jpeg_context.get("xmp_content"):
                 xmp_content = jpeg_context.get("xmp_content")
                 xmp_source = jpeg_context.get("xmp_source") or "embedded_xmp_parsed"
@@ -715,6 +743,7 @@ class ImgDataService:
             embedded_xmp_full_scan_max_bytes = int(files_config.get("EMBEDDED_XMP_FULL_SCAN_MAX_BYTES", 67108864))
             
             if embedded_xmp_full_scan_enabled:
+                report_progress("embedded_xmp_full_scan")
                 if io_metrics:
                     io_metrics.file_reads += 1
                 xmp_content = self.files.loadXmpFromImageParsed(image_path, max_bytes=embedded_xmp_full_scan_max_bytes)
@@ -728,6 +757,7 @@ class ImgDataService:
         image_orientation = jpeg_context.get("orientation") if jpeg_context else None
 
         if exiftool_available and prefer_exiftool_for_context:
+            report_progress("exiftool_context")
             exiftool_context = get_exiftool_metadata_context(include_xmp=not xmp_content)
             if exiftool_context.get("success"):
                 if not xmp_content and exiftool_context.get("xmp_content"):
@@ -760,7 +790,8 @@ class ImgDataService:
             image_orientation = jpeg_context.get("orientation") if jpeg_context else self.files.readJpegExifOrientation(image_path)
             missing_dimensions = not image_dimensions.get("width") or not image_dimensions.get("height")
             missing_orientation = image_orientation is None
-            if exiftool_available and (missing_dimensions or missing_orientation):
+            if allow_exiftool_context_fallback and exiftool_available and (missing_dimensions or missing_orientation):
+                report_progress("exiftool_context_fallback")
                 fallback_context = get_exiftool_metadata_context(include_xmp=False)
                 if fallback_context and fallback_context.get("success"):
                     # Fallback context is requested with include_xmp=False here.
@@ -798,6 +829,7 @@ class ImgDataService:
             "MICROSOFT": bool(configured_schemas.get("MICROSOFT", default_schemas["MICROSOFT"])),
             "MWG_REGIONS": bool(configured_schemas.get("MWG_REGIONS", default_schemas["MWG_REGIONS"])),
         }
+        report_progress("metadata_parse")
         return self.metadata_parser.parse(
             image_path=image_path,
             xmp_content=xmp_content,
@@ -816,6 +848,51 @@ class ImgDataService:
 
     def readAllPersonsFromImage(self, image_path: str) -> List[Dict[str, Any]]:
         return self.files.readAllPersonsFromMetadata(self._readImageMetadata(image_path))
+
+    def _shouldSkipRawFaceCheckWithoutSidecar(
+        self,
+        image_path: str,
+        check_type: str,
+        scan_context: Optional[ScanContext] = None,
+    ) -> bool:
+        normalized_type = str(check_type or "").strip().lower()
+        if normalized_type not in {"duplicate_faces", "position_deviations", "name_conflicts"}:
+            return False
+
+        if Path(image_path).suffix.lower() not in FileHandler.RAW_PREVIEW_EXTENSIONS:
+            return False
+
+        config = scan_context.config if scan_context is not None else self.config.readMergedConfig()
+        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        if bool(files_config.get("PREFER_EXIFTOOL_FOR_CONTEXT", False)):
+            return False
+
+        sidecar_cache = scan_context.sidecar_cache if scan_context is not None else None
+        return not bool(self.files.findXmpForImage(image_path, lookup_cache=sidecar_cache))
+
+    def _shouldProbeJpegFaceCheckWithoutSidecar(
+        self,
+        image_path: str,
+        check_type: str,
+        scan_context: Optional[ScanContext] = None,
+    ) -> bool:
+        normalized_type = str(check_type or "").strip().lower()
+        if normalized_type not in {"duplicate_faces", "position_deviations", "name_conflicts"}:
+            return False
+
+        if Path(image_path).suffix.lower() not in {".jpg", ".jpeg"}:
+            return False
+
+        if not os.path.isfile(image_path):
+            return False
+
+        config = scan_context.config if scan_context is not None else self.config.readMergedConfig()
+        files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
+        if bool(files_config.get("PREFER_EXIFTOOL_FOR_CONTEXT", False)):
+            return False
+
+        sidecar_cache = scan_context.sidecar_cache if scan_context is not None else None
+        return not bool(self.files.findXmpForImage(image_path, lookup_cache=sidecar_cache))
 
     @staticmethod
     def _sameMetadataFaceCandidate(left: MetadataFace, right: MetadataFace, *, tolerance: float = 1e-6) -> bool:
@@ -1587,13 +1664,8 @@ class ImgDataService:
             return display_progress
 
         if display_progress.get("running") and not thread_alive:
-            display_progress["running"] = False
-            display_progress["finished"] = True
-            display_progress["stop_requested"] = False
-            display_progress["active"] = False
-            display_progress["stale"] = True
-            if not display_progress.get("message_key"):
-                display_progress["message_key"] = "face_match:progress_interrupted"
+            display_progress["active"] = True
+            display_progress["stale"] = False
             return display_progress
 
         display_progress["running"] = False
@@ -1654,16 +1726,6 @@ class ImgDataService:
     def _normalizeFaceMatchingProgress(self, user_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
         self._syncFaceMatchProgressCountsFromCursor(current)
-        worker = self._face_matching_threads.get(user_key)
-        worker_alive = bool(worker and worker.is_alive())
-        if current.get("running") and not worker_alive:
-            current["running"] = False
-            current["stop_requested"] = False
-            if "finished" not in current:
-                current["finished"] = True
-            if not current.get("message"):
-                current["message"] = "Last face matching job is no longer running."
-            self.file_analysis.writeRuntimeState("face_match_progress", user_key, current)
         return current
 
     def requestStopFaceMatching(self, user_key: str) -> Dict[str, Any]:
@@ -2016,6 +2078,9 @@ class ImgDataService:
     def _invalidateChecksCandidatePathsCache(self, user_key: str, check_type: Any) -> None:
         state_key = self._checksStateKey(user_key, check_type)
         with self._checks_candidate_paths_cache_lock:
+            for key in list(self._checks_candidate_paths_cache.keys()):
+                if str(key).startswith(f"{state_key}:"):
+                    self._checks_candidate_paths_cache.pop(key, None)
             self._checks_candidate_paths_cache.pop(state_key, None)
 
     def _getChecksCandidatePaths(
@@ -2024,9 +2089,11 @@ class ImgDataService:
         user_key: str,
         check_type: Any,
         shared_folder: str,
+        changed_since_days: int = 0,
         use_cache: bool = True,
     ) -> List[str]:
-        state_key = self._checksStateKey(user_key, check_type)
+        normalized_days = max(0, int(changed_since_days or 0))
+        state_key = f"{self._checksStateKey(user_key, check_type)}:days-{normalized_days}"
         normalized_shared_folder = str(shared_folder or "").strip()
         if not normalized_shared_folder:
             return []
@@ -2042,9 +2109,25 @@ class ImgDataService:
                     return list(cached.get("paths") or [])
 
         candidate_paths = self.files.listImageFiles(normalized_shared_folder)
+        if normalized_days > 0:
+            cutoff_mtime_ns = int((datetime.now(timezone.utc).timestamp() - (normalized_days * 86400)) * 1_000_000_000)
+            lookup_cache = SidecarLookupCache()
+            changed_paths: List[str] = []
+            for image_path in candidate_paths:
+                normalized_path = str(image_path or "").strip()
+                if not normalized_path:
+                    continue
+                if self._fileChangedSince(normalized_path, cutoff_mtime_ns):
+                    changed_paths.append(normalized_path)
+                    continue
+                sidecar_path = self.files.findXmpForImage(normalized_path, lookup_cache=lookup_cache)
+                if sidecar_path and self._fileChangedSince(sidecar_path, cutoff_mtime_ns):
+                    changed_paths.append(normalized_path)
+            candidate_paths = changed_paths
         with self._checks_candidate_paths_cache_lock:
             self._checks_candidate_paths_cache[state_key] = {
                 "shared_folder": normalized_shared_folder,
+                "changed_since_days": normalized_days,
                 "paths": list(candidate_paths),
             }
         return candidate_paths
@@ -2056,14 +2139,6 @@ class ImgDataService:
         current["findings_count"] = max(0, int(current.get("findings_count") or 0))
         current["resolved_count"] = max(0, int(current.get("resolved_count") or 0))
         current["ignored_count"] = max(0, int(current.get("ignored_count") or 0))
-        worker = self._checks_threads.get(self._checksStateKey(user_key, normalized_type))
-        worker_alive = worker.is_alive() if worker is not None else False
-        if current.get("running") and not worker_alive:
-            current["running"] = False
-            current["finished"] = True
-            if not current.get("message"):
-                current["message"] = "Last checks scan is no longer running."
-            self.file_analysis.writeRuntimeState("checks_progress", self._checksStateKey(user_key, normalized_type), current)
         return current
 
     def getChecksProgress(self, user_key: str, check_type: str) -> Dict[str, Any]:
@@ -2156,14 +2231,6 @@ class ImgDataService:
         normalized_action = self._normalizeCleanupAction(action or current.get("action"))
         current["action"] = normalized_action
         current["targets"] = self._normalizeCleanupTargets(current.get("targets"))
-        worker = self._cleanup_threads.get(self._cleanupStateKey(user_key, normalized_action))
-        worker_alive = worker.is_alive() if worker is not None else False
-        if current.get("running") and not worker_alive:
-            current["running"] = False
-            current["finished"] = True
-            if not current.get("message"):
-                current["message"] = "Last cleanup job is no longer running."
-            self.file_analysis.writeRuntimeState("cleanup_progress", self._cleanupStateKey(user_key, normalized_action), current)
         return current
 
     def _setCleanupProgress(self, user_key: str, **updates: Any) -> Dict[str, Any]:
@@ -2236,7 +2303,9 @@ class ImgDataService:
         resolved_count: int = 0,
         ignored_count: int = 0,
         metrics_trusted: bool = True,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
+        normalized_days = max(0, int(changed_since_days or 0))
         return {
             "path_index": max(0, int(path_index)),
             "pending_entries": list(pending_entries or []),
@@ -2247,6 +2316,7 @@ class ImgDataService:
             "resolved_count": max(0, int(resolved_count)),
             "ignored_count": max(0, int(ignored_count)),
             "metrics_trusted": bool(metrics_trusted),
+            "changed_since_days": normalized_days,
         }
 
     def _buildChecksScanPayload(
@@ -2269,7 +2339,9 @@ class ImgDataService:
         stop_requested: bool = False,
         resolved_count: int = 0,
         ignored_count: int = 0,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
+        normalized_days = max(0, int(changed_since_days or 0))
         return {
             "running": running,
             "finished": finished,
@@ -2277,6 +2349,7 @@ class ImgDataService:
             "source_mode": "scan",
             "check_type": check_type,
             "save_only": save_only,
+            "changed_since_days": normalized_days,
             "files_scanned": files_scanned,
             "total_files": total_files,
             "findings_count": findings_count,
@@ -2293,6 +2366,7 @@ class ImgDataService:
                 findings_count=findings_count,
                 resolved_count=resolved_count,
                 ignored_count=ignored_count,
+                changed_since_days=normalized_days,
             ),
             "message_key": message_key,
             "message": message,
@@ -3135,7 +3209,7 @@ class ImgDataService:
     def _timestamp_now() -> str:
         return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
-    def _setFileAnalysisProgress(self, **updates: Any) -> None:
+    def _setFileAnalysisProgress(self, persist: bool = True, **updates: Any) -> None:
         with self._file_analysis_progress_lock:
             current = dict(self._file_analysis_progress)
             current.update(updates)
@@ -3144,23 +3218,11 @@ class ImgDataService:
             current["revision"] = max(0, int(current.get("revision") or 0)) + 1
             current["last_updated_at"] = self._timestamp_now()
             self._file_analysis_progress = current
-        self.file_analysis.writeRuntimeState("file_analysis_progress", "default", current)
+        if persist:
+            self.file_analysis.writeRuntimeState("file_analysis_progress", "default", current)
 
     def _normalizeFileAnalysisProgress(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
-        worker_alive = bool(self._file_analysis_thread and self._file_analysis_thread.is_alive())
-        if current.get("running") and not worker_alive:
-            current["running"] = False
-            current["finished"] = True
-            current["stopped"] = bool(current.get("stopped")) or current.get("status") != "finished"
-            current["stop_requested"] = False
-            if current.get("status") == "running":
-                current["status"] = "stopped"
-            if not current.get("finished_at"):
-                current["finished_at"] = current.get("last_updated_at") or self._timestamp_now()
-            if not current.get("message"):
-                current["message"] = "Last file analysis is no longer running."
-            self.file_analysis.writeRuntimeState("file_analysis_progress", "default", current)
         return current
 
     def _enrichFileAnalysisProgressWithFindings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -3189,6 +3251,11 @@ class ImgDataService:
         return current
 
     def getFileAnalysisProgress(self) -> Dict[str, Any]:
+        if self._file_analysis_thread and self._file_analysis_thread.is_alive():
+            with self._file_analysis_progress_lock:
+                current = dict(self._file_analysis_progress)
+            if current:
+                return self._enrichFileAnalysisProgressWithFindings(self._normalizeFileAnalysisProgress(current))
         current = self.file_analysis.readRuntimeState("file_analysis_progress", "default")
         if not isinstance(current, dict) or not current:
             with self._file_analysis_progress_lock:
@@ -4978,6 +5045,7 @@ class ImgDataService:
         auto_apply_suggested_names: bool = False,
         auto_apply_suggested_duplicates: bool = False,
         advance_current_result: bool = False,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         self._clearChecksStopRequest(user_key=user_key, check_type=check_type)
         self._setActiveChecksContext(user_key=user_key, check_type=check_type, save_only=save_only)
@@ -5001,6 +5069,7 @@ class ImgDataService:
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
                 advance_current_result=advance_current_result,
+                changed_since_days=changed_since_days,
             )
 
         if source_mode_normalized == "findings":
@@ -5035,6 +5104,7 @@ class ImgDataService:
         auto_apply_suggested_names: bool = False,
         auto_apply_suggested_duplicates: bool = False,
         advance_current_result: bool = False,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         check_type = self._normalizeChecksType(check_type)
         with self._checks_start_lock:
@@ -5064,6 +5134,7 @@ class ImgDataService:
                     advance_current_result=advance_current_result,
                 )
                 save_only = bool(resume_cursor.get("save_only", save_only))
+                changed_since_days = max(0, int(resume_cursor.get("changed_since_days", changed_since_days) or 0))
                 check_type = str(resume_cursor.get("check_type") or check_type or "dimension_issues").strip().lower()
                 state_key = self._checksStateKey(user_key, check_type)
             else:
@@ -5084,6 +5155,7 @@ class ImgDataService:
                 stop_requested=False,
                 source_mode="scan",
                 save_only=save_only,
+                changed_since_days=changed_since_days,
                 files_scanned=0,
                 total_files=0,
                 findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
@@ -5100,6 +5172,7 @@ class ImgDataService:
                     findings_count=0,
                     resolved_count=0,
                     ignored_count=0,
+                    changed_since_days=changed_since_days,
                 ),
             )
             worker = Thread(
@@ -5110,6 +5183,7 @@ class ImgDataService:
                     "base_url": base_url,
                     "check_type": check_type,
                     "save_only": save_only,
+                    "changed_since_days": changed_since_days,
                     "auto_apply_suggested_names": auto_apply_suggested_names,
                     "auto_apply_suggested_duplicates": auto_apply_suggested_duplicates,
                     "resume_cursor": resume_cursor if resume_cursor else None,
@@ -5131,6 +5205,7 @@ class ImgDataService:
         resume_cursor: Optional[Dict[str, Any]] = None,
         auto_apply_suggested_names: bool = False,
         auto_apply_suggested_duplicates: bool = False,
+        changed_since_days: int = 0,
     ) -> None:
         try:
             result = self.searchNextChecksItem(
@@ -5139,6 +5214,7 @@ class ImgDataService:
                 base_url=base_url,
                 check_type=check_type,
                 save_only=save_only,
+                changed_since_days=changed_since_days,
                 resume_cursor=resume_cursor,
                 auto_apply_suggested_names=auto_apply_suggested_names,
                 auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
@@ -5161,6 +5237,7 @@ class ImgDataService:
                 error=str(exc),
                 save_only=save_only,
                 source_mode="scan",
+                changed_since_days=changed_since_days,
                 files_scanned=int(current_progress.get("files_scanned") or 0),
                 total_files=int(current_progress.get("total_files") or 0),
                 findings_count=int(current_progress.get("findings_count") or 0),
@@ -5176,6 +5253,7 @@ class ImgDataService:
                     findings_count=0,
                     resolved_count=0,
                     ignored_count=0,
+                    changed_since_days=changed_since_days,
                 ),
             )
         except ImgDataOperationError as exc:
@@ -5193,6 +5271,7 @@ class ImgDataService:
                     stop_requested=True,
                     save_only=save_only,
                     source_mode="scan",
+                    changed_since_days=changed_since_days,
                     files_scanned=int(current_progress.get("files_scanned") or 0),
                     total_files=int(current_progress.get("total_files") or 0),
                     findings_count=int(current_progress.get("findings_count") or 0),
@@ -5208,6 +5287,7 @@ class ImgDataService:
                         findings_count=0,
                         resolved_count=0,
                         ignored_count=0,
+                        changed_since_days=changed_since_days,
                     ),
                 )
                 return
@@ -5224,6 +5304,7 @@ class ImgDataService:
                 error=str(exc),
                 save_only=save_only,
                 source_mode="scan",
+                changed_since_days=changed_since_days,
             )
         finally:
             self._checks_threads.pop(self._checksStateKey(user_key, check_type), None)
@@ -5239,6 +5320,7 @@ class ImgDataService:
         resume_cursor: Optional[Dict[str, Any]] = None,
         auto_apply_suggested_names: bool = False,
         auto_apply_suggested_duplicates: bool = False,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
         shared_folder = self.core.getSharedFolder(
@@ -5258,8 +5340,11 @@ class ImgDataService:
                 pending_entries=[],
                 message_key="checks:progress_shared_folder_missing",
                 message="Shared folder could not be resolved.",
+                changed_since_days=changed_since_days,
             )
 
+        if isinstance(resume_cursor, dict):
+            changed_since_days = max(0, int(resume_cursor.get("changed_since_days", changed_since_days) or 0))
         path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
         pending_entries = resume_cursor.get("pending_entries") if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("pending_entries"), list) else []
         metrics_trusted = bool(resume_cursor.get("metrics_trusted")) if isinstance(resume_cursor, dict) else False
@@ -5273,6 +5358,7 @@ class ImgDataService:
             self.CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS,
             self.CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL,
         )
+        scan_context = ScanContext(self.config.readMergedConfig())
 
         def flush_saved_checks_findings(*, force: bool = False, status: str = "running", reason: str = "") -> bool:
             if not save_only:
@@ -5304,6 +5390,7 @@ class ImgDataService:
                 progress["check_type"] = check_type
                 progress["source_mode"] = "scan"
                 progress["save_only"] = True
+                progress["changed_since_days"] = max(0, int(changed_since_days or 0))
                 progress["running"] = status not in {"finished", "stopped", "failed"}
                 progress["finished"] = status in {"finished", "stopped", "failed"}
                 progress["last_progress_at"] = self._utcNowIso()
@@ -5325,6 +5412,7 @@ class ImgDataService:
             user_key=user_key,
             check_type=check_type,
             shared_folder=shared_folder,
+            changed_since_days=changed_since_days,
             use_cache=True,
         )
         total_files = len(candidate_paths)
@@ -5338,6 +5426,7 @@ class ImgDataService:
             stop_requested=False,
             source_mode="scan",
             save_only=save_only,
+            changed_since_days=changed_since_days,
             files_scanned=max(0, path_index),
             total_files=total_files,
             findings_count=findings_count,
@@ -5353,6 +5442,7 @@ class ImgDataService:
                 findings_count=findings_count,
                 resolved_count=resolved_count,
                 ignored_count=ignored_count,
+                changed_since_days=changed_since_days,
             ),
         )
 
@@ -5385,6 +5475,7 @@ class ImgDataService:
                     message_key="checks:progress_stopped",
                     message="Checks scan stopped.",
                     message_params={"count": findings_count},
+                    changed_since_days=changed_since_days,
                 )
             entry = resolved.get("entry")
             item = resolved.get("item")
@@ -5462,6 +5553,7 @@ class ImgDataService:
                     message_key=str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
                     message="Suggested name could not be applied automatically.",
                     message_params={"count": findings_count},
+                    changed_since_days=changed_since_days,
                 )
             if not entry:
                 findings_count = self._countOpenChecksScanFindings(None, remaining_entries)
@@ -5486,6 +5578,7 @@ class ImgDataService:
                     message_key="checks:progress_result_found",
                     message="Check finding found.",
                     message_params={"count": findings_count},
+                    changed_since_days=changed_since_days,
                 )
 
         for index in range(max(0, path_index), total_files):
@@ -5508,6 +5601,7 @@ class ImgDataService:
                     message_key="checks:progress_stopped",
                     message="Checks scan stopped.",
                     message_params={"count": findings_count},
+                    changed_since_days=changed_since_days,
                 )
             image_path = candidate_paths[index]
             scanned_count = index + 1
@@ -5521,6 +5615,7 @@ class ImgDataService:
                 stop_requested=False,
                 source_mode="scan",
                 save_only=save_only,
+                changed_since_days=changed_since_days,
                 files_scanned=scanned_count,
                 total_files=total_files,
                 findings_count=findings_count,
@@ -5536,9 +5631,27 @@ class ImgDataService:
                     findings_count=findings_count,
                     resolved_count=resolved_count,
                     ignored_count=ignored_count,
+                    changed_since_days=changed_since_days,
                 ),
             )
-            analysis = self.analyzeImageFaceMetadata(image_path)
+            if self._shouldSkipRawFaceCheckWithoutSidecar(image_path, check_type, scan_context):
+                continue
+
+            jpeg_context_override = None
+            if self._shouldProbeJpegFaceCheckWithoutSidecar(image_path, check_type, scan_context):
+                jpeg_context_override = self.files.readJpegContext(image_path)
+                if not jpeg_context_override.get("xmp_content"):
+                    continue
+
+            analysis = self.files.analyzeMetadata(
+                self._readImageMetadata(
+                    image_path,
+                    scan_context=scan_context,
+                    allow_exiftool_context_fallback=check_type == "dimension_issues",
+                    allow_exiftool_sidecar_read=check_type == "dimension_issues",
+                    jpeg_context_override=jpeg_context_override,
+                )
+            )
             entries = self._buildCheckEntriesForType(
                 image_path=image_path,
                 review_type=check_type,
@@ -5578,6 +5691,7 @@ class ImgDataService:
                         message_key="checks:progress_stopped",
                         message="Checks scan stopped.",
                         message_params={"count": findings_count},
+                        changed_since_days=changed_since_days,
                     )
                 auto_applied_count = int(resolved.get("auto_applied_count") or 0)
                 processed_entry_tokens = [
@@ -5602,6 +5716,7 @@ class ImgDataService:
                         finished=False,
                         source_mode="scan",
                         save_only=True,
+                        changed_since_days=changed_since_days,
                         files_scanned=scanned_count,
                         total_files=total_files,
                         findings_count=findings_count,
@@ -5618,6 +5733,7 @@ class ImgDataService:
                             findings_count=findings_count,
                             resolved_count=resolved_count,
                             ignored_count=ignored_count,
+                            changed_since_days=changed_since_days,
                         ),
                     )
                     continue
@@ -5648,6 +5764,7 @@ class ImgDataService:
                     finished=False,
                     source_mode="scan",
                     save_only=True,
+                    changed_since_days=changed_since_days,
                     files_scanned=scanned_count,
                     total_files=total_files,
                     findings_count=findings_count,
@@ -5663,6 +5780,7 @@ class ImgDataService:
                         findings_count=findings_count,
                         resolved_count=resolved_count,
                         ignored_count=ignored_count,
+                        changed_since_days=changed_since_days,
                     ),
                 )
                 continue
@@ -5695,6 +5813,7 @@ class ImgDataService:
                     message_key="checks:progress_stopped",
                     message="Checks scan stopped.",
                     message_params={"count": findings_count},
+                    changed_since_days=changed_since_days,
                 )
             entry = resolved.get("entry")
             item = resolved.get("item")
@@ -5753,6 +5872,7 @@ class ImgDataService:
                     message_key=str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
                     message="Suggested name could not be applied automatically.",
                     message_params={"count": findings_count},
+                    changed_since_days=changed_since_days,
                 )
             if not entry:
                 findings_count = 0
@@ -5776,6 +5896,7 @@ class ImgDataService:
                 message_key="checks:progress_result_found",
                 message="Check finding found.",
                 message_params={"count": findings_count},
+                changed_since_days=changed_since_days,
             )
 
         if save_only:
@@ -5793,6 +5914,7 @@ class ImgDataService:
                 message_key="checks:progress_findings_saved" if saved_entries else "checks:progress_findings_empty",
                 message="Checks findings saved." if saved_entries else "No checks findings were saved.",
                 message_params={"count": len(saved_entries)},
+                changed_since_days=changed_since_days,
             )
 
         return self._buildChecksScanPayload(
@@ -5808,6 +5930,7 @@ class ImgDataService:
             message_key="checks:progress_finished_no_match",
             message="No further checks findings found.",
             message_params={"count": findings_count},
+            changed_since_days=changed_since_days,
         )
 
     def getChecksReviewItem(
@@ -6434,14 +6557,47 @@ class ImgDataService:
                     self._file_analysis_thread = None
                     return
 
+                current_file_number = files_analyzed + 1
+                self._setFileAnalysisProgress(
+                    persist=False,
+                    running=True,
+                    finished=False,
+                    stopped=False,
+                    status="running",
+                    phase="analysis",
+                    analysis_stage="metadata",
+                    message=f"Analyzing face metadata... {current_file_number} of {files_matched_total} files selected.",
+                    current_path=image_path,
+                    last_updated_at=self._timestamp_now(),
+                    files_analyzed=files_analyzed,
+                    analysis_progress={"current": files_analyzed, "total": files_matched_total},
+                )
+                def update_metadata_stage(stage: str) -> None:
+                    self._setFileAnalysisProgress(
+                        persist=False,
+                        analysis_stage=stage,
+                        message=f"Reading image metadata ({stage})... {current_file_number} of {files_matched_total} files selected.",
+                        current_path=image_path,
+                        last_updated_at=self._timestamp_now(),
+                    )
+
                 metadata_payload = self._readImageMetadata(
                     image_path,
                     include_unnamed_acd=True,
                     scan_context=scan_context,
+                    progress_callback=update_metadata_stage,
                 )
                 include_photos_for_position_deviations = bool(analysis_checks.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS"))
                 include_photos_for_name_conflicts = bool(analysis_checks.get("NAME_CONFLICTS_INCLUDE_PHOTOS"))
                 include_photos_for_checks = include_photos_for_position_deviations or include_photos_for_name_conflicts
+                if include_photos_for_checks:
+                    self._setFileAnalysisProgress(
+                        persist=False,
+                        analysis_stage="photos_lookup",
+                        message=f"Loading Photos comparison faces... {current_file_number} of {files_matched_total} files selected.",
+                        current_path=image_path,
+                        last_updated_at=self._timestamp_now(),
+                    )
                 photo_faces = self._loadPhotoFacesForImage(
                     user_key=user_key,
                     cookies=cookies,
@@ -6450,6 +6606,13 @@ class ImgDataService:
                     image_path=image_path,
                     photos_lookup_cache=scan_context.photos_lookup_cache,
                 ) if include_photos_for_checks else []
+                self._setFileAnalysisProgress(
+                    persist=False,
+                    analysis_stage="metadata_analysis",
+                    message=f"Evaluating face metadata... {current_file_number} of {files_matched_total} files selected.",
+                    current_path=image_path,
+                    last_updated_at=self._timestamp_now(),
+                )
                 analysis = self.files.analyzeMetadata(
                     metadata_payload,
                     comparison_faces=[face.to_dict() for face in photo_faces],
@@ -6552,6 +6715,7 @@ class ImgDataService:
                     stopped=False,
                     status="running",
                     phase="analysis",
+                    analysis_stage="completed",
                     message=f"Analyzing face metadata... {files_analyzed} of {files_matched_total} files analyzed.",
                     current_path=image_path,
                     last_updated_at=self._timestamp_now(),

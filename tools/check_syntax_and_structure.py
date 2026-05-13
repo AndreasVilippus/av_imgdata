@@ -394,6 +394,44 @@ def check_cgi_curl_argument_safety() -> int:
     return errors
 
 
+def check_ui_config_define_targets() -> int:
+    path = ROOT / "ui" / "config.define"
+    info_path = ROOT / "INFO.sh"
+    errors = 0
+
+    try:
+        config_define = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        fail(f"ui/config.define: could not parse JSON: {exc}")
+        return 1
+
+    if not isinstance(config_define, dict) or not config_define:
+        fail("ui/config.define: expected non-empty JSON object")
+        return 1
+
+    for target, value in config_define.items():
+        target_name = str(target or "").strip()
+        if not target_name.endswith(".js"):
+            errors += 1
+            fail(
+                "ui/config.define: generated DSM script target must end with .js "
+                f"to be served as JavaScript: {target_name}"
+            )
+        if not isinstance(value, dict) or not value.get("JSfiles"):
+            errors += 1
+            fail(f"ui/config.define: target is missing JSfiles: {target_name}")
+
+    info_source = info_path.read_text(encoding="utf-8")
+    dsmapp_match = re.search(r'^dsmappname="([^"]+)"', info_source, re.M)
+    if dsmapp_match:
+        dsmappname = dsmapp_match.group(1)
+        if dsmappname not in config_define:
+            errors += 1
+            fail("INFO.sh: dsmappname should match a generated ui/config.define target")
+
+    return errors
+
+
 def check_vue_computed_parameter_functions() -> int:
     errors = 0
 
@@ -437,6 +475,7 @@ def main() -> int:
     errors += check_imgdata_class_boundaries()
     errors += check_session_cookie_alignment()
     errors += check_cgi_curl_argument_safety()
+    errors += check_ui_config_define_targets()
     errors += check_vue_computed_parameter_functions()
 
     if errors:

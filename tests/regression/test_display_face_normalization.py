@@ -815,7 +815,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             self.service._checksConflictToken(entry_b),
         )
 
-    def test_get_cleanup_progress_clears_stale_running_state_without_worker(self):
+    def test_get_cleanup_progress_preserves_persisted_running_state_without_local_worker(self):
         written = {}
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
             "action": "normalize_names",
@@ -831,14 +831,12 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         progress = self.service.getCleanupProgress("user", "normalize_names")
 
-        self.assertFalse(progress.get("running"))
-        self.assertTrue(progress.get("finished"))
-        self.assertEqual(progress.get("message"), "Last cleanup job is no longer running.")
-        self.assertEqual(written.get("state_type"), "cleanup_progress")
-        self.assertEqual(written.get("state_key"), "user_normalize_names")
-        self.assertFalse(written.get("payload", {}).get("running"))
+        self.assertTrue(progress.get("running"))
+        self.assertFalse(progress.get("finished"))
+        self.assertEqual(progress.get("targets"), ["ACD"])
+        self.assertEqual(written, {})
 
-    def test_get_checks_progress_clears_stale_running_state_without_worker(self):
+    def test_get_checks_progress_preserves_persisted_running_scan_without_local_worker(self):
         written = {}
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
             "check_type": "name_conflicts",
@@ -857,14 +855,13 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         progress = self.service.getChecksProgress("user", "name_conflicts")
 
-        self.assertFalse(progress.get("running"))
-        self.assertTrue(progress.get("finished"))
-        self.assertEqual(progress.get("message"), "Last checks scan is no longer running.")
-        self.assertEqual(written.get("state_type"), "checks_progress")
-        self.assertEqual(written.get("state_key"), "user_name_conflicts")
-        self.assertFalse(written.get("payload", {}).get("running"))
+        self.assertTrue(progress.get("running"))
+        self.assertFalse(progress.get("finished"))
+        self.assertEqual(progress.get("source_mode"), "scan")
+        self.assertEqual(progress.get("files_scanned"), 945)
+        self.assertEqual(written, {})
 
-    def test_get_face_matching_progress_reads_runtime_state_and_clears_stale_running_state(self):
+    def test_get_face_matching_progress_preserves_persisted_running_state_without_local_worker(self):
         written = {}
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
             "operation_id": "face_match-existing",
@@ -889,13 +886,13 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         progress = self.service.getFaceMatchingProgress("user")
 
-        self.assertFalse(progress.get("running"))
+        self.assertTrue(progress.get("running"))
+        self.assertFalse(progress.get("finished"))
         self.assertFalse(progress.get("stop_requested"))
+        self.assertTrue(progress.get("active"))
+        self.assertFalse(progress.get("stale"))
         self.assertEqual(progress.get("findings_count"), 7)
-        self.assertEqual(progress.get("message"), "Last face matching job is no longer running.")
-        self.assertEqual(written.get("state_type"), "face_match_progress")
-        self.assertEqual(written.get("state_key"), "user")
-        self.assertFalse(written.get("payload", {}).get("running"))
+        self.assertEqual(written, {})
 
     def test_face_matching_progress_syncs_counts_from_resume_cursor(self):
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {}
@@ -930,7 +927,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(progress["findings_count"], 65)
         self.assertEqual(progress["transferred_count"], 61)
 
-    def test_get_file_analysis_progress_reads_runtime_state_and_clears_stale_running_state(self):
+    def test_get_file_analysis_progress_preserves_persisted_running_state_without_local_worker(self):
         written = {}
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
             "operation_id": "file_analysis-existing",
@@ -953,15 +950,12 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         progress = self.service.getFileAnalysisProgress()
 
-        self.assertFalse(progress.get("running"))
-        self.assertTrue(progress.get("finished"))
-        self.assertTrue(progress.get("stopped"))
-        self.assertEqual(progress.get("status"), "stopped")
+        self.assertTrue(progress.get("running"))
+        self.assertFalse(progress.get("finished"))
+        self.assertFalse(progress.get("stopped"))
+        self.assertEqual(progress.get("status"), "running")
         self.assertEqual(progress.get("files_analyzed"), 12)
-        self.assertEqual(progress.get("message"), "Last file analysis is no longer running.")
-        self.assertEqual(written.get("state_type"), "file_analysis_progress")
-        self.assertEqual(written.get("state_key"), "default")
-        self.assertFalse(written.get("payload", {}).get("running"))
+        self.assertEqual(written, {})
 
     def test_replace_checks_face_name_reassigns_photos_face_using_name_mapping(self):
         captured = {}

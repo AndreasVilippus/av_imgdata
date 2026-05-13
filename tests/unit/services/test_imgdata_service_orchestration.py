@@ -1,12 +1,126 @@
 from unittest.mock import patch
 
 from api.session_manager import SessionManager, SessionManagerError
-from imgdata import ImgDataService
+from imgdata import ImgDataService, ScanContext
 from models.metadata_payload import MetadataPayload
 
 
 def make_service():
     return ImgDataService(SessionManager())
+
+
+def test_raw_face_check_without_sidecar_is_skipped_when_exiftool_context_is_disabled():
+    service = make_service()
+    scan_context = ScanContext({"files": {"PREFER_EXIFTOOL_FOR_CONTEXT": False}})
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: None
+
+    assert service._shouldSkipRawFaceCheckWithoutSidecar(
+        "/volume1/photo/raw/DSC01889.ARW",
+        "name_conflicts",
+        scan_context,
+    ) is True
+
+
+def test_raw_face_check_with_sidecar_is_not_skipped():
+    service = make_service()
+    scan_context = ScanContext({"files": {"PREFER_EXIFTOOL_FOR_CONTEXT": False}})
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: "/volume1/photo/raw/DSC01889.xmp"
+
+    assert service._shouldSkipRawFaceCheckWithoutSidecar(
+        "/volume1/photo/raw/DSC01889.ARW",
+        "name_conflicts",
+        scan_context,
+    ) is False
+
+
+def test_raw_dimension_issue_check_still_reads_raw_without_sidecar():
+    service = make_service()
+    scan_context = ScanContext({"files": {"PREFER_EXIFTOOL_FOR_CONTEXT": False}})
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: None
+
+    assert service._shouldSkipRawFaceCheckWithoutSidecar(
+        "/volume1/photo/raw/DSC01889.ARW",
+        "dimension_issues",
+        scan_context,
+    ) is False
+
+
+def test_jpeg_face_check_without_sidecar_is_probed_for_embedded_xmp():
+    service = make_service()
+    scan_context = ScanContext({"files": {"PREFER_EXIFTOOL_FOR_CONTEXT": False}})
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: None
+
+    with patch("imgdata.os.path.isfile", return_value=True):
+        assert service._shouldProbeJpegFaceCheckWithoutSidecar(
+            "/volume1/photo/tests/0206671986005.jpg",
+            "name_conflicts",
+            scan_context,
+        ) is True
+
+
+def test_jpeg_face_check_with_sidecar_is_not_probed_for_skip():
+    service = make_service()
+    scan_context = ScanContext({"files": {"PREFER_EXIFTOOL_FOR_CONTEXT": False}})
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: "/volume1/photo/tests/0206671986005.xmp"
+
+    assert service._shouldProbeJpegFaceCheckWithoutSidecar(
+        "/volume1/photo/tests/0206671986005.jpg",
+        "name_conflicts",
+        scan_context,
+    ) is False
+
+
+def test_jpeg_dimension_issue_check_is_not_probed_for_face_skip():
+    service = make_service()
+    scan_context = ScanContext({"files": {"PREFER_EXIFTOOL_FOR_CONTEXT": False}})
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: None
+
+    assert service._shouldProbeJpegFaceCheckWithoutSidecar(
+        "/volume1/photo/tests/0206671986005.jpg",
+        "dimension_issues",
+        scan_context,
+    ) is False
+
+
+def test_checks_candidate_paths_changed_since_days_uses_image_and_sidecar_mtime():
+    service = make_service()
+    paths = [
+        "/volume1/photo/a.jpg",
+        "/volume1/photo/b.jpg",
+        "/volume1/photo/c.jpg",
+    ]
+    sidecars = {
+        "/volume1/photo/b.jpg": "/volume1/photo/b.xmp",
+        "/volume1/photo/c.jpg": "/volume1/photo/c.xmp",
+    }
+    service.files.listImageFiles = lambda shared_folder: paths
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: sidecars.get(image_path)
+    service._fileChangedSince = lambda path, cutoff: path in {
+        "/volume1/photo/b.xmp",
+        "/volume1/photo/c.jpg",
+    }
+
+    assert service._getChecksCandidatePaths(
+        user_key="user",
+        check_type="name_conflicts",
+        shared_folder="/volume1/photo",
+        changed_since_days=7,
+        use_cache=False,
+    ) == ["/volume1/photo/b.jpg", "/volume1/photo/c.jpg"]
+
+
+def test_checks_candidate_paths_changed_since_days_zero_keeps_all_paths():
+    service = make_service()
+    paths = ["/volume1/photo/a.jpg", "/volume1/photo/b.jpg"]
+    service.files.listImageFiles = lambda shared_folder: paths
+
+    assert service._getChecksCandidatePaths(
+        user_key="user",
+        check_type="name_conflicts",
+        shared_folder="/volume1/photo",
+        changed_since_days=0,
+        use_cache=False,
+    ) == paths
 
 
 def test_search_missing_photos_faces_resumes_from_path_index():

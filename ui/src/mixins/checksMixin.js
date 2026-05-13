@@ -4,6 +4,7 @@ export default {
 			selectedChecksType: 'dimension_issues',
 			selectedChecksAction: 'findings',
 			checksSaveOnly: false,
+			checksChangedSinceDays: 0,
 			checksAutoApplySuggestedNames: false,
 			checksAutoApplySuggestedDuplicates: false,
 			checksLoading: false,
@@ -137,6 +138,7 @@ export default {
 	},
 	mounted() {
 		this.fetchChecksFindingsStatus();
+		this.refreshChecksSessionState();
 	},
 	beforeDestroy() {
 		this.stopChecksProgressPolling();
@@ -794,7 +796,7 @@ export default {
 			}
 			const runningProgress = progress && progress.running
 				? progress
-				: await this.findRunningChecksScanProgress(String(this.selectedChecksType || '').trim().toLowerCase());
+				: await this.findRunningChecksScanProgress();
 			if (this.adoptRunningChecksScanProgress(runningProgress)) {
 				return;
 			}
@@ -813,7 +815,7 @@ export default {
 				try {
 					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_progress', {
 						check_type: checkType,
-					});
+					}, { resume: false, requireSynoToken: false });
 					const progress = this.getResponseData(data);
 					const isRunningScan = !!(
 						progress
@@ -966,7 +968,7 @@ export default {
 			try {
 				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_progress', {
 					check_type: this.selectedChecksType,
-				});
+				}, { resume: false, requireSynoToken: false });
 				if (this.checksProgressRequestId !== requestId) {
 					return {};
 				}
@@ -1275,6 +1277,7 @@ export default {
 					running: true,
 					source_mode: 'scan',
 					check_type: this.selectedChecksType,
+					changed_since_days: Math.max(0, Number(this.checksChangedSinceDays) || 0),
 					message: this.$avt('checks:status_preparing_scan', 'Checks scan starting. Building file list...'),
 					files_scanned: 0,
 					total_files: 0,
@@ -1303,6 +1306,7 @@ export default {
 					source_mode: 'scan',
 					check_type: this.selectedChecksType,
 					save_only: this.checksSaveOnly,
+					changed_since_days: Math.max(0, Number(this.checksChangedSinceDays) || 0),
 					resume_from_progress: resumeFromProgress,
 					advance_current_result: advanceCurrentResult,
 					auto_apply_suggested_names: this.checksAutoApplySuggestedNames,

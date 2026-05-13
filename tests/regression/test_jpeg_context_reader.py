@@ -110,6 +110,15 @@ class JpegContextReaderTests(unittest.TestCase):
         self.assertIsNone(context["width"])
         self.assertLessEqual(context["scanned_bytes"], 16)
 
+    def test_invalid_marker_stream_does_not_scan_body_byte_by_byte(self):
+        path = self._write_jpeg(b"\xff\xd8" + (b"\x00" * 1024 * 1024) + sof_segment(300, 200))
+
+        context = FileHandler.readJpegContext(str(path), include_xmp=False)
+
+        self.assertIsNone(context["width"])
+        self.assertFalse(context["complete"])
+        self.assertLessEqual(context["scanned_bytes"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

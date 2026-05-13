@@ -820,7 +820,8 @@ class FileHandler:
                         return context
                     context["scanned_bytes"] += 1
                     if prefix != b"\xff":
-                        continue
+                        context["complete"] = False
+                        return context
 
                     marker = handle.read(1)
                     if not marker:

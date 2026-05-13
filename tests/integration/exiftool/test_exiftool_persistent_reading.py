@@ -74,13 +74,23 @@ class TestExifToolPersistentReading(unittest.TestCase):
         subprocess_result = MagicMock(returncode=0, stdout=payload, stderr="")
 
         with patch.object(self.exiftool_handler, "resolveExecutable", return_value=("exiftool", "")), \
-             patch.object(self.exiftool_handler, "_runPersistentExifTool", side_effect=TimeoutError("hung")), \
+             patch.object(self.exiftool_handler, "_runPersistentExifTool", side_effect=OSError("process ended")), \
              patch("subprocess.run", return_value=subprocess_result) as run_mock:
             result = self.exiftool_handler.readMetadataContext("/tmp/test.jpg", include_xmp=False)
 
         run_mock.assert_called_once()
         self.assertTrue(result["success"])
         self.assertEqual(result["image_dimensions"], {"width": 100, "height": 80, "unit": "pixel"})
+
+    def test_persistent_read_timeout_does_not_retry_same_file_with_subprocess(self):
+        with patch.object(self.exiftool_handler, "resolveExecutable", return_value=("exiftool", "")), \
+             patch.object(self.exiftool_handler, "_runPersistentExifTool", side_effect=TimeoutError("hung")), \
+             patch("subprocess.run", side_effect=AssertionError("timeout must not be retried")) as run_mock:
+            result = self.exiftool_handler.readMetadataContext("/tmp/stuck.ARW", include_xmp=False)
+
+        run_mock.assert_not_called()
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "exiftool_execution_timeout")
 
     def test_writeXmpDetailed_keeps_isolated_subprocess_write_path(self):
         subprocess_result = MagicMock(returncode=0, stdout="1 image files updated", stderr="")

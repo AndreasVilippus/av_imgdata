@@ -205,6 +205,9 @@ class ExifToolHandler:
         if allow_persistent and self._persistentEnabled():
             try:
                 return self._runPersistentExifTool(args)
+            except TimeoutError:
+                self.close()
+                return _ExifToolResult(124, "", "exiftool_execution_timeout")
             except Exception:
                 self.close()
                 return self._runSubprocessExifTool(args)

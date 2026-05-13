@@ -1,5 +1,5 @@
 {
-    "SYNO.SDS.App.AV_ImgData.Instance": {
+    "AV_ImgData.js": {
         "JSfiles": [
             "dist/av-img-data.bundle.js"
         ],
