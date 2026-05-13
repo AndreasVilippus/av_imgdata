@@ -222,10 +222,12 @@
 								<span>{{ ignoreList.label }}</span>
 							</label>
 							<div class="config-card-desc">
-								{{ $avt('config:label_check_ignore_list_count', 'Entries: {count}', { count: getChecksIgnoreListStatus(ignoreList.reviewType).count }) }}
+								{{ $avt('config:label_check_ignore_list_count', 'Entries') }}:
+								{{ getChecksIgnoreListStatus(ignoreList.reviewType).count }}
 							</div>
 							<div class="config-card-desc">
-								{{ $avt('config:label_check_ignore_list_path', 'File: {path}', { path: getChecksIgnoreListStatus(ignoreList.reviewType).path || '-' }) }}
+								{{ $avt('config:label_check_ignore_list_path', 'File') }}:
+								{{ getChecksIgnoreListStatus(ignoreList.reviewType).path || '-' }}
 							</div>
 							<div class="config-inline-actions">
 								<v-button

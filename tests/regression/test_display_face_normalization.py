@@ -3293,6 +3293,107 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["running"])
         thread_cls.assert_not_called()
 
+    def test_file_analysis_start_blocks_when_face_matching_is_running(self):
+        self.service._face_matching_progress["user"] = {
+            "operation_id": "face-match-running",
+            "running": True,
+            "finished": False,
+            "action": "search_photo_face_in_file",
+        }
+
+        with patch("imgdata.Thread") as thread_cls:
+            result = self.service.startFileAnalysisDiscovery(
+                user_key="user",
+                cookies={},
+                base_url="http://example.test",
+            )
+
+        self.assertTrue(result["blocked_by_running_operation"])
+        self.assertEqual(result["requested_operation"], "file_analysis")
+        self.assertEqual(result["running_operation"], "face_match")
+        self.assertEqual(result["status"]["schema_version"], 1)
+        self.assertEqual(result["status"]["operation"], "file_analysis")
+        self.assertEqual(result["status"]["mode"], "none")
+        self.assertEqual(result["status"]["phase"], "blocked")
+        thread_cls.assert_not_called()
+
+    def test_face_matching_start_blocks_when_file_analysis_is_running(self):
+        self.service._file_analysis_progress = {
+            "operation_id": "file-analysis-running",
+            "running": True,
+            "finished": False,
+            "status": "running",
+        }
+
+        with patch("imgdata.Thread") as thread_cls:
+            result = self.service.startFaceMatchingDiscovery(
+                user_key="user",
+                cookies={},
+                base_url="http://example.test",
+            )
+
+        self.assertTrue(result["blocked_by_running_operation"])
+        self.assertEqual(result["requested_operation"], "face_match")
+        self.assertEqual(result["running_operation"], "file_analysis")
+        self.assertEqual(result["status"]["schema_version"], 1)
+        self.assertEqual(result["status"]["operation"], "face_match")
+        self.assertEqual(result["status"]["mode"], "none")
+        self.assertEqual(result["status"]["phase"], "blocked")
+        thread_cls.assert_not_called()
+
+    def test_checks_scan_start_blocks_when_cleanup_is_running(self):
+        state_key = self.service._cleanupStateKey("user", "normalize_names")
+        self.service._cleanup_progress[state_key] = {
+            "operation_id": "cleanup-running",
+            "running": True,
+            "finished": False,
+            "action": "normalize_names",
+        }
+
+        with patch("imgdata.Thread") as thread_cls:
+            result = self.service.startChecksScanDiscovery(
+                user_key="user",
+                cookies={},
+                base_url="http://example.test",
+                check_type="duplicate_faces",
+            )
+
+        self.assertTrue(result["blocked_by_running_operation"])
+        self.assertEqual(result["requested_operation"], "checks")
+        self.assertEqual(result["running_operation"], "cleanup")
+        self.assertEqual(result["status"]["schema_version"], 1)
+        self.assertEqual(result["status"]["operation"], "checks")
+        self.assertEqual(result["status"]["mode"], "none")
+        self.assertEqual(result["status"]["phase"], "blocked")
+        thread_cls.assert_not_called()
+
+    def test_cleanup_start_blocks_when_checks_scan_is_running(self):
+        state_key = self.service._checksStateKey("user", "name_conflicts")
+        self.service._checks_progress[state_key] = {
+            "operation_id": "checks-running",
+            "running": True,
+            "source_mode": "scan",
+            "check_type": "name_conflicts",
+        }
+
+        with patch("imgdata.Thread") as thread_cls:
+            result = self.service.startCleanupRun(
+                user_key="user",
+                cookies={},
+                base_url="http://example.test",
+                action="normalize_names",
+                targets=["ACD"],
+            )
+
+        self.assertTrue(result["blocked_by_running_operation"])
+        self.assertEqual(result["requested_operation"], "cleanup")
+        self.assertEqual(result["running_operation"], "checks")
+        self.assertEqual(result["status"]["schema_version"], 1)
+        self.assertEqual(result["status"]["operation"], "cleanup")
+        self.assertEqual(result["status"]["mode"], "none")
+        self.assertEqual(result["status"]["phase"], "blocked")
+        thread_cls.assert_not_called()
+
     def test_build_check_entries_for_type_excludes_configured_ignore_tokens(self):
         entry = {
             "review_type": "duplicate_faces",

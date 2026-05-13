@@ -88,10 +88,7 @@ export default {
 				this.isChecksScanRunning
 				|| (
 					this.selectedChecksAction === 'scan'
-					&& (
-						this.checksLoading
-						|| (this.checksProgress && Object.keys(this.checksProgress).length)
-					)
+					&& this.checksLoading
 				)
 			);
 		},

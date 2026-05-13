@@ -1841,6 +1841,73 @@ class ImgDataService:
 
         return None
 
+    @staticmethod
+    def _isRunningProgress(progress: Any) -> bool:
+        return isinstance(progress, dict) and bool(progress.get("running"))
+
+    def _runningOperationProgress(self, user_key: str, *, exclude_operation: str = "") -> Optional[Dict[str, Any]]:
+        excluded = str(exclude_operation or "").strip().lower()
+
+        if excluded != "file_analysis":
+            progress = self.getFileAnalysisProgress()
+            if self._isRunningProgress(progress):
+                payload = dict(progress)
+                payload.setdefault("operation", "file_analysis")
+                return payload
+
+        if excluded != "face_match":
+            progress = self.getFaceMatchingProgress(user_key)
+            if self._isRunningProgress(progress):
+                payload = dict(progress)
+                payload.setdefault("operation", "face_match")
+                return payload
+
+        if excluded != "checks":
+            progress = self._runningChecksScanProgress(user_key)
+            if self._isRunningProgress(progress):
+                payload = dict(progress)
+                payload.setdefault("operation", "checks")
+                return payload
+
+        if excluded != "cleanup":
+            progress = self.getCleanupProgress(user_key, "normalize_names")
+            if self._isRunningProgress(progress):
+                payload = dict(progress)
+                payload.setdefault("operation", "cleanup")
+                return payload
+
+        return None
+
+    def _buildStartBlockedByRunningOperationPayload(
+        self,
+        running_progress: Dict[str, Any],
+        *,
+        requested_operation: str,
+    ) -> Dict[str, Any]:
+        payload = {
+            "running": False,
+            "finished": False,
+            "blocked": True,
+            "blocked_by_running_operation": True,
+            "requested_operation": str(requested_operation or "").strip().lower(),
+            "running_operation": str((running_progress or {}).get("operation") or "").strip().lower(),
+            "running_operation_id": str((running_progress or {}).get("operation_id") or "").strip(),
+            "message_key": "status:operation_blocked_by_running_operation",
+            "message": "Another operation is already running.",
+        }
+        if isinstance(running_progress, dict):
+            payload["running_progress"] = dict(running_progress)
+        payload["status"] = self._buildStatusPayload(
+            operation=payload["requested_operation"],
+            action="",
+            mode="none",
+            phase="blocked",
+            save_only=False,
+            progress={},
+            counters=[],
+        )
+        return payload
+
     def _normalizeStatusChecksType(self, check_type: Any) -> str:
         normalized = str(check_type or "").strip().lower()
         options = {"dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts"}
@@ -5125,6 +5192,13 @@ class ImgDataService:
                     requested_check_type=check_type,
                 )
 
+            running_operation = self._runningOperationProgress(user_key, exclude_operation="checks")
+            if running_operation:
+                return self._buildStartBlockedByRunningOperationPayload(
+                    running_operation,
+                    requested_operation="checks",
+                )
+
             resume_cursor = current.get("resume_cursor") if resume_from_progress and isinstance(current.get("resume_cursor"), dict) else {}
             if resume_cursor:
                 resume_cursor = self._trustedChecksResumeCursor(
@@ -6935,6 +7009,12 @@ class ImgDataService:
         current = self.getFileAnalysisProgress()
         if current.get("running"):
             return current
+        running_operation = self._runningOperationProgress(user_key, exclude_operation="file_analysis")
+        if running_operation:
+            return self._buildStartBlockedByRunningOperationPayload(
+                running_operation,
+                requested_operation="file_analysis",
+            )
 
         job_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         started_at = self._timestamp_now()
@@ -7017,9 +7097,14 @@ class ImgDataService:
         resume_from_progress: bool = False,
     ) -> Dict[str, Any]:
         current = self.getFaceMatchingProgress(user_key)
-        worker = self._face_matching_threads.get(user_key)
-        if current.get("running") and worker and worker.is_alive():
+        if current.get("running"):
             return current
+        running_operation = self._runningOperationProgress(user_key, exclude_operation="face_match")
+        if running_operation:
+            return self._buildStartBlockedByRunningOperationPayload(
+                running_operation,
+                requested_operation="face_match",
+            )
 
         normalized_action = str(action or "search_photo_face_in_file").strip().lower()
         current_resume_cursor = current.get("resume_cursor") if isinstance(current.get("resume_cursor"), dict) else {}
@@ -10232,9 +10317,14 @@ class ImgDataService:
         normalized_targets = self._normalizeCleanupTargets(targets)
         current = self.getCleanupProgress(user_key, normalized_action)
         state_key = self._cleanupStateKey(user_key, normalized_action)
-        worker = self._cleanup_threads.get(state_key)
-        if current.get("running") and worker and worker.is_alive():
+        if current.get("running"):
             return current
+        running_operation = self._runningOperationProgress(user_key, exclude_operation="cleanup")
+        if running_operation:
+            return self._buildStartBlockedByRunningOperationPayload(
+                running_operation,
+                requested_operation="cleanup",
+            )
 
         self._setCleanupProgressMessage(
             user_key,

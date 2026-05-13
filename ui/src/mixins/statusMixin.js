@@ -153,6 +153,15 @@ export default {
 		getFileAnalysisStatusMessage(progress) {
 			const current = progress && typeof progress === 'object' ? progress : {};
 
+			if (current.message_key) {
+				return this.$avt(
+					String(current.message_key),
+					current.message || String(current.message_key),
+					current.message_params && typeof current.message_params === 'object'
+						? current.message_params
+						: null
+				);
+			}
 			if (current.stop_requested) {
 				return this.$avt('status:analyze_stopping', 'Stopping file analysis...');
 			}

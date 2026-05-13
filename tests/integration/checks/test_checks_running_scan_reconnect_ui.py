@@ -16,10 +16,18 @@ def test_checks_scan_running_accepts_any_active_scan_progress():
 
 
 def test_checks_scan_progress_card_is_visible_for_active_scan_progress():
+    mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
     view = Path("ui/src/views/ChecksView.vue").read_text(encoding="utf-8")
+    start = mixin.find("shouldShowChecksScanProgressCard()")
+    assert start >= 0
+    end = mixin.find("\n\t\t},", start)
+    assert end > start
+    method = mixin[start:end]
 
-    assert "vm.isChecksScanRunning ||" in view
-    assert "vm.selectedChecksAction === 'scan'" in view
+    assert "this.isChecksScanRunning" in method
+    assert "this.selectedChecksAction === 'scan'" in method
+    assert "&& this.checksLoading" in method
+    assert "Object.keys(this.checksProgress)" not in method
     assert "ProgressOverviewCard" in view
 
 

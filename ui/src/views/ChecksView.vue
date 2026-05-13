@@ -28,12 +28,11 @@
 					<span class="face-match-switch-label">{{ vm.$avt('checks:switch_save_only', 'Save findings only') }}</span>
 				</label>
 				<label
-					v-if="vm.selectedChecksAction === 'scan'"
 					class="face-match-switch"
 					:title="vm.$avt('checks:hint_changed_since_days', 'Only images whose file or sidecar changed within the selected number of days are checked. 0 checks all images.')"
 				>
 					<span class="face-match-switch-label">{{ vm.$avt('checks:label_changed_since_days', 'Changed in days') }}</span>
-					<input v-model.number="vm.checksChangedSinceDays" type="number" min="0" step="1" class="face-match-select" :disabled="vm.checksLoading" style="width: 90px;" />
+					<input v-model.number="vm.checksChangedSinceDays" type="number" min="0" step="1" class="face-match-select" :disabled="vm.checksLoading || vm.selectedChecksAction !== 'scan'" style="width: 90px;" />
 				</label>
 				<label
 					v-if="vm.selectedChecksType === 'name_conflicts'"
