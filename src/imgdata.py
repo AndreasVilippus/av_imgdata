@@ -1221,7 +1221,7 @@ class ImgDataService:
         xmp_path = payload.xmp_path or ""
         target_path = xmp_path or image_path
         target_snapshot = self._fileChangeSnapshot(target_path)
-        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
+        xmp_content = self._loadMetadataEditXmp(image_path=image_path, xmp_path=xmp_path)
         if not xmp_content:
             return None, not_found_warning
 
@@ -1241,6 +1241,20 @@ class ImgDataService:
             "root": root,
             "orientation": MetadataParser._extractXmpTiffOrientation(xmp_content),
         }, ""
+
+    def _loadMetadataEditXmp(self, *, image_path: str, xmp_path: str = "") -> Optional[str]:
+        if xmp_path:
+            xmp_content = self.files.loadXmpFromFile(xmp_path)
+            if xmp_content:
+                return xmp_content
+            return self.exiftool_handler.loadXmpFile(xmp_path)
+
+        if Path(image_path).suffix.lower() in {".jpg", ".jpeg"}:
+            xmp_content = self.files.loadXmpFromImageParsed(image_path)
+            if xmp_content:
+                return xmp_content
+
+        return self.exiftool_handler.loadEmbeddedXmp(image_path)
 
     def _metadataFaceEditCandidates(
         self,
@@ -1338,7 +1352,7 @@ class ImgDataService:
         xmp_path = payload.xmp_path or ""
         target_path = xmp_path or image_path
         target_snapshot = self._fileChangeSnapshot(target_path)
-        xmp_content = self.exiftool_handler.loadXmpFile(xmp_path) if xmp_path else self.exiftool_handler.loadEmbeddedXmp(image_path)
+        xmp_content = self._loadMetadataEditXmp(image_path=image_path, xmp_path=xmp_path)
         if not xmp_content:
             return {"updated": False, "updated_faces": 0, "formats": {}}
 
@@ -2902,12 +2916,18 @@ class ImgDataService:
                 "right_format": str(right_face.get("source_format") or entry.get("right_format") or "").strip(),
                 "left_source": str(left_face.get("source") or entry.get("left_source") or "").strip(),
                 "right_source": str(right_face.get("source") or entry.get("right_source") or "").strip(),
+                "left_face": to_display_face(left_face),
+                "right_face": to_display_face(right_face),
                 "left_face_target": left_face,
                 "right_face_target": right_face,
                 "left_face_signature": left_face,
                 "right_face_signature": right_face,
                 "left_state": str(entry.get("left_state") or "alert").strip() or "alert",
                 "right_state": str(entry.get("right_state") or "alert").strip() or "alert",
+                "left_alert_faces": list(entry.get("left_alert_faces") or []),
+                "left_reference_faces": list(entry.get("left_reference_faces") or []),
+                "right_alert_faces": list(entry.get("right_alert_faces") or []),
+                "right_reference_faces": list(entry.get("right_reference_faces") or []),
                 "from_stored_finding": True,
             })
             return item
@@ -5730,8 +5750,6 @@ class ImgDataService:
                 self._readImageMetadata(
                     image_path,
                     scan_context=scan_context,
-                    allow_exiftool_context_fallback=check_type == "dimension_issues",
-                    allow_exiftool_sidecar_read=check_type == "dimension_issues",
                     jpeg_context_override=jpeg_context_override,
                 )
             )

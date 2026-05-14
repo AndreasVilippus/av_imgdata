@@ -2610,6 +2610,37 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["stopped"])
         write_mock.assert_not_called()
 
+    def test_replace_metadata_face_name_uses_native_embedded_xmp_for_edit_preparation(self):
+        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        written = {}
+
+        def capture_write(_target_path, xmp_content):
+            written["xmp"] = xmp_content
+            return {"updated": True}
+
+        with patch.object(self.service, "_readImageMetadata", return_value=payload), \
+             patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
+             patch.object(self.service.files, "loadXmpFromImageParsed", return_value=XMP_MICROSOFT_RENAME), \
+             patch.object(self.service.exiftool_handler, "loadEmbeddedXmp", side_effect=AssertionError("native embedded XMP should be used for edit preparation")), \
+             patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
+            result = self.service.replaceMetadataFaceName(
+                image_path="dev/test.jpg",
+                face_data={
+                    "name": "Person Legacy",
+                    "x": 0.25,
+                    "y": 0.4,
+                    "w": 0.3,
+                    "h": 0.4,
+                    "source": "embedded_xmp_parsed",
+                    "source_format": "MICROSOFT",
+                },
+                new_name="Person Target",
+            )
+
+        self.assertTrue(result["updated"])
+        self.assertIn("Person Target", written["xmp"])
+        self.assertNotIn("Person Legacy", written["xmp"])
+
     def test_duplicate_support_prefers_safe_reinforcement_when_totals_tie(self):
         mwg_bottom = MetadataFace.from_center_box(
             name="Person Alpha",
@@ -3424,6 +3455,42 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             )
 
         self.assertEqual(result, [])
+
+    def test_stored_name_conflict_review_item_includes_display_faces_for_preview_boxes(self):
+        item = self.service._buildStoredChecksReviewItemFromEntry({
+            "review_type": "name_conflicts",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "image_name": "test.jpg",
+            "left_face_signature": {
+                "source_format": "ACD",
+                "source": "embedded_xmp_parsed",
+                "name": "Paul Lorenz",
+                "x": 0.618125,
+                "y": 0.19375,
+                "w": 0.20125,
+                "h": 0.160833,
+            },
+            "right_face_signature": {
+                "source_format": "MWG_REGIONS",
+                "source": "embedded_xmp_parsed",
+                "name": "Paul",
+                "x": 0.618125,
+                "y": 0.19375,
+                "w": 0.20125,
+                "h": 0.160833,
+            },
+        })
+
+        self.assertIsNotNone(item)
+        self.assertTrue(item["from_stored_finding"])
+        self.assertEqual(item["left_face"]["name"], "Paul Lorenz")
+        self.assertEqual(item["right_face"]["name"], "Paul")
+        self.assertTrue(item["left_face"]["display_normalized"])
+        self.assertTrue(item["right_face"]["display_normalized"])
+        self.assertIn("bbox", item["left_face"])
+        self.assertIn("bbox", item["right_face"])
+        self.assertEqual(item["left_alert_faces"], [])
+        self.assertEqual(item["right_reference_faces"], [])
 
     def test_ignore_checks_entry_persists_unique_token(self):
         entry = {

@@ -67,6 +67,11 @@ class PersistentExifToolProcess:
 
     @staticmethod
     def _split_ready_response(buffer: bytes) -> Tuple[Optional[bytes], bytes]:
+        for marker in (b"{ready}\r\n", b"{ready}\n", b"{ready}"):
+            marker_index = buffer.find(marker)
+            if marker_index >= 0:
+                return buffer[:marker_index], buffer[marker_index + len(marker) :]
+
         lines = buffer.splitlines(keepends=True)
         for index, line in enumerate(lines):
             if line.strip() == b"{ready}":

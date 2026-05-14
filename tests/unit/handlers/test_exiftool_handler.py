@@ -127,6 +127,32 @@ class ExifToolHandlerTests(unittest.TestCase):
             self.assertIn('"ImageHeight": 2848', result.stdout)
             self.assertIn('"Orientation": 1', result.stdout)
 
+    def test_persistent_reader_handles_ready_marker_after_binary_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            executable = Path(tmpdir) / "fake_exiftool.py"
+            executable.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "for line in sys.stdin:\n"
+                "    if line.strip() == '-execute':\n"
+                "        sys.stdout.write('<x:xmpmeta></x:xmpmeta>')\n"
+                "        sys.stdout.write('{ready}\\n')\n"
+                "        sys.stdout.flush()\n"
+                "    elif line.strip() == 'False':\n"
+                "        break\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            reader = PersistentExifToolProcess(str(executable), timeout_seconds=1)
+
+            try:
+                result = reader.run(["-b", "-XMP", "/tmp/photo.jpg"])
+            finally:
+                reader.close()
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "<x:xmpmeta></x:xmpmeta>")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,6 +82,34 @@ def test_jpeg_dimension_issue_check_is_not_probed_for_face_skip():
     ) is False
 
 
+def test_checks_face_scan_keeps_exiftool_fallbacks_enabled_for_metadata_read():
+    service = make_service()
+    captured = {}
+
+    service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+    service._getChecksCandidatePaths = lambda **kwargs: ["/volume1/photo/tests/test.jpg"]
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: "/volume1/photo/tests/test.xmp"
+    service.files.analyzeMetadata = lambda payload: {}
+    service._buildCheckEntriesForType = lambda **kwargs: []
+
+    def read_metadata(image_path, **kwargs):
+        captured.update(kwargs)
+        return MetadataPayload(image_path=image_path)
+
+    service._readImageMetadata = read_metadata
+
+    service.searchNextChecksItem(
+        user_key="user",
+        cookies={},
+        base_url="https://example.test",
+        check_type="name_conflicts",
+        save_only=False,
+    )
+
+    assert captured.get("allow_exiftool_context_fallback", True) is True
+    assert captured.get("allow_exiftool_sidecar_read", True) is True
+
+
 def test_checks_candidate_paths_changed_since_days_uses_image_and_sidecar_mtime():
     service = make_service()
     paths = [
