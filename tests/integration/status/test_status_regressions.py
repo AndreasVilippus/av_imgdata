@@ -120,3 +120,29 @@ def test_regression_findings_review_progress_total_represents_entries_not_findin
     assert face_status["progress"]["kind"] == "entries"
     assert face_status["progress"]["total"] == 10
     assert "findings" not in _counter_keys(face_status)
+
+
+def test_regression_finished_face_match_save_only_progress_uses_stored_finding_count():
+    service = _service()
+    service.getFaceMatchFindings = lambda: {"entries": []}
+
+    progress = service._normalizeFaceMatchingProgressForDisplay("user", {
+        "action": "search_photo_face_in_file",
+        "running": False,
+        "finished": True,
+        "save_only": True,
+        "findings_count": 4,
+        "message_key": "face_match:progress_findings_saved",
+        "message_params": {"count": 4},
+        "result": {"findings_count": 4},
+        "resume_cursor": {
+            "action": "search_photo_face_in_file",
+            "save_only": True,
+            "findings_count": 4,
+        },
+    })
+
+    assert progress["findings_count"] == 0
+    assert progress["message_params"]["count"] == 0
+    assert progress["result"]["findings_count"] == 0
+    assert progress["resume_cursor"]["findings_count"] == 0

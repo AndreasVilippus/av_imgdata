@@ -65,7 +65,11 @@ def test_checks_stop_state_keeps_button_in_stop_until_backend_finishes():
 def test_checks_progress_completion_clears_start_and_stop_latches():
     mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
 
-    start = mixin.find("applyChecksProgress(progress")
+    start = mixin.find("\n\t\tapplyChecksProgress(progress")
+    if start >= 0:
+        start += 1
+    else:
+        start = mixin.find("applyChecksProgress(progress")
     assert start >= 0
     end = mixin.find("\n\t\t},", start)
     assert end > start
@@ -158,3 +162,24 @@ def test_ensure_checks_result_item_loaded_stops_on_backend_stop_response():
     assert "root.stop_requested" in method
     assert "this.checksStopRequested = true" in method
     assert "return;" in method
+
+
+def test_checks_findings_mutations_continue_from_original_index_after_update():
+    mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
+
+    for name in (
+        "async ignoreChecksCurrentItem()",
+        "async deleteChecksMetadataFace(face)",
+        "async replaceChecksMetadataFaceName(face, newName, options = {})",
+        "async replaceChecksMetadataFacePosition(face, sourceFace)",
+        "async assignChecksFaceToPerson(side)",
+    ):
+        start = mixin.find(name)
+        assert start >= 0, name
+        end = mixin.find("\n\t\t},", start)
+        assert end > start, name
+        method = mixin[start:end]
+
+        assert "const reloadIndex = this.checksCurrentIndex;" in method
+        assert "await this.loadChecksItemAtIndex(reloadIndex);" in method
+        assert "await this.loadChecksItemAtIndex(this.checksCurrentIndex);" not in method

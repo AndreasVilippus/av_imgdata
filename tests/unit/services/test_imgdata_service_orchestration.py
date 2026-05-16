@@ -1,7 +1,9 @@
+import json
 from unittest.mock import patch
 
-from api.session_manager import SessionManager, SessionManagerError
+from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
 from imgdata import ImgDataService, ScanContext
+from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
 
 
@@ -188,6 +190,42 @@ def test_search_missing_photos_faces_resumes_from_path_index():
     assert result["findings_count"] == 11
 
 
+def test_face_matching_progress_serializes_metadata_face_objects():
+    service = make_service()
+    persisted = {}
+    metadata_face = MetadataFace.from_center_box(
+        name="Jelizaveta Vilippus geb. Kromskaja",
+        x=0.500164,
+        y=0.277917,
+        w=0.087058,
+        h=0.070207,
+        source="embedded_xmp_parsed",
+        source_format="ACD",
+    )
+
+    def write_runtime_state(name, user_key, payload):
+        json.dumps(payload)
+        persisted["name"] = name
+        persisted["user_key"] = user_key
+        persisted["payload"] = payload
+
+    service.file_analysis.writeRuntimeState = write_runtime_state
+
+    service._setFaceMatchingProgress(
+        "user",
+        result={
+            "searched": True,
+            "metadata_face": metadata_face,
+            "nested": {"faces": [metadata_face]},
+        },
+    )
+
+    assert persisted["name"] == "face_match_progress"
+    assert persisted["payload"]["result"]["metadata_face"] == metadata_face.to_dict()
+    assert persisted["payload"]["result"]["nested"]["faces"] == [metadata_face.to_dict()]
+    assert service.getFaceMatchingProgress("user")["result"]["metadata_face"] == metadata_face.to_dict()
+
+
 def test_start_face_matching_discovery_reuses_progress_cursor_when_skipping_target():
     service = make_service()
 
@@ -326,9 +364,8 @@ def test_run_checks_scan_preserves_latest_progress_on_session_error():
         },
     )
 
-    service.searchNextChecksItem = lambda **kwargs: (_ for _ in ()).throw(
-        SessionManagerError({"error": "resume_failed"})
-    )
+    detail = {"error": "api_failed", "api": "SYNO.FotoTeam.Browse.Item", "response": {"success": False, "error": {"code": 902}}}
+    service.searchNextChecksItem = lambda **kwargs: (_ for _ in ()).throw(SessionManagerError(detail))
 
     service._runChecksScan(
         user_key="user",
@@ -342,8 +379,94 @@ def test_run_checks_scan_preserves_latest_progress_on_session_error():
     assert progress["running"] is False
     assert progress["finished"] is False
     assert progress["error"] == "session manager error"
+    assert progress["error_details"] == detail
     assert progress["files_scanned"] == 945
     assert progress["findings_count"] == 12
     assert progress["current_path"] == "/volume1/photo/tests/test.jpg"
     assert progress["resume_cursor"]["path_index"] == 944
     assert progress["resume_cursor"]["findings_count"] == 12
+
+
+def test_run_face_matching_api_failure_does_not_request_login():
+    service = make_service()
+    service.session_manager.keepalive = lambda *args, **kwargs: {}
+    service._setFaceMatchingProgress(
+        "user",
+        running=True,
+        finished=False,
+        paused=False,
+        auth_required=False,
+        action="mark_missing_photos_faces",
+        auto=True,
+        save_only=False,
+        images_read=6038,
+        resume_cursor={
+            "action": "mark_missing_photos_faces",
+            "path_index": 6038,
+            "transferred_count": 0,
+            "auto": True,
+            "save_only": False,
+        },
+    )
+    detail = {
+        "error": "api_failed",
+        "api": "SYNO.Foto.Browse.Item",
+        "response": {"success": False, "error": {"code": 902}},
+    }
+
+    def fail_search(**kwargs):
+        raise SessionManagerError(detail)
+
+    service.searchMissingPhotosFaces = fail_search
+    service._runFaceMatching(
+        user_key="user",
+        cookies={},
+        base_url="https://example.test",
+        action="mark_missing_photos_faces",
+        limit=0,
+        offset=0,
+        skip_face_ids=[],
+        skip_targets=[],
+        auto=True,
+        save_only=False,
+    )
+
+    progress = service.getFaceMatchingProgress("user")
+    assert progress["message_key"] == "face_match:progress_failed"
+    assert progress["running"] is False
+    assert progress["finished"] is True
+    assert progress["paused"] is False
+    assert progress["auth_required"] is False
+    assert progress["error"] == "session manager error"
+    assert progress["error_details"] == detail
+    assert progress["images_read"] == 6038
+
+
+def test_run_face_matching_bootstrap_failure_requests_login():
+    service = make_service()
+
+    def fail_keepalive(*args, **kwargs):
+        raise SessionBootstrapRequired("missing kk_message for resume bootstrap")
+
+    service.session_manager.keepalive = fail_keepalive
+    service._runFaceMatching(
+        user_key="user",
+        cookies={},
+        base_url="https://example.test",
+        action="mark_missing_photos_faces",
+        limit=0,
+        offset=0,
+        skip_face_ids=[],
+        skip_targets=[],
+        auto=True,
+        save_only=False,
+    )
+
+    progress = service.getFaceMatchingProgress("user")
+    assert progress["message_key"] == "face_match:progress_auth_required"
+    assert progress["running"] is False
+    assert progress["finished"] is False
+    assert progress["paused"] is True
+    assert progress["auth_required"] is True
+    assert progress["error"] == "missing kk_message for resume bootstrap"
+    assert progress["error_details"] == {}

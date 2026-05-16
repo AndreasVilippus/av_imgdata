@@ -666,7 +666,6 @@ class PhotosHandler:
                 "version": "1",
                 "face_id": [int(face_id)],
                 "target_id": str(person_id),
-                "name": json.dumps(person_name),
             },
         )
         data = payload.get("data", {})

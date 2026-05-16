@@ -16,7 +16,7 @@ privilege="yes"
 support_cgi="yes"
 beta="no"
 reloadui="yes"
-dsmappname="AV_ImgData.js"
+dsmappname="SYNO.SDS.App.AV_ImgData.Instance"
 dsmuidir="ui"
 
 [ "$(caller)" != "0 NULL" ] && return 0

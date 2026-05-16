@@ -22,6 +22,7 @@ class SessionManagerError(Exception):
 class SessionManager:
     TRANSIENT_HTTP_STATUS_CODES = {502, 503, 504}
     TRANSIENT_REQUEST_EXCEPTIONS = (requests.Timeout, requests.ConnectionError)
+    SESSION_RETRY_ERROR_CODES = {106, 107, 119}
 
     def __init__(self, verify_ssl: bool = False, timeout: int = 20):
         self.verify_ssl = verify_ssl
@@ -87,8 +88,16 @@ class SessionManager:
     def _error_code(payload: Dict[str, Any]) -> Optional[int]:
         error = payload.get("error")
         if isinstance(error, dict):
-            return error.get("code")
+            code = error.get("code")
+            try:
+                return int(code)
+            except (TypeError, ValueError):
+                return None
         return None
+
+    def _api_failure_status_code(self, payload: Dict[str, Any]) -> int:
+        code = self._error_code(payload)
+        return 401 if code in self.SESSION_RETRY_ERROR_CODES else 502
 
     @staticmethod
     def _safe_json(response: requests.Response) -> Dict[str, Any]:
@@ -389,7 +398,7 @@ class SessionManager:
             if data.get("success"):
                 return data
 
-            if self._error_code(data) == 119:
+            if self._error_code(data) in self.SESSION_RETRY_ERROR_CODES:
                 state["sid"] = None
                 state = self._resume(user_key, cookies, base_url)
                 if state.get("sid"):
@@ -410,12 +419,12 @@ class SessionManager:
                     return retry_data
                 raise SessionManagerError(
                     {"error": "api_failed_after_resume", "api": api, "response": retry_data},
-                    status_code=401,
+                    status_code=self._api_failure_status_code(retry_data),
                 )
 
             raise SessionManagerError(
                 {"error": "api_failed", "api": api, "response": data},
-                status_code=401,
+                status_code=self._api_failure_status_code(data),
             )
 
     def call_api_post(
@@ -455,7 +464,7 @@ class SessionManager:
             if data.get("success"):
                 return data
 
-            if self._error_code(data) == 119:
+            if self._error_code(data) in self.SESSION_RETRY_ERROR_CODES:
                 state["sid"] = None
                 state = self._resume(user_key, cookies, base_url)
                 if state.get("sid"):
@@ -476,10 +485,10 @@ class SessionManager:
                     return retry_data
                 raise SessionManagerError(
                     {"error": "api_failed_after_resume", "api": api, "response": retry_data},
-                    status_code=401,
+                    status_code=self._api_failure_status_code(retry_data),
                 )
 
             raise SessionManagerError(
                 {"error": "api_failed", "api": api, "response": data},
-                status_code=401,
+                status_code=self._api_failure_status_code(data),
             )

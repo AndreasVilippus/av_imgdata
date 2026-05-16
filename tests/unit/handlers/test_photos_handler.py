@@ -113,6 +113,47 @@ class PhotosHandlerSortTests(unittest.TestCase):
         params = session_manager.post_calls[0]["params"]
         self.assertEqual(params["face"][0]["person_id"], 91)
 
+    def test_assign_face_to_existing_person_posts_target_id_without_name(self):
+        session_manager = DummySessionManager(post_payloads=[{"success": True, "data": {"ok": True}}])
+        handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))
+
+        result = handler.assignFaceToPerson(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            face_id=146890,
+            person_id=19785,
+            person_name="Jelizaveta Vilippus geb. Kromskaja",
+        )
+
+        self.assertEqual(result, {"ok": True})
+        params = session_manager.post_calls[0]["params"]
+        self.assertEqual(params["method"], "separate")
+        self.assertEqual(params["version"], "1")
+        self.assertEqual(params["face_id"], [146890])
+        self.assertEqual(params["target_id"], "19785")
+        self.assertNotIn("name", params)
+
+    def test_create_person_from_face_posts_name_without_target_id(self):
+        session_manager = DummySessionManager(post_payloads=[{"success": True, "data": {"created": True}}])
+        handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))
+
+        result = handler.createPersonFromFace(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            face_id=146890,
+            person_name="Jelizaveta Vilippus geb. Kromskaja",
+        )
+
+        self.assertEqual(result, {"created": True})
+        params = session_manager.post_calls[0]["params"]
+        self.assertEqual(params["method"], "separate")
+        self.assertEqual(params["version"], "1")
+        self.assertEqual(params["face_id"], [146890])
+        self.assertEqual(params["name"], '"Jelizaveta Vilippus geb. Kromskaja"')
+        self.assertNotIn("target_id", params)
+
     def test_find_item_by_path_resolves_photos_style_folder_keys_and_filename(self):
         session_manager = DummySessionManager(get_payloads=[
             {"success": True, "data": {"list": [{"id": 10, "name": "/trip"}]}},

@@ -140,9 +140,10 @@ def _session_exception_response(
                 "details": str(exc),
             },
         }
+    message = "session_manager_error" if exc.status_code == 401 else "synology_api_error"
     return {
         "success": False,
-        "error": {"code": exc.status_code, "message": "session_manager_error", "details": exc.detail},
+        "error": {"code": exc.status_code, "message": message, "details": exc.detail},
     }
 
 
@@ -306,13 +307,31 @@ def _snapshot_name_conflicts_mutation_state(
 
         original = original_face_data if isinstance(original_face_data, dict) else {}
         replacement = replacement_face_data if isinstance(replacement_face_data, dict) else {}
-        candidate_names = {
-            str(original.get("name") or original.get("face_name") or "").strip(),
-            str(original.get("old_name") or "").strip(),
-            str(replacement.get("name") or replacement.get("face_name") or "").strip(),
-            str(replacement.get("new_name") or "").strip(),
-        }
-        candidate_names = {value for value in candidate_names if value}
+        def collect_face_names(source: Any) -> set:
+            names = set()
+            if not isinstance(source, dict):
+                return names
+            for key in ("name", "face_name", "person_name", "source_name", "target_name", "old_name", "new_name"):
+                value = str(source.get(key) or "").strip()
+                if value:
+                    names.add(value)
+            for key in (
+                "left_face_signature",
+                "right_face_signature",
+                "face_signature",
+                "signature",
+                "left_face",
+                "right_face",
+                "metadata_face",
+                "photos_face",
+                "original_face_data",
+                "replacement_face_data",
+            ):
+                names.update(collect_face_names(source.get(key)))
+            return names
+
+        candidate_names = collect_face_names(original)
+        candidate_names.update(collect_face_names(replacement))
         candidate_signatures = {
             str(original.get("left_face_signature") or "").strip(),
             str(original.get("right_face_signature") or "").strip(),
@@ -340,12 +359,7 @@ def _snapshot_name_conflicts_mutation_state(
                 if any(value and value in candidate_signatures for value in entry_signatures):
                     return True
             if candidate_names:
-                entry_names = {
-                    str(entry.get("face_name") or "").strip(),
-                    str(entry.get("name") or "").strip(),
-                    str(entry.get("left_name") or "").strip(),
-                    str(entry.get("right_name") or "").strip(),
-                }
+                entry_names = collect_face_names(entry)
                 if any(value and value in candidate_names for value in entry_names):
                     return True
             # If the request does not carry a stable token, remove all snapshot
@@ -1535,10 +1549,9 @@ async def checks_replace_metadata_face_name(request: Request):
             mapping_saved = False
         refresh_error = None
         if result.get("updated"):
-            replacement_face_data = None
+            replacement_face_data = dict(face)
+            replacement_face_data["name"] = str(result.get("resolved_name") or new_name)
             if str(result.get("operation") or "").strip().lower() in {"photos_assign", "photos_create"}:
-                replacement_face_data = dict(face)
-                replacement_face_data["name"] = str(result.get("resolved_name") or new_name)
                 target_person = result.get("target_person") if isinstance(result.get("target_person"), dict) else {}
                 if target_person.get("id") not in (None, ""):
                     replacement_face_data["person_id"] = target_person.get("id")
@@ -1550,6 +1563,8 @@ async def checks_replace_metadata_face_name(request: Request):
                 replacement_face_data=replacement_face_data,
                 resolved_delta=1,
             )
+    except (SessionBootstrapRequired, SessionManagerError) as exc:
+        return JSONResponse(_session_exception_response(exc, bootstrap_message="checks_replace_metadata_face_name_bootstrap_required"))
     except Exception as exc:
         return JSONResponse(_operation_exception_response(exc, message="checks_replace_metadata_face_name_failed"))
 

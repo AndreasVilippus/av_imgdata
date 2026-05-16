@@ -31,6 +31,7 @@ from services.bbox_normalizer import denormalize_xmp_face, from_photos, from_xmp
 from services.config_service import ConfigService
 from services.exiftool_service import ExifToolService
 from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
+from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
 from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
@@ -127,6 +128,7 @@ class ImgDataService:
     CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS = 60
     CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL = 25
     CHECKS_AUTO_APPLY_MAX_ACTIONS_PER_CALL = 25
+    STOPPING_PROGRESS_STALE_SECONDS = 120
 
     def __init__(self, session_manager: SessionManager):
         self.session_manager = session_manager
@@ -397,6 +399,33 @@ class ImgDataService:
     @staticmethod
     def _utcNowIso() -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _parseProgressTimestamp(value: Any) -> Optional[datetime]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _isStaleStoppingProgress(self, progress: Any) -> bool:
+        if not isinstance(progress, dict) or not progress.get("running"):
+            return False
+        message_key = str(progress.get("message_key") or progress.get("message") or "").strip()
+        status = progress.get("status") if isinstance(progress.get("status"), dict) else {}
+        phase = str(status.get("phase") or progress.get("phase") or "").strip().lower()
+        if message_key not in {"checks:progress_stopping", "face_match:progress_stopping", "cleanup:progress_stopping"} and phase != "stopping":
+            return False
+        last_updated = self._parseProgressTimestamp(progress.get("last_updated_at"))
+        if last_updated is None:
+            return False
+        age_seconds = (datetime.now(timezone.utc) - last_updated).total_seconds()
+        return age_seconds >= self.STOPPING_PROGRESS_STALE_SECONDS
 
     def _checksProgressKeys(self, user_key: str = "", check_type: str = "") -> List[str]:
         normalized_user = str(user_key or "").strip()
@@ -904,10 +933,29 @@ class ImgDataService:
         return not bool(self.files.findXmpForImage(image_path, lookup_cache=sidecar_cache))
 
     @staticmethod
-    def _sameMetadataFaceCandidate(left: MetadataFace, right: MetadataFace, *, tolerance: float = 1e-6) -> bool:
+    def _sameMetadataFaceCandidate(
+        left: MetadataFace,
+        right: MetadataFace,
+        *,
+        tolerance: float = FACE_COORDINATE_TOLERANCE,
+    ) -> bool:
         if str(left.source_format or "").strip().upper() != str(right.source_format or "").strip().upper():
             return False
         if str(left.name or "").strip() != str(right.name or "").strip():
+            return False
+        return all(
+            abs(float(getattr(left, key, 0.0)) - float(getattr(right, key, 0.0))) <= tolerance
+            for key in ("x", "y", "w", "h")
+        )
+
+    @staticmethod
+    def _sameMetadataFaceLocation(
+        left: MetadataFace,
+        right: MetadataFace,
+        *,
+        tolerance: float = FACE_COORDINATE_TOLERANCE,
+    ) -> bool:
+        if str(left.source_format or "").strip().upper() != str(right.source_format or "").strip().upper():
             return False
         return all(
             abs(float(getattr(left, key, 0.0)) - float(getattr(right, key, 0.0))) <= tolerance
@@ -1107,7 +1155,7 @@ class ImgDataService:
             numeric = float(value)
         except (TypeError, ValueError):
             return "0"
-        formatted = f"{numeric:.6f}".rstrip("0").rstrip(".")
+        formatted = f"{numeric:.{FACE_COORDINATE_DIGITS}f}".rstrip("0").rstrip(".")
         return formatted or "0"
 
     @staticmethod
@@ -1181,15 +1229,35 @@ class ImgDataService:
         source_format = str(target.source_format or "").strip().upper()
 
         updated = False
-        for candidate in self._metadataFaceEditCandidates(edit_context, source_format):
+        already_updated = False
+        candidates = self._metadataFaceEditCandidates(edit_context, source_format)
+        for candidate in candidates:
             if not self._sameMetadataFaceCandidate(candidate["face"], target):
                 continue
             self._setMetadataFaceName(candidate["element"], source_format, replacement_name)
             updated = True
             break
-
         if not updated:
+            for candidate in candidates:
+                candidate_face = candidate["face"]
+                if (
+                    self._sameMetadataFaceLocation(candidate_face, target)
+                    and str(candidate_face.name or "").strip() == replacement_name
+                ):
+                    already_updated = True
+                    break
+
+        if not updated and not already_updated:
             return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
+
+        if already_updated:
+            return {
+                "updated": True,
+                "warning": "",
+                "target_path": edit_context["target_path"],
+                "used_sidecar": bool(edit_context["xmp_path"]),
+                "already_updated": True,
+            }
 
         write_result = self._writeMetadataEditContext(
             edit_context,
@@ -1477,8 +1545,24 @@ class ImgDataService:
                 current["operation_id"] = f"face_match-{uuid4().hex}"
             current["revision"] = max(0, int(current.get("revision") or 0)) + 1
             current["last_updated_at"] = self._timestamp_now()
+            current = self._jsonSafeProgressValue(current)
             self._face_matching_progress[user_key] = current
         self.file_analysis.writeRuntimeState("face_match_progress", user_key, current)
+
+    @staticmethod
+    def _jsonSafeProgressValue(value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if hasattr(value, "to_dict"):
+            try:
+                return ImgDataService._jsonSafeProgressValue(value.to_dict())
+            except Exception:
+                return str(value)
+        if isinstance(value, dict):
+            return {str(key): ImgDataService._jsonSafeProgressValue(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [ImgDataService._jsonSafeProgressValue(item) for item in value]
+        return str(value)
 
     @staticmethod
     def _syncFaceMatchProgressCountsFromCursor(
@@ -1514,6 +1598,83 @@ class ImgDataService:
         }
         payload.update(updates)
         self._setFaceMatchingProgress(user_key, **payload)
+
+    @staticmethod
+    def _synologyErrorCode(payload: Any) -> Optional[int]:
+        if not isinstance(payload, dict):
+            return None
+        error = payload.get("error")
+        if not isinstance(error, dict):
+            return None
+        try:
+            return int(error.get("code"))
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _sessionManagerErrorNeedsLogin(cls, exc: SessionManagerError) -> bool:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        error = str(detail.get("error") or "")
+        if error in {"resume_failed", "missing_synotoken_after_resume"}:
+            return True
+        if error in {"api_failed", "api_failed_after_resume"}:
+            return cls._synologyErrorCode(detail.get("response")) in SessionManager.SESSION_RETRY_ERROR_CODES
+        return False
+
+    def _setFaceMatchingSessionExceptionProgress(
+        self,
+        user_key: str,
+        exc: Exception,
+        *,
+        action: str,
+        auto: bool,
+        save_only: bool,
+        resume_cursor: Optional[Dict[str, Any]],
+        skip_face_ids: Optional[List[int]],
+        skip_targets: Optional[List[str]],
+    ) -> None:
+        detail = exc.detail if isinstance(exc, SessionManagerError) and isinstance(exc.detail, dict) else {}
+        if isinstance(exc, SessionBootstrapRequired) or (
+            isinstance(exc, SessionManagerError) and self._sessionManagerErrorNeedsLogin(exc)
+        ):
+            self._setFaceMatchingProgressMessage(
+                user_key,
+                "face_match:progress_auth_required",
+                message=str(exc),
+                running=False,
+                finished=False,
+                paused=True,
+                auth_required=True,
+                error=str(exc),
+                error_details=detail,
+                action=action,
+                auto=auto,
+                save_only=save_only,
+                resume_cursor=resume_cursor or self._buildFaceMatchResumeCursor(
+                    skip_face_ids=list(skip_face_ids or []),
+                    skip_targets=list(skip_targets or []),
+                    transferred_count=0,
+                    auto=auto,
+                    save_only=save_only,
+                    action=action,
+                ),
+            )
+            return
+
+        self._setFaceMatchingProgressMessage(
+            user_key,
+            "face_match:progress_failed",
+            message="Face matching failed.",
+            running=False,
+            finished=True,
+            paused=False,
+            auth_required=False,
+            error=str(exc),
+            error_details=detail,
+            action=action,
+            auto=auto,
+            save_only=save_only,
+        )
 
     @staticmethod
     def _faceMatchCandidatePathsCacheKey(user_key: str, action: Any) -> str:
@@ -1681,6 +1842,26 @@ class ImgDataService:
         display_progress["resume_available"] = bool(resume_cursor)
         display_progress["resume_cursor"] = resume_cursor
 
+        if bool(display_progress.get("save_only")) and bool(display_progress.get("finished")):
+            findings = self.getFaceMatchFindings()
+            entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+            stored_count = len(entries)
+            display_progress["findings_count"] = stored_count
+            message_params = display_progress.get("message_params")
+            if isinstance(message_params, dict) and "count" in message_params:
+                message_params = dict(message_params)
+                message_params["count"] = stored_count
+                display_progress["message_params"] = message_params
+            result = display_progress.get("result")
+            if isinstance(result, dict) and "findings_count" in result:
+                result = dict(result)
+                result["findings_count"] = stored_count
+                display_progress["result"] = result
+            if isinstance(resume_cursor, dict):
+                resume_cursor = dict(resume_cursor)
+                resume_cursor["findings_count"] = stored_count
+                display_progress["resume_cursor"] = resume_cursor
+
         if display_progress.get("running") and thread_alive:
             display_progress["active"] = True
             display_progress["stale"] = False
@@ -1733,7 +1914,12 @@ class ImgDataService:
                     memory_progress = dict(only_progress)
 
         if memory_progress:
-            return self._attachFaceMatchStatusPayload(memory_progress)
+            return self._attachFaceMatchStatusPayload(
+                self._normalizeFaceMatchingProgressForDisplay(
+                    user_key,
+                    self._normalizeFaceMatchingProgress(user_key, memory_progress),
+                )
+            )
 
         return self._getFaceMatchingProgressCore(user_key)
 
@@ -1868,33 +2054,36 @@ class ImgDataService:
     def _isRunningProgress(progress: Any) -> bool:
         return isinstance(progress, dict) and bool(progress.get("running"))
 
+    def _isBlockingRunningProgress(self, progress: Any) -> bool:
+        return self._isRunningProgress(progress) and not self._isStaleStoppingProgress(progress)
+
     def _runningOperationProgress(self, user_key: str, *, exclude_operation: str = "") -> Optional[Dict[str, Any]]:
         excluded = str(exclude_operation or "").strip().lower()
 
         if excluded != "file_analysis":
             progress = self.getFileAnalysisProgress()
-            if self._isRunningProgress(progress):
+            if self._isBlockingRunningProgress(progress):
                 payload = dict(progress)
                 payload.setdefault("operation", "file_analysis")
                 return payload
 
         if excluded != "face_match":
             progress = self.getFaceMatchingProgress(user_key)
-            if self._isRunningProgress(progress):
+            if self._isBlockingRunningProgress(progress):
                 payload = dict(progress)
                 payload.setdefault("operation", "face_match")
                 return payload
 
         if excluded != "checks":
             progress = self._runningChecksScanProgress(user_key)
-            if self._isRunningProgress(progress):
+            if self._isBlockingRunningProgress(progress):
                 payload = dict(progress)
                 payload.setdefault("operation", "checks")
                 return payload
 
         if excluded != "cleanup":
             progress = self.getCleanupProgress(user_key, "normalize_names")
-            if self._isRunningProgress(progress):
+            if self._isBlockingRunningProgress(progress):
                 payload = dict(progress)
                 payload.setdefault("operation", "cleanup")
                 return payload
@@ -3261,26 +3450,15 @@ class ImgDataService:
                         progress_updates[field] = result.get(field)
             self._setFaceMatchingProgress(user_key, **progress_updates)
         except (SessionBootstrapRequired, SessionManagerError) as exc:
-            self._setFaceMatchingProgressMessage(
+            self._setFaceMatchingSessionExceptionProgress(
                 user_key,
-                "face_match:progress_auth_required",
-                message=str(exc),
-                running=False,
-                finished=False,
-                paused=True,
-                auth_required=True,
-                error=str(exc),
+                exc,
                 action=action,
                 auto=auto,
                 save_only=save_only,
-                resume_cursor=resume_cursor or self._buildFaceMatchResumeCursor(
-                    skip_face_ids=list(skip_face_ids or []),
-                    skip_targets=list(skip_targets or []),
-                    transferred_count=0,
-                    auto=auto,
-                    save_only=save_only,
-                    action=action,
-                ),
+                resume_cursor=resume_cursor,
+                skip_face_ids=skip_face_ids,
+                skip_targets=skip_targets,
             )
         except Exception as exc:
             error_message = self._formatExceptionForProgress(exc)
@@ -3940,10 +4118,10 @@ class ImgDataService:
         return "|".join([
             str(image_path or "").strip(),
             str(payload.get("source_format") or "").strip().upper(),
-            f"{float(payload.get('x') or 0):.6f}",
-            f"{float(payload.get('y') or 0):.6f}",
-            f"{float(payload.get('w') or 0):.6f}",
-            f"{float(payload.get('h') or 0):.6f}",
+            format_face_coordinate(payload.get("x")),
+            format_face_coordinate(payload.get("y")),
+            format_face_coordinate(payload.get("w")),
+            format_face_coordinate(payload.get("h")),
         ])
 
     @staticmethod
@@ -4206,7 +4384,7 @@ class ImgDataService:
             if value in (None, ""):
                 continue
             try:
-                normalized[key] = round(float(value), 6)
+                normalized[key] = round_face_coordinate(value)
             except (TypeError, ValueError):
                 normalized[key] = value
         orientation = signature.get("orientation")
@@ -5329,6 +5507,7 @@ class ImgDataService:
         except (SessionBootstrapRequired, SessionManagerError) as exc:
             current_progress = self.getChecksProgress(user_key, check_type)
             current_resume_cursor = current_progress.get("resume_cursor") if isinstance(current_progress.get("resume_cursor"), dict) else {}
+            detail = exc.detail if isinstance(exc, SessionManagerError) and isinstance(exc.detail, dict) else {}
             self._setChecksProgressMessage(
                 user_key,
                 check_type,
@@ -5338,6 +5517,7 @@ class ImgDataService:
                 finished=False,
                 stop_requested=False,
                 error=str(exc),
+                error_details=detail,
                 save_only=save_only,
                 source_mode="scan",
                 changed_since_days=changed_since_days,

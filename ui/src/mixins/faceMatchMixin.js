@@ -1,3 +1,5 @@
+const FACE_COORDINATE_DIGITS = 6;
+
 export default {
 	data() {
 		return {
@@ -109,14 +111,24 @@ export default {
 			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
 				? this.faceMatchProgress
 				: {};
+			const phase = this.faceMatchStatusPhase;
 			return !!(
 				this.faceMatchLoading
-				|| progress.running
-				|| progress.stop_requested
-				|| progress.message_key
-				|| progress.message
-				|| Object.keys(progress).length
+				|| progress.running === true
+				|| progress.stop_requested === true
+				|| phase === 'preparing'
+				|| phase === 'running'
+				|| phase === 'stopping'
 			);
+		},
+		faceMatchStatusPhase() {
+			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
+				? this.faceMatchProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			return String(status.phase || '').trim().toLowerCase();
 		},
 		faceMatchFileProgressTotal() {
 			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
@@ -165,18 +177,12 @@ export default {
 		faceMatchShowPersonsProgress() {
 			return !this.faceMatchShowStoredFindingsProgress
 				&& !this.faceMatchIsFileSourceAction
-				&& (
-					this.faceMatchPersonsTotal > 0
-					|| this.faceMatchHasActiveProgressState
-				);
+				&& this.faceMatchHasActiveProgressState;
 		},
 		faceMatchShowFileProgress() {
 			return !this.faceMatchShowStoredFindingsProgress
 				&& this.faceMatchIsFileSourceAction
-				&& (
-					this.faceMatchFileProgressTotal > 0
-					|| this.faceMatchHasActiveProgressState
-				);
+				&& this.faceMatchHasActiveProgressState;
 		},
 		faceMatchShowStoredFindingsProgress() {
 			return this.faceMatchReviewingStoredFindings && this.faceMatchStoredFindingsTotal > 0;
@@ -194,7 +200,20 @@ export default {
 			if (!total) {
 				return 0;
 			}
-			return Math.min(total, Math.max(0, Number(this.faceMatchFindingIndex) || 0) + 1);
+			const currentOffset = Array.isArray(this.faceMatchFindingEntries) && this.faceMatchFindingEntries.length
+				? Math.max(0, Number(this.faceMatchFindingIndex) || 0) + 1
+				: 0;
+			return Math.min(total, this.faceMatchStoredFindingsCompletedCount + currentOffset);
+		},
+		faceMatchStoredFindingsCompletedCount() {
+			const total = this.faceMatchStoredFindingsTotal;
+			if (!total) {
+				return 0;
+			}
+			const remaining = Array.isArray(this.faceMatchFindingEntries)
+				? this.faceMatchFindingEntries.length
+				: 0;
+			return Math.max(0, Math.min(total, total - remaining));
 		},
 		faceMatchFacesLabel() {
 			if (this.faceMatchIsFileSourceAction) {
@@ -528,16 +547,45 @@ export default {
 			if (typeof this.fetchPipPackagesStatus === 'function') {
 				await this.fetchPipPackagesStatus();
 			}
-			await this.fetchFaceMatchingProgress();
-			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
-				? this.faceMatchProgress
-				: {};
+			const progress = await this.fetchFaceMatchingProgress({ applyRunningState: false });
+			if (this.isFaceMatchFindingsReviewActive() && this.getFaceMatchProgressMode(progress) === 'scan') {
+				return;
+			}
+			if (progress && typeof progress === 'object' && Object.keys(progress).length) {
+				this.applyFaceMatchingProgress(progress);
+			}
 			if (progress.running) {
 				this.faceMatchLoading = true;
 				this.startFaceMatchProgressPolling();
 				return;
 			}
 			this.faceMatchLoading = false;
+		},
+		isFaceMatchFindingsReviewActive() {
+			return !!(
+				this.faceMatchReviewingStoredFindings
+				&& (
+					this.faceMatchLoading
+					|| this.faceMatchFindingEntries.length
+					|| this.faceMatchResult
+				)
+			);
+		},
+		getFaceMatchProgressMode(progress) {
+			const source = progress && typeof progress === 'object' ? progress : {};
+			const status = source.status && typeof source.status === 'object' ? source.status : {};
+			const statusMode = String(status.mode || '').trim().toLowerCase();
+			if (status.schema_version === 1 && statusMode) {
+				return statusMode;
+			}
+			const action = String(source.action || source.selected_action || '').trim();
+			if (action === 'load_photo_face_match_findings') {
+				return 'findings';
+			}
+			if (action || source.running || source.stop_requested) {
+				return 'scan';
+			}
+			return '';
 		},
 		resetFaceMatchSelectionState() {
 			this.faceMatchEditableName = '';
@@ -589,7 +637,7 @@ export default {
 			this.syncFaceMatchEditableName();
 			this.setFaceMatchProgressMessage(
 				this.$avt('face_match:status_list_entry', 'List entry {current} of {total}.', {
-					current: index + 1,
+					current: this.faceMatchStoredFindingsChecked,
 					total: this.faceMatchStoredFindingsTotal || this.faceMatchFindingEntries.length,
 				})
 			);
@@ -1063,8 +1111,12 @@ export default {
 			this.faceMatchFindingEntries = remainingEntries;
 			this.faceMatchFindingsStatus = {
 				...(this.faceMatchFindingsStatus || {}),
-				count: Number(findingsUpdate.remaining_count) || remainingEntries.length,
-				transferred_count: Number(findingsUpdate.transferred_count) || (this.faceMatchTransferredCount + 1),
+				count: Number.isFinite(Number(findingsUpdate.remaining_count))
+					? Math.max(0, Number(findingsUpdate.remaining_count))
+					: remainingEntries.length,
+				transferred_count: Number.isFinite(Number(findingsUpdate.transferred_count))
+					? Math.max(0, Number(findingsUpdate.transferred_count))
+					: (this.faceMatchTransferredCount + 1),
 			};
 			this.faceMatchTransferredCount = Number(this.faceMatchFindingsStatus.transferred_count) || 0;
 
@@ -1102,10 +1154,10 @@ export default {
 			const token = [
 				String(imagePath || '').trim(),
 				String(metadataFace.source_format || '').trim().toUpperCase(),
-				Number(metadataFace.x || 0).toFixed(6),
-				Number(metadataFace.y || 0).toFixed(6),
-				Number(metadataFace.w || 0).toFixed(6),
-				Number(metadataFace.h || 0).toFixed(6),
+				Number(metadataFace.x || 0).toFixed(FACE_COORDINATE_DIGITS),
+				Number(metadataFace.y || 0).toFixed(FACE_COORDINATE_DIGITS),
+				Number(metadataFace.w || 0).toFixed(FACE_COORDINATE_DIGITS),
+				Number(metadataFace.h || 0).toFixed(FACE_COORDINATE_DIGITS),
 			].join('|');
 			const nextTargets = this.faceMatchSkippedTargets.slice();
 			if (!nextTargets.includes(token)) {
@@ -1157,7 +1209,7 @@ export default {
 			}
 			return true;
 		},
-		async fetchFaceMatchingProgress() {
+		async fetchFaceMatchingProgress({ applyRunningState = true } = {}) {
 			const requestId = this.faceMatchProgressRequestId + 1;
 			this.faceMatchProgressRequestId = requestId;
 			try {
@@ -1166,6 +1218,9 @@ export default {
 					return;
 				}
 				const progress = this.getResponseData(data);
+				if (progress.running && !applyRunningState) {
+					return progress;
+				}
 				if (!this.applyFaceMatchingProgress(progress)) {
 					return;
 				}
@@ -1177,8 +1232,9 @@ export default {
 					await this.fetchFaceMatchFindingsStatus();
 					this.stopFaceMatchProgressPolling();
 				}
+				return progress;
 			} catch (err) {
-				return;
+				return {};
 			}
 		},
 		startFaceMatchProgressPolling() {
@@ -1424,12 +1480,13 @@ export default {
 				};
 				this.resetFaceMatchFindingsReview();
 			} else {
+				const displayedProgress = this.faceMatchDisplayedProgress || {};
 				this.faceMatchProgressBase = {
-					persons_read: 0,
-					images_read: 0,
-					faces_read: 0,
-					target_faces_read: 0,
-					metadata_faces_read: 0,
+					persons_read: Math.max(0, Number(displayedProgress.persons_read) || 0),
+					images_read: Math.max(0, Number(displayedProgress.images_read) || 0),
+					faces_read: Math.max(0, Number(displayedProgress.faces_read) || 0),
+					target_faces_read: Math.max(0, Number(displayedProgress.target_faces_read) || 0),
+					metadata_faces_read: Math.max(0, Number(displayedProgress.metadata_faces_read) || 0),
 				};
 				const resumeCursor = this.faceMatchProgress && typeof this.faceMatchProgress.resume_cursor === 'object'
 					? this.faceMatchProgress.resume_cursor

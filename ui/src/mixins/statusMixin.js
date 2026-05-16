@@ -72,7 +72,10 @@ export default {
 				if (this.fileAnalysisProgressRequestId !== requestId) {
 					return;
 				}
-				this.fileAnalysisProgress = this.getResponseData(data);
+				const progress = this.getResponseData(data);
+				if (!this.isFileAnalysisProgressUpdateStale(this.fileAnalysisProgress, progress)) {
+					this.fileAnalysisProgress = progress;
+				}
 				if (!this.isFileAnalysisRunning) {
 					this.stopFileAnalysisProgressPolling();
 				}
@@ -119,6 +122,102 @@ export default {
 		},
 		stopFileAnalysisProgressPolling() {
 			this.stopNamedPolling('fileAnalysisProgressTimer');
+		},
+		getFileAnalysisStatusCounterLabel(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return '';
+			}
+			const labelKey = String(counter.label_key || '').trim();
+			const fallback = String(counter.fallback_label || counter.key || '').trim();
+			return labelKey ? this.$avt(labelKey, fallback) : fallback;
+		},
+		getFileAnalysisStatusCounters() {
+			const progress = this.fileAnalysisProgress && typeof this.fileAnalysisProgress === 'object'
+				? this.fileAnalysisProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			if (status.schema_version === 1 && Array.isArray(status.counters)) {
+				return status.counters
+					.filter((counter) => counter && typeof counter === 'object')
+					.filter((counter) => counter.show_when_zero || Number(counter.value) > 0)
+					.map((counter) => ({
+						key: String(counter.key || '').trim(),
+						label: this.getFileAnalysisStatusCounterLabel(counter),
+						value: Math.max(0, Number(counter.value) || 0),
+					}))
+					.filter((counter) => counter.key);
+			}
+			return [];
+		},
+		getFileAnalysisStatusProgress() {
+			const progress = this.fileAnalysisProgress && typeof this.fileAnalysisProgress === 'object'
+				? this.fileAnalysisProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			if (status.schema_version === 1 && status.progress && typeof status.progress === 'object') {
+				return status.progress;
+			}
+			const legacy = progress.analysis_progress && typeof progress.analysis_progress === 'object'
+				? progress.analysis_progress
+				: {};
+			if (Number(legacy.total) > 0) {
+				return {
+					kind: 'files',
+					current: Number(legacy.current) || 0,
+					total: Number(legacy.total) || 0,
+					title_key: 'status:files_matched',
+					fallback_title: 'Matching files',
+					primary_label_key: 'status:files_analyzed',
+					fallback_primary_label: 'Analyzed',
+					secondary_label_key: 'status:files_to_analyze',
+					fallback_secondary_label: 'to analyze',
+				};
+			}
+			return {};
+		},
+		getFileAnalysisStatusProgressTitle() {
+			const progress = this.getFileAnalysisStatusProgress();
+			return progress.title_key ? this.$avt(progress.title_key, progress.fallback_title || progress.kind) : (progress.fallback_title || progress.kind || '');
+		},
+		getFileAnalysisStatusProgressPrimaryLabel() {
+			const progress = this.getFileAnalysisStatusProgress();
+			const fallback = String(progress.fallback_primary_label || '').replace(':', '').toLowerCase();
+			return progress.primary_label_key ? this.$avt(progress.primary_label_key, fallback).replace(':', '').toLowerCase() : fallback;
+		},
+		getFileAnalysisStatusProgressSecondaryLabel() {
+			const progress = this.getFileAnalysisStatusProgress();
+			return progress.secondary_label_key ? this.$avt(progress.secondary_label_key, progress.fallback_secondary_label || '') : (progress.fallback_secondary_label || '');
+		},
+		formatFileAnalysisStatusCounter(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return '';
+			}
+			const label = String(counter.label || counter.key || '').replace(/:$/, '').trim();
+			const value = Math.max(0, Number(counter.value) || 0);
+			return label ? `${label}: ${value}` : String(value);
+		},
+		isFileAnalysisProgressUpdateStale(current, next) {
+			const currentProgress = current && typeof current === 'object' ? current : {};
+			const nextProgress = next && typeof next === 'object' ? next : {};
+			const currentOperationId = String(currentProgress.operation_id || '').trim();
+			const nextOperationId = String(nextProgress.operation_id || '').trim();
+			if (currentOperationId && !nextOperationId) {
+				return true;
+			}
+			if (currentOperationId && nextOperationId && currentOperationId !== nextOperationId) {
+				return false;
+			}
+			const currentRevision = Number(currentProgress.revision);
+			const nextRevision = Number(nextProgress.revision);
+			return Number.isFinite(currentRevision)
+				&& Number.isFinite(nextRevision)
+				&& currentRevision > 0
+				&& nextRevision > 0
+				&& nextRevision < currentRevision;
 		},
 		formatAnalysisCountSummary(counterMap, kind) {
 			if (!counterMap || typeof counterMap !== 'object') {

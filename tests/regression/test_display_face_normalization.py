@@ -16,6 +16,7 @@ from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
 from parser.metadata_parser import MetadataParser
 from services.config_service import ConfigService
+from services.face_coordinate_precision import format_face_coordinate
 
 
 XMP_MWG_AND_MICROSOFT = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
@@ -814,6 +815,22 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             self.service._checksConflictToken(entry_a),
             self.service._checksConflictToken(entry_b),
         )
+
+    def test_face_match_target_token_uses_shared_coordinate_precision(self):
+        face = MetadataFace.from_center_box(
+            name="Person Alpha",
+            x=0.1234564,
+            y=0.2345674,
+            w=0.3456784,
+            h=0.4567894,
+            source="metadata",
+            source_format="MWG_REGIONS",
+        )
+
+        token = self.service._faceMatchTargetToken(image_path="/volume1/photo/tests/test.jpg", face=face)
+
+        for value in (face.x, face.y, face.w, face.h):
+            self.assertIn(format_face_coordinate(value), token)
 
     def test_get_cleanup_progress_preserves_persisted_running_state_without_local_worker(self):
         written = {}
@@ -2640,6 +2657,32 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["updated"])
         self.assertIn("Person Target", written["xmp"])
         self.assertNotIn("Person Legacy", written["xmp"])
+
+    def test_replace_metadata_face_name_treats_already_renamed_face_as_success(self):
+        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        xmp_content = XMP_MWG_AND_MICROSOFT.replace("Person Alpha", "Jelizaveta Vilippus geb. Kromskaja")
+
+        with patch.object(self.service, "_readImageMetadata", return_value=payload), \
+             patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
+             patch.object(self.service.files, "loadXmpFromImageParsed", return_value=xmp_content), \
+             patch.object(self.service.exiftool_handler, "writeXmpDetailed") as write_mock:
+            result = self.service.replaceMetadataFaceName(
+                image_path="dev/test.jpg",
+                face_data={
+                    "name": "Jelizaveta Vilippus geb.  Kromskaja",
+                    "x": 0.154412,
+                    "y": 0.537786,
+                    "w": 0.308824,
+                    "h": 0.435866,
+                    "source": "embedded_xmp_parsed",
+                    "source_format": "MWG_REGIONS",
+                },
+                new_name="Jelizaveta Vilippus geb. Kromskaja",
+            )
+
+        self.assertTrue(result["updated"])
+        self.assertTrue(result["already_updated"])
+        write_mock.assert_not_called()
 
     def test_duplicate_support_prefers_safe_reinforcement_when_totals_tie(self):
         mwg_bottom = MetadataFace.from_center_box(

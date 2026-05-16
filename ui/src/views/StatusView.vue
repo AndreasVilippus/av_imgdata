@@ -34,18 +34,19 @@
 			<div class="panel-head panel-content-start">
 				<p>{{ vm.$avt('status:files_desc', 'Analyze image files and sidecars for face metadata formats.') }}</p>
 			</div>
-			<div v-if="Number(vm.fileAnalysisProgress.analysis_progress && vm.fileAnalysisProgress.analysis_progress.total) > 0" class="sm-status-progress">
+			<div v-if="Number(vm.getFileAnalysisStatusProgress().total) > 0" class="sm-status-progress">
 				<ProgressOverviewCard
-					:title="vm.$avt('status:files_matched', 'Matching files')"
-					:count="Number(vm.fileAnalysisProgress.files_matched_total) || 0"
-					:current="Number(vm.fileAnalysisProgress.analysis_progress && vm.fileAnalysisProgress.analysis_progress.current) || 0"
-					:total="Number(vm.fileAnalysisProgress.analysis_progress && vm.fileAnalysisProgress.analysis_progress.total) || 0"
-					:primary-label="vm.$avt('status:files_analyzed', 'Analyzed')"
-					:secondary-label="vm.$avt('status:files_to_analyze', 'to analyze')"
+					:title="vm.getFileAnalysisStatusProgressTitle()"
+					:count="Number(vm.getFileAnalysisStatusProgress().total) || 0"
+					:current="Number(vm.getFileAnalysisStatusProgress().current) || 0"
+					:total="Number(vm.getFileAnalysisStatusProgress().total) || 0"
+					:primary-label="vm.getFileAnalysisStatusProgressPrimaryLabel()"
+					:secondary-label="vm.getFileAnalysisStatusProgressSecondaryLabel()"
 					:status-text="vm.getFileAnalysisStatusMessage(vm.fileAnalysisProgress)"
 				/>
 			</div>
 			<div class="sm-files-result-details">
+				<div v-for="counter in vm.getFileAnalysisStatusCounters()" :key="`file-analysis-counter-${counter.key}`"><strong>{{ counter.label }}:</strong> {{ counter.value }}</div>
 				<div><strong>{{ vm.$avt('status:last_run', 'Last run') }}:</strong> {{ vm.formatAnalysisTimestamp(vm.fileAnalysisProgress.finished_at || vm.fileAnalysisProgress.started_at) }}</div>
 				<div><strong>{{ vm.$avt('status:files_seen', 'Files seen') }}:</strong> {{ Number(vm.fileAnalysisProgress.files_seen_total) || 0 }}</div>
 				<div><strong>{{ vm.$avt('status:files_matched', 'Matching files') }}:</strong> {{ Number(vm.fileAnalysisProgress.files_matched_total) || 0 }}</div>

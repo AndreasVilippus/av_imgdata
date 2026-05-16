@@ -503,6 +503,7 @@
 	font-size: var(--sm-font-sm);
 	font-weight: 700;
 	color: var(--sm-text);
+	white-space: pre-wrap;
 }
 
 .checks-face-name-input-wrap {

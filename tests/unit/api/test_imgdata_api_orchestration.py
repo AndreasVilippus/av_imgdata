@@ -2,6 +2,7 @@ import asyncio
 from unittest.mock import Mock
 
 from api import imgdata_api
+from api.session_manager import SessionManagerError
 
 
 SESSION_CTX = {
@@ -152,6 +153,37 @@ def test_face_assign_match_validates_ids_before_service_calls(monkeypatch):
         },
     }
     assign.assert_not_called()
+    remove.assert_not_called()
+
+
+def test_face_assign_match_reports_synology_api_failure_without_login_code(monkeypatch):
+    detail = {
+        "error": "api_failed",
+        "api": "SYNO.FotoTeam.Browse.Person",
+        "response": {"success": False, "error": {"code": 902}},
+    }
+
+    async def request_body(_request):
+        return {"face_id": "146890", "person_id": "19785", "person_name": "Jelizaveta Vilippus geb. Kromskaja"}
+
+    assign = Mock(side_effect=SessionManagerError(detail, status_code=502))
+    remove = Mock()
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "assignMatchedFaceToKnownPerson", assign)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingEntry", remove)
+
+    payload = _run(imgdata_api.face_assign_match(object()))
+
+    assert payload == {
+        "success": False,
+        "error": {
+            "code": 502,
+            "message": "synology_api_error",
+            "details": detail,
+        },
+    }
     remove.assert_not_called()
 
 

@@ -9,6 +9,8 @@ make the same physical face pair look new after mutation.
 import json
 from typing import Any, Dict, List
 
+from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, format_face_coordinate
+
 
 _NAME_FIELDS = {
     "name",
@@ -19,11 +21,13 @@ _NAME_FIELDS = {
 }
 
 
-def _quantized_float_token(value: Any, digits: int = 6) -> str:
+def _quantized_float_token(value: Any, digits: int = FACE_COORDINATE_DIGITS) -> str:
+    if digits == FACE_COORDINATE_DIGITS:
+        return format_face_coordinate(value)
     try:
         return f"{float(value):.{digits}f}"
     except (TypeError, ValueError):
-        return "0.000000"
+        return f"{0.0:.{digits}f}"
 
 
 def face_identity_token(face: Dict[str, Any]) -> str:

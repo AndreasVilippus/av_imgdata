@@ -34,29 +34,19 @@
 				</div>
 			</div>
 			<div class="face-match-status-message">{{ vm.getCleanupStatusHeadline() }}</div>
-			<div v-if="Number(vm.cleanupProgress.persons_total) > 0" class="sm-status-progress">
+			<div v-if="Number(vm.getCleanupStatusProgress().total) > 0" class="sm-status-progress">
 				<ProgressOverviewCard
-					:title="vm.$avt('cleanup:label_persons', 'Persons')"
-					:count="Number(vm.cleanupProgress.persons_total) || 0"
-					:current="Number(vm.cleanupProgress.persons_scanned) || 0"
-					:total="Number(vm.cleanupProgress.persons_total) || 0"
-					:primary-label="vm.$avt('cleanup:label_scanned', 'scanned')"
-					:secondary-label="vm.$avt('cleanup:label_persons_remaining', 'remaining')"
-					:status-text="vm.getCleanupProgressStatus('persons')"
-				/>
-			</div>
-			<div v-if="Number(vm.cleanupProgress.total_files) > 0" class="sm-status-progress">
-				<ProgressOverviewCard
-					:title="vm.$avt('cleanup:label_images', 'Images')"
-					:count="Number(vm.cleanupProgress.total_files) || 0"
-					:current="Number(vm.cleanupProgress.files_scanned) || 0"
-					:total="Number(vm.cleanupProgress.total_files) || 0"
-					:primary-label="vm.$avt('cleanup:label_scanned', 'scanned')"
-					:secondary-label="vm.$avt('cleanup:label_files_remaining', 'remaining')"
-					:status-text="vm.getCleanupProgressStatus('files')"
+					:title="vm.getCleanupStatusProgressTitle()"
+					:count="Number(vm.getCleanupStatusProgress().total) || 0"
+					:current="Number(vm.getCleanupStatusProgress().current) || 0"
+					:total="Number(vm.getCleanupStatusProgress().total) || 0"
+					:primary-label="vm.getCleanupStatusProgressPrimaryLabel()"
+					:secondary-label="vm.getCleanupStatusProgressSecondaryLabel()"
+					:status-text="vm.getCleanupStatusHeadline()"
 				/>
 			</div>
 			<div class="face-match-status-stats">
+				<span v-for="counter in vm.getCleanupStatusCounters()" :key="`cleanup-counter-${counter.key}`">{{ vm.formatCleanupStatusCounter(counter) }}</span>
 				<span>{{ vm.$avt('cleanup:label_mappings', 'Mappings') }}: {{ vm.cleanupProgress.mappings_count || 0 }}</span>
 				<span>{{ vm.$avt('cleanup:label_persons_scanned', 'Persons scanned') }}: {{ vm.cleanupProgress.persons_scanned || 0 }}</span>
 				<span>{{ vm.$avt('cleanup:label_persons_updated', 'Persons updated') }}: {{ vm.cleanupProgress.persons_updated || 0 }}</span>

@@ -214,6 +214,99 @@ class SessionManagerRetryTests(unittest.TestCase):
         self.assertTrue(session.closed)
         self.assertNotIn("user", manager._http_sessions)
 
+    def test_get_resumes_on_synology_session_timeout_code_106(self):
+        FakeSession.get_results = [
+            FakeResponse(status_code=200, payload={"success": False, "error": {"code": 106}}),
+            FakeResponse(status_code=200, payload={"success": True, "data": {"ok": True}}),
+        ]
+        FakeSession.post_results = [
+            FakeResponse(status_code=200, payload={
+                "success": True,
+                "data": {"sid": "new-sid", "synotoken": "new-token"},
+            }),
+        ]
+        manager = build_manager()
+
+        with patch("api.session_manager.requests.Session", FakeSession):
+            result = manager.call_api(
+                user_key="user",
+                cookies={"_SSID": "cookie"},
+                base_url="https://example.test",
+                api="SYNO.FotoTeam.Browse.Person",
+                params={"method": "list"},
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(FakeSession.get_calls), 2)
+        self.assertEqual(len(FakeSession.post_calls), 1)
+        self.assertEqual(FakeSession.get_calls[1]["params"]["_sid"], "new-sid")
+        self.assertEqual(FakeSession.get_calls[1]["headers"]["X-SYNO-TOKEN"], "new-token")
+
+    def test_post_resumes_on_synology_session_interrupted_code_107(self):
+        FakeSession.post_results = [
+            FakeResponse(status_code=200, payload={"success": False, "error": {"code": 107}}),
+            FakeResponse(status_code=200, payload={
+                "success": True,
+                "data": {"sid": "new-sid", "synotoken": "new-token"},
+            }),
+            FakeResponse(status_code=200, payload={"success": True, "data": {"created": True}}),
+        ]
+        manager = build_manager()
+
+        with patch("api.session_manager.requests.Session", FakeSession):
+            result = manager.call_api_post(
+                user_key="user",
+                cookies={"_SSID": "cookie"},
+                base_url="https://example.test",
+                api="SYNO.FotoTeam.Browse.Person",
+                params={"method": "separate"},
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(FakeSession.post_calls), 3)
+        self.assertEqual(FakeSession.post_calls[2]["data"]["_sid"], "new-sid")
+        self.assertEqual(FakeSession.post_calls[2]["headers"]["X-SYNO-TOKEN"], "new-token")
+
+    def test_get_non_session_api_failure_is_not_reported_as_login_failure(self):
+        FakeSession.get_results = [
+            FakeResponse(status_code=200, payload={"success": False, "error": {"code": 902}}),
+        ]
+        manager = build_manager()
+
+        with patch("api.session_manager.requests.Session", FakeSession):
+            with self.assertRaises(SessionManagerError) as context:
+                manager.call_api(
+                    user_key="user",
+                    cookies={"_SSID": "cookie"},
+                    base_url="https://example.test",
+                    api="SYNO.FotoTeam.Browse.Person",
+                    params={"method": "list"},
+                )
+
+        self.assertEqual(context.exception.status_code, 502)
+        self.assertEqual(context.exception.detail["error"], "api_failed")
+        self.assertEqual(context.exception.detail["response"]["error"]["code"], 902)
+
+    def test_post_non_session_api_failure_is_not_reported_as_login_failure(self):
+        FakeSession.post_results = [
+            FakeResponse(status_code=200, payload={"success": False, "error": {"code": 902}}),
+        ]
+        manager = build_manager()
+
+        with patch("api.session_manager.requests.Session", FakeSession):
+            with self.assertRaises(SessionManagerError) as context:
+                manager.call_api_post(
+                    user_key="user",
+                    cookies={"_SSID": "cookie"},
+                    base_url="https://example.test",
+                    api="SYNO.FotoTeam.Browse.Person",
+                    params={"method": "separate"},
+                )
+
+        self.assertEqual(context.exception.status_code, 502)
+        self.assertEqual(context.exception.detail["error"], "api_failed")
+        self.assertEqual(context.exception.detail["response"]["error"]["code"], 902)
+
 
 if __name__ == "__main__":
     unittest.main()

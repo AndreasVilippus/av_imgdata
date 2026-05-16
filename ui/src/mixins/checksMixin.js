@@ -22,6 +22,7 @@ export default {
 			checksProgressRequestId: 0,
 			checksSessionSyncing: false,
 			checksSkipNameMappingConfirm: false,
+			checksAcceptedNameMappings: {},
 			checksFindingsStatusLoaded: false,
 			checksFindingsStatus: {},
 			checksDuplicateAssignments: {
@@ -529,6 +530,9 @@ export default {
 			if (!faceName || !targetName) {
 				return false;
 			}
+			if (this.checksHasAcceptedNameMapping(faceName, targetName)) {
+				return true;
+			}
 			const leftName = String(item.left_name || '').trim();
 			const rightName = String(item.right_name || '').trim();
 			const faceFormat = String(face.source_format || '').trim().toUpperCase();
@@ -541,6 +545,28 @@ export default {
 				return String(item.right_state || '') === 'suggested';
 			}
 			return false;
+		},
+		checksNameMappingKey(sourceName, targetName) {
+			const sourceKey = this.normalizeFaceMatchName(sourceName);
+			const targetKey = this.normalizeFaceMatchName(targetName);
+			if (!sourceKey || !targetKey) {
+				return '';
+			}
+			return JSON.stringify([sourceKey, targetKey]);
+		},
+		checksHasAcceptedNameMapping(sourceName, targetName) {
+			const key = this.checksNameMappingKey(sourceName, targetName);
+			return !!(key && this.checksAcceptedNameMappings && this.checksAcceptedNameMappings[key]);
+		},
+		recordChecksAcceptedNameMapping(sourceName, targetName) {
+			const key = this.checksNameMappingKey(sourceName, targetName);
+			if (!key) {
+				return;
+			}
+			this.checksAcceptedNameMappings = {
+				...(this.checksAcceptedNameMappings || {}),
+				[key]: true,
+			};
 		},
 		applyChecksFindingsUpdate(findingsUpdate, { resolvedDelta = 0, ignoredDelta = 0, skippedDelta = 0 } = {}) {
 			if (!findingsUpdate || typeof findingsUpdate !== 'object') {
@@ -753,14 +779,30 @@ export default {
 		matchesSelectedChecksType(value) {
 			return String(value || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase();
 		},
+		isChecksFindingsReviewActive() {
+			return !!(
+				this.selectedChecksAction === 'findings'
+				&& (
+					this.checksFindingsActionRunning
+					|| this.checksLoading
+					|| this.checksEntries.length
+					|| this.checksCurrentItem
+				)
+			);
+		},
 		async refreshChecksSessionState() {
 			const progress = await this.fetchChecksProgress({
-				applyFinishedState: true,
-				adoptResultItem: true,
-				loadResultItem: true,
+				applyFinishedState: false,
+				applyRunningState: false,
+				adoptResultItem: false,
+				loadResultItem: false,
 			});
 			const hasProgress = !!(progress && Object.keys(progress).length);
 			if (!hasProgress) {
+				return;
+			}
+			const progressSourceMode = String(progress.source_mode || '').trim().toLowerCase();
+			if (this.isChecksFindingsReviewActive() && progressSourceMode === 'scan') {
 				return;
 			}
 			const result = progress && progress.result && typeof progress.result === 'object'
@@ -775,7 +817,7 @@ export default {
 				)
 			);
 			const matchesCurrentSelection = !!(
-				String(progress.source_mode || '').trim().toLowerCase() === 'scan'
+				progressSourceMode === 'scan'
 				&& String(progress.check_type || '').trim().toLowerCase() === String(this.selectedChecksType || '').trim().toLowerCase()
 			);
 			if (matchesCurrentSelection && (progress.running || hasRestorableResult)) {
@@ -786,6 +828,10 @@ export default {
 					}
 				} finally {
 					this.checksSessionSyncing = false;
+				}
+				this.applyChecksProgress(progress, { adoptResultItem: true });
+				if (!progress.running) {
+					await this.ensureChecksResultItemLoaded(progress);
 				}
 				this.checksLoading = true;
 				this.startChecksProgressPolling();
@@ -798,6 +844,10 @@ export default {
 				return;
 			}
 			if (matchesCurrentSelection || !progress.running) {
+				this.applyChecksProgress(progress, { adoptResultItem: true });
+				if (!progress.running) {
+					await this.ensureChecksResultItemLoaded(progress);
+				}
 				this.checksLoading = false;
 				if (this.selectedChecksAction === 'findings') {
 					this.checksFindingsActionRunning = false;
@@ -959,7 +1009,7 @@ export default {
 				this.syncChecksDuplicateAssignmentState(resolvedItem);
 			}
 		},
-		async fetchChecksProgress({ applyFinishedState = true, adoptResultItem = true, loadResultItem = true } = {}) {
+		async fetchChecksProgress({ applyFinishedState = true, applyRunningState = true, adoptResultItem = true, loadResultItem = true } = {}) {
 			const requestId = this.checksProgressRequestId + 1;
 			this.checksProgressRequestId = requestId;
 			try {
@@ -970,7 +1020,7 @@ export default {
 					return {};
 				}
 				const progress = this.getResponseData(data);
-				if (progress.running || applyFinishedState) {
+				if ((progress.running && applyRunningState) || (!progress.running && applyFinishedState)) {
 					this.applyChecksProgress(progress, { adoptResultItem });
 				}
 				if (!progress.running && loadResultItem) {
@@ -1385,6 +1435,7 @@ export default {
 			this.checksActionLocked = true;
 			this.checksLoading = true;
 			let keepLoadingState = false;
+			const reloadIndex = this.checksCurrentIndex;
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_ignore_entry', {
 					check_type: String(item.review_type || '').trim().toLowerCase(),
@@ -1407,7 +1458,7 @@ export default {
 					this.resetChecksDuplicateAssignmentState();
 					return;
 				}
-				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
+				await this.loadChecksItemAtIndex(reloadIndex);
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
@@ -1426,6 +1477,7 @@ export default {
 			}
 			this.checksActionLocked = true;
 			this.checksLoading = true;
+			const reloadIndex = this.checksCurrentIndex;
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_delete_metadata_face', {
 					image_path: this.checksCurrentItem.image_path,
@@ -1448,7 +1500,7 @@ export default {
 				}
 				this.applyChecksFindingsUpdate(result.findings_update);
 				this.checksStatusMessage = this.$avt('checks:status_face_deleted', 'Face removed from metadata.');
-				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
+				await this.loadChecksItemAtIndex(reloadIndex);
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
@@ -1465,6 +1517,7 @@ export default {
 			this.checksActionLocked = true;
 			this.checksLoading = true;
 			let keepLoadingState = false;
+			const reloadIndex = this.checksCurrentIndex;
 			try {
 				const sourceName = String(face && face.name || '').trim();
 				const targetName = String(newName || '').trim();
@@ -1505,6 +1558,9 @@ export default {
 					}
 					return;
 				}
+				if (result.mapping_saved) {
+					this.recordChecksAcceptedNameMapping(sourceName, targetName);
+				}
 				this.applyChecksFindingsUpdate(result.findings_update, { resolvedDelta: 1 });
 				const operation = String(result.operation || '').trim().toLowerCase();
 				if (operation === 'photos_create') {
@@ -1524,7 +1580,7 @@ export default {
 					this.resetChecksDuplicateAssignmentState();
 					return;
 				}
-				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
+				await this.loadChecksItemAtIndex(reloadIndex);
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
@@ -1544,6 +1600,7 @@ export default {
 			this.checksActionLocked = true;
 			this.checksLoading = true;
 			let keepLoadingState = false;
+			const reloadIndex = this.checksCurrentIndex;
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_replace_metadata_face_position', {
 					image_path: this.checksCurrentItem.image_path,
@@ -1577,7 +1634,7 @@ export default {
 					this.resetChecksDuplicateAssignmentState();
 					return;
 				}
-				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
+				await this.loadChecksItemAtIndex(reloadIndex);
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
@@ -1603,6 +1660,7 @@ export default {
 			this.checksActionLocked = true;
 			this.checksLoading = true;
 			let keepLoadingState = false;
+			const reloadIndex = this.checksCurrentIndex;
 			try {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_assign_face_person', {
 					image_path: item.image_path,
@@ -1637,7 +1695,7 @@ export default {
 					this.resetChecksDuplicateAssignmentState();
 					return;
 				}
-				await this.loadChecksItemAtIndex(this.checksCurrentIndex);
+				await this.loadChecksItemAtIndex(reloadIndex);
 			} catch (err) {
 				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {

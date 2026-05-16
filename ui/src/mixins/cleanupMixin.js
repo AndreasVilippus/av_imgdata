@@ -31,8 +31,117 @@ export default {
 		this.stopCleanupProgressPolling();
 	},
 	methods: {
+		getCleanupStatusCounterLabel(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return '';
+			}
+			const labelKey = String(counter.label_key || '').trim();
+			const fallback = String(counter.fallback_label || counter.key || '').trim();
+			return labelKey ? this.$avt(labelKey, fallback) : fallback;
+		},
+		getCleanupStatusCounters() {
+			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+				? this.cleanupProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			if (status.schema_version === 1 && Array.isArray(status.counters)) {
+				return status.counters
+					.filter((counter) => counter && typeof counter === 'object')
+					.filter((counter) => counter.show_when_zero || Number(counter.value) > 0)
+					.map((counter) => ({
+						key: String(counter.key || '').trim(),
+						label: this.getCleanupStatusCounterLabel(counter),
+						value: Math.max(0, Number(counter.value) || 0),
+					}))
+					.filter((counter) => counter.key);
+			}
+			return [];
+		},
+		getCleanupStatusProgress() {
+			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+				? this.cleanupProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			if (status.schema_version === 1 && status.progress && typeof status.progress === 'object') {
+				return status.progress;
+			}
+			if (Number(progress.total_files) > 0) {
+				return {
+					kind: 'files',
+					current: Number(progress.files_scanned) || 0,
+					total: Number(progress.total_files) || 0,
+					title_key: 'cleanup:label_images',
+					fallback_title: 'Images',
+					primary_label_key: 'cleanup:label_scanned',
+					fallback_primary_label: 'scanned',
+					secondary_label_key: 'cleanup:label_files_remaining',
+					fallback_secondary_label: 'remaining',
+				};
+			}
+			if (Number(progress.persons_total) > 0) {
+				return {
+					kind: 'persons',
+					current: Number(progress.persons_scanned) || 0,
+					total: Number(progress.persons_total) || 0,
+					title_key: 'cleanup:label_persons',
+					fallback_title: 'Persons',
+					primary_label_key: 'cleanup:label_scanned',
+					fallback_primary_label: 'scanned',
+					secondary_label_key: 'cleanup:label_persons_remaining',
+					fallback_secondary_label: 'remaining',
+				};
+			}
+			return {};
+		},
+		getCleanupStatusProgressTitle() {
+			const progress = this.getCleanupStatusProgress();
+			return progress.title_key ? this.$avt(progress.title_key, progress.fallback_title || progress.kind) : (progress.fallback_title || progress.kind || '');
+		},
+		getCleanupStatusProgressPrimaryLabel() {
+			const progress = this.getCleanupStatusProgress();
+			const fallback = String(progress.fallback_primary_label || '').replace(':', '').toLowerCase();
+			return progress.primary_label_key ? this.$avt(progress.primary_label_key, fallback).replace(':', '').toLowerCase() : fallback;
+		},
+		getCleanupStatusProgressSecondaryLabel() {
+			const progress = this.getCleanupStatusProgress();
+			return progress.secondary_label_key ? this.$avt(progress.secondary_label_key, progress.fallback_secondary_label || '') : (progress.fallback_secondary_label || '');
+		},
+		formatCleanupStatusCounter(counter) {
+			if (!counter || typeof counter !== 'object') {
+				return '';
+			}
+			const label = String(counter.label || counter.key || '').replace(/:$/, '').trim();
+			const value = Math.max(0, Number(counter.value) || 0);
+			return label ? `${label}: ${value}` : String(value);
+		},
+		isCleanupProgressUpdateStale(current, next) {
+			const currentProgress = current && typeof current === 'object' ? current : {};
+			const nextProgress = next && typeof next === 'object' ? next : {};
+			const currentOperationId = String(currentProgress.operation_id || '').trim();
+			const nextOperationId = String(nextProgress.operation_id || '').trim();
+			if (currentOperationId && !nextOperationId) {
+				return true;
+			}
+			if (currentOperationId && nextOperationId && currentOperationId !== nextOperationId) {
+				return false;
+			}
+			const currentRevision = Number(currentProgress.revision);
+			const nextRevision = Number(nextProgress.revision);
+			return Number.isFinite(currentRevision)
+				&& Number.isFinite(nextRevision)
+				&& currentRevision > 0
+				&& nextRevision > 0
+				&& nextRevision < currentRevision;
+		},
 		applyCleanupProgress(progress) {
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
+			if (this.isCleanupProgressUpdateStale(this.cleanupProgress, nextProgress)) {
+				return false;
+			}
 			this.cleanupProgress = nextProgress;
 			if (nextProgress.message_key || nextProgress.message) {
 				this.cleanupStatusMessage = this.$avt(
@@ -43,6 +152,7 @@ export default {
 						: null
 				);
 			}
+			return true;
 		},
 		async fetchCleanupProgress() {
 			const requestId = this.cleanupProgressRequestId + 1;

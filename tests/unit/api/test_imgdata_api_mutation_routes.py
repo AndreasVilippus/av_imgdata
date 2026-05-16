@@ -2,6 +2,7 @@ import asyncio
 import json
 from unittest.mock import Mock
 
+from api.session_manager import SessionManagerError
 from api import imgdata_api
 
 
@@ -209,6 +210,164 @@ def test_checks_replace_metadata_face_name_uses_snapshot_refresh_for_name_confli
         source_name="Person Legacy",
         target_name="Person Current",
     )
+
+
+def test_checks_replace_metadata_face_name_forwards_metadata_replacement_to_snapshot(monkeypatch):
+    face = {
+        "source": "embedded_xmp_parsed",
+        "source_format": "MWG_REGIONS",
+        "x": 0.41707,
+        "y": 0.53581,
+        "w": 0.04338,
+        "h": 0.02885,
+        "name": "Jelizaveta Vilippus geb.  Kromskaja",
+    }
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/jelizaveta.jpg",
+            "face": face,
+            "new_name": "Jelizaveta Vilippus geb. Kromskaja",
+            "save_mapping": False,
+        }
+
+    replace = Mock(return_value={
+        "updated": True,
+        "operation": "metadata_write",
+        "already_updated": True,
+    })
+    safe_refresh = Mock(return_value=({"snapshot_update": True, "count": 0}, None))
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "replaceChecksFaceName", replace)
+    monkeypatch.setattr(imgdata_api, "_safe_refresh_checks_mutation_state", safe_refresh)
+
+    response = _run(imgdata_api.checks_replace_metadata_face_name(object()))
+    payload = _json_response_payload(response)
+
+    assert payload["success"] is True
+    safe_refresh.assert_called_once()
+    refresh_kwargs = safe_refresh.call_args.kwargs
+    assert refresh_kwargs["check_type"] == "name_conflicts"
+    assert refresh_kwargs["image_path"] == "photo/jelizaveta.jpg"
+    assert refresh_kwargs["original_face_data"] == face
+    assert refresh_kwargs["replacement_face_data"]["name"] == "Jelizaveta Vilippus geb. Kromskaja"
+    assert refresh_kwargs["replacement_face_data"]["source_format"] == "MWG_REGIONS"
+    assert "person_id" not in refresh_kwargs["replacement_face_data"]
+    assert refresh_kwargs["resolved_delta"] == 1
+
+
+def test_checks_replace_metadata_face_name_snapshot_removes_nested_metadata_signature_name(monkeypatch):
+    image_path = "/volume1/photo/2019/2019.08.29-30 - Kaareli ja Jelizaveta pulm/2019.08.30 - kaareli ja jelizaveta pulm073.jpg"
+    face = {
+        "h": 0.02885,
+        "name": "Jelizaveta Vilippus geb.  Kromskaja",
+        "orientation": None,
+        "source": "embedded_xmp_parsed",
+        "source_format": "MWG_REGIONS",
+        "w": 0.04338,
+        "x": 0.41707,
+        "y": 0.53581,
+    }
+    entry = {
+        "review_type": "name_conflicts",
+        "image_path": image_path,
+        "face_name": "Jelizaveta Vilippus geb. Kromskaja",
+        "left_face_signature": {
+            "h": 0.031402,
+            "name": "Jelizaveta Vilippus geb. Kromskaja",
+            "source": "embedded_xmp_parsed",
+            "source_format": "ACD",
+            "w": 0.03894,
+            "x": 0.412958,
+            "y": 0.538349,
+        },
+        "right_face_signature": dict(face),
+    }
+    findings = {
+        "check_type": "name_conflicts",
+        "source_mode": "scan",
+        "save_only": True,
+        "entries": [entry],
+        "count": 1,
+    }
+    written = {}
+
+    async def request_body(_request):
+        return {
+            "image_path": image_path,
+            "face": face,
+            "new_name": "Jelizaveta Vilippus geb. Kromskaja",
+            "save_mapping": False,
+            "source_name": "Jelizaveta Vilippus geb.  Kromskaja",
+        }
+
+    replace = Mock(return_value={
+        "updated": True,
+        "warning": "",
+        "already_updated": True,
+        "operation": "metadata_write",
+    })
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "replaceChecksFaceName", replace)
+    monkeypatch.setattr(imgdata_api.IMGDATA.file_analysis, "readCheckFindings", Mock(return_value=findings))
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA.file_analysis,
+        "writeCheckFindings",
+        Mock(side_effect=lambda finding_type, payload: written.setdefault("payload", payload) or True),
+    )
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getChecksProgress", Mock(return_value={}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "_utcNowIso", Mock(return_value="2026-05-15T07:45:00+02:00"))
+
+    response = _run(imgdata_api.checks_replace_metadata_face_name(object()))
+    payload = _json_response_payload(response)
+
+    assert payload["success"] is True
+    update = payload["data"]["findings_update"]
+    assert update["removed_count"] == 1
+    assert update["count"] == 0
+    assert update["image_entries"] == []
+    assert written["payload"]["entries"] == []
+
+
+def test_checks_replace_metadata_face_name_returns_session_error_details(monkeypatch):
+    face = {
+        "source": "photos",
+        "source_format": "PHOTOS",
+        "face_id": 133684,
+        "person_id": 8675,
+        "name": "Asta Vilippus",
+    }
+    detail = {
+        "error": "api_failed",
+        "api": "SYNO.FotoTeam.Browse.Person",
+        "response": {"success": False, "error": {"code": 106}},
+    }
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/Dia_032_033.jpg",
+            "face": face,
+            "new_name": "Stephanie Kempf",
+            "create_missing_person": True,
+        }
+
+    replace = Mock(side_effect=SessionManagerError(detail, status_code=401))
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "replaceChecksFaceName", replace)
+
+    response = _run(imgdata_api.checks_replace_metadata_face_name(object()))
+    payload = _json_response_payload(response)
+
+    assert payload["success"] is False
+    assert payload["error"]["code"] == 401
+    assert payload["error"]["message"] == "session_manager_error"
+    assert payload["error"]["details"] == detail
 
 
 def test_checks_assign_face_person_forwards_photos_override_to_refresh(monkeypatch):

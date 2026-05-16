@@ -3,6 +3,7 @@ from services.name_conflict_snapshot import (
     name_conflict_combination_key,
     name_conflict_entry_combination_keys,
 )
+from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, format_face_coordinate
 
 
 def test_name_change_does_not_change_face_identity_token():
@@ -19,6 +20,24 @@ def test_name_change_does_not_change_face_identity_token():
     after["name"] = "Moritz"
 
     assert face_identity_token(before) == face_identity_token(after)
+
+
+def test_face_identity_token_uses_shared_coordinate_precision():
+    face = {
+        "source_format": "MWG_REGIONS",
+        "source": "metadata",
+        "name": "Max",
+        "x": 0.1234564,
+        "y": 0.2345674,
+        "w": 0.3456784,
+        "h": 0.4567894,
+    }
+
+    token = face_identity_token(face)
+
+    assert FACE_COORDINATE_DIGITS == 6
+    for key in ("x", "y", "w", "h"):
+        assert format_face_coordinate(face[key]) in token
 
 
 def test_combination_key_is_unordered():

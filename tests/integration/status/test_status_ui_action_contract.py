@@ -11,6 +11,8 @@ def _computed_method(source: str, method_name: str) -> str:
 
 def _watch_method(source: str, method_name: str) -> str:
     start = source.find(f"\t\t{method_name}(")
+    if start < 0:
+        start = source.find(f"\t\tasync {method_name}(")
     assert start >= 0, f"Missing watch method: {method_name}"
     end = source.find("\n\t\t},", start)
     assert end > start, f"Could not determine watch method end: {method_name}"
@@ -47,6 +49,62 @@ def test_face_match_save_only_and_use_stored_findings_are_mutually_exclusive():
 
     save_only = _watch_method(source, "faceMatchSaveOnly")
     assert "this.faceMatchUseStoredFindings = false" in save_only
+
+
+def test_face_match_stored_findings_availability_uses_findings_status_not_runtime_progress():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+
+    has_findings = _computed_method(source, "hasFaceMatchStoredFindings")
+    assert "faceMatchFindingsStatus" in has_findings
+    assert "faceMatchProgress" not in has_findings
+    assert "faceMatchDisplayedFindingsCount" not in has_findings
+
+    use_findings_switch = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+    assert ':disabled="vm.faceMatchLoading || !vm.hasFaceMatchStoredFindings"' in use_findings_switch
+
+
+def test_face_match_stored_findings_position_accounts_for_removed_entries():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+
+    checked = _computed_method(source, "faceMatchStoredFindingsChecked")
+    assert "faceMatchStoredFindingsCompletedCount" in checked
+    assert "currentOffset" in checked
+    assert "faceMatchFindingIndex" in checked
+    assert "Math.min(total" in checked
+
+    completed = _computed_method(source, "faceMatchStoredFindingsCompletedCount")
+    assert "faceMatchStoredFindingsTotal" in completed
+    assert "faceMatchFindingEntries.length" in completed
+    assert "total - remaining" in completed
+
+
+def test_face_match_stored_findings_message_uses_monotonic_checked_position():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+
+    load_entry = _watch_method(source, "loadFaceMatchFindingAtIndex")
+    assert "current: this.faceMatchStoredFindingsChecked" in load_entry
+    assert "current: index + 1" not in load_entry
+
+
+def test_face_match_findings_transfer_keeps_zero_remaining_count():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+
+    advance = _watch_method(source, "advanceFaceMatchFindingsAfterTransfer")
+    assert "Number.isFinite(Number(findingsUpdate.remaining_count))" in advance
+    assert "Math.max(0, Number(findingsUpdate.remaining_count))" in advance
+    assert "Number(findingsUpdate.remaining_count) || remainingEntries.length" not in advance
+
+
+def test_face_match_live_next_preserves_displayed_progress_as_partial_scan_base():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+
+    start = _watch_method(source, "startFaceMatchingAction")
+    assert "const displayedProgress = this.faceMatchDisplayedProgress || {}" in start
+    assert "persons_read: Math.max(0, Number(displayedProgress.persons_read) || 0)" in start
+    assert "images_read: Math.max(0, Number(displayedProgress.images_read) || 0)" in start
+    assert "faces_read: Math.max(0, Number(displayedProgress.faces_read) || 0)" in start
+    assert "target_faces_read: Math.max(0, Number(displayedProgress.target_faces_read) || 0)" in start
+    assert "metadata_faces_read: Math.max(0, Number(displayedProgress.metadata_faces_read) || 0)" in start
 
 
 def test_face_match_number_from_is_method_not_computed():

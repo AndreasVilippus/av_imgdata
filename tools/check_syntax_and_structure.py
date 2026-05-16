@@ -395,12 +395,13 @@ def check_cgi_curl_argument_safety() -> int:
 
 
 def check_ui_config_define_targets() -> int:
-    path = ROOT / "ui" / "config.define"
+    config_define_path = ROOT / "ui" / "config.define"
+    app_config_path = ROOT / "ui" / "app.config"
     info_path = ROOT / "INFO.sh"
     errors = 0
 
     try:
-        config_define = json.loads(path.read_text(encoding="utf-8"))
+        config_define = json.loads(config_define_path.read_text(encoding="utf-8"))
     except Exception as exc:
         fail(f"ui/config.define: could not parse JSON: {exc}")
         return 1
@@ -421,13 +422,23 @@ def check_ui_config_define_targets() -> int:
             errors += 1
             fail(f"ui/config.define: target is missing JSfiles: {target_name}")
 
+    try:
+        app_config = json.loads(app_config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        fail(f"ui/app.config: could not parse JSON: {exc}")
+        return errors + 1
+
+    if not isinstance(app_config, dict) or not app_config:
+        fail("ui/app.config: expected non-empty JSON object")
+        return errors + 1
+
     info_source = info_path.read_text(encoding="utf-8")
     dsmapp_match = re.search(r'^dsmappname="([^"]+)"', info_source, re.M)
     if dsmapp_match:
         dsmappname = dsmapp_match.group(1)
-        if dsmappname not in config_define:
+        if dsmappname not in app_config:
             errors += 1
-            fail("INFO.sh: dsmappname should match a generated ui/config.define target")
+            fail("INFO.sh: dsmappname should match a DSM app id from ui/app.config")
 
     return errors
 
