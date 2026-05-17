@@ -9666,6 +9666,231 @@ class ImgDataService:
             folder_name=folder_name,
         )
 
+
+    def _resolvePhotosPersonLookupName(self, person_name: str) -> Tuple[str, str, Optional[Dict[str, Any]]]:
+        requested_name = str(person_name or "").strip()
+        lookup_name = requested_name
+        mapped_assignment = self.name_mappings.findNameMapping(requested_name)
+        if isinstance(mapped_assignment, dict):
+            mapped_target_name = str(mapped_assignment.get("target_name") or "").strip()
+            if mapped_target_name:
+                lookup_name = mapped_target_name
+        else:
+            mapped_assignment = None
+        return requested_name, lookup_name, mapped_assignment
+
+    def resolveOrCreatePhotosPersonForExistingFace(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        image_path: str,
+        face_id: int,
+        person_name: str,
+        item_id: Optional[int] = None,
+        create_missing_person: bool = False,
+    ) -> Dict[str, Any]:
+        requested_name, lookup_name, mapped_assignment = self._resolvePhotosPersonLookupName(person_name)
+        if not lookup_name:
+            return {
+                "updated": False,
+                "warning": "checks:warning_target_person_not_found",
+                "operation": "photos_lookup",
+                "details": {"requested_name": requested_name, "lookup_name": lookup_name},
+            }
+
+        target_person = self.photos.findKnownPersonByName(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            name=lookup_name,
+        )
+        if isinstance(target_person, dict):
+            try:
+                target_person_id = int(target_person.get("id"))
+            except (TypeError, ValueError):
+                target_person_id = None
+            if target_person_id is not None:
+                resolved_name = str(target_person.get("name") or lookup_name)
+                assign_result = self.assignMatchedFaceToKnownPerson(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    face_id=int(face_id),
+                    person_id=target_person_id,
+                    person_name=resolved_name,
+                    item_id=item_id,
+                    image_path=image_path,
+                )
+                return {
+                    "updated": True,
+                    "warning": "",
+                    "operation": "photos_assign",
+                    "assign_result": assign_result,
+                    "create_result": None,
+                    "target_person": {"id": target_person_id, "name": resolved_name},
+                    "resolved_name": resolved_name,
+                    "requested_name": requested_name,
+                    "name_mapping": mapped_assignment,
+                }
+
+        if create_missing_person:
+            create_result = self.createMatchedFaceAsPerson(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                face_id=int(face_id),
+                person_name=lookup_name,
+                item_id=item_id,
+                image_path=image_path,
+            )
+            created_person_id = self._extractPersonId(create_result)
+            if created_person_id is None:
+                return {
+                    "updated": False,
+                    "warning": "checks:warning_target_person_create_failed",
+                    "operation": "photos_create",
+                    "create_result": create_result,
+                    "details": {"requested_name": requested_name, "lookup_name": lookup_name},
+                    "resolved_name": lookup_name,
+                    "name_mapping": mapped_assignment,
+                }
+            return {
+                "updated": True,
+                "warning": "",
+                "operation": "photos_create",
+                "create_result": create_result,
+                "assign_result": None,
+                "target_person": {"id": int(created_person_id), "name": lookup_name},
+                "resolved_name": lookup_name,
+                "requested_name": requested_name,
+                "name_mapping": mapped_assignment,
+            }
+
+        return {
+            "updated": False,
+            "warning": "checks:warning_target_person_not_found",
+            "operation": "photos_lookup",
+            "details": {"requested_name": requested_name, "lookup_name": lookup_name},
+            "resolved_name": lookup_name,
+            "name_mapping": mapped_assignment,
+        }
+
+    def resolveOrCreatePhotosPersonForMetadataFace(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        image_path: str,
+        metadata_face: Dict[str, Any],
+        person_name: str,
+        create_missing_person: bool = False,
+    ) -> Dict[str, Any]:
+        requested_name, lookup_name, mapped_assignment = self._resolvePhotosPersonLookupName(person_name)
+        if not lookup_name:
+            return {
+                "updated": False,
+                "warning": "checks:warning_target_person_not_found",
+                "operation": "photos_lookup",
+                "details": {"requested_name": requested_name, "lookup_name": lookup_name},
+            }
+
+        target_person = self.photos.findKnownPersonByName(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            name=lookup_name,
+        )
+        if isinstance(target_person, dict):
+            try:
+                target_person_id = int(target_person.get("id"))
+            except (TypeError, ValueError):
+                target_person_id = None
+            if target_person_id is not None:
+                resolved_name = str(target_person.get("name") or lookup_name)
+                add_result = self.addMatchedMetadataFaceToPhotos(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    image_path=image_path,
+                    metadata_face=metadata_face,
+                    person_id=target_person_id,
+                )
+                face_id = add_result.get("face_id") if isinstance(add_result, dict) else None
+                if face_id is None:
+                    raise ValueError("photos_face_create_failed")
+                assign_result = self.assignMatchedFaceToKnownPerson(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    face_id=int(face_id),
+                    person_id=target_person_id,
+                    person_name=resolved_name,
+                    item_id=add_result.get("item_id") if isinstance(add_result, dict) and add_result.get("item_id") is not None else None,
+                    image_path=image_path,
+                )
+                return {
+                    "updated": True,
+                    "warning": "",
+                    "operation": "photos_add_assign",
+                    "add_result": add_result,
+                    "assign_result": assign_result,
+                    "create_result": None,
+                    "target_person": {"id": target_person_id, "name": resolved_name},
+                    "face_id": int(face_id),
+                    "resolved_name": resolved_name,
+                    "requested_name": requested_name,
+                    "name_mapping": mapped_assignment,
+                }
+
+        if create_missing_person:
+            create_result = self.createMetadataFaceAsPhotosPerson(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                image_path=image_path,
+                metadata_face=metadata_face,
+                person_name=lookup_name,
+            )
+            created_person_id = self._extractPersonId(create_result)
+            if created_person_id is None and isinstance(create_result, dict):
+                try:
+                    created_person_id = int(create_result.get("person_id"))
+                except (TypeError, ValueError):
+                    created_person_id = None
+            if created_person_id is None:
+                return {
+                    "updated": False,
+                    "warning": "checks:warning_target_person_create_failed",
+                    "operation": "photos_create_from_metadata",
+                    "create_result": create_result,
+                    "details": {"requested_name": requested_name, "lookup_name": lookup_name},
+                    "resolved_name": lookup_name,
+                    "name_mapping": mapped_assignment,
+                }
+            return {
+                "updated": True,
+                "warning": "",
+                "operation": "photos_create_from_metadata",
+                "create_result": create_result,
+                "target_person": {"id": int(created_person_id), "name": lookup_name},
+                "face_id": create_result.get("face_id") if isinstance(create_result, dict) else None,
+                "resolved_name": lookup_name,
+                "requested_name": requested_name,
+                "name_mapping": mapped_assignment,
+            }
+
+        return {
+            "updated": False,
+            "warning": "checks:warning_target_person_not_found",
+            "operation": "photos_lookup",
+            "details": {"requested_name": requested_name, "lookup_name": lookup_name},
+            "resolved_name": lookup_name,
+            "name_mapping": mapped_assignment,
+        }
+
     def assignMatchedFaceToKnownPerson(
         self,
         *,
@@ -9901,84 +10126,16 @@ class ImgDataService:
                 "warning": "checks:warning_photos_face_id_missing",
             }
 
-        lookup_name = replacement_name
-        mapped_assignment = self.name_mappings.findNameMapping(replacement_name)
-        if isinstance(mapped_assignment, dict):
-            mapped_target_name = str(mapped_assignment.get("target_name") or "").strip()
-            if mapped_target_name:
-                lookup_name = mapped_target_name
-
-        target_person = self.photos.findKnownPersonByName(
+        return self.resolveOrCreatePhotosPersonForExistingFace(
             user_key=user_key,
             cookies=cookies,
             base_url=base_url,
-            name=lookup_name,
-        )
-        if not isinstance(target_person, dict):
-            if create_missing_person:
-                create_result = self.createMatchedFaceAsPerson(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    face_id=face_id,
-                    person_name=lookup_name,
-                    item_id=face_data.get("item_id") if face_data.get("item_id") is not None else None,
-                    image_path=image_path,
-                )
-                created_person_id = self._extractPersonId(create_result)
-                return {
-                    "updated": True,
-                    "warning": "",
-                    "operation": "photos_create",
-                    "create_result": create_result,
-                    "target_person": {
-                        "id": created_person_id,
-                        "name": lookup_name,
-                    },
-                    "resolved_name": lookup_name,
-                }
-            return {
-                "updated": False,
-                "warning": "checks:warning_target_person_not_found",
-                "details": {
-                    "requested_name": replacement_name,
-                    "lookup_name": lookup_name,
-                },
-            }
-
-        try:
-            target_person_id = int(target_person.get("id"))
-        except (TypeError, ValueError):
-            return {
-                "updated": False,
-                "warning": "checks:warning_target_person_not_found",
-                "details": {
-                    "requested_name": replacement_name,
-                    "lookup_name": lookup_name,
-                },
-            }
-
-        assign_result = self.assignMatchedFaceToKnownPerson(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            face_id=face_id,
-            person_id=target_person_id,
-            person_name=str(target_person.get("name") or lookup_name),
-            item_id=face_data.get("item_id") if face_data.get("item_id") is not None else None,
             image_path=image_path,
+            face_id=int(face_id),
+            person_name=replacement_name,
+            item_id=face_data.get("item_id") if face_data.get("item_id") is not None else None,
+            create_missing_person=create_missing_person,
         )
-        return {
-            "updated": True,
-            "warning": "",
-            "operation": "photos_assign",
-            "assign_result": assign_result,
-            "target_person": {
-                "id": target_person_id,
-                "name": str(target_person.get("name") or ""),
-            },
-            "resolved_name": lookup_name,
-        }
 
     @staticmethod
     def _metadataFaceToPhotosBoundingBox(face: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
@@ -10470,20 +10627,21 @@ class ImgDataService:
             target_person_id = None
 
         if target_person_id is None:
-            created = self.createMatchedFaceAsPerson(
+            created_assignment = self.resolveOrCreatePhotosPersonForExistingFace(
                 user_key=user_key,
                 cookies=cookies,
                 base_url=base_url,
+                image_path="",
                 face_id=face_ids[0],
                 person_name=target_name,
+                create_missing_person=True,
             )
-            target_person_id = self._resolveCreatedPersonId(
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                person_name=target_name,
-                create_result=created,
-            )
+            created_target_person = created_assignment.get("target_person") if isinstance(created_assignment, dict) else None
+            if isinstance(created_target_person, dict):
+                try:
+                    target_person_id = int(created_target_person.get("id"))
+                except (TypeError, ValueError):
+                    target_person_id = None
             if target_person_id is None:
                 return {"updated": False, "faces_reassigned": 0, "error": "photos_person_create_failed"}
 
