@@ -8722,6 +8722,9 @@ class ImgDataService:
                     ),
                 )
 
+                if not any(str(face.name or "").strip() for face in metadata_faces):
+                    continue
+
                 item = self.photos.findFotoTeamItemByPath(
                     user_key=user_key,
                     cookies=cookies,
