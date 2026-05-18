@@ -141,6 +141,45 @@ class SessionManagerRetryTests(unittest.TestCase):
         self.assertFalse(context.exception.detail["retryable"])
         self.assertEqual(context.exception.detail["attempts"], 1)
 
+    def test_read_only_post_retries_once_on_timeout(self):
+        FakeSession.post_results = [
+            requests.Timeout("temporary timeout"),
+            FakeResponse(status_code=200, payload={"success": True, "data": {"ok": True}}),
+        ]
+
+        with patch("api.session_manager.requests.Session", FakeSession):
+            result = build_manager().call_api_post(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                api="SYNO.FotoTeam.Browse.Person",
+                params={"method": "list"},
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(FakeSession.post_calls), 2)
+
+    def test_read_only_post_reports_retryable_timeout_after_second_failure(self):
+        FakeSession.post_results = [
+            requests.Timeout("temporary timeout"),
+            requests.Timeout("temporary timeout again"),
+        ]
+
+        with patch("api.session_manager.requests.Session", FakeSession):
+            with self.assertRaises(SessionManagerError) as context:
+                build_manager().call_api_post(
+                    user_key="user",
+                    cookies={},
+                    base_url="https://example.test",
+                    api="SYNO.FotoTeam.Browse.Person",
+                    params={"method": "list"},
+                )
+
+        self.assertEqual(len(FakeSession.post_calls), 2)
+        self.assertEqual(context.exception.detail["error"], "transient_post_failed")
+        self.assertTrue(context.exception.detail["retryable"])
+        self.assertEqual(context.exception.detail["attempts"], 2)
+
     def test_reuses_http_session_for_same_user(self):
         FakeSession.get_results = [
             FakeResponse(status_code=200, payload={"success": True, "data": {"first": True}}),

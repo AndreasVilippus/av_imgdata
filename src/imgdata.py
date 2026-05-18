@@ -9485,12 +9485,13 @@ class ImgDataService:
         cookies: Optional[Dict[str, str]] = None,
         base_url: Optional[str] = None,
         auto: bool = False,
+        refresh: bool = False,
     ) -> Dict[str, Any]:
         findings = self.getFaceMatchFindings()
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
         resolved_entries = entries
         transferred_count = int(findings.get("transferred_count") or 0)
-        if user_key and isinstance(cookies, dict) and base_url:
+        if (refresh or auto) and user_key and isinstance(cookies, dict) and base_url:
             known_persons_cache = self.photos.sortPersonsForFaceMatch(
                 self.photos.listFotoTeamPersonKnown(
                     user_key=user_key,

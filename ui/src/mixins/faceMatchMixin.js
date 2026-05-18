@@ -1116,13 +1116,32 @@ export default {
 		async advanceFaceMatchFindingsAfterTransfer(data) {
 			const findingsUpdate = this.getResponseDataObject(data, 'findings_update');
 			const faceId = this.getCurrentFaceMatchFaceId();
-			const remainingEntries = this.faceMatchFindingEntries.filter((entry) => {
-				if (!faceId || !entry || typeof entry !== 'object') {
+			const currentIndex = Math.max(0, Number(this.faceMatchFindingIndex) || 0);
+			const removedByBackend = !!(findingsUpdate && findingsUpdate.removed);
+			const removedCount = Math.max(0, Number(findingsUpdate && findingsUpdate.removed_count) || 0);
+
+			let remainingEntries = this.faceMatchFindingEntries.filter((entry, index) => {
+				if (!entry || typeof entry !== 'object') {
 					return true;
 				}
-				const entryFaceId = Number(entry && entry.face && entry.face.face_id);
-				return !Number.isFinite(entryFaceId) || entryFaceId !== faceId;
+
+				if (faceId) {
+					const entryFaceId = Number(entry && entry.face && entry.face.face_id);
+					if (Number.isFinite(entryFaceId) && entryFaceId === faceId) {
+						return false;
+					}
+				}
+
+				if (!faceId && removedByBackend && removedCount > 0 && index === currentIndex) {
+					return false;
+				}
+
+				return true;
 			});
+
+			if (remainingEntries.length === this.faceMatchFindingEntries.length && removedByBackend && removedCount > 0) {
+				remainingEntries = this.faceMatchFindingEntries.filter((entry, index) => index !== currentIndex);
+			}
 
 			this.faceMatchFindingEntries = remainingEntries;
 			this.faceMatchFindingsStatus = {
@@ -1136,18 +1155,18 @@ export default {
 			};
 			this.faceMatchTransferredCount = Number(this.faceMatchFindingsStatus.transferred_count) || 0;
 
-				if (!remainingEntries.length) {
-					this.faceMatchResult = null;
-					this.faceMatchFindingIndex = 0;
-					this.resetFaceMatchSelectionState();
-					this.faceMatchUseStoredFindings = false;
-					this.setFaceMatchProgressMessage(
-						this.$avt('face_match:status_findings_empty', 'No saved matches found.')
-					);
+			if (!remainingEntries.length) {
+				this.faceMatchResult = null;
+				this.faceMatchFindingIndex = 0;
+				this.resetFaceMatchSelectionState();
+				this.faceMatchUseStoredFindings = false;
+				this.setFaceMatchProgressMessage(
+					this.$avt('face_match:status_findings_empty', 'No saved matches found.')
+				);
 				return;
 			}
 
-			const nextIndex = Math.min(this.faceMatchFindingIndex, remainingEntries.length - 1);
+			const nextIndex = Math.min(currentIndex, remainingEntries.length - 1);
 			await this.loadFaceMatchFindingAtIndex(nextIndex);
 		},
 		buildNextSkippedFaceIds() {
@@ -1230,6 +1249,7 @@ export default {
 			this.faceMatchProgressRequestId = requestId;
 			try {
 				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_progress', {}, { resume: false, requireSynoToken: false });
+				this.faceMatchProgressErrorCount = 0;
 				if (this.faceMatchProgressRequestId !== requestId) {
 					return;
 				}
@@ -1250,6 +1270,15 @@ export default {
 				}
 				return progress;
 			} catch (err) {
+				this.faceMatchProgressErrorCount = (Number(this.faceMatchProgressErrorCount) || 0) + 1;
+				if (this.faceMatchProgressErrorCount >= 3) {
+					this.stopFaceMatchProgressPolling();
+					this.faceMatchLoading = false;
+					this.faceMatchProgress = {
+						...(this.faceMatchProgress || {}),
+						message: `Error: ${err.message}`,
+					};
+				}
 				return {};
 			}
 		},

@@ -642,6 +642,7 @@ async def face_matching_action(request: Request):
     auto = bool(body.get("auto"))
     save_only = bool(body.get("save_only"))
     resume_from_progress = bool(body.get("resume_from_progress"))
+    refresh = bool(body.get("refresh"))
     default_limit = _configured_max_photos_persons()
     limit = body.get("limit", default_limit)
     offset = body.get("offset", 0)
@@ -701,10 +702,13 @@ async def face_matching_action(request: Request):
                     cookies=session_ctx["cookies"],
                     base_url=session_ctx["base_url"],
                     auto=auto,
+                    refresh=refresh,
                 ),
             )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="face_matching_action_bootstrap_required")
+    except Exception as exc:
+        return _operation_exception_response(exc, message="face_matching_action_failed")
 
     return {
         "success": True,
@@ -713,6 +717,7 @@ async def face_matching_action(request: Request):
             "auto": auto,
             "save_only": save_only,
             "resume_from_progress": resume_from_progress,
+            "refresh": refresh,
             "face_matches": face_matches
         },
     }
