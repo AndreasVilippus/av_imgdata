@@ -107,6 +107,20 @@ def test_face_match_live_next_preserves_displayed_progress_as_partial_scan_base(
     assert "metadata_faces_read: Math.max(0, Number(displayedProgress.metadata_faces_read) || 0)" in start
 
 
+def test_face_match_file_list_actions_show_preparing_status_immediately():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+
+    start = _watch_method(source, "startFaceMatchingAction")
+    assert "const buildsFileList = [" in start
+    assert "'search_file_face_in_sources'" in start
+    assert "'mark_missing_photos_faces'" in start
+    assert "'search_missing_faces_insightface'" in start
+    assert "message_key: buildsFileList" in start
+    assert "face_match:status_preparing_scan" in start
+    assert "Face matching starts. Building file list..." in start
+    assert "running: true" in start
+
+
 def test_face_match_number_from_is_method_not_computed():
     source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
     computed_start = source.find("\tcomputed: {")
@@ -120,6 +134,38 @@ def test_face_match_number_from_is_method_not_computed():
     assert "faceMatchNumberFrom(...values)" not in computed
     assert "faceMatchNumberFrom(...values)" in methods
     assert "this.faceMatchNumberFrom(" in computed
+
+
+def test_face_match_result_actions_use_action_lock_and_disable_result_controls():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+
+    interaction = _computed_method(source, "faceMatchInteractionDisabled")
+    assert "this.faceMatchLoading || this.faceMatchActionLocked" in interaction
+
+    action = _watch_method(source, "handleFaceMatchAction")
+    assert "this.faceMatchInteractionDisabled" in action
+    assert "this.faceMatchActionLocked = true" in action
+    assert "finally" in action
+    assert "this.faceMatchActionLocked = false" in action
+
+    assert ':disabled="vm.faceMatchActionLocked"' in view
+    assert ':disabled="vm.faceMatchInteractionDisabled || !vm.hasNextFaceMatch"' in view
+    assert ':disabled="vm.faceMatchInteractionDisabled"' in view
+
+
+def test_face_match_found_result_message_does_not_show_generic_finished_progress():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    message = _computed_method(source, "faceMatchStatusMessage")
+
+    result_guard = message.find("this.faceMatchResultSummary && this.faceMatchResultSummary.found")
+    generic_message = message.find("progress && progress.message_key")
+
+    assert result_guard >= 0
+    assert generic_message > result_guard
+    assert "face_match:status_result_ready" in message
+    assert "face_match:result_" in message
+    assert "progress_finished" not in message[:generic_message]
 
 
 def test_checks_restart_button_is_limited_to_saved_scan():

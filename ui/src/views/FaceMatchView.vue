@@ -17,13 +17,13 @@
 						{{ vm.$avt('face_match:hint_insightface_unavailable', 'InsightFace search becomes available after the optional InsightFace package is installed.') }}
 					</div>
 					<div class="face-match-action-buttons">
-						<v-button @click="vm.handlePrimaryFaceMatchButton" style="width: 160px;">
+						<v-button @click="vm.handlePrimaryFaceMatchButton" :disabled="vm.faceMatchActionLocked" style="width: 160px;">
 							{{ vm.faceMatchPrimaryButtonLabel }}
 						</v-button>
 						<v-button
 							v-if="vm.hasNextFaceMatch || (vm.faceMatchReviewingStoredFindings && vm.faceMatchFindingEntries.length > 0)"
 							@click="vm.loadNextFaceMatch"
-							:disabled="vm.faceMatchLoading || !vm.hasNextFaceMatch"
+							:disabled="vm.faceMatchInteractionDisabled || !vm.hasNextFaceMatch"
 							style="width: 160px;"
 						>
 							{{ vm.$avt('face_match:button_next', 'Next') }}
@@ -115,6 +115,7 @@
 										type="text"
 										class="face-match-result-name-input"
 										:placeholder="vm.$avt('face_match:name_placeholder', 'Name of the match')"
+										:disabled="vm.faceMatchInteractionDisabled"
 										@input="vm.handleFaceMatchNameInput"
 										@focus="vm.handleFaceMatchNameFocus"
 									/>
@@ -128,6 +129,7 @@
 											:key="`face-person-suggest-${person.id}`"
 											type="button"
 											class="face-match-suggest-item"
+											:disabled="vm.faceMatchInteractionDisabled"
 											@click="vm.selectFaceMatchSuggestion(person)"
 										>
 											<img :src="vm.getFaceMatchPersonPreviewUrl(person)" alt="" class="face-match-suggest-thumb" />
@@ -164,6 +166,7 @@
 					class="face-match-icon-button face-match-icon-button-floating"
 					:title="vm.faceMatchTransferTooltip"
 					:aria-label="vm.faceMatchTransferTooltip"
+					:disabled="vm.faceMatchInteractionDisabled"
 					@click.prevent="vm.handleFaceMatchAction"
 				>
 					<span v-if="(vm.faceMatchActionMode === 'write_metadata' ? vm.personDataToRightIconUrl : vm.personDataToLeftIconUrl)" class="face-match-icon-stack">

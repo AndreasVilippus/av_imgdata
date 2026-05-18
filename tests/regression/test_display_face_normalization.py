@@ -652,7 +652,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
              patch.object(imgdata_api, "_read_request_body", side_effect=fake_body), \
              patch.object(
                  imgdata_api.IMGDATA,
-                 "addMatchedMetadataFaceToPhotos",
+                 "resolveOrCreatePhotosPersonForMetadataFace",
                  side_effect=ImgDataOperationError("photos_face_create_failed", detail),
              ):
             payload = asyncio.run(imgdata_api.face_create_metadata_match(None))
@@ -686,13 +686,14 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
              patch.object(imgdata_api, "_read_request_body", side_effect=fake_body), \
              patch.object(
                  imgdata_api.IMGDATA,
-                 "addMatchedMetadataFaceToPhotos",
-                 return_value={"face_id": 107256, "item_id": 35535},
-             ), \
-             patch.object(
-                 imgdata_api.IMGDATA,
-                 "createMatchedFaceAsPerson",
-                 return_value={"person_id": 91},
+                 "resolveOrCreatePhotosPersonForMetadataFace",
+                 return_value={
+                     "face_id": 107256,
+                     "item_id": 35535,
+                     "target_person": {"id": 91, "name": "Person Target"},
+                     "add_result": {"face_id": 107256, "item_id": 35535},
+                     "create_result": {"person_id": 91},
+                 },
              ), \
              patch.object(
                  imgdata_api.IMGDATA,

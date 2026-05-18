@@ -705,6 +705,7 @@ class PhotosHandler:
         face_bbox: Dict[str, Any],
         face_id_temp: Optional[str] = None,
         person_id: Optional[int] = None,
+        person_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         top_left = face_bbox.get("top_left") if isinstance(face_bbox, dict) else None
         bottom_right = face_bbox.get("bottom_right") if isinstance(face_bbox, dict) else None
@@ -723,6 +724,10 @@ class PhotosHandler:
         }
         if person_id is not None:
             face_payload["person_id"] = int(person_id)
+        else:
+            normalized_person_name = str(person_name or "").strip()
+            if normalized_person_name:
+                face_payload["name"] = normalized_person_name
         payload = self._session_manager.call_api_post(
             user_key=user_key,
             cookies=cookies,

@@ -860,12 +860,14 @@ async def face_create_match(request: Request):
         }
 
     try:
-        result = IMGDATA.createMatchedFaceAsPerson(
+        result = IMGDATA.resolveOrCreatePhotosPersonForExistingFace(
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
+            image_path="",
             face_id=face_id,
             person_name=person_name.strip(),
+            create_missing_person=True,
         )
         findings_update = IMGDATA.removeFaceMatchFindingEntry(
             face_id=face_id,
@@ -885,7 +887,7 @@ async def face_create_match(request: Request):
         "success": True,
         "data": {
             "face_id": face_id,
-            "person_id": IMGDATA._extractPersonId(result),
+            "person_id": (result.get("target_person") or {}).get("id") if isinstance(result, dict) else None,
             "person_name": person_name.strip(),
             "result": result,
             "findings_update": findings_update,
@@ -1046,13 +1048,14 @@ async def face_create_metadata_match(request: Request):
         }
 
     try:
-        transfer_result = IMGDATA.createMetadataFaceAsPhotosPerson(
+        transfer_result = IMGDATA.resolveOrCreatePhotosPersonForMetadataFace(
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
             image_path=image_path,
             metadata_face=metadata_face,
             person_name=person_name,
+            create_missing_person=True,
         )
         findings_update = IMGDATA.removeFaceMatchFindingMetadataEntry(
             image_path=image_path,
@@ -1084,9 +1087,10 @@ async def face_create_metadata_match(request: Request):
             "image_path": image_path,
             "person_name": person_name,
             "face_id": int(transfer_result["face_id"]),
-            "person_id": transfer_result.get("person_id"),
+            "person_id": (transfer_result.get("target_person") or {}).get("id") if isinstance(transfer_result, dict) else None,
             "add_result": transfer_result.get("add_result"),
             "create_result": transfer_result.get("create_result"),
+            "transfer_result": transfer_result,
             "findings_update": findings_update,
             "progress_update": progress_update,
             "mapping_saved": mapping_saved if save_mapping else False,

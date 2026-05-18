@@ -36,13 +36,17 @@ def test_face_create_match_creates_person_removes_finding_and_saves_mapping(monk
             "source_name": "Person Legacy",
         }
 
-    create = Mock(return_value={"person_id": 91, "created": True})
+    create = Mock(return_value={
+        "target_person": {"id": 91, "name": "Person Target"},
+        "operation": "photos_create",
+        "create_result": {"person_id": 91, "created": True},
+    })
     remove = Mock(return_value={"count": 0, "transferred_count": 1})
     save_mapping = Mock(return_value=True)
 
     monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
     monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
-    monkeypatch.setattr(imgdata_api.IMGDATA, "createMatchedFaceAsPerson", create)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "resolveOrCreatePhotosPersonForExistingFace", create)
     monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingEntry", remove)
     monkeypatch.setattr(imgdata_api.IMGDATA, "saveNameMapping", save_mapping)
 
@@ -51,15 +55,21 @@ def test_face_create_match_creates_person_removes_finding_and_saves_mapping(monk
     assert payload["success"] is True
     assert payload["data"]["face_id"] == 77
     assert payload["data"]["person_id"] == 91
-    assert payload["data"]["result"] == {"person_id": 91, "created": True}
+    assert payload["data"]["result"] == {
+        "target_person": {"id": 91, "name": "Person Target"},
+        "operation": "photos_create",
+        "create_result": {"person_id": 91, "created": True},
+    }
     assert payload["data"]["findings_update"] == {"count": 0, "transferred_count": 1}
     assert payload["data"]["mapping_saved"] is True
     create.assert_called_once_with(
         user_key="user-1",
         cookies={"_SSID": "sid-1"},
         base_url="https://dsm.example.test",
+        image_path="",
         face_id=77,
         person_name="Person Target",
+        create_missing_person=True,
     )
     remove.assert_called_once_with(face_id=77, increment_transferred_count=True)
     save_mapping.assert_called_once_with(
@@ -110,14 +120,18 @@ def test_face_create_metadata_match_creates_metadata_face_person_and_cleans_find
             "person_name": " Person Target ",
         }
 
-    add_face = Mock(return_value={"face_id": 107256, "item_id": 35535})
-    create_person = Mock(return_value={"person_id": 91})
+    create_metadata_person = Mock(return_value={
+        "face_id": 107256,
+        "item_id": 35535,
+        "target_person": {"id": 91, "name": "Person Target"},
+        "add_result": {"face_id": 107256, "item_id": 35535},
+        "create_result": {"person_id": 91},
+    })
     remove_metadata_finding = Mock(return_value={"removed": True})
 
     monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
     monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
-    monkeypatch.setattr(imgdata_api.IMGDATA, "addMatchedMetadataFaceToPhotos", add_face)
-    monkeypatch.setattr(imgdata_api.IMGDATA, "createMatchedFaceAsPerson", create_person)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "resolveOrCreatePhotosPersonForMetadataFace", create_metadata_person)
     monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", remove_metadata_finding)
 
     payload = _run(imgdata_api.face_create_metadata_match(object()))
@@ -125,21 +139,14 @@ def test_face_create_metadata_match_creates_metadata_face_person_and_cleans_find
     assert payload["success"] is True
     assert payload["data"]["face_id"] == 107256
     assert payload["data"]["person_id"] == 91
-    add_face.assert_called_once_with(
+    create_metadata_person.assert_called_once_with(
         user_key="user-1",
         cookies={"_SSID": "sid-1"},
         base_url="https://dsm.example.test",
         image_path="photo/test.jpg",
         metadata_face=metadata_face,
-    )
-    create_person.assert_called_once_with(
-        user_key="user-1",
-        cookies={"_SSID": "sid-1"},
-        base_url="https://dsm.example.test",
-        face_id=107256,
         person_name="Person Target",
-        item_id=35535,
-        image_path="photo/test.jpg",
+        create_missing_person=True,
     )
     remove_metadata_finding.assert_called_once_with(
         image_path="photo/test.jpg",

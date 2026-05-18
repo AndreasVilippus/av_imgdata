@@ -37,6 +37,21 @@ def test_face_match_start_invalidates_stale_progress_before_starting():
     assert "this.faceMatchLoading = true" in method
 
 
+def test_face_match_start_final_response_clears_loading_and_stop_state():
+    mixin = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    method = _method(mixin, "async startFaceMatchingAction(options = {})")
+
+    running_branch = method.find("if (faceMatches && faceMatches.running)")
+    finished_branch = method.find("} else {", running_branch)
+    clear_loading = method.find("this.faceMatchLoading = false", finished_branch)
+    stop_polling = method.find("this.stopFaceMatchProgressPolling()", finished_branch)
+
+    assert running_branch >= 0
+    assert finished_branch > running_branch
+    assert clear_loading > finished_branch
+    assert stop_polling > finished_branch
+
+
 def test_file_analysis_start_invalidates_stale_progress_before_starting():
     mixin = Path("ui/src/mixins/statusMixin.js").read_text(encoding="utf-8")
     method = _method(mixin, "async handleFilesAnalyze()")

@@ -67,6 +67,17 @@ def test_status_concept_defines_saved_findings_as_source_of_truth_after_save_onl
     assert "älterer `face_match_progress` oder `checks_progress` noch eine historische Fundzahl enthält" in concept
 
 
+def test_status_concept_defines_save_only_findings_streaming_persistence():
+    concept = _concept()
+
+    assert "Save-only-Scans dürfen gefundene Fundlisten-Einträge nicht nur im Worker-Speicher halten" in concept
+    assert "Während des laufenden `scan` werden neue Fundlisten-Einträge debounced in die persistente Fundliste geschrieben" in concept
+    assert "Bei `stopped`, `failed` oder `finished` wird die aktuell bekannte Fundliste erzwungen geschrieben" in concept
+    assert "Ein Resume eines Save-only-Scans lädt die bereits persistierte Fundliste derselben Aktion und hängt neue Treffer daran an" in concept
+    assert "Resume-Skip-Listen müssen aus dem Resume-Cursor und aus den bereits persistierten Einträgen aufgebaut werden" in concept
+    assert "`findings_count` eines Save-only-Scans beschreibt die Anzahl der persistierten offenen Fundlisten-Einträge" in concept
+
+
 def test_status_concept_lists_recent_runtime_regressions():
     concept = _concept()
 
@@ -75,6 +86,11 @@ def test_status_concept_lists_recent_runtime_regressions():
     assert "FaceMatch-Fundlistenposition bleibt bei `Nächster` und erfolgreichem `Übernehmen` monoton" in concept
     assert "FaceMatch blendet den Scan-Fortschrittsbalken bei `phase: finished` aus" in concept
     assert "darf keinen laufenden Fortschrittsbalken nur wegen vorhandener `progress`-Werte" in concept
+    assert "FaceMatch beendet den UI-Loading-/Stop-Zustand auch dann" in concept
+    assert "Start-/Fortsetzungsantwort final mit `running: false` zurückkommt" in concept
+    assert "FaceMatch-Fundzustände zeigen keine generische Abschlussmeldung" in concept
+    assert "FaceMatch-Ergebnisaktionen sperren Transfer-, Umbenennungs-, Vorschlags- und Weiter-Buttons sofort" in concept
+    assert "Automatisch erfolgreich übertragene Treffer dürfen den Fundlisten-Zähler nicht erhöhen" in concept
 
 
 def test_status_concept_defines_monotonic_face_match_findings_review_position():
@@ -94,3 +110,11 @@ def test_status_concept_defines_live_face_match_partial_scan_progress_base():
     assert "Dieser Teilscan darf im Backend wieder bei `status.progress.current = 0` beginnen" in concept
     assert "Die UI muss den bereits angezeigten Fortschritt als lokale Basis erhalten" in concept
     assert "sichtbare Fortschrittszähler nicht zurückspringen" in concept
+
+
+def test_status_concept_requires_preparing_status_for_file_list_scans():
+    concept = _concept()
+
+    assert "Dateilistenbasierte Scan-Aktionen müssen bereits vor dem eigentlichen Dateilauf eine vorbereitende Statusmeldung setzen" in concept
+    assert "Gesichtsabgleich-Aktionen, die Bilddateien auflisten" in concept
+    assert "`listImageFiles`-Schritt nicht als hängender Start erscheint" in concept
