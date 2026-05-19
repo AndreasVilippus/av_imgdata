@@ -1009,47 +1009,47 @@ export default {
 				this.syncChecksDuplicateAssignmentState(resolvedItem);
 			}
 		},
-		async fetchChecksProgress({ applyFinishedState = true, applyRunningState = true, adoptResultItem = true, loadResultItem = true } = {}) {
-			const requestId = this.checksProgressRequestId + 1;
-			this.checksProgressRequestId = requestId;
-			try {
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_progress', {
-					check_type: this.selectedChecksType,
-				}, { resume: false, requireSynoToken: false });
-				if (this.checksProgressRequestId !== requestId) {
-					return {};
-				}
-				const progress = this.getResponseData(data);
-				if ((progress.running && applyRunningState) || (!progress.running && applyFinishedState)) {
-					this.applyChecksProgress(progress, { adoptResultItem });
-				}
-				if (!progress.running && loadResultItem) {
-					await this.ensureChecksResultItemLoaded(progress);
-				}
-				if (!progress.running) {
-					this.checksLoading = false;
-					if (this.selectedChecksAction === 'findings') {
-						this.checksFindingsActionRunning = false;
+		async fetchChecksProgress({ applyFinishedState = true, applyRunningState = true, adoptResultItem = true, loadResultItem = true, force = false } = {}) {
+			return this.runOperationPollRequest(
+				'checks_progress',
+				async () => {
+					const requestId = this.checksProgressRequestId + 1;
+					this.checksProgressRequestId = requestId;
+					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_progress', {
+						check_type: this.selectedChecksType,
+					}, { resume: false, requireSynoToken: false });
+					if (this.checksProgressRequestId !== requestId) {
+						return {};
 					}
-					this.stopChecksProgressPolling();
-				}
-				return progress;
-			} catch (err) {
-				if (this.checksProgressRequestId !== requestId) {
-					return {};
-				}
-				const progress = this.checksProgress && typeof this.checksProgress === 'object'
-					? this.checksProgress
-					: {};
-				if (!progress.running) {
-					this.checksLoading = false;
-					if (this.selectedChecksAction === 'findings') {
-						this.checksFindingsActionRunning = false;
+					const progress = this.getResponseData(data);
+					if ((progress.running && applyRunningState) || (!progress.running && applyFinishedState)) {
+						this.applyChecksProgress(progress, { adoptResultItem });
 					}
-					this.stopChecksProgressPolling();
+					if (!progress.running && loadResultItem) {
+						await this.ensureChecksResultItemLoaded(progress);
+					}
+					if (!progress.running) {
+						this.checksLoading = false;
+						if (this.selectedChecksAction === 'findings') {
+							this.checksFindingsActionRunning = false;
+						}
+						this.stopChecksProgressPolling();
+					}
+					return progress;
+				},
+				{
+					force,
+					maxErrors: 3,
+					onStopAfterErrors: (err) => {
+						this.stopChecksProgressPolling();
+						this.checksLoading = false;
+						if (this.selectedChecksAction === 'findings') {
+							this.checksFindingsActionRunning = false;
+						}
+						this.checksStatusMessage = `Error: ${err.message}`;
+					},
 				}
-				return {};
-			}
+			);
 		},
 		startChecksProgressPolling() {
 			this.startNamedPolling('checksProgressTimer', () => {

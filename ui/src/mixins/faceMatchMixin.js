@@ -1244,43 +1244,46 @@ export default {
 			}
 			return true;
 		},
-		async fetchFaceMatchingProgress({ applyRunningState = true } = {}) {
-			const requestId = this.faceMatchProgressRequestId + 1;
-			this.faceMatchProgressRequestId = requestId;
-			try {
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_progress', {}, { resume: false, requireSynoToken: false });
-				this.faceMatchProgressErrorCount = 0;
-				if (this.faceMatchProgressRequestId !== requestId) {
-					return;
-				}
-				const progress = this.getResponseData(data);
-				if (progress.running && !applyRunningState) {
+		async fetchFaceMatchingProgress({ applyRunningState = true, force = false } = {}) {
+			return this.runOperationPollRequest(
+				'face_match_progress',
+				async () => {
+					const requestId = this.faceMatchProgressRequestId + 1;
+					this.faceMatchProgressRequestId = requestId;
+					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_progress', {}, { resume: false, requireSynoToken: false });
+					if (this.faceMatchProgressRequestId !== requestId) {
+						return {};
+					}
+					const progress = this.getResponseData(data);
+					if (progress.running && !applyRunningState) {
+						return progress;
+					}
+					if (!this.applyFaceMatchingProgress(progress)) {
+						return {};
+					}
+					if (progress.paused && !progress.running) {
+						this.faceMatchLoading = false;
+					}
+					if (!progress.running) {
+						this.faceMatchLoading = false;
+						await this.fetchFaceMatchFindingsStatus();
+						this.stopFaceMatchProgressPolling();
+					}
 					return progress;
+				},
+				{
+					force,
+					maxErrors: 3,
+					onStopAfterErrors: (err) => {
+						this.stopFaceMatchProgressPolling();
+						this.faceMatchLoading = false;
+						this.faceMatchProgress = {
+							...(this.faceMatchProgress || {}),
+							message: `Error: ${err.message}`,
+						};
+					},
 				}
-				if (!this.applyFaceMatchingProgress(progress)) {
-					return;
-				}
-				if (progress.paused && !progress.running) {
-					this.faceMatchLoading = false;
-				}
-				if (!progress.running) {
-					this.faceMatchLoading = false;
-					await this.fetchFaceMatchFindingsStatus();
-					this.stopFaceMatchProgressPolling();
-				}
-				return progress;
-			} catch (err) {
-				this.faceMatchProgressErrorCount = (Number(this.faceMatchProgressErrorCount) || 0) + 1;
-				if (this.faceMatchProgressErrorCount >= 3) {
-					this.stopFaceMatchProgressPolling();
-					this.faceMatchLoading = false;
-					this.faceMatchProgress = {
-						...(this.faceMatchProgress || {}),
-						message: `Error: ${err.message}`,
-					};
-				}
-				return {};
-			}
+			);
 		},
 		startFaceMatchProgressPolling() {
 			this.startNamedPolling('faceMatchProgressTimer', () => {

@@ -3,3 +3,33 @@
 /ui/node_modules/
 __pycache__/
 *.pyc
+
+# Local ChatGPT/generated patch helper scripts
+patch_*.py
+fix_*.py
+apply_*.py
+update_*.py
+repair_*.py
+*_patch.py
+*_fix.py
+*_repair.py
+
+# Local temporary diagnostic/helper scripts
+debug_*.py
+check_*.py
+inspect_*.py
+tmp_*.py
+temp_*.py
+
+# Local copied artifacts / scratch logs
+*.har
+*.log.tmp
+*_debug.log
+*_trace.log
+*_watch.log
+
+# Local backups from ad-hoc patching
+*.bak
+*.backup
+*.orig
+*.rej

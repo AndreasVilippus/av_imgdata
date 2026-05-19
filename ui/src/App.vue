@@ -39,6 +39,7 @@ import checksMixin from './mixins/checksMixin';
 import cleanupMixin from './mixins/cleanupMixin';
 import externalLibrariesMixin from './mixins/externalLibrariesMixin';
 import faceMatchMixin from './mixins/faceMatchMixin';
+import runtimePollingMixin from './mixins/runtimePollingMixin';
 import statusMixin from './mixins/statusMixin';
 import ChecksView from './views/ChecksView.vue';
 import CleanupView from './views/CleanupView.vue';
@@ -48,7 +49,7 @@ import FaceMatchView from './views/FaceMatchView.vue';
 import StatusView from './views/StatusView.vue';
 
 export default {
-	mixins: [statusMixin, checksMixin, cleanupMixin, faceMatchMixin, externalLibrariesMixin],
+	mixins: [runtimePollingMixin, statusMixin, checksMixin, cleanupMixin, faceMatchMixin, externalLibrariesMixin],
 	components: {
 		AppSidebarNav,
 		ChecksView,
