@@ -154,28 +154,42 @@ export default {
 			}
 			return true;
 		},
-		async fetchCleanupProgress() {
-			const requestId = this.cleanupProgressRequestId + 1;
-			this.cleanupProgressRequestId = requestId;
-			try {
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
-					action: this.selectedCleanupAction,
-				}, { resume: false, requireSynoToken: false });
-				if (this.cleanupProgressRequestId !== requestId) {
-					return {};
+		async fetchCleanupProgress({ force = false } = {}) {
+			return this.runOperationPollRequest(
+				'cleanup_progress',
+				async () => {
+					const requestId = this.cleanupProgressRequestId + 1;
+					this.cleanupProgressRequestId = requestId;
+					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
+						action: this.selectedCleanupAction,
+					}, { resume: false, requireSynoToken: false });
+					if (this.cleanupProgressRequestId !== requestId) {
+						return {};
+					}
+					const progress = this.getResponseData(data);
+					if (progress && Object.keys(progress).length) {
+						this.applyCleanupProgress(progress);
+					}
+					if (!progress.running) {
+						this.cleanupLoading = false;
+						this.stopCleanupProgressPolling();
+					}
+					return progress;
+				},
+				{
+					force,
+					maxErrors: 3,
+					onStopAfterErrors: (err) => {
+						this.stopCleanupProgressPolling();
+						this.cleanupLoading = false;
+						this.cleanupStatusMessage = `Error: ${err.message}`;
+						this.cleanupProgress = {
+							...(this.cleanupProgress || {}),
+							message: `Error: ${err.message}`,
+						};
+					},
 				}
-				const progress = this.getResponseData(data);
-				if (progress && Object.keys(progress).length) {
-					this.applyCleanupProgress(progress);
-				}
-				if (!progress.running) {
-					this.cleanupLoading = false;
-					this.stopCleanupProgressPolling();
-				}
-				return progress;
-			} catch (err) {
-				return {};
-			}
+			);
 		},
 		startCleanupProgressPolling() {
 			this.startNamedPolling('cleanupProgressTimer', () => {
