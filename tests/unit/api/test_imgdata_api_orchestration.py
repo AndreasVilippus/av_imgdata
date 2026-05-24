@@ -88,6 +88,61 @@ def test_face_matching_action_rejects_unsupported_action_before_service_call(mon
     start_discovery.assert_not_called()
 
 
+def test_config_get_exposes_backend_debug_log_path(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    monkeypatch.delenv("SYNOPKG_PKGVAR", raising=False)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getRuntimeConfig", Mock(return_value={"debug": {"BACKEND_DEBUG_ENABLED": False}}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getChecksIgnoreListsStatus", Mock(return_value={}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.config, "_config_path", config_path)
+
+    payload = _run(imgdata_api.config_get(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["backend_debug_log_path"] == str(tmp_path / "backend-debug.log")
+
+
+def test_face_matching_progress_writes_debug_summary_when_enabled(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    log_path = tmp_path / "debug.log"
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api.IMGDATA.config, "_config_path", config_path)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getRuntimeConfig",
+        Mock(return_value={
+            "debug": {
+                "BACKEND_DEBUG_ENABLED": True,
+                "BACKEND_DEBUG_LOG_PATH": str(log_path),
+                "BACKEND_DEBUG_LOG_MAX_BYTES": 1048576,
+                "BACKEND_DEBUG_LOG_BACKUPS": 1,
+            },
+        }),
+    )
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFaceMatchingProgress",
+        Mock(return_value={
+            "operation_id": "op-1",
+            "action": "search_photo_face_in_file",
+            "running": False,
+            "active": False,
+            "stale": True,
+            "findings_count": 0,
+            "transferred_count": 19,
+            "status": {"operation": "face_matching", "phase": "idle"},
+        }),
+    )
+
+    payload = _run(imgdata_api.face_matching_progress(object()))
+
+    assert payload["success"] is True
+    log_data = log_path.read_text()
+    assert '"event": "face_matching_progress"' in log_data
+    assert '"status_phase": "idle"' in log_data
+    assert '"transferred_count": 19' in log_data
+
+
 def test_face_assign_match_assigns_removes_finding_and_saves_mapping(monkeypatch):
     async def request_body(_request):
         return {

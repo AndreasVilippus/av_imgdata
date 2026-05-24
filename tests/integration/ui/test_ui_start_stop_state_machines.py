@@ -37,6 +37,17 @@ def test_face_match_start_invalidates_stale_progress_before_starting():
     assert "this.faceMatchLoading = true" in method
 
 
+def test_face_match_start_does_not_poll_before_start_response():
+    mixin = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    method = _method(mixin, "async startFaceMatchingAction(options = {})")
+
+    action_call = method.find("/api/face_matching_action")
+    first_poll_start = method.find("this.startFaceMatchProgressPolling()")
+
+    assert action_call >= 0
+    assert first_poll_start > action_call
+
+
 def test_face_match_start_final_response_clears_loading_and_stop_state():
     mixin = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
     method = _method(mixin, "async startFaceMatchingAction(options = {})")

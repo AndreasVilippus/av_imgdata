@@ -146,3 +146,45 @@ def test_regression_finished_face_match_save_only_progress_uses_stored_finding_c
     assert progress["message_params"]["count"] == 0
     assert progress["result"]["findings_count"] == 0
     assert progress["resume_cursor"]["findings_count"] == 0
+
+
+def test_regression_stale_face_match_progress_is_not_active_without_thread():
+    service = _service()
+
+    progress = service._normalizeFaceMatchingProgressForDisplay("user", {
+        "action": "search_photo_face_in_file",
+        "running": True,
+        "finished": False,
+        "message_key": "face_match:progress_checking_person",
+        "resume_cursor": {
+            "action": "search_photo_face_in_file",
+            "persons_read": 28,
+            "images_read": 71,
+            "faces_read": 977,
+        },
+    })
+
+    assert progress["running"] is False
+    assert progress["active"] is False
+    assert progress["stale"] is True
+    assert progress["stop_requested"] is False
+
+
+def test_regression_persisted_face_match_progress_gets_status_payload():
+    service = _service()
+    service.file_analysis.readRuntimeState = lambda _key, _user: {
+        "action": "search_photo_face_in_file",
+        "running": False,
+        "finished": True,
+        "message_key": "face_match:result_no_match",
+        "persons_read": 28,
+        "persons_total": 28,
+    }
+
+    progress = service._getFaceMatchingProgressCore("user")
+
+    assert progress["running"] is False
+    assert progress["active"] is False
+    assert progress["status"]["schema_version"] == 1
+    assert progress["status"]["operation"] == "face_match"
+    assert progress["status"]["phase"] == "finished"

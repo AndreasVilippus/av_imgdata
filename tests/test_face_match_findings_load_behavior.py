@@ -17,6 +17,7 @@ def make_service():
         return_value={
             "status": "stopped",
             "shared_folder": "/volume1/photo",
+            "action": "mark_missing_photos_faces",
             "save_only": True,
             "auto": False,
             "transferred_count": 0,
@@ -70,6 +71,26 @@ def test_get_face_match_finding_entries_refresh_true_revalidates_stored_entries(
     service.photos.sortPersonsForFaceMatch.assert_called_once()
     service._storedFaceMatchEntryExists.assert_called_once()
     service._resolveStoredFaceMatchEntry.assert_called_once()
+
+
+def test_get_face_match_finding_entries_returns_empty_for_other_action():
+    service = make_service()
+
+    result = service.getFaceMatchFindingEntries(
+        user_key="user",
+        cookies={"id": "session"},
+        base_url="https://dsm.example.test",
+        action="search_photo_face_in_file",
+        auto=False,
+        refresh=True,
+    )
+
+    assert result["count"] == 0
+    assert result["entries"] == []
+    assert result["action"] == "mark_missing_photos_faces"
+    assert result["requested_action"] == "search_photo_face_in_file"
+    service.photos.listFotoTeamPersonKnown.assert_not_called()
+    service._storedFaceMatchEntryExists.assert_not_called()
 
 
 def test_face_matching_action_wires_refresh_and_reports_generic_errors_as_json():

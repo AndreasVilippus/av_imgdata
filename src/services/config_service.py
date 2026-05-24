@@ -109,6 +109,10 @@ class ConfigService:
             },
             "debug": {
                 "IO_METRICS_ENABLED": False,
+                "BACKEND_DEBUG_ENABLED": False,
+                "BACKEND_DEBUG_LOG_PATH": "",
+                "BACKEND_DEBUG_LOG_MAX_BYTES": 1048576,
+                "BACKEND_DEBUG_LOG_BACKUPS": 3,
             },
             "review": {
                 "OPTIONS": {
@@ -310,6 +314,18 @@ class ConfigService:
 
         debug = root.get("debug") if isinstance(root.get("debug"), dict) else {}
         debug["IO_METRICS_ENABLED"] = bool(debug.get("IO_METRICS_ENABLED", False))
+        debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED", False))
+        debug["BACKEND_DEBUG_LOG_PATH"] = str(debug.get("BACKEND_DEBUG_LOG_PATH") or "")
+        try:
+            backend_debug_log_max_bytes = int(debug.get("BACKEND_DEBUG_LOG_MAX_BYTES") or 1048576)
+        except (TypeError, ValueError):
+            backend_debug_log_max_bytes = 1048576
+        try:
+            backend_debug_log_backups = int(debug.get("BACKEND_DEBUG_LOG_BACKUPS") or 3)
+        except (TypeError, ValueError):
+            backend_debug_log_backups = 3
+        debug["BACKEND_DEBUG_LOG_MAX_BYTES"] = max(65536, min(10485760, backend_debug_log_max_bytes))
+        debug["BACKEND_DEBUG_LOG_BACKUPS"] = max(1, min(10, backend_debug_log_backups))
         root["debug"] = debug
 
         review = root.get("review") if isinstance(root.get("review"), dict) else {}

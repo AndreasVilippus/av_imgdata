@@ -184,6 +184,81 @@ class PhotosPersonOrchestrationTests(unittest.TestCase):
         self.assertEqual(result["operation"], "photos_add_assign")
         self.assertEqual(result["target_person"], {"id": 123, "name": "Canonical Name"})
 
+    def test_metadata_face_skips_second_assign_when_add_face_already_assigned_person(self):
+        metadata_face = {
+            "name": "Alias",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0.2,
+            "h": 0.2,
+            "source": "embedded_xmp_parsed",
+            "source_format": "MWG_REGIONS",
+        }
+        with patch.object(
+            self.service.name_mappings,
+            "findNameMapping",
+            return_value=None,
+        ), patch.object(
+            self.service.photos,
+            "findKnownPersonByName",
+            return_value={"id": 123, "name": "Alias"},
+        ), patch.object(
+            self.service,
+            "addMatchedMetadataFaceToPhotos",
+            return_value={"created": True, "face_id": 456, "person_id": 123, "item_id": 789},
+        ) as add_mock, patch.object(
+            self.service,
+            "assignMatchedFaceToKnownPerson",
+        ) as assign_mock:
+            result = self.service.resolveOrCreatePhotosPersonForMetadataFace(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                image_path="/volume1/photo/image.jpg",
+                metadata_face=metadata_face,
+                person_name="Alias",
+                create_missing_person=False,
+            )
+
+        add_mock.assert_called_once()
+        assign_mock.assert_not_called()
+        self.assertTrue(result["updated"])
+        self.assertEqual(result["assign_result"]["reason"], "already_assigned_by_add_face")
+        self.assertEqual(result["face_id"], 456)
+
+    def test_direct_metadata_face_assign_skips_second_assign_when_add_face_already_assigned_person(self):
+        metadata_face = {
+            "name": "Alias",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0.2,
+            "h": 0.2,
+            "source": "embedded_xmp_parsed",
+            "source_format": "MWG_REGIONS",
+        }
+        with patch.object(
+            self.service,
+            "addMatchedMetadataFaceToPhotos",
+            return_value={"created": True, "face_id": 456, "person_id": 123, "item_id": 789},
+        ) as add_mock, patch.object(
+            self.service,
+            "assignMatchedFaceToKnownPerson",
+        ) as assign_mock:
+            result = self.service.assignMetadataFaceToKnownPhotosPerson(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                image_path="/volume1/photo/image.jpg",
+                metadata_face=metadata_face,
+                person_id=123,
+                person_name="Alias",
+            )
+
+        add_mock.assert_called_once()
+        assign_mock.assert_not_called()
+        self.assertEqual(result["face_id"], 456)
+        self.assertEqual(result["assign_result"]["reason"], "already_assigned_by_add_face")
+
     def test_metadata_face_uses_create_flow_when_person_missing_and_allowed(self):
         metadata_face = {
             "name": "New Person",

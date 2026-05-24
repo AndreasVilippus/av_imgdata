@@ -154,47 +154,40 @@ export default {
 			}
 			return true;
 		},
-		async fetchCleanupProgress({ force = false } = {}) {
-			return this.runOperationPollRequest(
-				'cleanup_progress',
-				async () => {
-					const requestId = this.cleanupProgressRequestId + 1;
-					this.cleanupProgressRequestId = requestId;
-					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
-						action: this.selectedCleanupAction,
-					}, { resume: false, requireSynoToken: false });
-					if (this.cleanupProgressRequestId !== requestId) {
-						return {};
-					}
-					const progress = this.getResponseData(data);
-					if (progress && Object.keys(progress).length) {
-						this.applyCleanupProgress(progress);
-					}
-					if (!progress.running) {
-						this.cleanupLoading = false;
-						this.stopCleanupProgressPolling();
-					}
-					return progress;
-				},
-				{
-					force,
-					maxErrors: 3,
-					onStopAfterErrors: (err) => {
-						this.stopCleanupProgressPolling();
-						this.cleanupLoading = false;
-						this.cleanupStatusMessage = `Error: ${err.message}`;
-						this.cleanupProgress = {
-							...(this.cleanupProgress || {}),
-							message: `Error: ${err.message}`,
-						};
-					},
+		async fetchCleanupProgress() {
+			const requestId = this.cleanupProgressRequestId + 1;
+			this.cleanupProgressRequestId = requestId;
+			try {
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
+					action: this.selectedCleanupAction,
+				}, { resume: false, requireSynoToken: false });
+				if (this.cleanupProgressRequestId !== requestId) {
+					return {};
 				}
-			);
+				const progress = this.getResponseData(data);
+				if (progress && Object.keys(progress).length) {
+					this.applyCleanupProgress(progress);
+				}
+				if (!progress.running) {
+					this.cleanupLoading = false;
+					this.stopCleanupProgressPolling();
+				}
+				return progress;
+			} catch (err) {
+				if (this.cleanupProgressRequestId === requestId) {
+					this.cleanupStatusMessage = `Error: ${err.message}`;
+					this.cleanupProgress = {
+						...(this.cleanupProgress || {}),
+						message: `Error: ${err.message}`,
+					};
+				}
+				return {};
+			}
 		},
 		startCleanupProgressPolling() {
 			this.startNamedPolling('cleanupProgressTimer', () => {
 				this.fetchCleanupProgress();
-			});
+			}, 1000, { skipIfPending: true });
 		},
 		stopCleanupProgressPolling() {
 			this.stopNamedPolling('cleanupProgressTimer');

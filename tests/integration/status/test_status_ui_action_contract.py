@@ -32,7 +32,7 @@ def test_face_match_restart_button_is_limited_to_saved_file_search():
     assert "!this.faceMatchAuthRequired" in guard
 
     label = _computed_method(source, "faceMatchPrimaryButtonLabel")
-    assert "faceMatchLoading" in label
+    assert "faceMatchHasActiveProgressState" in label
     assert "faceMatchAuthRequired" in label
     assert "faceMatchCanRestartSavedFileSearch" in label
     assert "faceMatchIsPaused" not in label
@@ -141,7 +141,7 @@ def test_face_match_result_actions_use_action_lock_and_disable_result_controls()
     view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
 
     interaction = _computed_method(source, "faceMatchInteractionDisabled")
-    assert "this.faceMatchLoading || this.faceMatchActionLocked" in interaction
+    assert "this.faceMatchHasActiveProgressState || this.faceMatchActionLocked" in interaction
 
     action = _watch_method(source, "handleFaceMatchAction")
     assert "this.faceMatchInteractionDisabled" in action

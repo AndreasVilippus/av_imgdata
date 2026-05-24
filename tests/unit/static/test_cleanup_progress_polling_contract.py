@@ -1,21 +1,20 @@
 from pathlib import Path
 
 
-def test_cleanup_progress_uses_shared_operation_polling_helper():
+def test_cleanup_progress_reads_backend_status_directly():
     source = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
 
-    assert "async fetchCleanupProgress({ force = false } = {})" in source
-    assert "return this.runOperationPollRequest(" in source
-    assert "'cleanup_progress'" in source
-    assert "force," in source
-    assert "maxErrors: 3" in source
-    assert "onStopAfterErrors" in source
+    assert "async fetchCleanupProgress()" in source
+    assert "return this.runOperationPollRequest(" not in source
+    assert "/api/cleanup_progress" in source
+    assert "maxErrors" not in source
+    assert "onStopAfterErrors" not in source
 
 
 def test_cleanup_progress_keeps_request_id_inside_poll_callback():
     source = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
 
-    callback_pos = source.index("return this.runOperationPollRequest(")
+    callback_pos = source.index("async fetchCleanupProgress")
     request_id_pos = source.index("const requestId = this.cleanupProgressRequestId + 1", callback_pos)
     api_call_pos = source.index("/api/cleanup_progress", request_id_pos)
 
@@ -23,16 +22,17 @@ def test_cleanup_progress_keeps_request_id_inside_poll_callback():
     assert "this.cleanupProgressRequestId !== requestId" in source[callback_pos:]
 
 
-def test_cleanup_progress_error_budget_stops_polling_and_releases_loading_state():
+def test_cleanup_progress_polling_error_preserves_backend_owned_state():
     source = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
 
     method_start = source.index("async fetchCleanupProgress")
     method_end = source.index("startCleanupProgressPolling", method_start)
     method_source = source[method_start:method_end]
 
-    assert "onStopAfterErrors: (err) =>" in method_source
-    assert "this.stopCleanupProgressPolling()" in method_source
-    assert "this.cleanupLoading = false" in method_source
+    catch_start = method_source.index("catch (err)")
+    catch_source = method_source[catch_start:]
+    assert "this.stopCleanupProgressPolling()" not in catch_source
+    assert "this.cleanupLoading = false" not in catch_source
     assert "this.cleanupStatusMessage = `Error: ${err.message}`" in method_source
     assert "message: `Error: ${err.message}`" in method_source
 

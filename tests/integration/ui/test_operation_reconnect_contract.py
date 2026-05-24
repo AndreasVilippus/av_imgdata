@@ -46,8 +46,10 @@ def test_face_match_reconnect_uses_persisted_runtime_progress_for_running_operat
     source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
     method = _method(source, "async refreshFaceMatchSessionState()")
 
-    assert "await this.fetchFaceMatchingProgress({ applyRunningState: false })" in method
-    assert "const progress = await this.fetchFaceMatchingProgress({ applyRunningState: false })" in method
+    assert "const findingsStatusPromise = this.fetchFaceMatchFindingsStatus()" in method
+    assert "const progressPromise = this.fetchFaceMatchingProgress({ applyRunningState: false })" in method
+    assert "await findingsStatusPromise" in method
+    assert "const progress = await progressPromise" in method
     assert "if (progress.running)" in method
     assert "this.startFaceMatchProgressPolling()" in method
 
@@ -57,7 +59,7 @@ def test_face_match_reconnect_does_not_apply_scan_progress_over_stored_findings_
     refresh = _method(source, "async refreshFaceMatchSessionState()")
     fetch = _method(source, "async fetchFaceMatchingProgress(")
 
-    assert "await this.fetchFaceMatchingProgress({ applyRunningState: false })" in refresh
+    assert "const progressPromise = this.fetchFaceMatchingProgress({ applyRunningState: false })" in refresh
     assert "this.isFaceMatchFindingsReviewActive() && this.getFaceMatchProgressMode(progress) === 'scan'" in refresh
     assert refresh.index("this.isFaceMatchFindingsReviewActive()") < refresh.index("this.applyFaceMatchingProgress(progress)")
     assert "applyRunningState = true" in fetch

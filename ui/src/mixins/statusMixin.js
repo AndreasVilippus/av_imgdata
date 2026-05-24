@@ -64,37 +64,32 @@ export default {
 				this.startFileAnalysisProgressPolling();
 			}
 		},
-		async fetchFileAnalysisProgress({ force = false } = {}) {
-			return this.runOperationPollRequest(
-				'file_analysis_progress',
-				async () => {
-					const requestId = this.fileAnalysisProgressRequestId + 1;
-					this.fileAnalysisProgressRequestId = requestId;
-					const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_progress', {}, { resume: false, requireSynoToken: false });
-					if (this.fileAnalysisProgressRequestId !== requestId) {
-						return {};
-					}
-					const progress = this.getResponseData(data);
-					if (!this.isFileAnalysisProgressUpdateStale(this.fileAnalysisProgress, progress)) {
-						this.fileAnalysisProgress = progress;
-					}
-					if (!this.isFileAnalysisRunning) {
-						this.stopFileAnalysisProgressPolling();
-					}
-					return progress;
-				},
-				{
-					force,
-					maxErrors: 3,
-					onStopAfterErrors: (err) => {
-						this.stopFileAnalysisProgressPolling();
-						this.fileAnalysisProgress = {
-							...(this.fileAnalysisProgress || {}),
-							message: `Error: ${err.message}`,
-						};
-					},
+		async fetchFileAnalysisProgress() {
+			const requestId = this.fileAnalysisProgressRequestId + 1;
+			this.fileAnalysisProgressRequestId = requestId;
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/file_analysis_progress', {}, { resume: false, requireSynoToken: false });
+				if (this.fileAnalysisProgressRequestId !== requestId) {
+					return {};
 				}
-			);
+				const progress = this.getResponseData(data);
+				if (!this.isFileAnalysisProgressUpdateStale(this.fileAnalysisProgress, progress)) {
+					this.fileAnalysisProgress = progress;
+				}
+				if (!this.isFileAnalysisRunning) {
+					this.stopFileAnalysisProgressPolling();
+				}
+				return progress;
+			} catch (err) {
+				if (this.fileAnalysisProgressRequestId !== requestId) {
+					return {};
+				}
+				this.fileAnalysisProgress = {
+					...(this.fileAnalysisProgress || {}),
+					message: `Error: ${err.message}`,
+				};
+				return {};
+			}
 		},
 		async fetchExiftoolStatus() {
 			try {
@@ -126,7 +121,7 @@ export default {
 		startFileAnalysisProgressPolling() {
 			this.startNamedPolling('fileAnalysisProgressTimer', () => {
 				this.fetchFileAnalysisProgress();
-			});
+			}, 1000, { skipIfPending: true });
 		},
 		stopFileAnalysisProgressPolling() {
 			this.stopNamedPolling('fileAnalysisProgressTimer');

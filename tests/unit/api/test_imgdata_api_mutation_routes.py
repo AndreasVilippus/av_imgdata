@@ -27,6 +27,68 @@ def _json_response_payload(response):
     return json.loads(response.body.decode("utf-8"))
 
 
+def test_face_matching_findings_status_filters_by_requested_action(monkeypatch):
+    async def request_body(_request):
+        return {"action": "search_photo_face_in_file"}
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFaceMatchFindings",
+        Mock(return_value={
+            "status": "finished",
+            "action": "mark_missing_photos_faces",
+            "save_only": True,
+            "auto": True,
+            "transferred_count": 7,
+            "entries": [{"id": 1}],
+        }),
+    )
+
+    payload = _run(imgdata_api.face_matching_findings_status(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["count"] == 0
+    assert payload["data"]["action"] == "mark_missing_photos_faces"
+    assert payload["data"]["requested_action"] == "search_photo_face_in_file"
+    assert payload["data"]["save_only"] is False
+    assert payload["data"]["auto"] is False
+
+
+def test_face_matching_action_passes_selected_findings_action_to_loader(monkeypatch):
+    async def request_body(_request):
+        return {
+            "action": "load_photo_face_match_findings",
+            "findings_action": "mark_missing_photos_faces",
+            "auto": True,
+            "refresh": True,
+        }
+
+    load_entries = Mock(return_value={"count": 0, "entries": []})
+
+    class FakeLoop:
+        async def run_in_executor(self, _executor, func):
+            return func()
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.asyncio, "get_running_loop", lambda: FakeLoop())
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getFaceMatchFindingEntries", load_entries)
+
+    payload = _run(imgdata_api.face_matching_action(object()))
+
+    assert payload["success"] is True
+    load_entries.assert_called_once_with(
+        user_key="user-1",
+        cookies={"_SSID": "sid-1"},
+        base_url="https://dsm.example.test",
+        action="mark_missing_photos_faces",
+        auto=True,
+        refresh=True,
+    )
+
+
 def test_face_create_match_creates_person_removes_finding_and_saves_mapping(monkeypatch):
     async def request_body(_request):
         return {

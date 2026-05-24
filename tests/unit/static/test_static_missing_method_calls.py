@@ -22,8 +22,7 @@ UI_ALLOWED_MISSING_THIS_METHODS = {
     "normalizeFaceMatchName",
     "resolveLocalIconUrl",
     "startNamedPolling",
-    "stopNamedPolling",    "runOperationPollRequest",
-
+    "stopNamedPolling",
 }
 
 BACKEND_ALLOWED_MISSING_SELF_METHODS = {

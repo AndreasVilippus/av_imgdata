@@ -284,6 +284,29 @@ class TestConfigServiceDefaults(unittest.TestCase):
         config = service.readMergedConfig()
 
         self.assertFalse(config["debug"]["IO_METRICS_ENABLED"])
+        self.assertFalse(config["debug"]["BACKEND_DEBUG_ENABLED"])
+        self.assertEqual(config["debug"]["BACKEND_DEBUG_LOG_PATH"], "")
+        self.assertEqual(config["debug"]["BACKEND_DEBUG_LOG_MAX_BYTES"], 1048576)
+        self.assertEqual(config["debug"]["BACKEND_DEBUG_LOG_BACKUPS"], 3)
+
+    def test_backend_debug_config_is_normalized(self):
+        service = ConfigService(str(self.config_file))
+        with self.config_file.open("w") as f:
+            json.dump({
+                "debug": {
+                    "BACKEND_DEBUG_ENABLED": 1,
+                    "BACKEND_DEBUG_LOG_PATH": "/tmp/av-debug.log",
+                    "BACKEND_DEBUG_LOG_MAX_BYTES": 1,
+                    "BACKEND_DEBUG_LOG_BACKUPS": 99,
+                },
+            }, f)
+
+        config = service.readMergedConfig()
+
+        self.assertTrue(config["debug"]["BACKEND_DEBUG_ENABLED"])
+        self.assertEqual(config["debug"]["BACKEND_DEBUG_LOG_PATH"], "/tmp/av-debug.log")
+        self.assertEqual(config["debug"]["BACKEND_DEBUG_LOG_MAX_BYTES"], 65536)
+        self.assertEqual(config["debug"]["BACKEND_DEBUG_LOG_BACKUPS"], 10)
 
     def test_exiftool_persistent_timeout_is_normalized(self):
         service = ConfigService(str(self.config_file))

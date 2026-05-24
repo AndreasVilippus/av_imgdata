@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath("src"))
 
 from api import imgdata_api
 from api.session_manager import SessionManager, SessionManagerError
+from handler.photos_handler import PhotosLookupCache
 from imgdata import ImgDataOperationError, ImgDataService
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
@@ -426,7 +427,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["created"])
         self.assertEqual(result["face_id"], 107256)
         self.assertEqual(captured["person_id"], 91)
-        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 2)
+        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 1)
 
     def test_add_matched_metadata_face_to_photos_allows_second_face_for_same_person_on_same_item(self):
         metadata_face = {
@@ -488,9 +489,9 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["created"])
         self.assertEqual(result["face_id"], 107256)
         self.assertEqual(captured["person_id"], 91)
-        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 2)
+        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 1)
 
-    def test_add_matched_metadata_face_to_photos_reports_missing_created_face(self):
+    def test_add_matched_metadata_face_to_photos_trusts_returned_face_id_without_postcheck(self):
         metadata_face = {
             "name": "Person Target",
             "x": 0.6254395,
@@ -507,21 +508,18 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "list": [{"face_id": 107256, "face_id_temp": kwargs["face_id_temp"]}],
         }
 
-        with self.assertRaises(ImgDataOperationError) as context:
-            self.service.addMatchedMetadataFaceToPhotos(
-                user_key="user",
-                cookies={},
-                base_url="https://example.test",
-                image_path="/volume1/photo/tests/generic-event/generic-photo-100.JPG",
-                metadata_face=metadata_face,
-                person_id=91,
-            )
+        result = self.service.addMatchedMetadataFaceToPhotos(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            image_path="/volume1/photo/tests/generic-event/generic-photo-100.JPG",
+            metadata_face=metadata_face,
+            person_id=91,
+        )
 
-        self.assertEqual(context.exception.details["code"], "photos_face_changed_during_operation")
-        self.assertEqual(context.exception.details["reason"], "photos_face_missing")
-        self.assertEqual(context.exception.details["phase"], "photos_face_create_postcheck")
-        self.assertEqual(context.exception.details["item_id"], 35535)
-        self.assertEqual(context.exception.details["face_id"], 107256)
+        self.assertTrue(result["created"])
+        self.assertEqual(result["face_id"], 107256)
+        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 1)
 
     def test_add_matched_metadata_face_to_photos_recovers_face_id_from_postcheck_when_add_result_is_empty(self):
         metadata_face = {
@@ -568,7 +566,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         self.assertTrue(result["created"])
         self.assertEqual(result["face_id"], 107256)
-        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 3)
+        self.assertEqual(self.service.photos.list_faceFotoTeamItems.call_count, 2)
 
     def test_assign_matched_face_validates_photos_person_after_write_when_item_known(self):
         self.service.photos.list_faceFotoTeamItems = Mock(side_effect=[
@@ -879,7 +877,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(progress.get("files_scanned"), 945)
         self.assertEqual(written, {})
 
-    def test_get_face_matching_progress_preserves_persisted_running_state_without_local_worker(self):
+    def test_get_face_matching_progress_marks_persisted_running_state_stale_without_local_worker(self):
         written = {}
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
             "operation_id": "face_match-existing",
@@ -904,12 +902,14 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         progress = self.service.getFaceMatchingProgress("user")
 
-        self.assertTrue(progress.get("running"))
+        self.assertFalse(progress.get("running"))
         self.assertFalse(progress.get("finished"))
         self.assertFalse(progress.get("stop_requested"))
-        self.assertTrue(progress.get("active"))
-        self.assertFalse(progress.get("stale"))
+        self.assertFalse(progress.get("active"))
+        self.assertTrue(progress.get("stale"))
         self.assertEqual(progress.get("findings_count"), 7)
+        self.assertEqual(progress.get("status", {}).get("schema_version"), 1)
+        self.assertNotEqual(progress.get("status", {}).get("phase"), "running")
         self.assertEqual(written, {})
 
     def test_face_matching_progress_syncs_counts_from_resume_cursor(self):
@@ -3005,6 +3005,42 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         self.assertFalse(exists)
 
+    def test_stored_missing_photos_face_entry_forwards_photos_lookup_cache(self):
+        metadata_face = MetadataFace.from_center_box(
+            name="Person Known",
+            x=0.4,
+            y=0.3,
+            w=0.2,
+            h=0.25,
+            source="metadata",
+            source_format="MICROSOFT",
+        )
+        payload = MetadataPayload(
+            image_path="/volume1/photo/tests/test.jpg",
+            has_xmp=True,
+            faces=[metadata_face],
+        )
+        cache = PhotosLookupCache()
+        self.service._readImageMetadata = lambda image_path, **kwargs: payload
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.photos.findFotoTeamItemByPath = Mock(return_value={"id": 1234})
+        self.service.photos.list_faceFotoTeamItems = lambda **kwargs: []
+
+        self.service._storedFaceMatchEntryExists(
+            user_key="user",
+            cookies={},
+            base_url="http://example.test",
+            entry={
+                "action": "mark_missing_photos_faces",
+                "image_path": "/volume1/photo/tests/test.jpg",
+                "metadata_face": metadata_face.to_dict(),
+            },
+            image_faces_cache={},
+            photos_lookup_cache=cache,
+        )
+
+        self.assertIs(self.service.photos.findFotoTeamItemByPath.call_args.kwargs["lookup_cache"], cache)
+
     def test_build_checks_scan_payload_keeps_resume_cursor_in_sync(self):
         payload = self.service._buildChecksScanPayload(
             check_type="name_conflicts",
@@ -3368,7 +3404,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["running"])
         thread_cls.assert_not_called()
 
-    def test_file_analysis_start_blocks_when_face_matching_is_running(self):
+    def test_file_analysis_start_ignores_stale_face_matching_progress_without_worker(self):
         self.service._face_matching_progress["user"] = {
             "operation_id": "face-match-running",
             "running": True,
@@ -3383,14 +3419,10 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                 base_url="http://example.test",
             )
 
-        self.assertTrue(result["blocked_by_running_operation"])
-        self.assertEqual(result["requested_operation"], "file_analysis")
-        self.assertEqual(result["running_operation"], "face_match")
-        self.assertEqual(result["status"]["schema_version"], 1)
-        self.assertEqual(result["status"]["operation"], "file_analysis")
-        self.assertEqual(result["status"]["mode"], "none")
-        self.assertEqual(result["status"]["phase"], "blocked")
-        thread_cls.assert_not_called()
+        self.assertFalse(result.get("blocked_by_running_operation", False))
+        self.assertTrue(result["running"])
+        self.assertEqual(result["status"], "running")
+        thread_cls.assert_called_once()
 
     def test_face_matching_start_blocks_when_file_analysis_is_running(self):
         self.service._file_analysis_progress = {

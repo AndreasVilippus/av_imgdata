@@ -85,7 +85,11 @@
     "FINDINGS_STORAGE_FORMAT": "json"
   },
   "debug": {
-    "IO_METRICS_ENABLED": false
+    "IO_METRICS_ENABLED": false,
+    "BACKEND_DEBUG_ENABLED": false,
+    "BACKEND_DEBUG_LOG_PATH": "",
+    "BACKEND_DEBUG_LOG_MAX_BYTES": 1048576,
+    "BACKEND_DEBUG_LOG_BACKUPS": 3
   },
   "review": {
     "OPTIONS": {

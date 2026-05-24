@@ -1,21 +1,20 @@
 from pathlib import Path
 
 
-def test_file_analysis_progress_uses_shared_operation_polling_helper():
+def test_file_analysis_progress_reads_backend_status_directly():
     source = Path("ui/src/mixins/statusMixin.js").read_text(encoding="utf-8")
 
-    assert "async fetchFileAnalysisProgress({ force = false } = {})" in source
-    assert "return this.runOperationPollRequest(" in source
-    assert "'file_analysis_progress'" in source
-    assert "force," in source
-    assert "maxErrors: 3" in source
-    assert "onStopAfterErrors" in source
+    assert "async fetchFileAnalysisProgress()" in source
+    assert "return this.runOperationPollRequest(" not in source
+    assert "/api/file_analysis_progress" in source
+    assert "maxErrors" not in source
+    assert "onStopAfterErrors" not in source
 
 
 def test_file_analysis_progress_keeps_request_id_inside_poll_callback():
     source = Path("ui/src/mixins/statusMixin.js").read_text(encoding="utf-8")
 
-    callback_pos = source.index("return this.runOperationPollRequest(")
+    callback_pos = source.index("async fetchFileAnalysisProgress")
     request_id_pos = source.index("const requestId = this.fileAnalysisProgressRequestId + 1", callback_pos)
     api_call_pos = source.index("/api/file_analysis_progress", request_id_pos)
 
@@ -23,15 +22,16 @@ def test_file_analysis_progress_keeps_request_id_inside_poll_callback():
     assert "this.fileAnalysisProgressRequestId !== requestId" in source[callback_pos:]
 
 
-def test_file_analysis_progress_error_budget_stops_polling_and_records_error():
+def test_file_analysis_progress_polling_error_preserves_backend_owned_state():
     source = Path("ui/src/mixins/statusMixin.js").read_text(encoding="utf-8")
 
     method_start = source.index("async fetchFileAnalysisProgress")
     method_end = source.index("async fetchExiftoolStatus", method_start)
     method_source = source[method_start:method_end]
 
-    assert "onStopAfterErrors: (err) =>" in method_source
-    assert "this.stopFileAnalysisProgressPolling()" in method_source
+    catch_start = method_source.index("catch (err)")
+    catch_source = method_source[catch_start:]
+    assert "this.stopFileAnalysisProgressPolling()" not in catch_source
     assert "message: `Error: ${err.message}`" in method_source
 
 

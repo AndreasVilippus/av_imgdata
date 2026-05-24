@@ -257,6 +257,25 @@
 					</label>
 				</div>
 			</section>
+
+			<section class="config-card">
+				<div class="sm-section-title">{{ $avt('config:section_debugging', 'Debugging') }}</div>
+				<div class="config-card-desc">{{ $avt('config:section_debugging_desc', 'Diagnostic options for backend request and status troubleshooting.') }}</div>
+
+				<div class="config-form-grid">
+					<label class="config-checkbox" :title="$avt('config:hint_backend_debug_enabled', 'Writes backend request and status diagnostics to a rotating package log. Keep disabled during normal operation.')">
+						<input
+							v-model="configModel.debug.BACKEND_DEBUG_ENABLED"
+							type="checkbox"
+							:disabled="saving"
+						/>
+						<span>{{ $avt('config:label_backend_debug_enabled', 'Enable backend debug log') }}</span>
+					</label>
+					<div class="config-card-desc">
+						{{ $avt('config:hint_backend_debug_log_path', 'Log path: {path}', { path: backendDebugLogPath || configModel.debug.BACKEND_DEBUG_LOG_PATH || 'backend-debug.log' }) }}
+					</div>
+				</div>
+			</section>
 		</div>
 	</section>
 </template>
@@ -271,6 +290,7 @@ export default {
 			clearingIgnoreListType: '',
 			message: '',
 			configPath: '',
+			backendDebugLogPath: '',
 			configModel: this.createDefaultConfig(),
 			imageExtensionsInput: '',
 			checksIgnoreListsStatus: this.createDefaultChecksIgnoreListsStatus(),
@@ -388,6 +408,13 @@ export default {
 				face_match: {
 					FILE_MATCH_SOURCE_SCOPE: 'both',
 					PERSON_SORT_ORDER: 'id_desc',
+				},
+				debug: {
+					IO_METRICS_ENABLED: false,
+					BACKEND_DEBUG_ENABLED: false,
+					BACKEND_DEBUG_LOG_PATH: '',
+					BACKEND_DEBUG_LOG_MAX_BYTES: 1048576,
+					BACKEND_DEBUG_LOG_BACKUPS: 3,
 				},
 			};
 		},
@@ -516,6 +543,7 @@ export default {
 			const reviewIgnoreLists = (review.CHECKS_IGNORE_LISTS && typeof review.CHECKS_IGNORE_LISTS === 'object' && !Array.isArray(review.CHECKS_IGNORE_LISTS)) ? review.CHECKS_IGNORE_LISTS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
+			const debug = (root.debug && typeof root.debug === 'object' && !Array.isArray(root.debug)) ? root.debug : {};
 
 			const imageExtensions = this.normalizeImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
 			const exiftoolImageExtensions = this.normalizeImageExtensions(files.EXIFTOOL_IMAGE_EXTENSIONS, []);
@@ -618,6 +646,14 @@ export default {
 						? String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase()
 						: defaults.face_match.PERSON_SORT_ORDER,
 				},
+				debug: {
+					...debug,
+					IO_METRICS_ENABLED: Boolean(debug.IO_METRICS_ENABLED ?? defaults.debug.IO_METRICS_ENABLED),
+					BACKEND_DEBUG_ENABLED: Boolean(debug.BACKEND_DEBUG_ENABLED ?? defaults.debug.BACKEND_DEBUG_ENABLED),
+					BACKEND_DEBUG_LOG_PATH: String(debug.BACKEND_DEBUG_LOG_PATH || defaults.debug.BACKEND_DEBUG_LOG_PATH),
+					BACKEND_DEBUG_LOG_MAX_BYTES: Math.max(65536, Math.min(10485760, Number(debug.BACKEND_DEBUG_LOG_MAX_BYTES) || defaults.debug.BACKEND_DEBUG_LOG_MAX_BYTES)),
+					BACKEND_DEBUG_LOG_BACKUPS: Math.max(1, Math.min(10, Number(debug.BACKEND_DEBUG_LOG_BACKUPS) || defaults.debug.BACKEND_DEBUG_LOG_BACKUPS)),
+				},
 			};
 		},
 		applyDefaults() {
@@ -646,6 +682,7 @@ export default {
 			try {
 				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/config_get');
 				this.configPath = (data && data.data && data.data.config_path) || '';
+				this.backendDebugLogPath = (data && data.data && data.data.backend_debug_log_path) || '';
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
 				this.checksIgnoreListsStatus = this.normalizeChecksIgnoreListsStatus(data && data.data && data.data.checks_ignore_lists);
@@ -673,6 +710,7 @@ export default {
 				const normalized = this.normalizeConfig(payloadConfig);
 				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/config_save', { config: normalized });
 				this.configPath = (data && data.data && data.data.config_path) || this.configPath;
+				this.backendDebugLogPath = (data && data.data && data.data.backend_debug_log_path) || this.backendDebugLogPath;
 				this.configModel = this.normalizeConfig(data && data.data && data.data.config);
 				this.imageExtensionsInput = this.formatImageExtensions(this.configModel.files.IMAGE_EXTENSIONS);
 				this.checksIgnoreListsStatus = this.normalizeChecksIgnoreListsStatus(data && data.data && data.data.checks_ignore_lists);

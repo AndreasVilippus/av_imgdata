@@ -39,7 +39,6 @@ import checksMixin from './mixins/checksMixin';
 import cleanupMixin from './mixins/cleanupMixin';
 import externalLibrariesMixin from './mixins/externalLibrariesMixin';
 import faceMatchMixin from './mixins/faceMatchMixin';
-import runtimePollingMixin from './mixins/runtimePollingMixin';
 import statusMixin from './mixins/statusMixin';
 import ChecksView from './views/ChecksView.vue';
 import CleanupView from './views/CleanupView.vue';
@@ -49,7 +48,7 @@ import FaceMatchView from './views/FaceMatchView.vue';
 import StatusView from './views/StatusView.vue';
 
 export default {
-	mixins: [runtimePollingMixin, statusMixin, checksMixin, cleanupMixin, faceMatchMixin, externalLibrariesMixin],
+	mixins: [statusMixin, checksMixin, cleanupMixin, faceMatchMixin, externalLibrariesMixin],
 	components: {
 		AppSidebarNav,
 		ChecksView,
@@ -133,11 +132,15 @@ export default {
 				checks_replace_metadata_face_position: 120000,
 				checks_assign_face_person: 120000,
 				checks_ignore_entry: 120000,
+				checks_start: 120000,
 				face_assign_match: 120000,
 				face_create_match: 120000,
 				face_apply_metadata_match: 120000,
 				face_assign_metadata_match: 120000,
 				face_create_metadata_match: 120000,
+				face_matching_action: 120000,
+				file_analysis_start: 120000,
+				cleanup_start: 120000,
 				exiftool_install: 120000,
 				exiftool_remove: 120000,
 				insightface_model_delete: 120000,
@@ -287,15 +290,18 @@ export default {
 					if (err && err.name === 'AbortError') {
 						throw new Error(this.$avt('error:request_timeout', 'Backend request timed out.'));
 					}
+					if (err instanceof TypeError) {
+						throw new Error(this.$avt('error:network_request_failed', 'Backend request failed or was aborted before a response was received.'));
+					}
 					throw err;
 				} finally {
 					window.clearTimeout(timeoutId);
 				}
-			},
+				},
 			async callFileAnalysisApi(apiPath, body = {}, options = {}) {
 				return this.callDsmApi(apiPath, body, options);
 			},
-			startNamedPolling(timerKey, callback, interval = 1000) {
+			startNamedPolling(timerKey, callback, interval = 1000, options = {}) {
 				this.stopNamedPolling(timerKey);
 				if (!this.__namedPollingPending) {
 					this.__namedPollingPending = {};
@@ -303,10 +309,11 @@ export default {
 				if (!this.__namedPollingRunIds) {
 					this.__namedPollingRunIds = {};
 				}
+				const skipIfPending = options && options.skipIfPending === true;
 				const runId = (Number(this.__namedPollingRunIds[timerKey]) || 0) + 1;
 				this.__namedPollingRunIds[timerKey] = runId;
 				const run = () => {
-					if (this.__namedPollingPending[timerKey]) {
+					if (skipIfPending && this.__namedPollingPending[timerKey]) {
 						return;
 					}
 					this.__namedPollingPending[timerKey] = true;

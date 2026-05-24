@@ -137,11 +137,13 @@ class ImgDataService:
         self.exiftool_handler = ExifToolHandler(self.config)
         self.core = CoreHandler(session_manager)
         self.photos = PhotosHandler(session_manager, self.config)
+        self.photos_lookup_cache = PhotosLookupCache()
         self.files = FileHandler(self.config)
         self.metadata_parser = MetadataParser()
         self.name_mappings = NameMappingService()
         self.face_matcher = FaceMatcher()
         self.file_analysis = FileAnalysisService()
+        self._debug_logger: Optional[Callable[..., None]] = None
         self._face_matching_progress: Dict[str, Dict[str, Any]] = {}
         self._face_matching_progress_lock = Lock()
         self._face_matching_threads: Dict[str, Thread] = {}
@@ -1868,8 +1870,18 @@ class ImgDataService:
             return display_progress
 
         if display_progress.get("running") and not thread_alive:
-            display_progress["active"] = True
-            display_progress["stale"] = False
+            self._debugLog(
+                "face_matching_progress_marked_stale_without_worker",
+                operation_id=display_progress.get("operation_id"),
+                action=display_progress.get("action"),
+                message_key=display_progress.get("message_key") or display_progress.get("message"),
+                findings_count=int(display_progress.get("findings_count") or 0),
+                transferred_count=int(display_progress.get("transferred_count") or 0),
+            )
+            display_progress["running"] = False
+            display_progress["active"] = False
+            display_progress["stale"] = True
+            display_progress["stop_requested"] = False
             return display_progress
 
         display_progress["running"] = False
@@ -1930,7 +1942,12 @@ class ImgDataService:
             with self._face_matching_progress_lock:
                 current = self._face_matching_progress.get(user_key, {})
         payload = dict(current) if isinstance(current, dict) else {}
-        return self._normalizeFaceMatchingProgressForDisplay(user_key, self._normalizeFaceMatchingProgress(user_key, payload))
+        return self._attachFaceMatchStatusPayload(
+            self._normalizeFaceMatchingProgressForDisplay(
+                user_key,
+                self._normalizeFaceMatchingProgress(user_key, payload),
+            )
+        )
 
     def _normalizeFaceMatchingProgress(self, user_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
@@ -3393,6 +3410,18 @@ class ImgDataService:
         save_only: bool,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> None:
+        started = monotonic()
+        self._debugLog(
+            "face_matching_worker_start",
+            action=action,
+            auto=auto,
+            save_only=save_only,
+            limit=limit,
+            offset=offset,
+            skip_face_ids_count=len(skip_face_ids or []),
+            skip_targets_count=len(skip_targets or []),
+            resume=bool(resume_cursor),
+        )
         try:
             self.session_manager.keepalive(user_key, base_url=base_url)
             if action == "search_file_face_in_sources":
@@ -3449,6 +3478,15 @@ class ImgDataService:
                     if field in result:
                         progress_updates[field] = result.get(field)
             self._setFaceMatchingProgress(user_key, **progress_updates)
+            self._debugLog(
+                "face_matching_worker_finished",
+                action=action,
+                auto=auto,
+                save_only=save_only,
+                duration_ms=round((monotonic() - started) * 1000, 2),
+                findings_count=progress_updates.get("findings_count"),
+                transferred_count=progress_updates.get("transferred_count"),
+            )
         except (SessionBootstrapRequired, SessionManagerError) as exc:
             self._setFaceMatchingSessionExceptionProgress(
                 user_key,
@@ -3460,8 +3498,16 @@ class ImgDataService:
                 skip_face_ids=skip_face_ids,
                 skip_targets=skip_targets,
             )
+            self._debugLog(
+                "face_matching_worker_session_exception",
+                action=action,
+                duration_ms=round((monotonic() - started) * 1000, 2),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
         except Exception as exc:
             error_message = self._formatExceptionForProgress(exc)
+            error_traceback = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-4000:]
             self._setFaceMatchingProgressMessage(
                 user_key,
                 "face_match:progress_failed",
@@ -3471,10 +3517,18 @@ class ImgDataService:
                 paused=False,
                 auth_required=False,
                 error=error_message,
-                error_traceback="".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-4000:],
+                error_traceback=error_traceback,
                 action=action,
                 auto=auto,
                 save_only=save_only,
+            )
+            self._debugLog(
+                "face_matching_worker_exception",
+                action=action,
+                duration_ms=round((monotonic() - started) * 1000, 2),
+                error_type=type(exc).__name__,
+                error=error_message,
+                traceback=error_traceback,
             )
         finally:
             self._face_matching_threads.pop(user_key, None)
@@ -4230,6 +4284,7 @@ class ImgDataService:
         base_url: str,
         entry: Dict[str, Any],
         image_faces_cache: Dict[int, List[Dict[str, Any]]],
+        photos_lookup_cache: Optional[PhotosLookupCache] = None,
     ) -> bool:
         if not isinstance(entry, dict):
             return False
@@ -4287,6 +4342,7 @@ class ImgDataService:
                 shared_folder=shared_folder,
                 image_path=image_path,
                 additional=["thumbnail"],
+                lookup_cache=photos_lookup_cache,
             )
             item_id = item.get("id") if isinstance(item, dict) else None
             try:
@@ -7248,9 +7304,22 @@ class ImgDataService:
     ) -> Dict[str, Any]:
         current = self.getFileAnalysisProgress()
         if current.get("running"):
+            self._debugLog(
+                "file_analysis_start_reused_running_progress",
+                operation_id=current.get("operation_id"),
+                status=current.get("status"),
+                phase=current.get("phase"),
+            )
             return current
         running_operation = self._runningOperationProgress(user_key, exclude_operation="file_analysis")
         if running_operation:
+            self._debugLog(
+                "file_analysis_start_blocked_by_running_operation",
+                requested_operation="file_analysis",
+                running_operation=running_operation.get("operation"),
+                running_operation_id=running_operation.get("operation_id"),
+                running_phase=running_operation.get("phase"),
+            )
             return self._buildStartBlockedByRunningOperationPayload(
                 running_operation,
                 requested_operation="file_analysis",
@@ -7258,6 +7327,7 @@ class ImgDataService:
 
         job_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         started_at = self._timestamp_now()
+        self._debugLog("file_analysis_start", job_id=job_id)
         self._setFileAnalysisProgress(
             running=True,
             finished=False,
@@ -7338,9 +7408,23 @@ class ImgDataService:
     ) -> Dict[str, Any]:
         current = self.getFaceMatchingProgress(user_key)
         if current.get("running"):
+            self._debugLog(
+                "face_matching_start_reused_running_progress",
+                operation_id=current.get("operation_id"),
+                action=current.get("action"),
+                active=bool(current.get("active")),
+                stale=bool(current.get("stale")),
+            )
             return current
         running_operation = self._runningOperationProgress(user_key, exclude_operation="face_match")
         if running_operation:
+            self._debugLog(
+                "face_matching_start_blocked_by_running_operation",
+                requested_operation="face_match",
+                running_operation=running_operation.get("operation"),
+                running_operation_id=running_operation.get("operation_id"),
+                running_phase=running_operation.get("phase"),
+            )
             return self._buildStartBlockedByRunningOperationPayload(
                 running_operation,
                 requested_operation="face_match",
@@ -7399,6 +7483,18 @@ class ImgDataService:
             "face_match:status_preparing_scan"
             if normalized_action in {"search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"}
             else "face_match:status_starting"
+        )
+        self._debugLog(
+            "face_matching_start",
+            operation_id=operation_id,
+            action=normalized_action,
+            auto=auto,
+            save_only=save_only,
+            resume=bool(resume_cursor),
+            continue_existing_operation=continue_existing_operation,
+            skip_face_ids_count=len(combined_skip_face_ids),
+            skip_targets_count=len(combined_skip_targets),
+            resume_path_index=resume_path_index,
         )
 
         self._setFaceMatchingProgressMessage(
@@ -9484,10 +9580,25 @@ class ImgDataService:
         user_key: Optional[str] = None,
         cookies: Optional[Dict[str, str]] = None,
         base_url: Optional[str] = None,
+        action: str = "",
         auto: bool = False,
         refresh: bool = False,
     ) -> Dict[str, Any]:
         findings = self.getFaceMatchFindings()
+        requested_action = str(action or "").strip().lower()
+        findings_action = str(findings.get("action") or "").strip().lower()
+        if requested_action and findings_action and requested_action != findings_action:
+            return {
+                "status": str(findings.get("status") or ""),
+                "shared_folder": str(findings.get("shared_folder") or ""),
+                "action": findings_action,
+                "requested_action": requested_action,
+                "count": 0,
+                "entries": [],
+                "transferred_count": 0,
+                "save_only": False,
+                "auto": bool(auto),
+            }
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
         resolved_entries = entries
         transferred_count = int(findings.get("transferred_count") or 0)
@@ -9501,6 +9612,7 @@ class ImgDataService:
                 )
             )
             image_faces_cache: Dict[int, List[Dict[str, Any]]] = {}
+            photos_lookup_cache = getattr(self, "photos_lookup_cache", None)
             next_entries = []
             findings_changed = False
             for entry in entries:
@@ -9513,6 +9625,7 @@ class ImgDataService:
                     base_url=base_url,
                     entry=entry,
                     image_faces_cache=image_faces_cache,
+                    photos_lookup_cache=photos_lookup_cache,
                 ):
                     findings_changed = True
                     continue
@@ -9587,6 +9700,8 @@ class ImgDataService:
         return {
             "status": str(findings.get("status") or ""),
             "shared_folder": str(findings.get("shared_folder") or ""),
+            "action": findings_action,
+            "requested_action": requested_action,
             "count": len(resolved_entries),
             "entries": resolved_entries,
             "transferred_count": transferred_count,
@@ -9908,16 +10023,23 @@ class ImgDataService:
                 face_id = add_result.get("face_id") if isinstance(add_result, dict) else None
                 if face_id is None:
                     raise ValueError("photos_face_create_failed")
-                assign_result = self.assignMatchedFaceToKnownPerson(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    face_id=int(face_id),
-                    person_id=target_person_id,
-                    person_name=resolved_name,
-                    item_id=add_result.get("item_id") if isinstance(add_result, dict) and add_result.get("item_id") is not None else None,
-                    image_path=image_path,
-                )
+                if self._metadataFaceAddAlreadyAssignedToPerson(add_result, target_person_id):
+                    assign_result = {
+                        "skipped": True,
+                        "reason": "already_assigned_by_add_face",
+                        "person_id": target_person_id,
+                    }
+                else:
+                    assign_result = self.assignMatchedFaceToKnownPerson(
+                        user_key=user_key,
+                        cookies=cookies,
+                        base_url=base_url,
+                        face_id=int(face_id),
+                        person_id=target_person_id,
+                        person_name=resolved_name,
+                        item_id=add_result.get("item_id") if isinstance(add_result, dict) and add_result.get("item_id") is not None else None,
+                        image_path=image_path,
+                    )
                 return {
                     "updated": True,
                     "warning": "",
@@ -10125,16 +10247,23 @@ class ImgDataService:
         face_id = add_result.get("face_id")
         if face_id is None:
             raise ValueError("photos_face_create_failed")
-        assign_result = self.assignMatchedFaceToKnownPerson(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            face_id=int(face_id),
-            person_id=person_id,
-            person_name=person_name,
-            item_id=add_result.get("item_id") if isinstance(add_result, dict) and add_result.get("item_id") is not None else None,
-            image_path=image_path,
-        )
+        if self._metadataFaceAddAlreadyAssignedToPerson(add_result, person_id):
+            assign_result = {
+                "skipped": True,
+                "reason": "already_assigned_by_add_face",
+                "person_id": int(person_id),
+            }
+        else:
+            assign_result = self.assignMatchedFaceToKnownPerson(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                face_id=int(face_id),
+                person_id=person_id,
+                person_name=person_name,
+                item_id=add_result.get("item_id") if isinstance(add_result, dict) and add_result.get("item_id") is not None else None,
+                image_path=image_path,
+            )
         return {
             "image_path": image_path,
             "person_id": int(person_id),
@@ -10143,6 +10272,17 @@ class ImgDataService:
             "add_result": add_result,
             "assign_result": assign_result,
         }
+
+    @staticmethod
+    def _metadataFaceAddAlreadyAssignedToPerson(add_result: Any, person_id: Any) -> bool:
+        if not isinstance(add_result, dict) or not bool(add_result.get("created")):
+            return False
+        try:
+            added_person_id = int(add_result.get("person_id"))
+            expected_person_id = int(person_id)
+        except (TypeError, ValueError):
+            return False
+        return added_person_id == expected_person_id
 
     def createMetadataFaceAsPhotosPerson(
         self,
@@ -10264,6 +10404,7 @@ class ImgDataService:
             shared_folder=shared_folder,
             image_path=image_path,
             additional=["thumbnail"],
+            lookup_cache=self.photos_lookup_cache,
         )
         if not isinstance(item, dict) or item.get("id") is None:
             raise ValueError("photos_item_not_found_for_image")
@@ -10349,16 +10490,6 @@ class ImgDataService:
                         "readback_found_face": False,
                     },
                 )
-            self._validatePhotosFaceOnItem(
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                item_id=item_id,
-                face_id=int(created_face_id),
-                phase="photos_face_create_postcheck",
-                image_path=image_path,
-                expected_person_id=int(person_id) if person_id is not None else None,
-            )
         created_person_id = None
         if person_id is not None:
             created_person_id = int(person_id)
@@ -11095,6 +11226,18 @@ class ImgDataService:
 
     def saveRuntimeConfig(self, config: Dict[str, Any]) -> bool:
         return self.config.writeConfig(config)
+
+    def setDebugLogger(self, logger: Optional[Callable[..., None]]) -> None:
+        self._debug_logger = logger if callable(logger) else None
+
+    def _debugLog(self, event: str, **fields: Any) -> None:
+        logger = self._debug_logger
+        if not callable(logger):
+            return
+        try:
+            logger(event, **fields)
+        except Exception:
+            pass
 
     def _defaultInsightFaceModelRoot(self) -> Path:
         return (self.config._config_path.parent / "insightface_models").resolve()

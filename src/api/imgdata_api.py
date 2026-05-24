@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 import asyncio
+import hashlib
+import json
+import logging
 import os
+import time
+import traceback
 from contextvars import ContextVar
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlsplit
 from fastapi import APIRouter, Request
@@ -19,12 +26,126 @@ SESSION_MANAGER = SessionManager(verify_ssl=DSM_INTERNAL_VERIFY_SSL, timeout=20)
 IMGDATA = ImgDataService(SESSION_MANAGER)
 
 _REQUEST_MUTATION_CONTEXT: ContextVar[Dict[str, Any]] = ContextVar("request_mutation_context", default={})
+_DEBUG_LOGGER = logging.getLogger("av_imgdata.backend_debug")
+_DEBUG_LOGGER.setLevel(logging.INFO)
+_DEBUG_LOGGER.propagate = False
+_DEBUG_LOGGER_SIGNATURE: Optional[Tuple[str, int, int]] = None
 
 
 def _configured_max_photos_persons() -> int:
     config = IMGDATA.getRuntimeConfig()
     photos = config.get("photos", {}) if isinstance(config.get("photos"), dict) else {}
     return max(1, int(photos["MAX_PHOTOS_PERSONS"]))
+
+
+def _backend_debug_config() -> Dict[str, Any]:
+    try:
+        config = IMGDATA.getRuntimeConfig()
+    except Exception:
+        return {}
+    debug = config.get("debug") if isinstance(config.get("debug"), dict) else {}
+    return debug if isinstance(debug, dict) else {}
+
+
+def is_backend_debug_enabled() -> bool:
+    override = os.getenv("AV_IMGDATA_BACKEND_DEBUG", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+    return bool(_backend_debug_config().get("BACKEND_DEBUG_ENABLED", False))
+
+
+def backend_debug_log_path() -> str:
+    debug = _backend_debug_config()
+    configured = str(debug.get("BACKEND_DEBUG_LOG_PATH") or "").strip()
+    if configured:
+        return configured
+    var_dir = os.getenv("SYNOPKG_PKGVAR")
+    if var_dir:
+        return str(Path(var_dir) / "backend-debug.log")
+    return str(Path(IMGDATA.config._config_path).parent / "backend-debug.log")
+
+
+def _backend_debug_logger() -> Optional[logging.Logger]:
+    global _DEBUG_LOGGER_SIGNATURE
+    debug = _backend_debug_config()
+    path = backend_debug_log_path()
+    max_bytes = max(65536, min(10485760, int(debug.get("BACKEND_DEBUG_LOG_MAX_BYTES") or 1048576)))
+    backups = max(1, min(10, int(debug.get("BACKEND_DEBUG_LOG_BACKUPS") or 3)))
+    signature = (path, max_bytes, backups)
+    if _DEBUG_LOGGER_SIGNATURE == signature and _DEBUG_LOGGER.handlers:
+        return _DEBUG_LOGGER
+
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
+    except Exception:
+        return None
+
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    for old_handler in list(_DEBUG_LOGGER.handlers):
+        _DEBUG_LOGGER.removeHandler(old_handler)
+        try:
+            old_handler.close()
+        except Exception:
+            pass
+    _DEBUG_LOGGER.addHandler(handler)
+    _DEBUG_LOGGER_SIGNATURE = signature
+    return _DEBUG_LOGGER
+
+
+def _safe_debug_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(key): _safe_debug_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_debug_value(item) for item in value[:100]]
+    return str(value)
+
+
+def _debug_user_key(user_key: str) -> str:
+    if not user_key:
+        return ""
+    return hashlib.sha256(user_key.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
+def backend_debug_log(event: str, **fields: Any) -> None:
+    if not is_backend_debug_enabled():
+        return
+    logger = _backend_debug_logger()
+    if logger is None:
+        return
+    payload = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "event": str(event),
+    }
+    payload.update({key: _safe_debug_value(value) for key, value in fields.items()})
+    try:
+        logger.info(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    except Exception:
+        pass
+
+
+IMGDATA.setDebugLogger(backend_debug_log)
+
+
+def _progress_debug_summary(progress: Dict[str, Any]) -> Dict[str, Any]:
+    status = progress.get("status") if isinstance(progress.get("status"), dict) else {}
+    return {
+        "operation_id": progress.get("operation_id"),
+        "action": progress.get("action"),
+        "running": bool(progress.get("running")),
+        "active": bool(progress.get("active")),
+        "stale": bool(progress.get("stale")),
+        "stop_requested": bool(progress.get("stop_requested")),
+        "resume_available": bool(progress.get("resume_available")),
+        "findings_count": int(progress.get("findings_count") or 0),
+        "transferred_count": int(progress.get("transferred_count") or 0),
+        "status_phase": status.get("phase"),
+        "status_operation": status.get("operation"),
+    }
 
 
 @router.get("/ping")
@@ -633,6 +754,7 @@ async def exiftool_remove(request: Request):
 
 @router.post("/face_matching_action")
 async def face_matching_action(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
@@ -669,6 +791,12 @@ async def face_matching_action(request: Request):
             normalized_skip_targets.append(normalized)
 
     if action not in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface", "load_photo_face_match_findings"}:
+        backend_debug_log(
+            "face_matching_action_rejected",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            action=action,
+        )
         return {
             "success": False,
             "error": {
@@ -679,6 +807,20 @@ async def face_matching_action(request: Request):
         }
 
     try:
+        backend_debug_log(
+            "face_matching_action_start",
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            action=action,
+            auto=auto,
+            save_only=save_only,
+            resume_from_progress=resume_from_progress,
+            refresh=refresh,
+            limit=limit,
+            offset=offset,
+            skip_face_ids_count=len(normalized_skip_face_ids),
+            skip_targets_count=len(normalized_skip_targets),
+            findings_action=str(body.get("findings_action") or body.get("source_action") or "").strip(),
+        )
         if action in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"}:
             face_matches = IMGDATA.startFaceMatchingDiscovery(
                 user_key=session_ctx["user_key"],
@@ -701,15 +843,51 @@ async def face_matching_action(request: Request):
                     user_key=session_ctx["user_key"],
                     cookies=session_ctx["cookies"],
                     base_url=session_ctx["base_url"],
+                    action=str(body.get("findings_action") or body.get("source_action") or "").strip(),
                     auto=auto,
                     refresh=refresh,
                 ),
             )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
+        backend_debug_log(
+            "face_matching_action_session_exception",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            action=action,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
         return _session_exception_response(exc, bootstrap_message="face_matching_action_bootstrap_required")
     except Exception as exc:
+        backend_debug_log(
+            "face_matching_action_exception",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            action=action,
+            error_type=type(exc).__name__,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
         return _operation_exception_response(exc, message="face_matching_action_failed")
 
+    result_summary = _progress_debug_summary(face_matches) if isinstance(face_matches, dict) else {}
+    if isinstance(face_matches, dict) and "entries" in face_matches:
+        entries = face_matches.get("entries") if isinstance(face_matches.get("entries"), list) else []
+        result_summary = {
+            "status": face_matches.get("status"),
+            "action": face_matches.get("action"),
+            "count": len(entries),
+            "transferred_count": int(face_matches.get("transferred_count") or 0),
+            "save_only": bool(face_matches.get("save_only")),
+            "auto": bool(face_matches.get("auto")),
+        }
+    backend_debug_log(
+        "face_matching_action_end",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        action=action,
+        result=result_summary,
+    )
     return {
         "success": True,
         "data": {
@@ -725,45 +903,91 @@ async def face_matching_action(request: Request):
 
 @router.post("/face_matching_findings_status")
 async def face_matching_findings_status(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
+    body = await _read_request_body(request)
+    requested_action = str(body.get("action") or body.get("source_action") or "").strip().lower()
     findings = IMGDATA.getFaceMatchFindings()
-    entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+    findings_action = str(findings.get("action") or "").strip().lower()
+    if requested_action and findings_action and requested_action != findings_action:
+        entries = []
+    else:
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+    backend_debug_log(
+        "face_matching_findings_status",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        requested_action=requested_action,
+        findings_action=findings_action,
+        status=str(findings.get("status") or ""),
+        count=len(entries),
+        transferred_count=int(findings.get("transferred_count") or 0),
+    )
     return {
         "success": True,
         "data": {
             "status": str(findings.get("status") or ""),
+            "action": findings_action,
+            "requested_action": requested_action,
             "count": len(entries),
             "transferred_count": int(findings.get("transferred_count") or 0),
-            "save_only": bool(findings.get("save_only")),
-            "auto": bool(findings.get("auto")),
+            "save_only": bool(findings.get("save_only")) if entries else False,
+            "auto": bool(findings.get("auto")) if entries else False,
         },
     }
 
 
 @router.post("/face_matching_progress")
 async def face_matching_progress(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
+    try:
+        progress = IMGDATA.getFaceMatchingProgress(session_ctx["user_key"])
+    except Exception as exc:
+        backend_debug_log(
+            "face_matching_progress_exception",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            error_type=type(exc).__name__,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
+        raise
+    backend_debug_log(
+        "face_matching_progress",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        progress=_progress_debug_summary(progress),
+    )
     return {
         "success": True,
-        "data": IMGDATA.getFaceMatchingProgress(session_ctx["user_key"]),
+        "data": progress,
     }
 
 
 @router.post("/face_matching_stop")
 async def face_matching_stop(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
+    progress = IMGDATA.requestStopFaceMatching(session_ctx["user_key"])
+    backend_debug_log(
+        "face_matching_stop",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        progress=_progress_debug_summary(progress),
+    )
     return {
         "success": True,
-        "data": IMGDATA.requestStopFaceMatching(session_ctx["user_key"]),
+        "data": progress,
     }
 
 
@@ -1756,6 +1980,7 @@ async def config_get(request: Request):
         "data": {
             "config": config,
             "config_path": str(IMGDATA.config._config_path),
+            "backend_debug_log_path": backend_debug_log_path(),
             "checks_ignore_lists": IMGDATA.getChecksIgnoreListsStatus(),
         },
     }
@@ -1792,6 +2017,7 @@ async def config_save(request: Request):
         "data": {
             "config": IMGDATA.getRuntimeConfig(),
             "config_path": str(IMGDATA.config._config_path),
+            "backend_debug_log_path": backend_debug_log_path(),
             "checks_ignore_lists": IMGDATA.getChecksIgnoreListsStatus(),
             "saved": True,
         },

@@ -19,3 +19,43 @@ def test_stored_face_match_transfer_still_removes_existing_photos_face_by_face_i
     assert "if (faceId)" in source
     assert "const entryFaceId = Number(entry && entry.face && entry.face.face_id)" in source
     assert "Number.isFinite(entryFaceId) && entryFaceId === faceId" in source
+
+
+def test_stored_face_match_status_fetch_failure_keeps_existing_status():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    method_start = source.index("async fetchFaceMatchFindingsStatus()")
+    method_end = source.index("async reconcileStoredFaceMatchFindingsAfterMutationError", method_start)
+    method_source = source[method_start:method_end]
+
+    assert "this.faceMatchFindingsStatus = {};" not in method_source
+    assert "this.faceMatchFindingsStatus = this.faceMatchFindingsStatus && typeof this.faceMatchFindingsStatus === 'object'" in method_source
+
+
+def test_stored_face_match_mutation_error_reconciles_from_backend():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+
+    assert "async reconcileStoredFaceMatchFindingsAfterMutationError(err)" in source
+    assert "getFaceMatchErrorMessage(err, fallback = 'Unknown error')" in source
+    assert "const message = this.getFaceMatchErrorMessage(err);" in source
+    assert "await this.loadStoredFaceMatchFindings()" in source
+    assert source.count("await this.reconcileStoredFaceMatchFindingsAfterMutationError(err)") >= 3
+
+
+def test_face_match_mutations_show_pending_output_before_backend_write():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+
+    assert "setFaceMatchMutationPending(messageKey, fallback, imagePath, personName = '')" in source
+    assert "face_match:output_assign_metadata_face_starting" in source
+    assert "face_match:output_assign_photos_face_starting" in source
+    assert "face_match:output_create_metadata_face_starting" in source
+    assert "face_match:output_apply_metadata_face_starting" in source
+
+
+def test_dsm_api_type_error_gets_explicit_network_failure_message():
+    source = Path("ui/src/App.vue").read_text(encoding="utf-8")
+    method_start = source.index("async callDsmApi(apiPath, body = {}, options = {})")
+    method_end = source.index("async callFileAnalysisApi", method_start)
+    method_source = source[method_start:method_end]
+
+    assert "err instanceof TypeError" in method_source
+    assert "error:network_request_failed" in method_source
