@@ -28,11 +28,18 @@ class ImgDataApiPersonOrchestrationRouteTests(unittest.IsolatedAsyncioTestCase):
             "save_mapping": True,
         })
 
-        orchestration_result = {
-            "updated": True,
-            "operation": "photos_create",
-            "target_person": {"id": 123, "name": "Alice"},
-            "create_result": {"person_id": 123},
+        mutation_result = {
+            "face_id": 456,
+            "person_id": 123,
+            "person_name": "Alice",
+            "result": {
+                "updated": True,
+                "operation": "photos_create",
+                "target_person": {"id": 123, "name": "Alice"},
+                "create_result": {"person_id": 123},
+            },
+            "findings_update": {"removed": True},
+            "mapping_saved": True,
         }
 
         with patch.object(imgdata_api, "_prepare_session_request", return_value=(
@@ -40,42 +47,40 @@ class ImgDataApiPersonOrchestrationRouteTests(unittest.IsolatedAsyncioTestCase):
             None,
         )), patch.object(
             imgdata_api.IMGDATA,
+            "applyPhotoFaceMatchPersonCreation",
+            return_value=mutation_result,
+        ) as mutation_mock, patch.object(
+            imgdata_api.IMGDATA,
             "resolveOrCreatePhotosPersonForExistingFace",
-            return_value=orchestration_result,
         ) as orchestrate_mock, patch.object(
             imgdata_api.IMGDATA,
             "createMatchedFaceAsPerson",
         ) as direct_create_mock, patch.object(
             imgdata_api.IMGDATA,
             "removeFaceMatchFindingEntry",
-            return_value={"removed": True},
         ) as remove_mock, patch.object(
             imgdata_api,
             "_save_name_mapping_if_requested",
-            return_value=True,
         ) as mapping_mock:
             response = await imgdata_api.face_create_match(request)
 
         self.assertTrue(response["success"])
-        orchestrate_mock.assert_called_once_with(
+        mutation_mock.assert_called_once_with(
             user_key="user",
             cookies={},
             base_url="https://example.test",
-            image_path="",
             face_id=456,
             person_name="Alice",
-            create_missing_person=True,
-        )
-        direct_create_mock.assert_not_called()
-        remove_mock.assert_called_once_with(face_id=456, increment_transferred_count=True)
-        mapping_mock.assert_called_once_with(
             save_mapping=True,
             source_name="Alias",
-            target_name="Alice",
         )
+        orchestrate_mock.assert_not_called()
+        direct_create_mock.assert_not_called()
+        remove_mock.assert_not_called()
+        mapping_mock.assert_not_called()
         self.assertEqual(response["data"]["person_id"], 123)
         self.assertEqual(response["data"]["person_name"], "Alice")
-        self.assertEqual(response["data"]["result"], orchestration_result)
+        self.assertEqual(response["data"], mutation_result)
 
     async def test_face_create_metadata_match_uses_metadata_orchestration(self):
         metadata_face = {

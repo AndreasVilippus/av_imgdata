@@ -2,13 +2,124 @@ import json
 from unittest.mock import patch
 
 from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
-from imgdata import ImgDataService, ScanContext
+from imgdata import ImgDataOperationError, ImgDataService, ScanContext
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
 
 
 def make_service():
     return ImgDataService(SessionManager())
+
+
+def test_write_operation_lock_keeps_structured_conflict_details():
+    service = make_service()
+
+    with service._writeOperationLock(
+        service._metadataWriteLockKey("/volume1/photo/a.jpg"),
+        phase="metadata_write",
+        context={"image_path": "/volume1/photo/a.jpg"},
+    ):
+        try:
+            with service._writeOperationLock(
+                service._metadataWriteLockKey("/volume1/photo/a.jpg"),
+                phase="metadata_write",
+                context={"image_path": "/volume1/photo/a.jpg"},
+            ):
+                pass
+        except ImgDataOperationError as exc:
+            details = exc.details
+        else:
+            raise AssertionError("expected write conflict")
+
+    assert details["code"] == "write_conflict"
+    assert details["message_key"] == "write_conflict"
+    assert details["phase"] == "metadata_write"
+    assert details["lock_key"] == "metadata:/volume1/photo/a.jpg"
+    assert details["retryable"] is True
+    assert details["image_path"] == "/volume1/photo/a.jpg"
+
+
+def test_photo_face_match_assignment_mutation_updates_photos_findings_and_mapping():
+    service = make_service()
+    calls = []
+    service.assignMatchedFaceToKnownPerson = lambda **kwargs: calls.append(("assign", kwargs)) or {"updated": True}
+    service.removeFaceMatchFindingEntry = lambda **kwargs: calls.append(("remove", kwargs)) or {"count": 4, "transferred_count": 2}
+    service.saveNameMapping = lambda **kwargs: calls.append(("mapping", kwargs)) or True
+
+    result = service.applyPhotoFaceMatchAssignment(
+        user_key="user",
+        cookies={"_SSID": "sid"},
+        base_url="https://example.test",
+        face_id=77,
+        person_id=91,
+        person_name=" Target ",
+        save_mapping=True,
+        source_name="Legacy",
+    )
+
+    assert result == {
+        "face_id": 77,
+        "person_id": 91,
+        "result": {"updated": True},
+        "findings_update": {"count": 4, "transferred_count": 2},
+        "mapping_saved": True,
+    }
+    assert calls == [
+        ("assign", {
+            "user_key": "user",
+            "cookies": {"_SSID": "sid"},
+            "base_url": "https://example.test",
+            "face_id": 77,
+            "person_id": 91,
+            "person_name": "Target",
+        }),
+        ("remove", {"face_id": 77, "increment_transferred_count": True}),
+        ("mapping", {"source_name": "Legacy", "target_name": "Target"}),
+    ]
+
+
+def test_photo_face_match_person_creation_mutation_updates_findings_and_mapping():
+    service = make_service()
+    calls = []
+    create_result = {
+        "operation": "photos_create",
+        "target_person": {"id": 91, "name": "Target"},
+    }
+    service.resolveOrCreatePhotosPersonForExistingFace = lambda **kwargs: calls.append(("create", kwargs)) or create_result
+    service.removeFaceMatchFindingEntry = lambda **kwargs: calls.append(("remove", kwargs)) or {"count": 4, "transferred_count": 2}
+    service.saveNameMapping = lambda **kwargs: calls.append(("mapping", kwargs)) or True
+
+    result = service.applyPhotoFaceMatchPersonCreation(
+        user_key="user",
+        cookies={"_SSID": "sid"},
+        base_url="https://example.test",
+        face_id=77,
+        person_name=" Target ",
+        save_mapping=True,
+        source_name="Legacy",
+    )
+
+    assert result == {
+        "face_id": 77,
+        "person_id": 91,
+        "person_name": "Target",
+        "result": create_result,
+        "findings_update": {"count": 4, "transferred_count": 2},
+        "mapping_saved": True,
+    }
+    assert calls == [
+        ("create", {
+            "user_key": "user",
+            "cookies": {"_SSID": "sid"},
+            "base_url": "https://example.test",
+            "image_path": "",
+            "face_id": 77,
+            "person_name": "Target",
+            "create_missing_person": True,
+        }),
+        ("remove", {"face_id": 77, "increment_transferred_count": True}),
+        ("mapping", {"source_name": "Legacy", "target_name": "Target"}),
+    ]
 
 
 def test_raw_face_check_without_sidecar_is_skipped_when_exiftool_context_is_disabled():

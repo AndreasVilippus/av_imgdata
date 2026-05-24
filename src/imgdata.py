@@ -9,7 +9,6 @@ import traceback
 import zipfile
 from importlib import metadata as importlib_metadata
 import xml.etree.ElementTree as ET
-from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone
 from time import monotonic, sleep
@@ -33,8 +32,10 @@ from services.exiftool_service import ExifToolService
 from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
+from services.face_match_mutation_service import FaceMatchMutationService
 from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
+from services.write_lock_service import WriteLockService
 
 
 class ImgDataOperationError(Exception):
@@ -163,10 +164,27 @@ class ImgDataService:
         self._file_analysis_progress: Dict[str, Any] = {}
         self._file_analysis_progress_lock = Lock()
         self._file_analysis_thread: Optional[Thread] = None
-        self._write_locks: Dict[str, Lock] = {}
-        self._write_locks_lock = Lock()
+        self.write_locks = WriteLockService(self._buildWriteConflictError)
+        self.face_match_mutations = FaceMatchMutationService(self, self._debugLog)
 
-    @contextmanager
+    @staticmethod
+    def _buildWriteConflictError(
+        lock_key: str,
+        phase: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> ImgDataOperationError:
+        return ImgDataOperationError(
+            "write_conflict",
+            {
+                "code": "write_conflict",
+                "message_key": "write_conflict",
+                "phase": phase,
+                "lock_key": lock_key,
+                "retryable": True,
+                **(context or {}),
+            },
+        )
+
     def _writeOperationLock(
         self,
         key: str,
@@ -174,31 +192,7 @@ class ImgDataService:
         phase: str,
         context: Optional[Dict[str, Any]] = None,
     ):
-        normalized_key = str(key or "").strip()
-        if not normalized_key:
-            yield
-            return
-        with self._write_locks_lock:
-            lock = self._write_locks.get(normalized_key)
-            if lock is None:
-                lock = Lock()
-                self._write_locks[normalized_key] = lock
-        if not lock.acquire(blocking=False):
-            raise ImgDataOperationError(
-                "write_conflict",
-                {
-                    "code": "write_conflict",
-                    "message_key": "write_conflict",
-                    "phase": phase,
-                    "lock_key": normalized_key,
-                    "retryable": True,
-                    **(context or {}),
-                },
-                    )
-        try:
-            yield
-        finally:
-            lock.release()
+        return self.write_locks.acquire(key, phase=phase, context=context)
 
     @staticmethod
     def _metadataWriteLockKey(path: Any) -> str:
@@ -10100,6 +10094,50 @@ class ImgDataService:
             "name_mapping": mapped_assignment,
         }
 
+    def applyPhotoFaceMatchAssignment(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        face_id: int,
+        person_id: int,
+        person_name: str,
+        save_mapping: bool = False,
+        source_name: Any = "",
+    ) -> Dict[str, Any]:
+        return self.face_match_mutations.apply_photo_face_assignment(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            face_id=face_id,
+            person_id=person_id,
+            person_name=person_name,
+            save_mapping=save_mapping,
+            source_name=source_name,
+        )
+
+    def applyPhotoFaceMatchPersonCreation(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        face_id: int,
+        person_name: str,
+        save_mapping: bool = False,
+        source_name: Any = "",
+    ) -> Dict[str, Any]:
+        return self.face_match_mutations.apply_photo_face_person_creation(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            face_id=face_id,
+            person_name=person_name,
+            save_mapping=save_mapping,
+            source_name=source_name,
+        )
+
     def assignMatchedFaceToKnownPerson(
         self,
         *,
@@ -10111,7 +10149,8 @@ class ImgDataService:
         person_name: str,
         item_id: Optional[int] = None,
         image_path: str = "",
-        ) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
+        started = monotonic()
         with self._writeOperationLock(
             self._photosFaceWriteLockKey(face_id),
             phase="photos_face_assign",
@@ -10119,6 +10158,7 @@ class ImgDataService:
         ):
             before_face = None
             if item_id is not None:
+                precheck_started = monotonic()
                 before_face = self._validatePhotosFaceOnItem(
                     user_key=user_key,
                     cookies=cookies,
@@ -10128,6 +10168,14 @@ class ImgDataService:
                     phase="photos_face_assign_precheck",
                     image_path=image_path,
                 )
+                self._debugLog(
+                    "photos_face_assign_phase",
+                    phase="precheck",
+                    duration_ms=round((monotonic() - precheck_started) * 1000, 2),
+                    face_id=face_id,
+                    item_id=item_id,
+                )
+            api_started = monotonic()
             result = self.photos.assignFaceToPerson(
                 user_key=user_key,
                 cookies=cookies,
@@ -10136,7 +10184,16 @@ class ImgDataService:
                 person_id=person_id,
                 person_name=person_name,
             )
+            self._debugLog(
+                "photos_face_assign_phase",
+                phase="photos_api_assign",
+                duration_ms=round((monotonic() - api_started) * 1000, 2),
+                face_id=face_id,
+                person_id=person_id,
+                success=bool(result.get("success", True)) if isinstance(result, dict) else None,
+            )
             if item_id is not None:
+                postcheck_started = monotonic()
                 self._validatePhotosFaceOnItem(
                     user_key=user_key,
                     cookies=cookies,
@@ -10148,6 +10205,21 @@ class ImgDataService:
                     expected_person_id=int(person_id),
                     before=before_face,
                 )
+                self._debugLog(
+                    "photos_face_assign_phase",
+                    phase="postcheck",
+                    duration_ms=round((monotonic() - postcheck_started) * 1000, 2),
+                    face_id=face_id,
+                    item_id=item_id,
+                    person_id=person_id,
+                )
+            self._debugLog(
+                "photos_face_assign_end",
+                duration_ms=round((monotonic() - started) * 1000, 2),
+                face_id=face_id,
+                person_id=person_id,
+                item_id=item_id,
+            )
             return result
 
     def assignChecksFaceToKnownPerson(

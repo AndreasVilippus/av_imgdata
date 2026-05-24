@@ -590,24 +590,53 @@ def _safe_refresh_checks_mutation_state(
 
 @router.post("/status")
 async def status(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
     try:
+        persons_started = time.monotonic()
         persons_status = IMGDATA.status_persons(
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
         )
+        backend_debug_log(
+            "status_phase",
+            phase="persons",
+            duration_ms=round((time.monotonic() - persons_started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            known=int(persons_status.get("known") or 0) if isinstance(persons_status, dict) else None,
+            total=int(persons_status.get("total") or 0) if isinstance(persons_status, dict) else None,
+        )
+        system_started = time.monotonic()
         system_status = IMGDATA.status_system(
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
         )
+        backend_debug_log(
+            "status_phase",
+            phase="system",
+            duration_ms=round((time.monotonic() - system_started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
+        backend_debug_log(
+            "status_exception",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
         return _session_exception_response(exc, bootstrap_message="status_bootstrap_required")
 
+    backend_debug_log(
+        "status_end",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+    )
     return {
         "success": True,
         "data": {
@@ -619,13 +648,22 @@ async def status(request: Request):
 
 @router.post("/exiftool_status")
 async def exiftool_status(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
+    data = IMGDATA.exiftool_status()
+    backend_debug_log(
+        "exiftool_status_end",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        installed=bool(data.get("installed")) if isinstance(data, dict) else None,
+        available=bool(data.get("available")) if isinstance(data, dict) else None,
+    )
     return {
         "success": True,
-        "data": IMGDATA.exiftool_status(),
+        "data": data,
     }
 
 
@@ -993,6 +1031,7 @@ async def face_matching_stop(request: Request):
 
 @router.post("/face_assign_match")
 async def face_assign_match(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
@@ -1024,42 +1063,59 @@ async def face_assign_match(request: Request):
         }
 
     try:
-        result = IMGDATA.assignMatchedFaceToKnownPerson(
+        data = IMGDATA.applyPhotoFaceMatchAssignment(
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
             face_id=face_id,
             person_id=person_id,
             person_name=person_name.strip(),
-        )
-        findings_update = IMGDATA.removeFaceMatchFindingEntry(
-            face_id=face_id,
-            increment_transferred_count=True,
-        )
-        mapping_saved = _save_name_mapping_if_requested(
             save_mapping=save_mapping,
             source_name=source_name,
-            target_name=person_name,
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
+        backend_debug_log(
+            "face_assign_match_exception",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            face_id=face_id,
+            person_id=person_id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
         return _session_exception_response(exc, bootstrap_message="face_assign_match_bootstrap_required")
     except Exception as exc:
+        backend_debug_log(
+            "face_assign_match_exception",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            face_id=face_id,
+            person_id=person_id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
         return _operation_exception_response(exc, message="face_assign_match_failed")
 
+    backend_debug_log(
+        "face_assign_match_end",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        face_id=face_id,
+        person_id=person_id,
+        findings_count=int((data.get("findings_update") or {}).get("count") or 0) if isinstance(data.get("findings_update"), dict) else None,
+        transferred_count=int((data.get("findings_update") or {}).get("transferred_count") or 0) if isinstance(data.get("findings_update"), dict) else None,
+        mapping_saved=bool(data.get("mapping_saved")),
+    )
     return {
         "success": True,
-        "data": {
-            "face_id": face_id,
-            "person_id": person_id,
-            "result": result,
-            "findings_update": findings_update,
-            "mapping_saved": mapping_saved if save_mapping else False,
-        },
+        "data": data,
     }
 
 
 @router.post("/face_create_match")
 async def face_create_match(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
@@ -1089,39 +1145,50 @@ async def face_create_match(request: Request):
         }
 
     try:
-        result = IMGDATA.resolveOrCreatePhotosPersonForExistingFace(
+        data = IMGDATA.applyPhotoFaceMatchPersonCreation(
             user_key=session_ctx["user_key"],
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
-            image_path="",
             face_id=face_id,
             person_name=person_name.strip(),
-            create_missing_person=True,
-        )
-        findings_update = IMGDATA.removeFaceMatchFindingEntry(
-            face_id=face_id,
-            increment_transferred_count=True,
-        )
-        mapping_saved = _save_name_mapping_if_requested(
             save_mapping=save_mapping,
             source_name=source_name,
-            target_name=person_name,
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
+        backend_debug_log(
+            "face_create_match_exception",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            face_id=face_id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
         return _session_exception_response(exc, bootstrap_message="face_create_match_bootstrap_required")
     except Exception as exc:
+        backend_debug_log(
+            "face_create_match_exception",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            face_id=face_id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
         return _operation_exception_response(exc, message="face_create_match_failed")
 
+    backend_debug_log(
+        "face_create_match_end",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        face_id=face_id,
+        person_id=data.get("person_id"),
+        findings_count=int((data.get("findings_update") or {}).get("count") or 0) if isinstance(data.get("findings_update"), dict) else None,
+        transferred_count=int((data.get("findings_update") or {}).get("transferred_count") or 0) if isinstance(data.get("findings_update"), dict) else None,
+        mapping_saved=bool(data.get("mapping_saved")),
+    )
     return {
         "success": True,
-        "data": {
-            "face_id": face_id,
-            "person_id": (result.get("target_person") or {}).get("id") if isinstance(result, dict) else None,
-            "person_name": person_name.strip(),
-            "result": result,
-            "findings_update": findings_update,
-            "mapping_saved": mapping_saved if save_mapping else False,
-        },
+        "data": data,
     }
 
 
@@ -1390,13 +1457,27 @@ async def file_analysis_start(request: Request):
 
 @router.post("/file_analysis_progress")
 async def file_analysis_progress(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
+    progress = IMGDATA.getFileAnalysisProgress()
+    data = _compact_file_analysis_progress(progress)
+    status = progress.get("status") if isinstance(progress, dict) and isinstance(progress.get("status"), dict) else {}
+    backend_debug_log(
+        "file_analysis_progress_end",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        running=bool(progress.get("running")) if isinstance(progress, dict) else None,
+        active=bool(progress.get("active")) if isinstance(progress, dict) else None,
+        phase=status.get("phase"),
+        files_analyzed=int(progress.get("files_analyzed") or 0) if isinstance(progress, dict) else None,
+        files_matched_total=int(progress.get("files_matched_total") or 0) if isinstance(progress, dict) else None,
+    )
     return {
         "success": True,
-        "data": _compact_file_analysis_progress(IMGDATA.getFileAnalysisProgress()),
+        "data": data,
     }
 
 
