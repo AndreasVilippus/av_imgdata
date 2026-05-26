@@ -254,6 +254,72 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(result.get("matched_person_id"), 91)
         self.assertEqual(result.get("source_name"), "Person Target")
 
+    def test_search_file_face_sources_keeps_photo_face_person_aligned_with_face_person_id(self):
+        target_face = MetadataFace.from_center_box(
+            name="",
+            x=0.50,
+            y=0.50,
+            w=0.10,
+            h=0.10,
+            source="embedded_xmp_exiftool",
+            source_format="ACD",
+        )
+        image_path = "/volume1/photo/tests/group.jpg"
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service._fileFaceMatchSourceScope = lambda: "photos"
+        self.service._getReverseFaceMatchCandidateEntries = lambda: []
+        self.service.files.listImageFiles = lambda base_path: [image_path]
+        self.service._readImageMetadata = lambda image_path, include_unnamed_acd=False: MetadataPayload(
+            image_path=image_path,
+            faces=[target_face],
+        )
+        persons = [
+            {"id": 1, "name": "Andreas Lichtenberg"},
+            {"id": 2, "name": "Kaire Vilippus"},
+        ]
+        self.service.photos.listFotoTeamPersonKnown = lambda **kwargs: persons
+        self.service.photos.sortPersonsForFaceMatch = lambda people: people
+        self.service.photos.listFotoTeamItems = lambda **kwargs: [{
+            "id": 100,
+            "folder_id": 200,
+            "filename": "group.jpg",
+        }]
+        self.service.photos.getFotoTeamFolder = lambda **kwargs: {"folder": {"name": "tests"}}
+        self.service.photos.list_faceFotoTeamItems = lambda **kwargs: [
+            {
+                "face_id": 10,
+                "face_name": "Andreas Lichtenberg",
+                "person_id": 1,
+                "bbox": {
+                    "top_left": {"x": 0.10, "y": 0.10},
+                    "bottom_right": {"x": 0.20, "y": 0.20},
+                },
+            },
+            {
+                "face_id": 11,
+                "face_name": "Kaire Vilippus",
+                "person_id": 2,
+                "bbox": {
+                    "top_left": {"x": 0.45, "y": 0.45},
+                    "bottom_right": {"x": 0.55, "y": 0.55},
+                },
+            },
+        ]
+        self.service.photos.findKnownPersonByName = lambda **kwargs: next(
+            person for person in persons if person["name"] == kwargs["name"]
+        )
+
+        result = self.service.searchFileFaceInSources(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+        )
+
+        self.assertTrue(result.get("searched"))
+        self.assertEqual(result.get("source_name"), "Kaire Vilippus")
+        self.assertEqual(result.get("matched_person_id"), 2)
+        self.assertEqual(result.get("matched_person", {}).get("name"), "Kaire Vilippus")
+
     def test_search_photo_face_in_file_save_only_persists_found_match(self):
         metadata_face = MetadataFace.from_center_box(
             name="Person Known",

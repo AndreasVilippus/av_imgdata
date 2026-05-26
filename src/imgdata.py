@@ -35,6 +35,8 @@ from services.face_matcher import FaceMatcher, compute
 from services.face_match_mutation_service import FaceMatchMutationService
 from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
+from services.runtime_operation_service import RuntimeOperationService
+from services.status_payload_builder import StatusPayloadBuilder
 from services.write_lock_service import WriteLockService
 
 
@@ -166,6 +168,12 @@ class ImgDataService:
         self._file_analysis_thread: Optional[Thread] = None
         self.write_locks = WriteLockService(self._buildWriteConflictError)
         self.face_match_mutations = FaceMatchMutationService(self, self._debugLog)
+        self.status_builder = StatusPayloadBuilder()
+        self.runtime_operations = RuntimeOperationService(
+            timestamp_func=self._timestamp_now,
+            status_builder=self.status_builder,
+            stale_stopping_seconds=self.STOPPING_PROGRESS_STALE_SECONDS,
+        )
 
     @staticmethod
     def _buildWriteConflictError(
@@ -394,34 +402,14 @@ class ImgDataService:
 
     @staticmethod
     def _utcNowIso() -> str:
-        return datetime.now(timezone.utc).isoformat()
+        return RuntimeOperationService.utc_now_iso()
 
     @staticmethod
     def _parseProgressTimestamp(value: Any) -> Optional[datetime]:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+        return RuntimeOperationService.parse_timestamp(value)
 
     def _isStaleStoppingProgress(self, progress: Any) -> bool:
-        if not isinstance(progress, dict) or not progress.get("running"):
-            return False
-        message_key = str(progress.get("message_key") or progress.get("message") or "").strip()
-        status = progress.get("status") if isinstance(progress.get("status"), dict) else {}
-        phase = str(status.get("phase") or progress.get("phase") or "").strip().lower()
-        if message_key not in {"checks:progress_stopping", "face_match:progress_stopping", "cleanup:progress_stopping"} and phase != "stopping":
-            return False
-        last_updated = self._parseProgressTimestamp(progress.get("last_updated_at"))
-        if last_updated is None:
-            return False
-        age_seconds = (datetime.now(timezone.utc) - last_updated).total_seconds()
-        return age_seconds >= self.STOPPING_PROGRESS_STALE_SECONDS
+        return self.runtime_operations.is_stale_stopping_progress(progress)
 
     def _checksProgressKeys(self, user_key: str = "", check_type: str = "") -> List[str]:
         normalized_user = str(user_key or "").strip()
@@ -1537,10 +1525,10 @@ class ImgDataService:
             current = dict(self._face_matching_progress.get(user_key, {}))
             current.update(updates)
             self._syncFaceMatchProgressCountsFromCursor(current, explicit_fields=set(updates.keys()))
-            if not current.get("operation_id"):
-                current["operation_id"] = f"face_match-{uuid4().hex}"
-            current["revision"] = max(0, int(current.get("revision") or 0)) + 1
-            current["last_updated_at"] = self._timestamp_now()
+            current = self.runtime_operations.stamp_progress(
+                current,
+                operation_prefix="face_match",
+            )
             current = self._jsonSafeProgressValue(current)
             self._face_matching_progress[user_key] = current
         self.file_analysis.writeRuntimeState("face_match_progress", user_key, current)
@@ -1993,10 +1981,11 @@ class ImgDataService:
             current = dict(self._checks_progress.get(state_key, {}))
             current.update(updates)
             current["check_type"] = check_type
-            if not current.get("operation_id"):
-                current["operation_id"] = f"checks-{check_type}-{uuid4().hex}"
-            current["revision"] = max(0, int(current.get("revision") or 0)) + 1
-            current["last_updated_at"] = self._timestamp_now()
+            current = self.runtime_operations.stamp_progress(
+                current,
+                operation_prefix="checks",
+                operation_discriminator=check_type,
+            )
             self._checks_progress[state_key] = current
         self.file_analysis.writeRuntimeState("checks_progress", state_key, current)
 
@@ -2063,10 +2052,10 @@ class ImgDataService:
 
     @staticmethod
     def _isRunningProgress(progress: Any) -> bool:
-        return isinstance(progress, dict) and bool(progress.get("running"))
+        return RuntimeOperationService.is_running_progress(progress)
 
     def _isBlockingRunningProgress(self, progress: Any) -> bool:
-        return self._isRunningProgress(progress) and not self._isStaleStoppingProgress(progress)
+        return self.runtime_operations.is_blocking_running_progress(progress)
 
     def _runningOperationProgress(self, user_key: str, *, exclude_operation: str = "") -> Optional[Dict[str, Any]]:
         excluded = str(exclude_operation or "").strip().lower()
@@ -2107,66 +2096,31 @@ class ImgDataService:
         *,
         requested_operation: str,
     ) -> Dict[str, Any]:
-        payload = {
-            "running": False,
-            "finished": False,
-            "blocked": True,
-            "blocked_by_running_operation": True,
-            "requested_operation": str(requested_operation or "").strip().lower(),
-            "running_operation": str((running_progress or {}).get("operation") or "").strip().lower(),
-            "running_operation_id": str((running_progress or {}).get("operation_id") or "").strip(),
-            "message_key": "status:operation_blocked_by_running_operation",
-            "message": "Another operation is already running.",
-        }
-        if isinstance(running_progress, dict):
-            payload["running_progress"] = dict(running_progress)
-        payload["status"] = self._buildStatusPayload(
-            operation=payload["requested_operation"],
-            action="",
-            mode="none",
-            phase="blocked",
-            save_only=False,
-            progress={},
-            counters=[],
+        return self.runtime_operations.blocked_by_running_operation_payload(
+            running_progress,
+            requested_operation=requested_operation,
         )
-        return payload
 
     def _normalizeStatusChecksType(self, check_type: Any) -> str:
-        normalized = str(check_type or "").strip().lower()
-        options = {"dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts"}
-        return normalized if normalized in options else "dimension_issues"
+        return self.status_builder.normalize_checks_type(check_type)
 
     def _deriveStatusPhase(self, *, running: Any = False, finished: Any = False, stop_requested: Any = False, message_key: str = "", status: str = "") -> str:
-        normalized_status = str(status or "").strip().lower()
-        normalized_message = str(message_key or "").strip().lower()
-        if normalized_status in {"failed", "error"} or "failed" in normalized_message or "error" in normalized_message:
-            return "failed"
-        if normalized_status in {"blocked"} or "blocked" in normalized_message:
-            return "blocked"
-        if bool(stop_requested) or normalized_status in {"stopping"} or "stopping" in normalized_message:
-            return "stopping" if bool(running) else "stopped"
-        if "empty" in normalized_message or normalized_status in {"empty"}:
-            return "empty"
-        if bool(finished) or normalized_status in {"finished", "done", "saved"}:
-            return "finished"
-        if "preparing" in normalized_message or "listing" in normalized_message:
-            return "preparing"
-        if bool(running):
-            return "running"
-        return "idle"
+        return self.status_builder.derive_phase(
+            running=running,
+            finished=finished,
+            stop_requested=stop_requested,
+            message_key=message_key,
+            status=status,
+        )
 
     def _buildStatusCounter(self, key: str, *, value: Any, label_key: str = "", fallback_label: str = "", show_when_zero: bool = False) -> Dict[str, Any]:
-        try:
-            counter_value = max(0, int(value))
-        except Exception:
-            counter_value = 0
-        return {
-            "key": str(key or "").strip(),
-            "value": counter_value,
-            "label_key": str(label_key or "").strip(),
-            "fallback_label": str(fallback_label or "").strip(),
-            "show_when_zero": bool(show_when_zero),
-        }
+        return self.status_builder.counter(
+            key,
+            value=value,
+            label_key=label_key,
+            fallback_label=fallback_label,
+            show_when_zero=show_when_zero,
+        )
 
     def _buildStatusProgress(
         self,
@@ -2181,24 +2135,17 @@ class ImgDataService:
         secondary_label_key: str = "",
         fallback_secondary_label: str = "",
     ) -> Dict[str, Any]:
-        def to_int(value: Any) -> int:
-            try:
-                return max(0, int(value))
-            except Exception:
-                return 0
-        progress_current = to_int(current)
-        progress_total = to_int(total)
-        return {
-            "kind": str(kind or "").strip(),
-            "current": progress_current,
-            "total": progress_total,
-            "title_key": str(title_key or "").strip(),
-            "fallback_title": str(fallback_title or "").strip(),
-            "primary_label_key": str(primary_label_key or "").strip(),
-            "fallback_primary_label": str(fallback_primary_label or "").strip(),
-            "secondary_label_key": str(secondary_label_key or "").strip(),
-            "fallback_secondary_label": str(fallback_secondary_label or "").strip(),
-        }
+        return self.status_builder.progress(
+            kind=kind,
+            current=current,
+            total=total,
+            title_key=title_key,
+            fallback_title=fallback_title,
+            primary_label_key=primary_label_key,
+            fallback_primary_label=fallback_primary_label,
+            secondary_label_key=secondary_label_key,
+            fallback_secondary_label=fallback_secondary_label,
+        )
 
     def _buildStatusPayload(
         self,
@@ -2211,26 +2158,15 @@ class ImgDataService:
         progress: Optional[Dict[str, Any]] = None,
         counters: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        visible_counters: List[Dict[str, Any]] = []
-        for counter in counters or []:
-            if not isinstance(counter, dict):
-                continue
-            try:
-                value = int(counter.get("value") or 0)
-            except Exception:
-                value = 0
-            if value > 0 or bool(counter.get("show_when_zero")):
-                visible_counters.append(counter)
-        return {
-            "schema_version": 1,
-            "operation": str(operation or "").strip(),
-            "action": str(action or "").strip(),
-            "mode": str(mode or "").strip(),
-            "phase": str(phase or "").strip(),
-            "save_only": bool(save_only),
-            "progress": progress if isinstance(progress, dict) else {},
-            "counters": visible_counters,
-        }
+        return self.status_builder.payload(
+            operation=operation,
+            action=action,
+            mode=mode,
+            phase=phase,
+            save_only=save_only,
+            progress=progress,
+            counters=counters,
+        )
 
     def _buildChecksStatusPayload(
         self,
@@ -2252,28 +2188,24 @@ class ImgDataService:
         transferred_count: Any = 0,
         **_ignored: Any,
     ) -> Dict[str, Any]:
-        def to_int(value: Any) -> int:
-            try:
-                return max(0, int(value))
-            except Exception:
-                return 0
-        normalized_type = self._normalizeStatusChecksType(check_type)
-        mode = str(source_mode or "").strip().lower() or "scan"
-        counters: List[Dict[str, Any]] = []
-        if mode == "findings":
-            progress = self._buildStatusProgress(kind="entries", current=entries_current, total=entries_total, title_key="checks:label_list_entries", fallback_title="Einträge", primary_label_key="checks:label_index", fallback_primary_label="Eintrag", secondary_label_key="checks:label_entries_remaining", fallback_secondary_label="verbleibend")
-            for key, value, label_key, fallback in (("resolved", resolved_count, "checks:counter_resolved", "Aufgelöst"), ("ignored", ignored_count, "checks:counter_ignored", "Ignoriert"), ("skipped", skipped_count, "checks:counter_skipped", "Übersprungen"), ("errors", errors_count, "checks:counter_errors", "Fehler")):
-                if to_int(value) > 0:
-                    counters.append(self._buildStatusCounter(key, value=value, label_key=label_key, fallback_label=fallback))
-        else:
-            progress = self._buildStatusProgress(kind="files", current=files_scanned, total=total_files, title_key="checks:label_images", fallback_title="Bilder", primary_label_key="checks:label_scanned", fallback_primary_label="geprüft", secondary_label_key="checks:label_remaining", fallback_secondary_label="verbleibend")
-            if save_only:
-                counters.append(self._buildStatusCounter("findings", value=findings_count, label_key="checks:counter_findings", fallback_label="Funde", show_when_zero=True))
-            else:
-                for key, value, label_key, fallback in (("findings", findings_count, "checks:counter_findings", "Funde"), ("resolved", resolved_count, "checks:counter_resolved", "Aufgelöst"), ("ignored", ignored_count, "checks:counter_ignored", "Ignoriert"), ("skipped", skipped_count, "checks:counter_skipped", "Übersprungen"), ("errors", errors_count, "checks:counter_errors", "Fehler")):
-                    if to_int(value) > 0:
-                        counters.append(self._buildStatusCounter(key, value=value, label_key=label_key, fallback_label=fallback))
-        return self._buildStatusPayload(operation="checks", action=normalized_type, mode=mode, phase=phase, save_only=save_only, progress=progress, counters=counters)
+        return self.status_builder.checks_payload(
+            check_type=check_type,
+            source_mode=source_mode,
+            phase=phase,
+            save_only=save_only,
+            files_scanned=files_scanned,
+            total_files=total_files,
+            findings_count=findings_count,
+            resolved_count=resolved_count,
+            ignored_count=ignored_count,
+            skipped_count=skipped_count,
+            errors_count=errors_count,
+            entries_current=entries_current,
+            entries_total=entries_total,
+            stored_findings_count=stored_findings_count,
+            transferred_count=transferred_count,
+            **_ignored,
+        )
 
     def _buildFaceMatchStatusPayload(
         self,
@@ -2294,31 +2226,23 @@ class ImgDataService:
         updated_count: Any = 0,
         **_ignored: Any,
     ) -> Dict[str, Any]:
-        def to_int(value: Any) -> int:
-            try:
-                return max(0, int(value))
-            except Exception:
-                return 0
-        normalized_action = str(action or "").strip().lower()
-        mode = str(source_mode or "").strip().lower() or "scan"
-        kind = str(progress_kind or "").strip().lower()
-        if not kind:
-            kind = "entries" if mode == "findings" else "persons"
-        title_by_kind = {"entries": ("face_match:label_list_entries", "Einträge"), "files": ("face_match:label_files", "Dateien"), "images": ("face_match:label_images", "Bilder"), "persons": ("face_match:label_persons", "Personen"), "faces": ("face_match:label_faces", "Gesichter"), "metadata_faces": ("face_match:label_metadata_faces", "Metadaten-Gesichter"), "target_faces": ("face_match:label_target_faces", "Ziel-Gesichter")}
-        title_key, fallback_title = title_by_kind.get(kind, ("face_match:label_progress", "Fortschritt"))
-        progress = self._buildStatusProgress(kind=kind, current=current, total=total, title_key=title_key, fallback_title=fallback_title, primary_label_key="face_match:label_checked", fallback_primary_label="geprüft", secondary_label_key="face_match:label_remaining", fallback_secondary_label="verbleibend")
-        counters: List[Dict[str, Any]] = []
-        if mode == "findings":
-            for key, value, label_key, fallback in (("transferred", transferred_count, "face_match:counter_transferred", "Übertragen"), ("skipped", skipped_count, "face_match:counter_skipped", "Übersprungen"), ("errors", errors_count, "face_match:counter_errors", "Fehler")):
-                if to_int(value) > 0:
-                    counters.append(self._buildStatusCounter(key, value=value, label_key=label_key, fallback_label=fallback))
-        elif save_only:
-            counters.append(self._buildStatusCounter("findings", value=findings_count, label_key="face_match:counter_findings", fallback_label="Funde", show_when_zero=True))
-        else:
-            for key, value, label_key, fallback in (("transferred", transferred_count, "face_match:counter_transferred", "Übertragen"), ("skipped", skipped_count, "face_match:counter_skipped", "Übersprungen"), ("created", created_count, "face_match:counter_created", "Erstellt"), ("assigned", assigned_count, "face_match:counter_assigned", "Zugewiesen"), ("updated", updated_count, "face_match:counter_updated", "Geändert"), ("errors", errors_count, "face_match:counter_errors", "Fehler")):
-                if to_int(value) > 0:
-                    counters.append(self._buildStatusCounter(key, value=value, label_key=label_key, fallback_label=fallback))
-        return self._buildStatusPayload(operation="face_match", action=normalized_action, mode=mode, phase=phase, save_only=save_only, progress=progress, counters=counters)
+        return self.status_builder.face_match_payload(
+            action=action,
+            source_mode=source_mode,
+            phase=phase,
+            save_only=save_only,
+            progress_kind=progress_kind,
+            current=current,
+            total=total,
+            findings_count=findings_count,
+            transferred_count=transferred_count,
+            skipped_count=skipped_count,
+            errors_count=errors_count,
+            created_count=created_count,
+            assigned_count=assigned_count,
+            updated_count=updated_count,
+            **_ignored,
+        )
 
     def _attachChecksStatusPayload(self, payload: Dict[str, Any], *, check_type: str = "") -> Dict[str, Any]:
         if not isinstance(payload, dict):
@@ -2330,6 +2254,26 @@ class ImgDataService:
         phase = self._deriveStatusPhase(running=payload.get("running"), finished=payload.get("finished"), stop_requested=payload.get("stop_requested"), message_key=str(payload.get("message_key") or payload.get("message") or ""), status=existing_status_text)
         payload["status"] = self._buildChecksStatusPayload(check_type=normalized_type, source_mode=source_mode, phase=phase, save_only=bool(payload.get("save_only")), files_scanned=payload.get("files_scanned", 0), total_files=payload.get("total_files", 0), findings_count=payload.get("findings_count", 0), resolved_count=payload.get("resolved_count", 0), ignored_count=payload.get("ignored_count", 0), skipped_count=payload.get("skipped_count", 0), errors_count=payload.get("errors_count", 0), entries_current=payload.get("entries_current", payload.get("current", 0)), entries_total=payload.get("entries_total", payload.get("count", payload.get("total", 0))))
         return payload
+
+    def attachChecksStatusForResponse(
+        self,
+        payload: Dict[str, Any],
+        *,
+        check_type: str = "",
+        source_mode: str = "",
+    ) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+
+        normalized_check_type = str(check_type or payload.get("check_type") or "").strip().lower()
+        if normalized_check_type:
+            payload.setdefault("check_type", normalized_check_type)
+
+        normalized_source_mode = str(source_mode or payload.get("source_mode") or "").strip().lower()
+        if normalized_source_mode:
+            payload.setdefault("source_mode", normalized_source_mode)
+
+        return self._attachChecksStatusPayload(payload, check_type=normalized_check_type)
 
     def _attachFaceMatchStatusPayload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(payload, dict):
@@ -2531,10 +2475,11 @@ class ImgDataService:
             current.update(updates)
             current["action"] = action
             current["targets"] = self._normalizeCleanupTargets(current.get("targets"))
-            if not current.get("operation_id"):
-                current["operation_id"] = f"cleanup-{action}-{uuid4().hex}"
-            current["revision"] = max(0, int(current.get("revision") or 0)) + 1
-            current["last_updated_at"] = self._timestamp_now()
+            current = self.runtime_operations.stamp_progress(
+                current,
+                operation_prefix="cleanup",
+                operation_discriminator=action,
+            )
             self._cleanup_progress[state_key] = current
         self.file_analysis.writeRuntimeState("cleanup_progress", state_key, current)
         return current
@@ -3535,10 +3480,10 @@ class ImgDataService:
         with self._file_analysis_progress_lock:
             current = dict(self._file_analysis_progress)
             current.update(updates)
-            if not current.get("operation_id"):
-                current["operation_id"] = f"file_analysis-{uuid4().hex}"
-            current["revision"] = max(0, int(current.get("revision") or 0)) + 1
-            current["last_updated_at"] = self._timestamp_now()
+            current = self.runtime_operations.stamp_progress(
+                current,
+                operation_prefix="file_analysis",
+            )
             self._file_analysis_progress = current
         if persist:
             self.file_analysis.writeRuntimeState("file_analysis_progress", "default", current)
@@ -3944,6 +3889,7 @@ class ImgDataService:
                     target_face=target_face,
                     photo_sources=photo_sources,
                     metadata_sources=metadata_sources,
+                    known_persons_cache=known_persons_cache,
                 )
                 if isinstance(matched_entry, dict):
                     resolved.update(matched_entry)
@@ -4061,6 +4007,7 @@ class ImgDataService:
         target_face: MetadataFace,
         photo_sources: List[Dict[str, Any]],
         metadata_sources: List[MetadataFace],
+        known_persons_cache: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         target_photo_face = PhotosFace(face_id=0, person_id=0, bbox=from_xmp(target_face))
         source_candidates: List[Dict[str, Any]] = []
@@ -4133,12 +4080,26 @@ class ImgDataService:
             return None
 
         matched_person = matched.get("matched_person") if isinstance(matched.get("matched_person"), dict) else None
+        if (
+            isinstance(matched_person, dict)
+            and self.photos._normalize_person_name(matched_person.get("name")) != self.photos._normalize_person_name(source_name)
+        ):
+            self._debugLog(
+                "face_match_source_person_mismatch_ignored",
+                image_path=image_path,
+                source_name=source_name,
+                matched_person_id=matched_person.get("id"),
+                matched_person_name=matched_person.get("name"),
+                source_type=str(matched.get("source_type") or ""),
+            )
+            matched_person = None
         if matched_person is None:
             matched_person = self.photos.findKnownPersonByName(
                 user_key=user_key,
                 cookies=cookies,
                 base_url=base_url,
                 name=source_name,
+                known_persons=known_persons_cache,
             )
 
         return {
@@ -8241,6 +8202,7 @@ class ImgDataService:
                 }
 
             photo_faces_by_path: Dict[str, List[Dict[str, Any]]] = {}
+            known_persons_cache: Optional[List[Dict[str, Any]]] = None
             if use_photos:
                 known_persons = self.photos.sortPersonsForFaceMatch(
                     self.photos.listFotoTeamPersonKnown(
@@ -8252,6 +8214,7 @@ class ImgDataService:
                         additional=["thumbnail"],
                     )
                 )
+                known_persons_cache = known_persons
                 self._setFaceMatchingProgressMessage(
                     user_key,
                     "face_match:progress_known_persons_loaded",
@@ -8359,7 +8322,18 @@ class ImgDataService:
                                 continue
                             try:
                                 face_id_int = int(face_id)
+                                face_person_id_int = int(face.get("person_id"))
                             except (TypeError, ValueError):
+                                continue
+                            if face_person_id_int != person_id_int:
+                                self._debugLog(
+                                    "face_match_photo_source_face_skipped_person_mismatch",
+                                    image_id=image_id_int,
+                                    face_id=face_id_int,
+                                    face_name=face_name,
+                                    face_person_id=face_person_id_int,
+                                    album_person_id=person_id_int,
+                                )
                                 continue
                             if any(int(existing.get("face_id")) == face_id_int for existing in photo_faces_by_path[image_path] if existing.get("face_id") is not None):
                                 continue
@@ -8544,6 +8518,7 @@ class ImgDataService:
                         target_face=target_face,
                         photo_sources=photo_sources,
                         metadata_sources=metadata_sources,
+                        known_persons_cache=known_persons_cache,
                     )
                     self._setFaceMatchingProgressMessage(
                         user_key,

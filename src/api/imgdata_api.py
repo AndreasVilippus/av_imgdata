@@ -1494,18 +1494,11 @@ async def file_analysis_stop(request: Request):
 
 
 def _attach_checks_status_for_response(payload, *, check_type: str = "", source_mode: str = ""):
-    if not isinstance(payload, dict):
-        return payload
-
-    normalized_check_type = str(check_type or payload.get("check_type") or "").strip().lower()
-    if normalized_check_type:
-        payload.setdefault("check_type", normalized_check_type)
-
-    normalized_source_mode = str(source_mode or payload.get("source_mode") or "").strip().lower()
-    if normalized_source_mode:
-        payload.setdefault("source_mode", normalized_source_mode)
-
-    return IMGDATA._attachChecksStatusPayload(payload, check_type=normalized_check_type)
+    return IMGDATA.attachChecksStatusForResponse(
+        payload,
+        check_type=check_type,
+        source_mode=source_mode,
+    )
 
 
 @router.post("/checks_start")

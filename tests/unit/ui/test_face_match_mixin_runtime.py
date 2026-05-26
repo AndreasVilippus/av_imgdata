@@ -214,6 +214,87 @@ def test_load_stored_findings_sends_selected_source_action_runtime():
     assert result["useStored"] is False
 
 
+def test_reloaded_stored_findings_keep_original_review_total_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const responses = [
+              { count: 114, transferred_count: 0, entries: Array.from({ length: 114 }, (_, index) => ({ id: index + 1 })) },
+              { count: 113, transferred_count: 1, entries: Array.from({ length: 113 }, (_, index) => ({ id: index + 2 })) },
+            ];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_file_face_in_sources',
+              callFileAnalysisApi: async () => ({
+                success: true,
+                data: {
+                  face_matches: {
+                    action: 'search_file_face_in_sources',
+                    requested_action: 'search_file_face_in_sources',
+                    save_only: true,
+                    status: 'finished',
+                    ...responses.shift(),
+                  },
+                },
+              }),
+            });
+
+            await component.loadStoredFaceMatchFindings();
+            assert.strictEqual(component.faceMatchFindingEntriesTotal, 114);
+            assert.strictEqual(component.faceMatchStoredFindingsChecked, 1);
+
+            await component.loadStoredFaceMatchFindings();
+            assert.strictEqual(component.faceMatchFindingEntriesTotal, 114);
+            assert.strictEqual(component.faceMatchStoredFindingsCompletedCount, 1);
+            assert.strictEqual(component.faceMatchStoredFindingsChecked, 2);
+            console.log(JSON.stringify({
+              total: component.faceMatchFindingEntriesTotal,
+              completed: component.faceMatchStoredFindingsCompletedCount,
+              checked: component.faceMatchStoredFindingsChecked,
+            }));
+            """
+        )
+    )
+
+    assert result == {"total": 114, "completed": 1, "checked": 2}
+
+
+def test_file_source_face_match_titles_show_source_target_and_image_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_file_face_in_sources',
+              faceMatchUseStoredFindings: true,
+              faceMatchResult: {
+                action: 'search_file_face_in_sources',
+                image_path: '/volume1/photo/Familie/Kaire/IMG_0001.JPG',
+                source_face: { name: 'Kaire Vilippus' },
+                metadata_face: { name: '' },
+              },
+            });
+
+            assert.strictEqual(component.faceMatchLeftTitle, 'Name source');
+            assert.strictEqual(component.faceMatchRightTitle, 'File marking to name');
+            assert.strictEqual(component.faceMatchImageContextTitle, 'File: IMG_0001.JPG');
+            assert.strictEqual(component.faceMatchImageContextPath, '/volume1/photo/Familie/Kaire/IMG_0001.JPG');
+            console.log(JSON.stringify({
+              left: component.faceMatchLeftTitle,
+              right: component.faceMatchRightTitle,
+              image: component.faceMatchImageContextTitle,
+              path: component.faceMatchImageContextPath,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "left": "Name source",
+        "right": "File marking to name",
+        "image": "File: IMG_0001.JPG",
+        "path": "/volume1/photo/Familie/Kaire/IMG_0001.JPG",
+    }
+
+
 def test_use_stored_findings_and_save_only_watchers_are_mutually_exclusive_runtime():
     result = run_node(
         face_match_runtime_script(

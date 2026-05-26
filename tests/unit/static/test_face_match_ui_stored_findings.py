@@ -51,6 +51,18 @@ def test_face_match_mutations_show_pending_output_before_backend_write():
     assert "face_match:output_apply_metadata_face_starting" in source
 
 
+def test_file_source_preview_labels_distinguish_name_source_and_file_target():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+
+    assert "face_match:title_name_source" in source
+    assert "face_match:title_file_face_target" in source
+    assert "faceMatchImageContextTitle()" in source
+    assert "faceMatchImageContextPath()" in source
+    assert "vm.faceMatchImageContextTitle" in view
+    assert "vm.faceMatchImageContextPath" in view
+
+
 def test_dsm_api_type_error_gets_explicit_network_failure_message():
     source = Path("ui/src/App.vue").read_text(encoding="utf-8")
     method_start = source.index("async callDsmApi(apiPath, body = {}, options = {})")

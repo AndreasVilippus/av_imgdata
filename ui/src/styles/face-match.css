@@ -304,6 +304,21 @@
 	overflow: visible;
 }
 
+.face-match-image-context {
+	margin-bottom: 8px;
+}
+
+.face-match-image-context .sm-section-title-block {
+	margin-bottom: 2px;
+}
+
+.face-match-image-path {
+	color: var(--sm-text-muted);
+	font-size: 12px;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
 .face-match-loading {
 	min-height: 140px;
 	display: flex;

@@ -734,6 +734,12 @@ export default {
 			if (!isSaveOnlyScan) {
 				return headline;
 			}
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			if (status.schema_version === 1 && Array.isArray(status.counters)) {
+				return headline;
+			}
 			const findings = this.getChecksSaveOnlyFindingsCount(progress);
 			const skipped = Math.max(0, Number(progress.skipped_count || progress.skip_count) || 0);
 			const findingsLabel = this.$avt('checks:counter_findings', 'Findings').replace(/:$/, '').trim();

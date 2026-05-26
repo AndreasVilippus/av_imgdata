@@ -154,7 +154,10 @@
 			</div>
 		</section>
 		<section class="panel face-match-split-panel">
-			<div class="sm-section-title sm-section-title-block">{{ vm.$avt('face_match:file_title', 'File') }}</div>
+			<div class="face-match-image-context">
+				<div class="sm-section-title sm-section-title-block">{{ vm.faceMatchImageContextTitle }}</div>
+				<div v-if="vm.faceMatchImageContextPath" class="face-match-image-path" :title="vm.faceMatchImageContextPath">{{ vm.faceMatchImageContextPath }}</div>
+			</div>
 			<div v-if="vm.faceMatchLoading" class="face-match-loading">
 				<span class="sm-loader"></span>
 				{{ vm.$avt('face_match:loading', 'Loading data...') }}

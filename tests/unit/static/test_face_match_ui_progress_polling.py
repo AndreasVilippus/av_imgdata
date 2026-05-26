@@ -17,14 +17,11 @@ def test_face_match_progress_polling_error_does_not_end_backend_operation_locall
 
 
 def test_named_polling_guard_resets_after_callback_success_or_error():
-    source = Path("ui/src/App.vue").read_text(encoding="utf-8")
-    start = source.index("startNamedPolling(timerKey, callback, interval = 1000, options = {})")
-    end = source.index("\n\t\t\tstopNamedPolling(timerKey)", start)
-    method_source = source[start:end]
+    method_source = Path("ui/src/services/runtime-polling.js").read_text(encoding="utf-8")
 
-    assert "if (skipIfPending && this.__namedPollingPending[timerKey])" in method_source
+    assert "if (skipIfPending && state.pending[timerKey])" in method_source
     assert "Promise.resolve()" in method_source
     assert ".then(() => callback())" in method_source
     assert ".catch(() => {})" in method_source
     assert ".finally(() =>" in method_source
-    assert "this.__namedPollingPending[timerKey] = false" in method_source
+    assert "state.pending[timerKey] = false" in method_source

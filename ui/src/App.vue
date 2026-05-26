@@ -40,6 +40,7 @@ import cleanupMixin from './mixins/cleanupMixin';
 import externalLibrariesMixin from './mixins/externalLibrariesMixin';
 import faceMatchMixin from './mixins/faceMatchMixin';
 import statusMixin from './mixins/statusMixin';
+import { createRuntimePollingController } from './services/runtime-polling';
 import ChecksView from './views/ChecksView.vue';
 import CleanupView from './views/CleanupView.vue';
 import ConfigurationView from './views/ConfigurationView.vue';
@@ -62,7 +63,11 @@ export default {
 		return {
 			selectedOption: 'status',
 			output: '',
+			runtimePolling: null,
 		};
+	},
+	created() {
+		this.runtimePolling = createRuntimePollingController(this);
 	},
 		methods: {
 		close() {
@@ -302,44 +307,10 @@ export default {
 				return this.callDsmApi(apiPath, body, options);
 			},
 			startNamedPolling(timerKey, callback, interval = 1000, options = {}) {
-				this.stopNamedPolling(timerKey);
-				if (!this.__namedPollingPending) {
-					this.__namedPollingPending = {};
-				}
-				if (!this.__namedPollingRunIds) {
-					this.__namedPollingRunIds = {};
-				}
-				const skipIfPending = options && options.skipIfPending === true;
-				const runId = (Number(this.__namedPollingRunIds[timerKey]) || 0) + 1;
-				this.__namedPollingRunIds[timerKey] = runId;
-				const run = () => {
-					if (skipIfPending && this.__namedPollingPending[timerKey]) {
-						return;
-					}
-					this.__namedPollingPending[timerKey] = true;
-					Promise.resolve()
-						.then(() => callback())
-						.catch(() => {})
-						.finally(() => {
-							if (this.__namedPollingPending && this.__namedPollingRunIds && this.__namedPollingRunIds[timerKey] === runId) {
-								this.__namedPollingPending[timerKey] = false;
-							}
-						});
-				};
-				run();
-				this[timerKey] = window.setInterval(run, interval);
+				this.runtimePolling.startNamedPolling(timerKey, callback, interval, options);
 			},
 			stopNamedPolling(timerKey) {
-				if (this[timerKey]) {
-					window.clearInterval(this[timerKey]);
-					this[timerKey] = null;
-				}
-				if (this.__namedPollingPending) {
-					this.__namedPollingPending[timerKey] = false;
-				}
-				if (this.__namedPollingRunIds) {
-					this.__namedPollingRunIds[timerKey] = (Number(this.__namedPollingRunIds[timerKey]) || 0) + 1;
-				}
+				this.runtimePolling.stopNamedPolling(timerKey);
 			},
 			formatCountSummary(counterMap) {
 				if (!counterMap || typeof counterMap !== 'object') {

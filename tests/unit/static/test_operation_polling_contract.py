@@ -9,19 +9,15 @@ def read_ui_sources():
 
 
 def test_polling_overlap_guard_is_opt_in_for_named_polling():
-    source = Path("ui/src/App.vue").read_text(encoding="utf-8")
-
-    start = source.index("startNamedPolling(timerKey, callback, interval = 1000, options = {})")
-    end = source.index("\n\t\t\tstopNamedPolling(timerKey)", start)
-    method = source[start:end]
+    method = Path("ui/src/services/runtime-polling.js").read_text(encoding="utf-8")
 
     assert "const skipIfPending = options && options.skipIfPending === true" in method
-    assert "__namedPollingPending" in method
-    assert "if (skipIfPending && this.__namedPollingPending[timerKey])" in method
+    assert "state.pending" in method
+    assert "if (skipIfPending && state.pending[timerKey])" in method
     assert "return;" in method
-    assert "this.__namedPollingPending[timerKey] = true" in method
+    assert "state.pending[timerKey] = true" in method
     assert "finally" in method
-    assert "this.__namedPollingPending[timerKey] = false" in method
+    assert "state.pending[timerKey] = false" in method
 
 
 def test_runtime_polling_mixin_was_removed_from_app():
@@ -34,11 +30,7 @@ def test_runtime_polling_mixin_was_removed_from_app():
 
 
 def test_named_polling_errors_do_not_stop_backend_operations_locally():
-    source = Path("ui/src/App.vue").read_text(encoding="utf-8")
-
-    start = source.index("startNamedPolling(timerKey, callback, interval = 1000, options = {})")
-    end = source.index("\n\t\t\tstopNamedPolling(timerKey)", start)
-    method = source[start:end]
+    method = Path("ui/src/services/runtime-polling.js").read_text(encoding="utf-8")
 
     assert ".catch(() => {})" in method
     assert "maxErrors" not in method
@@ -102,7 +94,7 @@ def test_only_runtime_progress_polling_opts_into_overlap_skipping():
 
 def test_stopping_polling_releases_in_flight_latches_for_next_user_action():
     source = read_ui_sources()
-    app = Path("ui/src/App.vue").read_text(encoding="utf-8")
+    polling = Path("ui/src/services/runtime-polling.js").read_text(encoding="utf-8")
 
     for timer_key in (
         "faceMatchProgressTimer",
@@ -111,6 +103,5 @@ def test_stopping_polling_releases_in_flight_latches_for_next_user_action():
         "cleanupProgressTimer",
     ):
         stop_pos = source.index(f"this.stopNamedPolling('{timer_key}')")
-        method_pos = app.index("\n\t\t\tstopNamedPolling(timerKey)")
         assert stop_pos >= 0
-        assert "this.__namedPollingPending[timerKey] = false" in app[method_pos:]
+        assert "state.pending[timerKey] = false" in polling

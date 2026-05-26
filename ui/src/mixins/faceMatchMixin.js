@@ -456,13 +456,35 @@ export default {
 				&& (Number(this.faceMatchFindingsStatus && this.faceMatchFindingsStatus.count) || 0) > 0;
 		},
 		faceMatchLeftTitle() {
-			if (this.faceMatchIsFileSourceAction) {
-				return this.$avt('face_match:label_source', 'Source');
+			const action = String(this.faceMatchCurrentAction || '').trim().toLowerCase();
+			if (action === 'search_file_face_in_sources') {
+				return this.$avt('face_match:title_name_source', 'Name source');
+			}
+			if (action === 'mark_missing_photos_faces' || action === 'search_missing_faces_insightface') {
+				return this.$avt('face_match:title_file_face_source', 'File face');
 			}
 			return this.$avt('face_match:photos_title', 'Photos');
 		},
 		faceMatchRightTitle() {
+			const action = String(this.faceMatchCurrentAction || '').trim().toLowerCase();
+			if (action === 'search_file_face_in_sources') {
+				return this.$avt('face_match:title_file_face_target', 'File marking to name');
+			}
+			if (action === 'mark_missing_photos_faces' || action === 'search_missing_faces_insightface') {
+				return this.$avt('face_match:title_photos_face_target', 'Photos face to create');
+			}
 			return this.faceMatchFileTitle;
+		},
+		faceMatchImageContextTitle() {
+			const path = String(this.faceMatchResult && this.faceMatchResult.image_path || '').trim();
+			if (!path) {
+				return this.$avt('face_match:file_title', 'File');
+			}
+			const filename = path.split(/[\\/]/).filter(Boolean).pop() || path;
+			return `${this.$avt('face_match:file_title', 'File')}: ${filename}`;
+		},
+		faceMatchImageContextPath() {
+			return String(this.faceMatchResult && this.faceMatchResult.image_path || '').trim();
 		},
 		hasNextFaceMatch() {
 			if (this.faceMatchReviewingStoredFindings) {
@@ -765,17 +787,23 @@ export default {
 			});
 			const payload = this.getResponseDataObject(data, 'face_matches');
 			const entries = Array.isArray(payload.entries) ? payload.entries : [];
+			const remainingCount = Number(payload.count) || entries.length;
+			const transferredCount = Math.max(0, Number(payload.transferred_count) || 0);
 			this.faceMatchFindingEntries = entries;
 			this.faceMatchFindingIndex = 0;
-			this.faceMatchFindingEntriesTotal = Number(payload.count) || entries.length;
-			this.faceMatchTransferredCount = Number(payload.transferred_count) || 0;
+			this.faceMatchFindingEntriesTotal = Math.max(
+				Number(this.faceMatchFindingEntriesTotal) || 0,
+				remainingCount + transferredCount,
+				entries.length
+			);
+			this.faceMatchTransferredCount = transferredCount;
 			this.faceMatchFindingsStatus = {
 				...(this.faceMatchFindingsStatus || {}),
-				count: Number(payload.count) || entries.length,
+				count: remainingCount,
 				action: this.normalizeFaceMatchAction(payload.action || payload.requested_action || this.selectedFaceMatchingAction),
 				requested_action: this.normalizeFaceMatchAction(payload.requested_action || this.selectedFaceMatchingAction),
 				status: payload.status || '',
-				transferred_count: Number(payload.transferred_count) || 0,
+				transferred_count: transferredCount,
 				save_only: !!payload.save_only,
 				auto: !!payload.auto,
 			};
