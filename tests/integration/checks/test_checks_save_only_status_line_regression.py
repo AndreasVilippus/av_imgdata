@@ -1,22 +1,19 @@
 from pathlib import Path
 
 
-def test_save_only_status_line_uses_findings_and_skipped_only():
+def test_save_only_status_line_uses_backend_schema_counters():
     mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
-    start = mixin.find("getChecksProgressStatusText()")
+    start = mixin.find("\t\tgetChecksStatusHeadline()")
     assert start >= 0
     end = mixin.find("\n\t\t},", start)
     assert end > start
     method = mixin[start:end]
 
-    assert "checks:counter_findings" in method
-    assert "checks:counter_skipped" in method
-    assert "skipped_count" in method
-    assert "parts.join(' | ')" in method
+    assert "status.schema_version === 1" in method
+    assert "getChecksCountersStatusSuffix()" in method
+    assert "schemaCounterSuffix" in method
     assert " — " not in method
-    assert "getChecksCountersStatusSuffix" not in method
     assert "counter_processed" not in method
-    assert "counter_resolved" not in method
     assert "counter_ignored" not in method
     assert "counter_total" not in method
 

@@ -217,6 +217,106 @@ def test_face_create_metadata_match_creates_metadata_face_person_and_cleans_find
     )
 
 
+def test_face_apply_metadata_match_forwards_oriented_display_face_and_removes_finding(monkeypatch):
+    metadata_face = {
+        "name": "",
+        "source": "embedded_xmp_parsed",
+        "source_format": "MWG_REGIONS",
+        "x": 0.63764,
+        "y": 0.43534,
+        "w": 0.24366,
+        "h": 0.18274,
+        "orientation": 6,
+        "display_normalized": True,
+        "bbox": {
+            "x1": 0.51581,
+            "x2": 0.75947,
+            "y1": 0.34397,
+            "y2": 0.52671,
+        },
+    }
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/hannover/20170422_193209.jpg",
+            "metadata_face": metadata_face,
+            "person_name": " Kira Bolm ",
+        }
+
+    replace = Mock(return_value={
+        "updated": True,
+        "warning": "",
+        "target_path": "photo/hannover/20170422_193209.jpg",
+    })
+    remove = Mock(return_value={"removed": True, "remaining_count": 40, "transferred_count": 67})
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "replaceMetadataFaceName", replace)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", remove)
+
+    payload = _run(imgdata_api.face_apply_metadata_match(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["person_name"] == "Kira Bolm"
+    assert payload["data"]["result"]["updated"] is True
+    assert payload["data"]["findings_update"] == {
+        "removed": True,
+        "remaining_count": 40,
+        "transferred_count": 67,
+    }
+    replace.assert_called_once_with(
+        image_path="photo/hannover/20170422_193209.jpg",
+        face_data=metadata_face,
+        new_name="Kira Bolm",
+    )
+    remove.assert_called_once_with(
+        image_path="photo/hannover/20170422_193209.jpg",
+        metadata_face=metadata_face,
+        increment_transferred_count=True,
+    )
+
+
+def test_face_apply_metadata_match_keeps_finding_when_oriented_display_face_is_not_found(monkeypatch):
+    metadata_face = {
+        "name": "",
+        "source": "embedded_xmp_parsed",
+        "source_format": "MWG_REGIONS",
+        "x": 0.63764,
+        "y": 0.43534,
+        "w": 0.24366,
+        "h": 0.18274,
+        "orientation": 6,
+        "display_normalized": True,
+    }
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/hannover/20170422_193209.jpg",
+            "metadata_face": metadata_face,
+            "person_name": "Kira Bolm",
+        }
+
+    replace = Mock(return_value={
+        "updated": False,
+        "warning": "checks:warning_face_replace_not_found",
+    })
+    remove = Mock()
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "replaceMetadataFaceName", replace)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", remove)
+
+    payload = _run(imgdata_api.face_apply_metadata_match(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["result"]["updated"] is False
+    assert payload["data"]["result"]["warning"] == "checks:warning_face_replace_not_found"
+    assert payload["data"]["findings_update"] is None
+    remove.assert_not_called()
+
+
 def test_checks_replace_metadata_face_name_uses_snapshot_refresh_for_name_conflicts(monkeypatch):
     face = {
         "source": "photos",
@@ -324,6 +424,51 @@ def test_checks_replace_metadata_face_name_forwards_metadata_replacement_to_snap
     assert refresh_kwargs["replacement_face_data"]["name"] == "Jelizaveta Vilippus geb. Kromskaja"
     assert refresh_kwargs["replacement_face_data"]["source_format"] == "MWG_REGIONS"
     assert "person_id" not in refresh_kwargs["replacement_face_data"]
+    assert refresh_kwargs["resolved_delta"] == 1
+
+
+def test_checks_replace_metadata_face_name_uses_requested_review_type_for_refresh(monkeypatch):
+    face = {
+        "source": "embedded_xmp_parsed",
+        "source_format": "MWG_REGIONS",
+        "name": "Kaire Vilippus",
+    }
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/duplicate.jpg",
+            "face": face,
+            "new_name": "Andreas Vilippus",
+            "review_type": "duplicate_faces",
+        }
+
+    replace = Mock(return_value={
+        "updated": True,
+        "operation": "metadata_write",
+    })
+    safe_refresh = Mock(return_value=({"snapshot_update": True, "count": 0}, None))
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "replaceChecksFaceName", replace)
+    monkeypatch.setattr(imgdata_api, "_safe_refresh_checks_mutation_state", safe_refresh)
+
+    response = _run(imgdata_api.checks_replace_metadata_face_name(object()))
+    payload = _json_response_payload(response)
+
+    assert payload["success"] is True
+    replace.assert_called_once_with(
+        user_key="user-1",
+        cookies={"_SSID": "sid-1"},
+        base_url="https://dsm.example.test",
+        image_path="photo/duplicate.jpg",
+        face_data=face,
+        new_name="Andreas Vilippus",
+        create_missing_person=False,
+    )
+    refresh_kwargs = safe_refresh.call_args.kwargs
+    assert refresh_kwargs["check_type"] == "duplicate_faces"
+    assert refresh_kwargs["replacement_face_data"]["name"] == "Andreas Vilippus"
     assert refresh_kwargs["resolved_delta"] == 1
 
 
@@ -486,6 +631,53 @@ def test_checks_assign_face_person_forwards_photos_override_to_refresh(monkeypat
     assert refresh_kwargs["image_path"] == "photo/test.jpg"
     assert refresh_kwargs["original_face_data"] == face
     assert refresh_kwargs["replacement_face_data"]["face_id"] == 77
+    assert refresh_kwargs["replacement_face_data"]["name"] == "Person Current"
+    assert refresh_kwargs["replacement_face_data"]["person_id"] == 42
+    assert "resolved_delta" not in refresh_kwargs
+
+
+def test_checks_assign_face_person_forwards_metadata_override_to_refresh(monkeypatch):
+    face = {
+        "source": "embedded_xmp_exiftool",
+        "source_format": "MICROSOFT",
+        "name": "Person Legacy",
+    }
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/test.jpg",
+            "face": face,
+            "review_type": "position_deviations",
+            "person_id": "42",
+            "person_name": " Person Current ",
+        }
+
+    assign = Mock(return_value={"updated": True})
+    safe_refresh = Mock(return_value=({"count": 0}, None))
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "assignChecksFaceToKnownPerson", assign)
+    monkeypatch.setattr(imgdata_api, "_safe_refresh_checks_mutation_state", safe_refresh)
+
+    response = _run(imgdata_api.checks_assign_face_person(object()))
+    payload = _json_response_payload(response)
+
+    assert payload["success"] is True
+    assign.assert_called_once_with(
+        user_key="user-1",
+        cookies={"_SSID": "sid-1"},
+        base_url="https://dsm.example.test",
+        image_path="photo/test.jpg",
+        face_data=face,
+        person_id=42,
+        person_name="Person Current",
+    )
+    refresh_kwargs = safe_refresh.call_args.kwargs
+    assert refresh_kwargs["check_type"] == "position_deviations"
+    assert refresh_kwargs["image_path"] == "photo/test.jpg"
+    assert refresh_kwargs["original_face_data"] == face
+    assert refresh_kwargs["replacement_face_data"]["source_format"] == "MICROSOFT"
     assert refresh_kwargs["replacement_face_data"]["name"] == "Person Current"
     assert refresh_kwargs["replacement_face_data"]["person_id"] == 42
     assert "resolved_delta" not in refresh_kwargs

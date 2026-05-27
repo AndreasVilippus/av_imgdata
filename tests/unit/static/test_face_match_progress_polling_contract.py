@@ -4,7 +4,7 @@ from pathlib import Path
 def test_face_match_progress_reads_backend_status_directly():
     source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
 
-    assert "async fetchFaceMatchingProgress({ applyRunningState = true } = {})" in source
+    assert "async fetchFaceMatchingProgress({ applyRunningState = true, allowConcurrent = false } = {})" in source
     assert "return this.runOperationPollRequest(" not in source
     assert "/api/face_matching_progress" in source
     assert "maxErrors" not in source

@@ -966,7 +966,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "payload": dict(payload),
         }) or True
 
-        progress = self.service.getFaceMatchingProgress("user")
+        progress = self.service.getFaceMatchingProgress("user", compact_for_response=True)
 
         self.assertFalse(progress.get("running"))
         self.assertFalse(progress.get("finished"))
@@ -977,6 +977,34 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(progress.get("status", {}).get("schema_version"), 1)
         self.assertNotEqual(progress.get("status", {}).get("phase"), "running")
         self.assertEqual(written, {})
+
+    def test_finished_stale_face_matching_progress_omits_heavy_resume_payload(self):
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+            "operation_id": "face_match-existing",
+            "running": False,
+            "finished": True,
+            "action": "search_photo_face_in_file",
+            "save_only": True,
+            "findings_count": 7,
+            "result": {"lookup_debug": {"large": list(range(100))}},
+            "resume_cursor": {
+                "skip_face_ids": list(range(100)),
+                "findings_count": 7,
+            },
+        }
+        self.service.getFaceMatchFindings = Mock(return_value={
+            "entries": [{"id": 1}, {"id": 2}],
+        })
+
+        progress = self.service.getFaceMatchingProgress("user", compact_for_response=True)
+
+        self.assertFalse(progress.get("running"))
+        self.assertTrue(progress.get("finished"))
+        self.assertTrue(progress.get("stale"))
+        self.assertNotIn("result", progress)
+        self.assertNotIn("resume_cursor", progress)
+        self.assertFalse(progress.get("resume_available"))
+        self.assertEqual(progress.get("findings_count"), 2)
 
     def test_face_matching_progress_syncs_counts_from_resume_cursor(self):
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {}
@@ -2750,6 +2778,132 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["updated"])
         self.assertTrue(result["already_updated"])
         write_mock.assert_not_called()
+
+    def test_replace_metadata_face_name_denormalizes_oriented_display_face_for_match(self):
+        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        xmp_content = XMP_MWG_AND_MICROSOFT.replace(
+            '<rdf:Description rdf:about=""',
+            '<rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/"',
+        ).replace(
+            '<MP:RegionInfo rdf:parseType="Resource">',
+            '<tiff:Orientation>6</tiff:Orientation><MP:RegionInfo rdf:parseType="Resource">',
+        )
+        written = {}
+
+        def capture_write(_target_path, next_xmp_content):
+            written["xmp"] = next_xmp_content
+            return {"updated": True}
+
+        with patch.object(self.service, "_readImageMetadata", return_value=payload), \
+             patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
+             patch.object(self.service.files, "loadXmpFromImageParsed", return_value=xmp_content), \
+             patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
+            result = self.service.replaceMetadataFaceName(
+                image_path="dev/test.jpg",
+                face_data={
+                    "name": "Person Alpha",
+                    "x": 0.462214,
+                    "y": 0.154412,
+                    "w": 0.435866,
+                    "h": 0.308824,
+                    "source": "embedded_xmp_parsed",
+                    "source_format": "MWG_REGIONS",
+                    "orientation": 6,
+                    "display_normalized": True,
+                },
+                new_name="Person Target",
+            )
+
+        self.assertTrue(result["updated"])
+        self.assertRegex(written["xmp"], r"\bName=\"Person Target\"")
+        self.assertNotRegex(written["xmp"], r"\bmwg-rs:Name=\"Person Alpha\"|\bns\d+:Name=\"Person Alpha\"")
+
+    def test_delete_metadata_face_denormalizes_oriented_display_face_for_match(self):
+        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        xmp_content = XMP_MWG_AND_MICROSOFT.replace(
+            '<rdf:Description rdf:about=""',
+            '<rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/"',
+        ).replace(
+            '<MP:RegionInfo rdf:parseType="Resource">',
+            '<tiff:Orientation>6</tiff:Orientation><MP:RegionInfo rdf:parseType="Resource">',
+        )
+        written = {}
+
+        def capture_write(_target_path, next_xmp_content):
+            written["xmp"] = next_xmp_content
+            return {"updated": True}
+
+        with patch.object(self.service, "_readImageMetadata", return_value=payload), \
+             patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
+             patch.object(self.service.files, "loadXmpFromImageParsed", return_value=xmp_content), \
+             patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
+            result = self.service.deleteMetadataFace(
+                image_path="dev/test.jpg",
+                face_data={
+                    "name": "Person Alpha",
+                    "x": 0.462214,
+                    "y": 0.154412,
+                    "w": 0.435866,
+                    "h": 0.308824,
+                    "source": "embedded_xmp_parsed",
+                    "source_format": "MWG_REGIONS",
+                    "orientation": 6,
+                    "display_normalized": True,
+                },
+            )
+
+        self.assertTrue(result["deleted"])
+        self.assertNotRegex(written["xmp"], r"\bmwg-rs:Name=\"Person Alpha\"|\bns\d+:Name=\"Person Alpha\"")
+        self.assertNotRegex(written["xmp"], r"\bmwg-rs:Area\b|\bns\d+:Area\b")
+
+    def test_replace_metadata_face_position_denormalizes_oriented_display_target_for_match(self):
+        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        xmp_content = XMP_MWG_AND_MICROSOFT.replace(
+            '<rdf:Description rdf:about=""',
+            '<rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/"',
+        ).replace(
+            '<MP:RegionInfo rdf:parseType="Resource">',
+            '<tiff:Orientation>6</tiff:Orientation><MP:RegionInfo rdf:parseType="Resource">',
+        )
+        written = {}
+
+        def capture_write(_target_path, next_xmp_content):
+            written["xmp"] = next_xmp_content
+            return {"updated": True}
+
+        with patch.object(self.service, "_readImageMetadata", return_value=payload), \
+             patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
+             patch.object(self.service.files, "loadXmpFromImageParsed", return_value=xmp_content), \
+             patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
+            result = self.service.replaceMetadataFacePosition(
+                image_path="dev/test.jpg",
+                face_data={
+                    "name": "Person Alpha",
+                    "x": 0.462214,
+                    "y": 0.154412,
+                    "w": 0.435866,
+                    "h": 0.308824,
+                    "source": "embedded_xmp_parsed",
+                    "source_format": "MWG_REGIONS",
+                    "orientation": 6,
+                    "display_normalized": True,
+                },
+                source_face_data={
+                    "name": "Person Alpha",
+                    "x": 0.7,
+                    "y": 0.2,
+                    "w": 0.1,
+                    "h": 0.4,
+                    "source": "photos",
+                    "source_format": "PHOTOS",
+                },
+            )
+
+        self.assertTrue(result["updated"])
+        self.assertRegex(written["xmp"], r"\bx=\"0\.2\"|\bns\d+:x=\"0\.2\"")
+        self.assertRegex(written["xmp"], r"\by=\"0\.3\"|\bns\d+:y=\"0\.3\"")
+        self.assertRegex(written["xmp"], r"\bw=\"0\.4\"|\bns\d+:w=\"0\.4\"")
+        self.assertRegex(written["xmp"], r"\bh=\"0\.1\"|\bns\d+:h=\"0\.1\"")
 
     def test_duplicate_support_prefers_safe_reinforcement_when_totals_tie(self):
         mwg_bottom = MetadataFace.from_center_box(

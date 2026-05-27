@@ -39,10 +39,31 @@ def test_checks_save_only_status_keeps_findings_counter_when_zero():
     assert payload["counters"] == [{
         "key": "findings",
         "value": 0,
-        "label_key": "checks:counter_findings",
-        "fallback_label": "Funde",
+        "label_key": "checks:counter_stored_findings",
+        "fallback_label": "In Fundliste",
         "show_when_zero": True,
     }]
+
+
+def test_checks_save_only_status_reports_stored_and_auto_resolved_counts():
+    payload = StatusPayloadBuilder().checks_payload(
+        check_type="name_conflicts",
+        source_mode="scan",
+        phase="running",
+        save_only=True,
+        files_scanned=12,
+        total_files=30,
+        findings_count=5,
+        resolved_count=3,
+        ignored_count=2,
+        transferred_count=1,
+    )
+
+    assert [counter["key"] for counter in payload["counters"]] == ["findings", "resolved"]
+    assert payload["counters"][0]["label_key"] == "checks:counter_stored_findings"
+    assert payload["counters"][0]["value"] == 5
+    assert payload["counters"][1]["label_key"] == "checks:counter_auto_resolved"
+    assert payload["counters"][1]["value"] == 3
 
 
 def test_face_match_findings_status_only_exposes_action_counters():

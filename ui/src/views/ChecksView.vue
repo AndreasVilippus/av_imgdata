@@ -26,15 +26,7 @@
 					<input v-model="vm.checksSaveOnly" type="checkbox" :disabled="vm.checksLoading" />
 					<span class="face-match-switch-slider"></span>
 					<span class="face-match-switch-label">{{ vm.$avt('checks:switch_save_only', 'Save findings only') }}</span>
-					</label>
-					<label
-						v-if="vm.selectedChecksAction === 'scan'"
-						class="face-match-switch"
-						:title="vm.$avt('checks:hint_changed_since_days', 'Only images whose file or sidecar changed within the selected number of days are checked. 0 checks all images.')"
-					>
-						<span class="face-match-switch-label">{{ vm.$avt('checks:label_changed_since_days', 'Changed in days') }}</span>
-						<input v-model.number="vm.checksChangedSinceDays" type="number" min="0" step="1" class="face-match-select" :disabled="vm.checksLoading" style="width: 90px;" />
-					</label>
+				</label>
 				<label
 					v-if="vm.selectedChecksType === 'name_conflicts'"
 					class="face-match-switch"
@@ -52,6 +44,14 @@
 					<input v-model="vm.checksAutoApplySuggestedDuplicates" type="checkbox" :disabled="vm.checksLoading" />
 					<span class="face-match-switch-slider"></span>
 					<span class="face-match-switch-label">{{ vm.$avt('checks:switch_auto_apply_suggested_duplicates', 'Keep suggested face automatically') }}</span>
+				</label>
+				<label
+					v-if="vm.selectedChecksAction === 'scan'"
+					class="checks-number-field"
+					:title="vm.$avt('checks:hint_changed_since_days', 'Only images whose file or sidecar changed within the selected number of days are checked. 0 checks all images.')"
+				>
+					<span class="face-match-switch-label">{{ vm.$avt('checks:label_changed_since_days', 'Changed in days') }}</span>
+					<input v-model.number="vm.checksChangedSinceDays" type="number" min="0" step="1" class="checks-number-input" :disabled="vm.checksLoading" />
 				</label>
 			</div>
 			<div class="checks-actions-row checks-actions-row-buttons">

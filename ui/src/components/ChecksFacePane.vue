@@ -1,7 +1,7 @@
 <template>
 	<div class="face-match-col">
 		<h2>{{ title }}</h2>
-		<div v-if="vm.isChecksDuplicateFaces(item)" class="checks-face-name checks-face-name-input-wrap">
+		<div v-if="vm.isChecksFaceAssignmentSupported(item)" class="checks-face-name checks-face-name-input-wrap">
 			<label class="checks-face-name-field">
 				<input
 					v-model.trim="assignment.name"
@@ -37,14 +37,14 @@
 		</div>
 		<div v-if="vm.getChecksImageUrl(item)" class="face-match-thumbnail-wrap">
 			<button
-				v-if="!vm.isChecksNameConflict(item) && vm.canDeleteChecksFace(item, targetFace)"
+				v-if="!vm.isChecksNameConflict(item) && vm.canDeleteChecksFace(item, actionFace)"
 				type="button"
 				class="face-match-icon-button"
 				:class="deleteButtonClass"
 				:title="vm.$avt('checks:tooltip_delete_face', 'Delete face from metadata')"
 				:aria-label="vm.$avt('checks:tooltip_delete_face', 'Delete face from metadata')"
 				:disabled="vm.checksLoading || vm.checksActionLocked"
-				@click.prevent="vm.deleteChecksMetadataFace(targetFace)"
+				@click.prevent="vm.deleteChecksMetadataFace(actionFace)"
 			>
 				<span class="face-match-icon-stack">
 					<img :src="vm.getChecksDeleteFaceBaseIconUrl()" alt="" class="face-match-icon-image" />
@@ -52,12 +52,12 @@
 				</span>
 			</button>
 			<button
-				v-if="vm.isChecksDuplicateFaces(item)"
+				v-if="vm.isChecksFaceAssignmentSupported(item) && actionFace"
 				type="button"
 				class="face-match-icon-button"
 				:class="syncButtonClass"
-				:title="vm.$avt('checks:tooltip_assign_known_person', 'Assign selected known person')"
-				:aria-label="vm.$avt('checks:tooltip_assign_known_person', 'Assign selected known person')"
+				:title="assignmentTooltip"
+				:aria-label="assignmentTooltip"
 				:disabled="!vm.canAssignChecksFaceToPerson(item, side)"
 				@click.prevent="vm.assignChecksFaceToPerson(side)"
 			>
@@ -67,14 +67,14 @@
 				</span>
 			</button>
 			<button
-				v-if="vm.isChecksPositionDeviation(item) && vm.canReplaceChecksFacePosition(item, targetFace, positionSourceFace)"
+				v-if="vm.isChecksPositionReplacementSupported(item) && vm.canReplaceChecksFacePosition(item, actionFace, positionSourceFace)"
 				type="button"
 				class="face-match-icon-button"
 				:class="positionButtonClass"
 				:title="positionTooltip"
 				:aria-label="positionTooltip"
 				:disabled="vm.checksLoading"
-				@click.prevent="vm.replaceChecksMetadataFacePosition(targetFace, positionSourceFace)"
+				@click.prevent="vm.replaceChecksMetadataFacePosition(actionFace, positionSourceFace)"
 			>
 				<img v-if="positionIconUrl" :src="positionIconUrl" alt="" class="face-match-icon-image" />
 				<span v-else class="face-match-icon-fallback">{{ positionFallback }}</span>
@@ -155,8 +155,13 @@ export default {
 		targetFace() {
 			return this.isLeft ? this.item.left_face_target : this.item.right_face_target;
 		},
+		actionFace() {
+			return this.targetFace || this.face;
+		},
 		positionSourceFace() {
-			return this.isLeft ? this.item.right_face : this.item.left_face;
+			return this.isLeft
+				? (this.item.right_face_target || this.item.right_face)
+				: (this.item.left_face_target || this.item.left_face);
 		},
 		referenceFaces() {
 			return this.isLeft
@@ -179,8 +184,14 @@ export default {
 		syncButtonClass() {
 			return this.isLeft ? 'checks-sync-button checks-sync-button-right' : 'checks-sync-button checks-sync-button-left';
 		},
+		assignmentTooltip() {
+			if (this.vm.isChecksMetadataFace(this.actionFace)) {
+				return this.vm.$avt('checks:tooltip_replace_typed_metadata_name', 'Replace metadata face name with the typed name.');
+			}
+			return this.vm.$avt('checks:tooltip_assign_or_create_person', 'Assign the selected Photos person, or create it from the typed name.');
+		},
 		positionButtonClass() {
-			return this.isLeft ? 'checks-position-button checks-position-button-left' : 'checks-position-button checks-position-button-right';
+			return this.isLeft ? 'checks-position-button checks-position-button-right' : 'checks-position-button checks-position-button-left';
 		},
 		positionTooltip() {
 			return this.isLeft

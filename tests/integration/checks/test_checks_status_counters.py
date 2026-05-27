@@ -11,7 +11,7 @@ def test_checks_status_counter_ui_is_wired():
     assert 'getRelevantChecksStatusCounters()' in mixin
     assert 'getChecksCountersStatusSuffix()' in mixin
     assert 'getChecksProgressStatusText()' in mixin
-    assert 'checks:counter_findings' in mixin
+    assert 'schemaCounterSuffix' in mixin
     assert 'progress.findings_count' in mixin
 
 
@@ -29,3 +29,7 @@ def test_checks_status_counter_translations_exist():
 
     assert 'counter_findings="Findings"' in enu
     assert 'counter_findings="Funde"' in ger
+    assert 'counter_stored_findings="In match list"' in enu
+    assert 'counter_stored_findings="In Fundliste"' in ger
+    assert 'counter_auto_resolved="Auto resolved"' in enu
+    assert 'counter_auto_resolved="Automatisch gelöst"' in ger

@@ -92,10 +92,17 @@ Long-running operation payloads should include:
     "counters": [
       {
         "key": "findings",
-        "label_key": "checks:counter_findings",
-        "fallback_label": "Findings",
+        "label_key": "checks:counter_stored_findings",
+        "fallback_label": "In match list",
         "value": 7,
         "show_when_zero": true
+      },
+      {
+        "key": "resolved",
+        "label_key": "checks:counter_auto_resolved",
+        "fallback_label": "Auto resolved",
+        "value": 3,
+        "show_when_zero": false
       }
     ]
   }
@@ -156,9 +163,9 @@ Rules:
 | `mode` | `scan` |
 | `save_only` | `true` |
 | Progress | `files` |
-| Counters | `findings` |
+| Counters | `findings`, optional `resolved` |
 
-Do not show `resolved`, `ignored`, `transferred`, or old stored findings counts.
+For save-only scans, `findings` counts only entries actually written to the later stored findings list. If automatic corrections are enabled, `resolved` counts successfully auto-resolved conflicts. Do not show `ignored`, `transferred`, or old stored findings counts.
 
 ### Interactive scan
 

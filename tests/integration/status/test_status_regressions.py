@@ -33,7 +33,7 @@ def test_regression_checks_save_only_scan_never_uses_stored_findings_count():
     assert status["counters"][0]["value"] == 0
 
 
-def test_regression_checks_save_only_scan_never_sends_resolved_ignored_or_transferred():
+def test_regression_checks_save_only_scan_sends_resolved_but_not_ignored_or_transferred():
     service = _service()
 
     status = service._buildChecksStatusPayload(
@@ -49,7 +49,7 @@ def test_regression_checks_save_only_scan_never_sends_resolved_ignored_or_transf
         transferred_count=2,
     )
 
-    assert _counter_keys(status) == ["findings"]
+    assert _counter_keys(status) == ["findings", "resolved"]
 
 
 def test_regression_face_match_save_only_scan_never_sends_transferred_or_skipped():

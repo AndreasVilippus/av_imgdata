@@ -87,6 +87,20 @@ class FileHandlerPhotosComparisonTests(unittest.TestCase):
 
         self.assertEqual(analysis["files_with_name_conflicts"], 1)
 
+    def test_oriented_image_dimensions_swap_width_height_for_rotated_exif_orientation(self):
+        self.assertEqual(
+            FileHandler._orientedImageDimensions({"width": 800, "height": 600, "unit": "pixel"}, 6),
+            {"width": 600, "height": 800, "unit": "pixel"},
+        )
+        self.assertEqual(
+            FileHandler._orientedImageDimensions({"width": 800, "height": 600, "unit": "pixel"}, 8),
+            {"width": 600, "height": 800, "unit": "pixel"},
+        )
+        self.assertEqual(
+            FileHandler._orientedImageDimensions({"width": 800, "height": 600, "unit": "pixel"}, 3),
+            {"width": 800, "height": 600, "unit": "pixel"},
+        )
+
 
 class FileHandlerRawPreviewTests(unittest.TestCase):
     def test_extract_embedded_jpeg_preview_from_arw_tiff_tags(self):

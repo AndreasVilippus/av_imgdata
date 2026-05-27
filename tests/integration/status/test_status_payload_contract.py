@@ -124,7 +124,7 @@ def test_build_status_payload_contract():
     assert _counter_keys(status) == ["findings"]
 
 
-def test_checks_save_only_scan_status_only_sends_findings_counter():
+def test_checks_save_only_scan_status_sends_stored_findings_and_auto_resolved_counters():
     service = _service()
 
     status = service._buildChecksStatusPayload(
@@ -150,10 +150,14 @@ def test_checks_save_only_scan_status_only_sends_findings_counter():
     assert status["progress"]["current"] == 120
     assert status["progress"]["total"] == 41070
 
-    assert _counter_keys(status) == ["findings"]
+    assert _counter_keys(status) == ["findings", "resolved"]
     findings = _counter(status, "findings")
+    resolved = _counter(status, "resolved")
     assert findings["value"] == 7
+    assert findings["label_key"] == "checks:counter_stored_findings"
     assert findings["show_when_zero"] is True
+    assert resolved["value"] == 9
+    assert resolved["label_key"] == "checks:counter_auto_resolved"
 
 
 def test_checks_save_only_scan_status_keeps_findings_zero_visible():
@@ -172,6 +176,7 @@ def test_checks_save_only_scan_status_keeps_findings_zero_visible():
     assert _counter_keys(status) == ["findings"]
     findings = _counter(status, "findings")
     assert findings["value"] == 0
+    assert findings["label_key"] == "checks:counter_stored_findings"
     assert findings["show_when_zero"] is True
 
 

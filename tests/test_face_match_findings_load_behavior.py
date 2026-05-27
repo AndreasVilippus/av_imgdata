@@ -55,6 +55,43 @@ def test_get_face_match_finding_entries_does_not_refresh_by_default_with_session
     service._persistFaceMatchFindingsEntries.assert_not_called()
 
 
+def test_get_face_match_finding_entries_strips_debug_payload_from_response():
+    service = make_service()
+    service.getFaceMatchFindings.return_value["entries"] = [{
+        "action": "search_photo_face_in_file",
+        "image_path": "/volume1/photo/a.jpg",
+        "lookup_debug": {"candidates": list(range(100))},
+        "resume_cursor": {"skip_face_ids": [1]},
+        "matched_person": {
+            "id": 7,
+            "name": "Person A",
+            "additional": {
+                "thumbnail": {
+                    "cache_key": "abc",
+                    "extra": "not-needed",
+                },
+                "large_blob": "not-needed",
+            },
+            "raw_payload": "not-needed",
+        },
+    }]
+
+    result = service.getFaceMatchFindingEntries()
+    entry = result["entries"][0]
+
+    assert "lookup_debug" not in entry
+    assert "resume_cursor" not in entry
+    assert entry["matched_person"] == {
+        "id": 7,
+        "name": "Person A",
+        "additional": {
+            "thumbnail": {
+                "cache_key": "abc",
+            },
+        },
+    }
+
+
 def test_get_face_match_finding_entries_refresh_true_revalidates_stored_entries():
     service = make_service()
 

@@ -121,6 +121,45 @@ def test_stored_findings_availability_is_bound_to_selected_action_runtime():
     assert result == {"hasFindings": True}
 
 
+def test_stored_findings_status_count_is_not_review_progress_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchUseStoredFindings: true,
+              faceMatchFindingsStatus: {
+                action: 'search_photo_face_in_file',
+                requested_action: 'search_photo_face_in_file',
+                count: 1050,
+              },
+              faceMatchFindingEntries: [],
+              faceMatchFindingEntriesTotal: 0,
+            });
+
+            assert.strictEqual(component.hasFaceMatchStoredFindings, true);
+            assert.strictEqual(component.faceMatchShowStoredFindingsProgress, false);
+            assert.strictEqual(component.faceMatchStoredFindingsTotal, 0);
+            assert.strictEqual(component.faceMatchStoredFindingsChecked, 0);
+
+            component.faceMatchFindingEntries = Array.from({ length: 1050 }, (_, index) => ({ id: index + 1 }));
+            component.faceMatchFindingEntriesTotal = 1050;
+
+            assert.strictEqual(component.faceMatchShowStoredFindingsProgress, true);
+            assert.strictEqual(component.faceMatchStoredFindingsTotal, 1050);
+            assert.strictEqual(component.faceMatchStoredFindingsChecked, 1);
+            console.log(JSON.stringify({
+              available: component.hasFaceMatchStoredFindings,
+              checked: component.faceMatchStoredFindingsChecked,
+              total: component.faceMatchStoredFindingsTotal,
+            }));
+            """
+        )
+    )
+
+    assert result == {"available": True, "checked": 1, "total": 1050}
+
+
 def test_switching_face_match_action_disables_foreign_stored_findings_runtime():
     result = run_node(
         face_match_runtime_script(
@@ -214,6 +253,89 @@ def test_load_stored_findings_sends_selected_source_action_runtime():
     assert result["useStored"] is False
 
 
+def test_stored_findings_status_uses_active_finding_action_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let requestBody = null;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchUseStoredFindings: true,
+              faceMatchFindingEntries: [{ id: 1 }],
+              faceMatchResult: {
+                id: 1,
+                action: 'search_file_face_in_sources',
+              },
+              callFileAnalysisApi: async (_path, body) => {
+                requestBody = body;
+                return {
+                  success: true,
+                  data: {
+                    action: 'search_file_face_in_sources',
+                    requested_action: 'search_file_face_in_sources',
+                    count: 55,
+                  },
+                };
+              },
+            });
+
+            await component.fetchFaceMatchFindingsStatus();
+
+            assert.strictEqual(requestBody.action, 'search_file_face_in_sources');
+            assert.strictEqual(component.faceMatchUseStoredFindings, true);
+            assert.strictEqual(component.hasFaceMatchStoredFindings, true);
+            console.log(JSON.stringify({ action: requestBody.action, count: component.faceMatchFindingsStatus.count }));
+            """
+        )
+    )
+
+    assert result == {"action": "search_file_face_in_sources", "count": 55}
+
+
+def test_load_stored_findings_prefers_status_action_during_review_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let requestBody = null;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchUseStoredFindings: true,
+              faceMatchFindingsStatus: {
+                action: 'search_file_face_in_sources',
+                requested_action: 'search_photo_face_in_file',
+                count: 55,
+              },
+              callFileAnalysisApi: async (_path, body) => {
+                requestBody = body;
+                return {
+                  success: true,
+                  data: {
+                    face_matches: {
+                      action: 'search_file_face_in_sources',
+                      requested_action: 'search_file_face_in_sources',
+                      count: 1,
+                      entries: [{ id: 1, action: 'search_file_face_in_sources' }],
+                    },
+                  },
+                };
+              },
+            });
+
+            await component.loadStoredFaceMatchFindings();
+
+            assert.strictEqual(requestBody.findings_action, 'search_file_face_in_sources');
+            assert.strictEqual(component.faceMatchResult.action, 'search_file_face_in_sources');
+            console.log(JSON.stringify({ findingsAction: requestBody.findings_action, resultAction: component.faceMatchResult.action }));
+            """
+        )
+    )
+
+    assert result == {
+        "findingsAction": "search_file_face_in_sources",
+        "resultAction": "search_file_face_in_sources",
+    }
+
+
 def test_reloaded_stored_findings_keep_original_review_total_runtime():
     result = run_node(
         face_match_runtime_script(
@@ -256,6 +378,121 @@ def test_reloaded_stored_findings_keep_original_review_total_runtime():
     )
 
     assert result == {"total": 114, "completed": 1, "checked": 2}
+
+
+def test_stored_findings_next_is_not_overwritten_by_stale_scan_progress_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const entries = [
+              { id: 1, action: 'search_file_face_in_sources', image_path: '/volume1/photo/one.jpg' },
+              { id: 2, action: 'search_file_face_in_sources', image_path: '/volume1/photo/two.jpg' },
+            ];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchUseStoredFindings: true,
+              faceMatchFindingEntries: entries,
+              faceMatchFindingEntriesTotal: 2,
+              faceMatchFindingIndex: 0,
+              faceMatchResult: entries[0],
+            });
+
+            await component.loadNextFaceMatch();
+            assert.strictEqual(component.faceMatchFindingIndex, 0);
+            assert.strictEqual(component.faceMatchResult.id, 2);
+            assert.strictEqual(component.faceMatchFindingEntries.length, 1);
+
+            const applied = component.applyFaceMatchingProgress({
+              running: false,
+              action: 'search_file_face_in_sources',
+              status: {
+                schema_version: 1,
+                mode: 'scan',
+                phase: 'finished',
+              },
+              result: entries[0],
+            });
+
+            assert.strictEqual(applied, true);
+            assert.strictEqual(component.faceMatchFindingIndex, 0);
+            assert.strictEqual(component.faceMatchResult.id, 2);
+            assert.match(component.faceMatchProgress.message, /List entry 2 of 2/);
+            console.log(JSON.stringify({
+              index: component.faceMatchFindingIndex,
+              resultId: component.faceMatchResult.id,
+              entries: component.faceMatchFindingEntries.length,
+              message: component.faceMatchProgress.message,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "index": 0,
+        "resultId": 2,
+        "entries": 1,
+        "message": "List entry 2 of 2.",
+    }
+
+
+def test_skipped_stored_finding_stays_filtered_after_reload_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const entries = [
+              { id: 1, action: 'search_file_face_in_sources', image_path: '/volume1/photo/one.jpg' },
+              { id: 2, action: 'search_file_face_in_sources', image_path: '/volume1/photo/two.jpg' },
+            ];
+            let loads = 0;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_file_face_in_sources',
+              faceMatchUseStoredFindings: true,
+              faceMatchFindingEntries: entries.slice(),
+              faceMatchFindingEntriesTotal: 2,
+              faceMatchFindingIndex: 0,
+              faceMatchResult: entries[0],
+              callFileAnalysisApi: async () => {
+                loads += 1;
+                return {
+                  success: true,
+                  data: {
+                    face_matches: {
+                      action: 'search_file_face_in_sources',
+                      requested_action: 'search_file_face_in_sources',
+                      count: 2,
+                      transferred_count: 0,
+                      entries: entries.slice(),
+                    },
+                  },
+                };
+              },
+            });
+
+            await component.loadNextFaceMatch();
+            assert.strictEqual(component.faceMatchResult.id, 2);
+
+            await component.loadStoredFaceMatchFindings();
+
+            assert.strictEqual(loads, 1);
+            assert.strictEqual(component.faceMatchFindingEntries.length, 1);
+            assert.strictEqual(component.faceMatchResult.id, 2);
+            assert.strictEqual(component.faceMatchStoredFindingsChecked, 2);
+            console.log(JSON.stringify({
+              loads,
+              entries: component.faceMatchFindingEntries.length,
+              resultId: component.faceMatchResult.id,
+              checked: component.faceMatchStoredFindingsChecked,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "loads": 1,
+        "entries": 1,
+        "resultId": 2,
+        "checked": 2,
+    }
 
 
 def test_file_source_face_match_titles_show_source_target_and_image_runtime():
@@ -498,6 +735,100 @@ def test_stale_backend_running_phase_does_not_keep_stop_state_runtime():
     )
 
     assert result == {"label": "Start", "disabled": False}
+
+
+def test_stale_backend_flat_finished_phase_does_not_keep_stop_state_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              faceMatchLoading: true,
+              faceMatchProgress: {
+                running: false,
+                active: false,
+                stale: true,
+                status_phase: 'finished',
+              },
+            });
+
+            assert.strictEqual(component.faceMatchStatusPhase, 'finished');
+            assert.strictEqual(component.faceMatchPrimaryButtonLabel, 'Start');
+            assert.strictEqual(component.faceMatchInteractionDisabled, false);
+            console.log(JSON.stringify({
+              phase: component.faceMatchStatusPhase,
+              label: component.faceMatchPrimaryButtonLabel,
+              disabled: component.faceMatchInteractionDisabled,
+            }));
+            """
+        )
+    )
+
+    assert result == {"phase": "finished", "label": "Start", "disabled": False}
+
+
+def test_face_match_progress_polling_returns_pending_request_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let capturedCallback = null;
+            const requestPromise = Promise.resolve({ running: true });
+            const component = createComponent({
+              startNamedPolling: (timerKey, callback, interval, options) => {
+                capturedCallback = callback;
+                assert.strictEqual(timerKey, 'faceMatchProgressTimer');
+                assert.strictEqual(interval, 1000);
+                assert.strictEqual(options.skipIfPending, true);
+              },
+              fetchFaceMatchingProgress: () => requestPromise,
+            });
+
+            component.startFaceMatchProgressPolling();
+
+            assert.strictEqual(capturedCallback(), requestPromise);
+            console.log(JSON.stringify({ returnsPromise: true }));
+            """
+        )
+    )
+
+    assert result == {"returnsPromise": True}
+
+
+def test_face_match_progress_fetch_skips_overlap_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let callCount = 0;
+            let resolveRequest = null;
+            const component = createComponent({
+              callDsmApi: async () => {
+                callCount += 1;
+                return await new Promise((resolve) => {
+                  resolveRequest = resolve;
+                });
+              },
+              fetchFaceMatchFindingsStatus: async () => {},
+              stopFaceMatchProgressPolling: () => {},
+            });
+
+            const first = component.fetchFaceMatchingProgress();
+            const second = await component.fetchFaceMatchingProgress();
+
+            assert.strictEqual(Object.keys(second).length, 0);
+            assert.strictEqual(callCount, 1);
+            assert.strictEqual(component.faceMatchProgressRequestPending, true);
+
+            resolveRequest({ success: true, data: { running: false, active: false, stale: true, status_phase: 'finished' } });
+            const progress = await first;
+
+            assert.strictEqual(progress.status_phase, 'finished');
+            assert.strictEqual(component.faceMatchProgressRequestPending, false);
+            assert.strictEqual(component.faceMatchLoading, false);
+            console.log(JSON.stringify({ callCount, phase: component.faceMatchStatusPhase }));
+            """
+        )
+    )
+
+    assert result == {"callCount": 1, "phase": "finished"}
 
 
 def test_primary_button_stops_when_backend_progress_is_running_runtime():

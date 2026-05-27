@@ -1,5 +1,5 @@
 import json
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from api.session_manager import SessionBootstrapRequired, SessionManager, SessionManagerError
 from imgdata import ImgDataOperationError, ImgDataService, ScanContext
@@ -76,6 +76,63 @@ def test_photo_face_match_assignment_mutation_updates_photos_findings_and_mappin
         ("remove", {"face_id": 77, "increment_transferred_count": True}),
         ("mapping", {"source_name": "Legacy", "target_name": "Target"}),
     ]
+
+
+def test_remove_face_match_finding_entry_compacts_persisted_payload():
+    service = make_service()
+    written = {}
+    service._debugLog = lambda *args, **kwargs: None
+    service.getFaceMatchFindings = lambda: {
+        "status": "finished",
+        "action": "search_photo_face_in_file",
+        "save_only": True,
+        "transferred_count": 3,
+        "entries": [
+            {
+                "face": {"face_id": 77},
+                "lookup_debug": {"large": list(range(100))},
+            },
+            {
+                "face": {"face_id": 88},
+                "lookup_debug": {"large": list(range(100))},
+                "resume_cursor": {"skip_face_ids": [77]},
+                "matched_person": {
+                    "id": 5,
+                    "name": "Target",
+                    "additional": {
+                        "thumbnail": {
+                            "cache_key": "thumb",
+                            "large": "drop",
+                        },
+                        "raw": "drop",
+                    },
+                    "raw_payload": "drop",
+                },
+            },
+        ],
+    }
+    service.file_analysis.writeCheckFindings = lambda finding_type, payload: written.update({
+        "finding_type": finding_type,
+        "payload": payload,
+    }) or True
+
+    result = service.removeFaceMatchFindingEntry(face_id=77)
+
+    assert result["removed"] is True
+    assert result["remaining_count"] == 1
+    assert written["finding_type"] == "face_match"
+    entry = written["payload"]["entries"][0]
+    assert "lookup_debug" not in entry
+    assert "resume_cursor" not in entry
+    assert entry["matched_person"] == {
+        "id": 5,
+        "name": "Target",
+        "additional": {
+            "thumbnail": {
+                "cache_key": "thumb",
+            },
+        },
+    }
 
 
 def test_photo_face_match_person_creation_mutation_updates_findings_and_mapping():
@@ -496,6 +553,64 @@ def test_run_checks_scan_preserves_latest_progress_on_session_error():
     assert progress["current_path"] == "/volume1/photo/tests/test.jpg"
     assert progress["resume_cursor"]["path_index"] == 944
     assert progress["resume_cursor"]["findings_count"] == 12
+
+
+def test_checks_save_only_auto_apply_progress_counts_stored_and_resolved_separately():
+    service = make_service()
+    image_path = "/volume1/photo/tests/conflict.jpg"
+    resolved_entry = {
+        "review_type": "name_conflicts",
+        "image_path": image_path,
+        "entry_id": "resolved",
+        "left_face_signature": {"source_format": "ACD", "name": "Old", "x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4},
+        "right_face_signature": {"source_format": "MWG_REGIONS", "name": "New", "x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4},
+    }
+    remaining_entry = {
+        "review_type": "name_conflicts",
+        "image_path": image_path,
+        "entry_id": "remaining",
+        "left_face_signature": {"source_format": "MICROSOFT", "name": "Old", "x": 0.5, "y": 0.2, "w": 0.3, "h": 0.4},
+        "right_face_signature": {"source_format": "MWG_REGIONS", "name": "New", "x": 0.5, "y": 0.2, "w": 0.3, "h": 0.4},
+    }
+    captured_writes = []
+
+    service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+    service._getChecksCandidatePaths = lambda **kwargs: [image_path]
+    service._shouldStopChecks = lambda *args, **kwargs: False
+    service._shouldSkipRawFaceCheckWithoutSidecar = lambda *args, **kwargs: False
+    service._shouldProbeJpegFaceCheckWithoutSidecar = lambda *args, **kwargs: False
+    service._readImageMetadata = lambda *args, **kwargs: MetadataPayload(image_path=image_path, faces=[])
+    service.files.analyzeMetadata = lambda payload: {}
+    service._buildCheckEntriesForType = Mock(return_value=[resolved_entry, remaining_entry])
+    service._resolveChecksReviewEntry = Mock(return_value={
+        "entry": None,
+        "item": None,
+        "auto_applied_count": 1,
+        "processed_entry_tokens": [service._checksEntryToken(resolved_entry)],
+    })
+    service._writeChecksFindings = lambda **kwargs: captured_writes.append(kwargs)
+
+    result = service.searchNextChecksItem(
+        user_key="user",
+        cookies={},
+        base_url="https://example.test",
+        check_type="name_conflicts",
+        save_only=True,
+        auto_apply_suggested_names=True,
+    )
+
+    assert result["findings_count"] == 1
+    assert result["resolved_count"] == 1
+    assert captured_writes[-1]["entries"] == [remaining_entry]
+
+    progress = service.getChecksProgress("user", "name_conflicts")
+    assert progress["findings_count"] == 1
+    assert progress["resolved_count"] == 1
+    counters = {counter["key"]: counter for counter in progress["status"]["counters"]}
+    assert counters["findings"]["value"] == 1
+    assert counters["findings"]["label_key"] == "checks:counter_stored_findings"
+    assert counters["resolved"]["value"] == 1
+    assert counters["resolved"]["label_key"] == "checks:counter_auto_resolved"
 
 
 def test_run_face_matching_api_failure_does_not_request_login():

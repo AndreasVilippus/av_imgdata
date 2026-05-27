@@ -947,6 +947,19 @@ class ImgDataService:
         )
 
     @staticmethod
+    def _metadataFaceEditTargetFromData(face_data: Dict[str, Any]) -> MetadataFace:
+        target_data = dict(face_data) if isinstance(face_data, dict) else {}
+        source_format = str(target_data.get("source_format") or "").strip().upper()
+        orientation = target_data.get("orientation")
+        if (
+            target_data.get("display_normalized")
+            and source_format in {"MICROSOFT", "MWG_REGIONS"}
+            and orientation not in (None, "", 1, "1")
+        ):
+            target_data = denormalize_xmp_face(target_data)
+        return MetadataFace.from_dict(target_data)
+
+    @staticmethod
     def _findParentMap(root: ET.Element) -> Dict[ET.Element, ET.Element]:
         return {child: parent for parent in root.iter() for child in parent}
 
@@ -1068,7 +1081,7 @@ class ImgDataService:
         if warning:
             return {"deleted": False, "warning": "checks:warning_face_delete_not_found"}
 
-        target = MetadataFace.from_dict(face_data if isinstance(face_data, dict) else {})
+        target = self._metadataFaceEditTargetFromData(face_data if isinstance(face_data, dict) else {})
         source_format = str(target.source_format or "").strip().upper()
         root = edit_context["root"]
         parent_map = self._findParentMap(root)
@@ -1209,7 +1222,7 @@ class ImgDataService:
         if warning:
             return {"updated": False, "warning": "checks:warning_face_replace_not_found"}
 
-        target = MetadataFace.from_dict(face_data if isinstance(face_data, dict) else {})
+        target = self._metadataFaceEditTargetFromData(face_data if isinstance(face_data, dict) else {})
         source_format = str(target.source_format or "").strip().upper()
 
         updated = False
@@ -1488,7 +1501,7 @@ class ImgDataService:
         if warning:
             return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
 
-        target = MetadataFace.from_dict(face_data if isinstance(face_data, dict) else {})
+        target = self._metadataFaceEditTargetFromData(face_data if isinstance(face_data, dict) else {})
         source_face = MetadataFace.from_dict(source_face_data if isinstance(source_face_data, dict) else {})
         source_format = str(target.source_format or "").strip().upper()
 
@@ -1872,7 +1885,16 @@ class ImgDataService:
         display_progress["stop_requested"] = False
         return display_progress
 
-    def getFaceMatchingProgress(self, user_key: str) -> Dict[str, Any]:
+    @staticmethod
+    def _compactFaceMatchingProgressForResponse(progress: Dict[str, Any]) -> Dict[str, Any]:
+        compact = dict(progress) if isinstance(progress, dict) else {}
+        if compact.get("finished") and compact.get("stale"):
+            compact.pop("result", None)
+            compact.pop("resume_cursor", None)
+            compact["resume_available"] = False
+        return compact
+
+    def getFaceMatchingProgress(self, user_key: str, *, compact_for_response: bool = False) -> Dict[str, Any]:
         normalized_user = str(user_key or "").strip()
 
         candidate_keys: List[str] = []
@@ -1908,14 +1930,16 @@ class ImgDataService:
                     memory_progress = dict(only_progress)
 
         if memory_progress:
-            return self._attachFaceMatchStatusPayload(
+            payload = self._attachFaceMatchStatusPayload(
                 self._normalizeFaceMatchingProgressForDisplay(
                     user_key,
                     self._normalizeFaceMatchingProgress(user_key, memory_progress),
                 )
             )
+            return self._compactFaceMatchingProgressForResponse(payload) if compact_for_response else payload
 
-        return self._getFaceMatchingProgressCore(user_key)
+        payload = self._getFaceMatchingProgressCore(user_key)
+        return self._compactFaceMatchingProgressForResponse(payload) if compact_for_response else payload
 
 
     def _getFaceMatchingProgressCore(self, user_key: str) -> Dict[str, Any]:
@@ -3758,6 +3782,54 @@ class ImgDataService:
             normalized["metadata_face"] = metadata_face.to_dict()
         return normalized
 
+    @staticmethod
+    def _compactFaceMatchPersonForResponse(person: Any) -> Any:
+        if not isinstance(person, dict):
+            return person
+        compact = {
+            key: person.get(key)
+            for key in ("id", "name", "display_name")
+            if person.get(key) is not None
+        }
+        thumbnail = person.get("thumbnail")
+        if isinstance(thumbnail, dict):
+            compact["thumbnail"] = {
+                key: thumbnail.get(key)
+                for key in ("cache_key", "unit_id")
+                if thumbnail.get(key) is not None
+            }
+        additional = person.get("additional")
+        if isinstance(additional, dict):
+            additional_thumbnail = additional.get("thumbnail")
+            if isinstance(additional_thumbnail, dict):
+                compact["additional"] = {
+                    "thumbnail": {
+                        key: additional_thumbnail.get(key)
+                        for key in ("cache_key", "unit_id")
+                        if additional_thumbnail.get(key) is not None
+                    }
+                }
+        return compact
+
+    @classmethod
+    def _compactFaceMatchFindingEntryForResponse(cls, entry: Dict[str, Any]) -> Dict[str, Any]:
+        compact = cls._normalizeFaceMatchEntry(entry)
+        for key in (
+            "lookup_debug",
+            "debug",
+            "resume_cursor",
+            "candidate_persons",
+            "known_persons",
+            "person_candidates",
+        ):
+            compact.pop(key, None)
+        compact["matched_person"] = cls._compactFaceMatchPersonForResponse(compact.get("matched_person"))
+        return compact
+
+    @classmethod
+    def _compactFaceMatchFindingEntryForStorage(cls, entry: Dict[str, Any]) -> Dict[str, Any]:
+        return cls._compactFaceMatchFindingEntryForResponse(entry)
+
     def _resolveStoredFaceMatchEntry(
         self,
         *,
@@ -3987,7 +4059,11 @@ class ImgDataService:
                 "save_only": bool(findings.get("save_only")),
                 "transferred_count": int(transferred_count),
                 "count": len(entries),
-                "entries": entries,
+                "entries": [
+                    self._compactFaceMatchFindingEntryForStorage(entry)
+                    for entry in entries
+                    if isinstance(entry, dict)
+                ],
             },
         )
 
@@ -6079,7 +6155,10 @@ class ImgDataService:
 
                 if refreshed_entries:
                     saved_entries.extend(refreshed_entries)
+                    findings_count = len(saved_entries)
                     flush_saved_checks_findings(reason="save_only_result")
+                else:
+                    findings_count = len(saved_entries)
                 self._setChecksProgressMessage(
                     user_key,
                     check_type,
@@ -9666,13 +9745,18 @@ class ImgDataService:
                     entries=resolved_entries,
                     transferred_count=transferred_count,
                 )
+        response_entries = [
+            self._compactFaceMatchFindingEntryForResponse(entry)
+            for entry in resolved_entries
+            if isinstance(entry, dict)
+        ]
         return {
             "status": str(findings.get("status") or ""),
             "shared_folder": str(findings.get("shared_folder") or ""),
             "action": findings_action,
             "requested_action": requested_action,
             "count": len(resolved_entries),
-            "entries": resolved_entries,
+            "entries": response_entries,
             "transferred_count": transferred_count,
             "save_only": bool(findings.get("save_only")),
             "auto": bool(auto or findings.get("auto")),
@@ -9685,7 +9769,15 @@ class ImgDataService:
         metadata_face: Dict[str, Any],
         increment_transferred_count: bool = True,
     ) -> Dict[str, Any]:
+        started = monotonic()
         findings = self.getFaceMatchFindings()
+        self._debugLog(
+            "face_match_findings_remove_phase",
+            phase="read",
+            duration_ms=round((monotonic() - started) * 1000, 2),
+            mode="metadata",
+        )
+        filter_started = monotonic()
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
         remaining_entries = []
         removed_count = 0
@@ -9700,6 +9792,15 @@ class ImgDataService:
                     removed_count += 1
                     continue
             remaining_entries.append(entry)
+        self._debugLog(
+            "face_match_findings_remove_phase",
+            phase="filter",
+            duration_ms=round((monotonic() - filter_started) * 1000, 2),
+            mode="metadata",
+            entries_count=len(entries),
+            remaining_count=len(remaining_entries),
+            removed_count=removed_count,
+        )
 
         if removed_count == 0:
             return {
@@ -9714,7 +9815,15 @@ class ImgDataService:
             transferred_count += removed_count
 
         if not remaining_entries:
+            write_started = monotonic()
             deleted = self.file_analysis.deleteCheckFindings("face_match")
+            self._debugLog(
+                "face_match_findings_remove_phase",
+                phase="delete",
+                duration_ms=round((monotonic() - write_started) * 1000, 2),
+                mode="metadata",
+                removed_count=removed_count,
+            )
             return {
                 "removed": deleted,
                 "removed_count": removed_count,
@@ -9736,9 +9845,22 @@ class ImgDataService:
             "save_only": bool(findings.get("save_only")),
             "transferred_count": transferred_count,
             "count": len(remaining_entries),
-            "entries": remaining_entries,
+            "entries": [
+                self._compactFaceMatchFindingEntryForStorage(entry)
+                for entry in remaining_entries
+                if isinstance(entry, dict)
+            ],
         }
+        write_started = monotonic()
         written = self.file_analysis.writeCheckFindings("face_match", updated_payload)
+        self._debugLog(
+            "face_match_findings_remove_phase",
+            phase="write",
+            duration_ms=round((monotonic() - write_started) * 1000, 2),
+            mode="metadata",
+            remaining_count=len(remaining_entries),
+            removed_count=removed_count,
+        )
         return {
             "removed": bool(written),
             "removed_count": removed_count,
@@ -9753,7 +9875,16 @@ class ImgDataService:
         face_id: int,
         increment_transferred_count: bool = True,
     ) -> Dict[str, Any]:
+        started = monotonic()
         findings = self.getFaceMatchFindings()
+        self._debugLog(
+            "face_match_findings_remove_phase",
+            phase="read",
+            duration_ms=round((monotonic() - started) * 1000, 2),
+            mode="photos_face",
+            face_id=face_id,
+        )
+        filter_started = monotonic()
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
         remaining_entries = []
         removed_count = 0
@@ -9772,6 +9903,16 @@ class ImgDataService:
                 removed_count += 1
                 continue
             remaining_entries.append(entry)
+        self._debugLog(
+            "face_match_findings_remove_phase",
+            phase="filter",
+            duration_ms=round((monotonic() - filter_started) * 1000, 2),
+            mode="photos_face",
+            face_id=face_id,
+            entries_count=len(entries),
+            remaining_count=len(remaining_entries),
+            removed_count=removed_count,
+        )
 
         if removed_count == 0:
             return {
@@ -9786,7 +9927,16 @@ class ImgDataService:
             transferred_count += removed_count
 
         if not remaining_entries:
+            write_started = monotonic()
             deleted = self.file_analysis.deleteCheckFindings("face_match")
+            self._debugLog(
+                "face_match_findings_remove_phase",
+                phase="delete",
+                duration_ms=round((monotonic() - write_started) * 1000, 2),
+                mode="photos_face",
+                face_id=face_id,
+                removed_count=removed_count,
+            )
             return {
                 "removed": deleted,
                 "removed_count": removed_count,
@@ -9808,9 +9958,23 @@ class ImgDataService:
             "save_only": bool(findings.get("save_only")),
             "transferred_count": transferred_count,
             "count": len(remaining_entries),
-            "entries": remaining_entries,
+            "entries": [
+                self._compactFaceMatchFindingEntryForStorage(entry)
+                for entry in remaining_entries
+                if isinstance(entry, dict)
+            ],
         }
+        write_started = monotonic()
         written = self.file_analysis.writeCheckFindings("face_match", updated_payload)
+        self._debugLog(
+            "face_match_findings_remove_phase",
+            phase="write",
+            duration_ms=round((monotonic() - write_started) * 1000, 2),
+            mode="photos_face",
+            face_id=face_id,
+            remaining_count=len(remaining_entries),
+            removed_count=removed_count,
+        )
         return {
             "removed": bool(written),
             "removed_count": removed_count,

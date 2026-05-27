@@ -201,7 +201,7 @@ export default {
 			};
 		},
 		syncChecksDuplicateAssignmentState(item) {
-			if (!this.isChecksDuplicateFaces(item)) {
+			if (!this.isChecksFaceAssignmentSupported(item)) {
 				this.resetChecksDuplicateAssignmentState();
 				return;
 			}
@@ -307,6 +307,12 @@ export default {
 		isChecksPositionDeviation(item) {
 			return !!(item && item.review_type === 'position_deviations');
 		},
+		isChecksFaceAssignmentSupported(item) {
+			return this.isChecksDuplicateFaces(item) || this.isChecksPositionDeviation(item);
+		},
+		isChecksPositionReplacementSupported(item) {
+			return this.isChecksDuplicateFaces(item) || this.isChecksPositionDeviation(item);
+		},
 		canReplaceChecksFaceName(item, face, newName) {
 			return !this.checksActionLocked
 				&& this.isChecksNameConflict(item)
@@ -316,7 +322,7 @@ export default {
 		},
 		canReplaceChecksFacePosition(item, face, sourceFace) {
 			return !this.checksActionLocked
-				&& this.isChecksPositionDeviation(item)
+				&& this.isChecksPositionReplacementSupported(item)
 				&& !!(item && item.image_path)
 				&& this.isChecksMetadataFace(face)
 				&& !!(sourceFace && typeof sourceFace === 'object' && sourceFace.source_format);
@@ -422,11 +428,20 @@ export default {
 			state.suggestLoading = false;
 		},
 		canAssignChecksFaceToPerson(item, side) {
-			if (!this.isChecksDuplicateFaces(item) || this.checksActionLocked || this.checksLoading || !item || !item.image_path) {
+			if (!this.isChecksFaceAssignmentSupported(item) || this.checksActionLocked || this.checksLoading || !item || !item.image_path) {
 				return false;
 			}
 			const state = this.getChecksDuplicateAssignment(side);
-			return !!(state.selectedPerson && state.selectedPerson.id && String(state.name || '').trim());
+			const face = side === 'left'
+				? (item.left_face_target || item.left_face)
+				: (item.right_face_target || item.right_face);
+			const name = String(state.name || '').trim();
+			if (!face || !name) {
+				return false;
+			}
+			return this.isChecksMetadataFace(face) || this.isChecksPhotosFace(face)
+				? true
+				: !!(state.selectedPerson && state.selectedPerson.id);
 		},
 		showChecksPopup(message) {
 			if (typeof window !== 'undefined' && typeof window.alert === 'function') {
@@ -476,7 +491,7 @@ export default {
 			return '';
 		},
 		getChecksReplaceRightTooltip(item) {
-			if (this.isChecksPositionDeviation(item)) {
+			if (this.isChecksPositionReplacementSupported(item)) {
 				return this.$avt(
 					'checks:tooltip_replace_right_position',
 					'The face on the right takes the position from the left.'
@@ -499,7 +514,7 @@ export default {
 			);
 		},
 		getChecksReplaceLeftTooltip(item) {
-			if (this.isChecksPositionDeviation(item)) {
+			if (this.isChecksPositionReplacementSupported(item)) {
 				return this.$avt(
 					'checks:tooltip_replace_left_position',
 					'The face on the left takes the position from the right.'
@@ -1060,6 +1075,31 @@ export default {
 				? this.checksProgress
 				: {};
 			const key = String(progress.message_key || '').trim();
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			const schemaCounterSuffix = status.schema_version === 1 && Array.isArray(status.counters)
+				? this.getChecksCountersStatusSuffix()
+				: '';
+			if (status.schema_version === 1 && Array.isArray(status.counters)) {
+				const withBackendCounters = (text) => {
+					const normalized = String(text || '').trim();
+					if (normalized && schemaCounterSuffix) {
+						return `${normalized} | ${schemaCounterSuffix}`;
+					}
+					return normalized || schemaCounterSuffix;
+				};
+				if (key === 'checks:progress_scanning') {
+					return withBackendCounters(this.$avt('checks:progress_scanning_short', 'Scanning files...'));
+				}
+				if (key === 'checks:progress_result_found') {
+					return withBackendCounters(this.$avt('checks:progress_result_found_short', 'Check finding found.'));
+				}
+				if (key === 'checks:progress_findings_saved') {
+					return withBackendCounters(this.$avt('checks:progress_findings_saved_short', 'Findings list saved.'));
+				}
+				return withBackendCounters(this.checksStatusMessage);
+			}
 			const openFindings = Number(progress.findings_count) || 0;
 			const resolvedNames = Number(progress.resolved_count) || 0;
 			const ignoredConflicts = Number(progress.ignored_count) || 0;
@@ -1637,19 +1677,21 @@ export default {
 				this.checksActionLocked = false;
 				if (!keepLoadingState) {
 					this.checksLoading = false;
-				if (this.selectedChecksAction === 'findings') {
-					this.checksFindingsActionRunning = false;
-				}
+					if (this.selectedChecksAction === 'findings') {
+						this.checksFindingsActionRunning = false;
+					}
 				}
 			}
 		},
 		async assignChecksFaceToPerson(side) {
 			const item = this.checksCurrentItem;
-			if (!this.isChecksDuplicateFaces(item)) {
+			if (!this.isChecksFaceAssignmentSupported(item)) {
 				return;
 			}
 			const state = this.getChecksDuplicateAssignment(side);
-			const face = side === 'left' ? item.left_face_target : item.right_face_target;
+			const face = side === 'left'
+				? (item.left_face_target || item.left_face)
+				: (item.right_face_target || item.right_face);
 			if (!this.canAssignChecksFaceToPerson(item, side) || !face) {
 				return;
 			}
@@ -1658,13 +1700,23 @@ export default {
 			let keepLoadingState = false;
 			const reloadIndex = this.checksCurrentIndex;
 			try {
-				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_assign_face_person', {
-					image_path: item.image_path,
-					face,
-					person_id: state.selectedPerson.id,
-					person_name: String(state.name || '').trim(),
-					review_type: item.review_type,
-				});
+				const targetName = String(state.name || '').trim();
+				const shouldRenameOrCreate = this.isChecksMetadataFace(face) || !state.selectedPerson;
+				const data = shouldRenameOrCreate
+					? await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_replace_metadata_face_name', {
+						image_path: item.image_path,
+						face,
+						new_name: targetName,
+						review_type: item.review_type,
+						create_missing_person: this.isChecksPhotosFace(face),
+					})
+					: await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_assign_face_person', {
+						image_path: item.image_path,
+						face,
+						person_id: state.selectedPerson.id,
+						person_name: targetName,
+						review_type: item.review_type,
+					});
 				const result = this.getResponseData(data);
 				if (result.warning) {
 					this.checksStatusMessage = this.$avt(
@@ -1680,7 +1732,18 @@ export default {
 					return;
 				}
 				this.applyChecksFindingsUpdate(result.findings_update, { resolvedDelta: 1 });
-				this.checksStatusMessage = this.$avt('checks:status_face_person_assigned', 'Known person assigned.');
+				const operation = String(result.operation || '').trim().toLowerCase();
+				if (operation === 'photos_create') {
+					this.checksStatusMessage = this.$avt('checks:status_face_person_created', 'Photos person created from face.');
+				} else if (operation === 'photos_assign') {
+					this.checksStatusMessage = this.$avt('checks:status_face_person_assigned', 'Photos face assigned to known person.');
+				} else if (this.isChecksMetadataFace(face)) {
+					this.checksStatusMessage =
+						this.$avt('checks:status_face_name_replaced', 'Face name replaced in metadata.');
+				} else {
+					this.checksStatusMessage =
+						this.$avt('checks:status_face_person_assigned', 'Known person assigned.');
+				}
 				if (this.selectedChecksAction === 'scan' && !this.checksSaveOnly) {
 					keepLoadingState = true;
 					await this.startChecksScan({ resumeFromProgress: true });

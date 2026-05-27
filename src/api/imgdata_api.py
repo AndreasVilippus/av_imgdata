@@ -986,7 +986,7 @@ async def face_matching_progress(request: Request):
         return error_response
 
     try:
-        progress = IMGDATA.getFaceMatchingProgress(session_ctx["user_key"])
+        progress = IMGDATA.getFaceMatchingProgress(session_ctx["user_key"], compact_for_response=True)
     except Exception as exc:
         backend_debug_log(
             "face_matching_progress_exception",
@@ -1823,6 +1823,7 @@ async def checks_replace_metadata_face_name(request: Request):
     image_path = str(body.get("image_path") or "").strip()
     face = body.get("face")
     new_name = str(body.get("new_name") or "").strip()
+    review_type = str(body.get("review_type") or "").strip().lower() or "name_conflicts"
     save_mapping = bool(body.get("save_mapping"))
     source_name = str(body.get("source_name") or "").strip()
     create_missing_person = bool(body.get("create_missing_person"))
@@ -1864,7 +1865,7 @@ async def checks_replace_metadata_face_name(request: Request):
                     replacement_face_data["person_id"] = target_person.get("id")
             findings_update, refresh_error = _safe_refresh_checks_mutation_state(
                 session_ctx,
-                check_type="name_conflicts",
+                check_type=review_type,
                 image_path=image_path,
                 original_face_data=face,
                 replacement_face_data=replacement_face_data,
@@ -1977,11 +1978,9 @@ async def checks_assign_face_person(request: Request):
         findings_update = None
         refresh_error = None
         if result.get("updated") and review_type:
-            replacement_face_data = None
-            if str(face.get("source_format") or "").strip().upper() == "PHOTOS":
-                replacement_face_data = dict(face)
-                replacement_face_data["name"] = person_name
-                replacement_face_data["person_id"] = person_id
+            replacement_face_data = dict(face)
+            replacement_face_data["name"] = person_name
+            replacement_face_data["person_id"] = person_id
             findings_update, refresh_error = _safe_refresh_checks_mutation_state(
                 session_ctx,
                 check_type=review_type,

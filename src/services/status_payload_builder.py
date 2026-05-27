@@ -146,7 +146,9 @@ class StatusPayloadBuilder:
         else:
             status_progress = self.progress(kind="files", current=files_scanned, total=total_files, title_key="checks:label_images", fallback_title="Bilder", primary_label_key="checks:label_scanned", fallback_primary_label="geprüft", secondary_label_key="checks:label_remaining", fallback_secondary_label="verbleibend")
             if save_only:
-                counters.append(self.counter("findings", value=findings_count, label_key="checks:counter_findings", fallback_label="Funde", show_when_zero=True))
+                counters.append(self.counter("findings", value=findings_count, label_key="checks:counter_stored_findings", fallback_label="In Fundliste", show_when_zero=True))
+                if self.to_int(resolved_count) > 0:
+                    counters.append(self.counter("resolved", value=resolved_count, label_key="checks:counter_auto_resolved", fallback_label="Automatisch gelöst"))
             else:
                 for key, value, label_key, fallback in (("findings", findings_count, "checks:counter_findings", "Funde"), ("resolved", resolved_count, "checks:counter_resolved", "Aufgelöst"), ("ignored", ignored_count, "checks:counter_ignored", "Ignoriert"), ("skipped", skipped_count, "checks:counter_skipped", "Übersprungen"), ("errors", errors_count, "checks:counter_errors", "Fehler")):
                     if self.to_int(value) > 0:

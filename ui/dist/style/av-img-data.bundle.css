@@ -494,6 +494,34 @@
 	justify-content: flex-end;
 }
 
+.checks-number-field {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin-left: auto;
+	min-height: 32px;
+	font-size: 13px;
+	color: var(--sm-text);
+}
+
+.checks-number-input {
+	width: 90px;
+	height: 32px;
+	padding: 0 8px;
+	border: 1px solid var(--sm-border);
+	border-radius: var(--sm-radius-1);
+	background: #fff;
+	color: var(--sm-text);
+	font-family: var(--sm-font);
+	font-size: 13px;
+}
+
+.checks-number-input:disabled {
+	background: #f5f7f9;
+	color: var(--sm-text-muted);
+	cursor: not-allowed;
+}
+
 .checks-split {
 	margin-top: 16px;
 }
@@ -508,6 +536,8 @@
 
 .checks-face-name-input-wrap {
 	font-weight: 400;
+	position: relative;
+	z-index: 30;
 }
 
 .checks-face-name-field {
@@ -515,6 +545,10 @@
 	display: block;
 	width: 100%;
 	max-width: 100%;
+}
+
+.checks-face-name-field .face-match-suggest-list {
+	z-index: 31;
 }
 
 .checks-replace-actions {
@@ -614,7 +648,7 @@
 
 .checks-sync-button {
 	position: absolute;
-	top: 48px;
+	top: 88px;
 	z-index: 5;
 	width: auto;
 	height: var(--sm-icon-compact-h);
