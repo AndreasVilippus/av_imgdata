@@ -32,3 +32,12 @@ def test_duplicate_and_position_deviation_support_action_controls_without_overla
     assert "if (!this.isChecksFaceAssignmentSupported(item)) {" in mixin
     assert ".checks-position-button {\n\tposition: absolute;\n\ttop: 48px;" in styles
     assert ".checks-sync-button {\n\tposition: absolute;\n\ttop: 88px;" in styles
+
+
+def test_position_replacement_requires_different_source_formats():
+    mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
+
+    assert "getChecksFaceSourceFormat(face) {" in mixin
+    assert "const targetFormat = this.getChecksFaceSourceFormat(face);" in mixin
+    assert "const sourceFormat = this.getChecksFaceSourceFormat(sourceFace);" in mixin
+    assert "&& targetFormat !== sourceFormat;" in mixin

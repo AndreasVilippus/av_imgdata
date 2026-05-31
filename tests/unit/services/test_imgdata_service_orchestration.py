@@ -668,6 +668,45 @@ def test_run_face_matching_api_failure_does_not_request_login():
     assert progress["images_read"] == 6038
 
 
+def test_run_face_matching_publishes_success_result_with_terminal_state_atomically():
+    service = make_service()
+    updates = []
+    result = {
+        "searched": True,
+        "metadata_face": {"name": "Person Candidate"},
+        "findings_count": 1,
+        "transferred_count": 0,
+    }
+    service.session_manager.keepalive = lambda *args, **kwargs: {}
+    service.searchPhotoFaceInFile = Mock(return_value=result)
+    service._setFaceMatchingProgress = lambda user_key, **kwargs: updates.append((user_key, kwargs))
+
+    service._runFaceMatching(
+        user_key="user",
+        cookies={},
+        base_url="https://example.test",
+        action="search_photo_face_in_file",
+        limit=0,
+        offset=0,
+        skip_face_ids=[],
+        skip_targets=[],
+        auto=False,
+        save_only=False,
+    )
+
+    assert updates == [("user", {
+        "result": result,
+        "running": False,
+        "finished": True,
+        "stop_requested": False,
+        "action": "search_photo_face_in_file",
+        "auto": False,
+        "save_only": False,
+        "findings_count": 1,
+        "transferred_count": 0,
+    })]
+
+
 def test_run_face_matching_bootstrap_failure_requests_login():
     service = make_service()
 

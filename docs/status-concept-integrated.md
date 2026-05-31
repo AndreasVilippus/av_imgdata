@@ -235,6 +235,7 @@ Rules:
 - UI must not immediately apply scan progress over an active findings review.
 - Checks views must discover running check scans across check types and adopt only matching scan state.
 - `stop_requested` applies only to the operation, action/check type, and mode that produced it.
+- Stale runtime status without a live worker must not keep an active stopping message. If FaceMatch has `running: false`, `active: false`, and `stop_requested: false`, a historical `face_match:progress_stopping` message is normalized to `face_match:progress_stopped`.
 - A stored findings review remains visible until the backend replaces, resolves, skips, ignores, or clears the current item.
 
 ## Polling Rules
@@ -348,4 +349,4 @@ UI status contract tests should verify:
 - scan progress does not overwrite findings mode
 - `stop_requested` is scoped to matching operation/mode/action
 
-Regression tests should cover Checks save-only, FaceMatch save-only, auto-transfer, findings review, final `running: false` start responses, hidden finished progress bars, stale stop timeout, and monotonically increasing findings positions.
+Regression tests should cover Checks save-only, FaceMatch save-only, auto-transfer, findings review, final `running: false` start responses, hidden finished progress bars, stale stop timeout, stale FaceMatch stop-message normalization, and monotonically increasing findings positions.

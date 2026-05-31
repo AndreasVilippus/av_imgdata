@@ -293,6 +293,9 @@ export default {
 		isChecksPhotosFace(face) {
 			return String(face && face.source_format || '').trim().toUpperCase() === 'PHOTOS';
 		},
+		getChecksFaceSourceFormat(face) {
+			return String(face && face.source_format || '').trim().toUpperCase();
+		},
 		canDeleteChecksFace(item, face) {
 			return !this.checksActionLocked
 				&& !!(item && item.image_path)
@@ -321,11 +324,14 @@ export default {
 				&& !!String(newName || '').trim();
 		},
 		canReplaceChecksFacePosition(item, face, sourceFace) {
+			const targetFormat = this.getChecksFaceSourceFormat(face);
+			const sourceFormat = this.getChecksFaceSourceFormat(sourceFace);
 			return !this.checksActionLocked
 				&& this.isChecksPositionReplacementSupported(item)
 				&& !!(item && item.image_path)
 				&& this.isChecksMetadataFace(face)
-				&& !!(sourceFace && typeof sourceFace === 'object' && sourceFace.source_format);
+				&& !!sourceFormat
+				&& targetFormat !== sourceFormat;
 		},
 		canIgnoreChecksItem(item = this.checksCurrentItem) {
 			const reviewType = String(item && item.review_type || '').trim().toLowerCase();
@@ -1576,12 +1582,14 @@ export default {
 					image_path: this.checksCurrentItem.image_path,
 					face,
 					new_name: targetName,
+					review_type: this.checksCurrentItem.review_type,
 					save_mapping: saveMapping,
 					source_name: sourceName,
 					create_missing_person: !!options.createMissingPerson,
 				});
 				const result = this.getResponseData(data);
 				if (result.warning) {
+					const findingsUpdated = this.applyChecksFindingsUpdate(result.findings_update);
 					this.checksStatusMessage = this.$avt(
 						result.warning,
 						result.warning === 'checks:warning_exiftool_required'
@@ -1591,6 +1599,14 @@ export default {
 					const popupMessage = this.getChecksWarningPopupMessage(result);
 					if (popupMessage) {
 						this.showChecksPopup(popupMessage);
+					}
+					if (findingsUpdated) {
+						if (!this.checksEntries.length) {
+							this.checksCurrentItem = null;
+							this.resetChecksDuplicateAssignmentState();
+							return;
+						}
+						await this.loadChecksItemAtIndex(reloadIndex);
 					}
 					return;
 				}

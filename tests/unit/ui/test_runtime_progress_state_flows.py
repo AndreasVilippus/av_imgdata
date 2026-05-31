@@ -129,6 +129,50 @@ def test_face_match_final_backend_progress_releases_loading_runtime():
     assert result["events"][-2:] == ["findings-status", "stop"]
 
 
+def test_face_match_incomplete_worker_handoff_keeps_polling_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/faceMatchMixin.js",
+            """
+            const events = [];
+            const previousProgress = {
+              operation_id: 'face_match-existing',
+              revision: 18750,
+              running: true,
+              finished: false,
+              result: null,
+            };
+            const component = createComponent({
+              faceMatchLoading: true,
+              faceMatchProgress: previousProgress,
+              callDsmApi: async () => ({
+                success: true,
+                data: {
+                  operation_id: 'face_match-existing',
+                  revision: 18754,
+                  running: false,
+                  finished: false,
+                  stale: true,
+                  result: null,
+                },
+              }),
+              stopFaceMatchProgressPolling: () => events.push('stop'),
+              fetchFaceMatchFindingsStatus: async () => events.push('findings-status'),
+            });
+
+            await component.fetchFaceMatchingProgress();
+
+            assert.strictEqual(component.faceMatchLoading, true);
+            assert.strictEqual(component.faceMatchProgress, previousProgress);
+            assert.deepStrictEqual(events, []);
+            console.log(JSON.stringify({ loading: component.faceMatchLoading, events }));
+            """
+        )
+    )
+
+    assert result == {"loading": True, "events": []}
+
+
 def test_checks_poll_error_keeps_backend_owned_running_state_runtime():
     result = run_node(
         mixin_runtime_script(
@@ -186,6 +230,100 @@ def test_checks_final_backend_progress_releases_loading_runtime():
     assert result["loading"] is False
     assert result["findingsRunning"] is False
     assert result["events"] == ["apply-progress", "load-item", "stop"]
+
+
+def test_checks_position_replacement_requires_different_source_formats_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/checksMixin.js",
+            """
+            const component = createComponent({
+              checksActionLocked: false,
+            });
+            const item = { review_type: 'position_deviations', image_path: '/volume1/photo/test.jpg' };
+
+            assert.strictEqual(
+              component.canReplaceChecksFacePosition(
+                item,
+                { source_format: 'ACD' },
+                { source_format: 'ACD' },
+              ),
+              false
+            );
+            assert.strictEqual(
+              component.canReplaceChecksFacePosition(
+                item,
+                { source_format: 'ACD' },
+                { source_format: 'MWG_REGIONS' },
+              ),
+              true
+            );
+            console.log(JSON.stringify({ same: false, different: true }));
+            """
+        )
+    )
+
+    assert result == {"same": False, "different": True}
+
+
+def test_checks_face_name_warning_applies_findings_update_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/checksMixin.js",
+            """
+            const events = [];
+            const staleItem = {
+              review_type: 'duplicate_faces',
+              image_path: '/volume1/photo/duplicate.jpg',
+            };
+            const component = createComponent({
+              checksCurrentItem: staleItem,
+              checksCurrentIndex: 0,
+              checksEntries: [staleItem],
+              checksProgress: {},
+              selectedChecksAction: 'findings',
+              selectedChecksType: 'duplicate_faces',
+              checksSkipNameMappingConfirm: true,
+              canReplaceChecksFaceName: () => true,
+              resetChecksDuplicateAssignmentState: () => events.push('reset-assignment'),
+              loadChecksItemAtIndex: async (index) => events.push(['load', index]),
+              showChecksPopup: (message) => events.push(['popup', message]),
+              getChecksWarningPopupMessage: () => '',
+              callChecksApi: async (_url, payload) => {
+                events.push(['review_type', payload.review_type]);
+                return {
+                  success: true,
+                  data: {
+                    updated: false,
+                    warning: 'checks:warning_face_replace_not_found',
+                    findings_update: {
+                      image_path: '/volume1/photo/duplicate.jpg',
+                      image_entries: [],
+                      count: 0,
+                      status: 'finished',
+                      save_only: true,
+                    },
+                  },
+                };
+              },
+            });
+
+            await component.replaceChecksMetadataFaceName({ name: 'Klaus Heine' }, 'Werner Kodantke');
+
+            assert.strictEqual(component.checksCurrentItem, null);
+            assert.deepStrictEqual(component.checksEntries, []);
+            assert.strictEqual(component.checksStatusMessage, 'Face name could not be replaced in metadata.');
+            assert.deepStrictEqual(events, [['review_type', 'duplicate_faces'], 'reset-assignment']);
+            console.log(JSON.stringify({ entries: component.checksEntries.length, current: component.checksCurrentItem, events }));
+            """
+        )
+    )
+
+    assert result == {
+        "entries": 0,
+        "current": None,
+        "events": [["review_type", "duplicate_faces"], "reset-assignment"],
+    }
 
 
 def test_cleanup_poll_error_keeps_backend_owned_running_state_runtime():

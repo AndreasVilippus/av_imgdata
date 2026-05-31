@@ -1417,6 +1417,10 @@ export default {
 			const localCount = Number(this.faceMatchTransferredCount) || 0;
 			this.faceMatchTransferredCount = Math.max(localCount, progressCount);
 		},
+		invalidateFaceMatchProgressRequests() {
+			this.faceMatchProgressRequestId += 1;
+			this.faceMatchProgressRequestPending = false;
+		},
 		isFaceMatchProgressUpdateStale(current, next) {
 			const currentProgress = current && typeof current === 'object' ? current : {};
 			const nextProgress = next && typeof next === 'object' ? next : {};
@@ -1436,9 +1440,9 @@ export default {
 				&& nextRevision > 0
 				&& nextRevision < currentRevision;
 		},
-		applyFaceMatchingProgress(progress) {
+		applyFaceMatchingProgress(progress, { authoritative = false } = {}) {
 			const nextProgress = progress && typeof progress === 'object' ? progress : {};
-			if (this.isFaceMatchProgressUpdateStale(this.faceMatchProgress, nextProgress)) {
+			if (!authoritative && this.isFaceMatchProgressUpdateStale(this.faceMatchProgress, nextProgress)) {
 				return false;
 			}
 			this.syncFaceMatchTransferredCountFromProgress(nextProgress);
@@ -1470,6 +1474,18 @@ export default {
 				}
 				const progress = this.getResponseData(data);
 				if (progress.running && !applyRunningState) {
+					return progress;
+				}
+				const incompleteWorkerHandoff = !!(
+					this.faceMatchLoading
+					&& !progress.running
+					&& !progress.finished
+					&& !progress.paused
+					&& !progress.auth_required
+					&& !progress.stop_requested
+					&& String(progress.operation_id || '').trim()
+				);
+				if (incompleteWorkerHandoff) {
 					return progress;
 				}
 				if (!this.applyFaceMatchingProgress(progress)) {
@@ -1729,7 +1745,7 @@ export default {
 				return;
 			}
 			this.stopFaceMatchProgressPolling();
-			this.faceMatchProgressRequestId += 1;
+			this.invalidateFaceMatchProgressRequests();
 			if (this.faceMatchReviewingStoredFindings) {
 				this.faceMatchLoading = true;
 				this.faceMatchResult = null;
@@ -1836,7 +1852,7 @@ export default {
 					skip_targets: this.faceMatchSkippedTargets,
 				}, { requireResumeMessage: true });
 				const faceMatches = this.getResponseDataObject(data, 'face_matches');
-				if (!this.applyFaceMatchingProgress(faceMatches)) {
+				if (!this.applyFaceMatchingProgress(faceMatches, { authoritative: true })) {
 					return;
 				}
 				if (faceMatches && faceMatches.running) {

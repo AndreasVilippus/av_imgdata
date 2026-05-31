@@ -435,6 +435,54 @@ def test_stored_findings_next_is_not_overwritten_by_stale_scan_progress_runtime(
     }
 
 
+def test_finished_face_match_progress_result_is_renderable_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+            });
+
+            const applied = component.applyFaceMatchingProgress({
+              running: false,
+              finished: true,
+              stale: true,
+              action: 'search_photo_face_in_file',
+              message_key: 'face_match:result_named_match_with_id',
+              message_params: { id: 27353 },
+              findings_count: 1,
+              result: {
+                searched: true,
+                metadata_face: {
+                  name: 'Person Candidate',
+                  source: 'embedded_xmp_parsed',
+                  source_format: 'ACD',
+                },
+                match: { score: 1 },
+                matched_person: { id: 27353, name: 'Person Candidate' },
+              },
+            });
+
+            assert.strictEqual(applied, true);
+            assert.strictEqual(component.faceMatchResultSummary.found, true);
+            assert.strictEqual(component.faceMatchResultSummary.name, 'Person Candidate');
+            assert.strictEqual(component.faceMatchResultSummary.photosPersonId, 27353);
+            console.log(JSON.stringify({
+              found: component.faceMatchResultSummary.found,
+              name: component.faceMatchResultSummary.name,
+              photosPersonId: component.faceMatchResultSummary.photosPersonId,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "found": True,
+        "name": "Person Candidate",
+        "photosPersonId": 27353,
+    }
+
+
 def test_skipped_stored_finding_stays_filtered_after_reload_runtime():
     result = run_node(
         face_match_runtime_script(
@@ -640,6 +688,65 @@ def test_live_start_does_not_poll_until_start_response_is_applied_runtime():
     ]
 
 
+def test_followup_start_accepts_authoritative_response_with_older_revision_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const events = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchProgress: {
+                operation_id: 'face_match-existing',
+                revision: 12,
+                running: false,
+                finished: true,
+              },
+              callDsmApi: async () => ({
+                success: true,
+                data: {
+                  face_matches: {
+                    operation_id: 'face_match-existing',
+                    revision: 11,
+                    running: true,
+                    finished: false,
+                    action: 'search_photo_face_in_file',
+                  },
+                },
+              }),
+              startFaceMatchProgressPolling: () => events.push('start-polling'),
+              stopFaceMatchProgressPolling: () => events.push('stop-polling'),
+              fetchFaceMatchFindingsStatus: async () => events.push('fetch-findings-status'),
+            });
+
+            await component.startFaceMatchingAction({ resetSkippedFaceIds: false });
+
+            assert.strictEqual(component.faceMatchProgress.running, true);
+            assert.strictEqual(component.faceMatchProgress.revision, 11);
+            assert.deepStrictEqual(events, [
+              'stop-polling',
+              'start-polling',
+              'fetch-findings-status',
+            ]);
+            console.log(JSON.stringify({
+              running: component.faceMatchProgress.running,
+              revision: component.faceMatchProgress.revision,
+              events,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "running": True,
+        "revision": 11,
+        "events": [
+            "stop-polling",
+            "start-polling",
+            "fetch-findings-status",
+        ],
+    }
+
+
 def test_unknown_face_progress_counts_stay_monotonic_across_followup_scan_runtime():
     result = run_node(
         face_match_runtime_script(
@@ -829,6 +936,97 @@ def test_face_match_progress_fetch_skips_overlap_runtime():
     )
 
     assert result == {"callCount": 1, "phase": "finished"}
+
+
+def test_face_match_start_releases_invalidated_pending_progress_request_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let progressCallCount = 0;
+            let resolveOldProgress = null;
+            let resolveNewProgress = null;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              callDsmApi: async (path) => {
+                if (path.indexOf('face_matching_progress') >= 0) {
+                  progressCallCount += 1;
+                  return await new Promise((resolve) => {
+                    if (progressCallCount === 1) {
+                      resolveOldProgress = resolve;
+                    } else {
+                      resolveNewProgress = resolve;
+                    }
+                  });
+                }
+                return {
+                  success: true,
+                  data: {
+                    face_matches: {
+                      running: true,
+                      active: true,
+                      action: 'search_photo_face_in_file',
+                      operation_id: 'face_match-new',
+                    },
+                  },
+                };
+              },
+              fetchFaceMatchFindingsStatus: async () => {},
+              startNamedPolling: (_timerKey, callback) => {
+                component.pollCallback = callback;
+              },
+              stopNamedPolling: () => {},
+            });
+
+            const oldProgress = component.fetchFaceMatchingProgress();
+            assert.strictEqual(component.faceMatchProgressRequestPending, true);
+
+            await component.startFaceMatchingAction();
+            assert.strictEqual(component.faceMatchProgressRequestPending, false);
+
+            const newProgress = component.pollCallback();
+            assert.strictEqual(progressCallCount, 2);
+            assert.strictEqual(component.faceMatchProgressRequestPending, true);
+
+            resolveOldProgress({
+              success: true,
+              data: {
+                running: false,
+                active: false,
+                stale: true,
+                operation_id: 'face_match-old',
+                status_phase: 'finished',
+              },
+            });
+            await oldProgress;
+
+            resolveNewProgress({
+              success: true,
+              data: {
+                running: false,
+                active: false,
+                stale: true,
+                operation_id: 'face_match-new',
+                status_phase: 'finished',
+              },
+            });
+            await newProgress;
+
+            assert.strictEqual(component.faceMatchProgressRequestPending, false);
+            assert.strictEqual(component.faceMatchProgress.operation_id, 'face_match-new');
+            console.log(JSON.stringify({
+              progressCallCount,
+              operationId: component.faceMatchProgress.operation_id,
+              pending: component.faceMatchProgressRequestPending,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "progressCallCount": 2,
+        "operationId": "face_match-new",
+        "pending": False,
+    }
 
 
 def test_primary_button_stops_when_backend_progress_is_running_runtime():

@@ -1504,6 +1504,9 @@ class ImgDataService:
         target = self._metadataFaceEditTargetFromData(face_data if isinstance(face_data, dict) else {})
         source_face = MetadataFace.from_dict(source_face_data if isinstance(source_face_data, dict) else {})
         source_format = str(target.source_format or "").strip().upper()
+        source_face_format = str(source_face.source_format or "").strip().upper()
+        if source_format and source_face_format and source_format == source_face_format:
+            return {"updated": False, "warning": "checks:warning_face_position_same_source"}
 
         updated = False
         for candidate in self._metadataFaceEditCandidates(edit_context, source_format):
@@ -1802,6 +1805,13 @@ class ImgDataService:
     def _normalizeFaceMatchingProgressForDisplay(self, user_key: str, progress: Dict[str, Any]) -> Dict[str, Any]:
         display_progress = dict(progress) if isinstance(progress, dict) else {}
 
+        def normalize_stale_stop_message() -> None:
+            message_key = str(display_progress.get("message_key") or display_progress.get("message") or "").strip()
+            if message_key != "face_match:progress_stopping":
+                return
+            display_progress["message_key"] = "face_match:progress_stopped"
+            display_progress["message"] = "face_match:progress_stopped"
+
         if not display_progress:
             return {
                 "running": False,
@@ -1877,21 +1887,24 @@ class ImgDataService:
             display_progress["active"] = False
             display_progress["stale"] = True
             display_progress["stop_requested"] = False
+            normalize_stale_stop_message()
             return display_progress
 
         display_progress["running"] = False
         display_progress["active"] = False
         display_progress["stale"] = True
         display_progress["stop_requested"] = False
+        normalize_stale_stop_message()
         return display_progress
 
     @staticmethod
     def _compactFaceMatchingProgressForResponse(progress: Dict[str, Any]) -> Dict[str, Any]:
         compact = dict(progress) if isinstance(progress, dict) else {}
         if compact.get("finished") and compact.get("stale"):
-            compact.pop("result", None)
             compact.pop("resume_cursor", None)
             compact["resume_available"] = False
+            if compact.get("save_only"):
+                compact.pop("result", None)
         return compact
 
     def getFaceMatchingProgress(self, user_key: str, *, compact_for_response: bool = False) -> Dict[str, Any]:
@@ -3431,7 +3444,9 @@ class ImgDataService:
                 )
             progress_updates: Dict[str, Any] = {
                 "result": result,
+                "running": False,
                 "finished": True,
+                "stop_requested": False,
                 "action": action,
                 "auto": auto,
                 "save_only": save_only,
@@ -8188,7 +8203,6 @@ class ImgDataService:
                 user_key,
                 final_message_key,
                 message_params=final_message_params,
-                running=False,
                 stop_requested=False,
                 persons_read=persons_read,
                 images_read=images_read,
@@ -8725,7 +8739,6 @@ class ImgDataService:
                 user_key,
                 final_message_key,
                 message_params=final_message_params,
-                running=False,
                 stop_requested=False,
                 persons_read=persons_read,
                 images_read=images_read,
@@ -9189,7 +9202,6 @@ class ImgDataService:
                 user_key,
                 final_message_key,
                 message_params=final_message_params,
-                running=False,
                 stop_requested=False,
                 persons_read=persons_read,
                 images_read=images_read,
@@ -9597,7 +9609,6 @@ class ImgDataService:
                 user_key,
                 final_message_key,
                 message_params=final_message_params,
-                running=False,
                 stop_requested=False,
                 persons_read=persons_read,
                 images_read=images_read,

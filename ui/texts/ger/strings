@@ -246,6 +246,7 @@ warning_photos_face_id_missing="Das Photos-Gesicht konnte nicht umgehängt werde
 warning_face_replace_failed="Der Gesichtsname konnte in den Metadaten nicht ersetzt werden."
 warning_face_position_replace_not_found="Die Gesichtsposition konnte in den Metadaten nicht gefunden werden."
 warning_face_position_replace_failed="Die Gesichtsposition konnte in den Metadaten nicht ersetzt werden."
+warning_face_position_same_source="Die Gesichtsposition wird nicht zwischen Gesichtern derselben Quelle übernommen."
 counter_processed="Geprüft"
 counter_findings="Funde"
 counter_stored_findings="In Fundliste"

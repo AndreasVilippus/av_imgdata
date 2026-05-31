@@ -135,6 +135,7 @@ def _progress_debug_summary(progress: Dict[str, Any]) -> Dict[str, Any]:
     status = progress.get("status") if isinstance(progress.get("status"), dict) else {}
     return {
         "operation_id": progress.get("operation_id"),
+        "revision": progress.get("revision"),
         "action": progress.get("action"),
         "running": bool(progress.get("running")),
         "active": bool(progress.get("active")),
@@ -1870,6 +1871,12 @@ async def checks_replace_metadata_face_name(request: Request):
                 original_face_data=face,
                 replacement_face_data=replacement_face_data,
                 resolved_delta=1,
+            )
+        elif str(result.get("warning") or "").strip() == "checks:warning_face_replace_not_found":
+            findings_update, refresh_error = _safe_refresh_checks_mutation_state(
+                session_ctx,
+                check_type=review_type,
+                image_path=image_path,
             )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return JSONResponse(_session_exception_response(exc, bootstrap_message="checks_replace_metadata_face_name_bootstrap_required"))

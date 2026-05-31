@@ -31,9 +31,12 @@ def test_cleanup_start_invalidates_stale_progress_before_starting():
 def test_face_match_start_invalidates_stale_progress_before_starting():
     mixin = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
     method = _method(mixin, "async startFaceMatchingAction(options = {})")
+    invalidation = _method(mixin, "invalidateFaceMatchProgressRequests()")
 
     assert "this.stopFaceMatchProgressPolling()" in method
-    assert "this.faceMatchProgressRequestId += 1" in method
+    assert "this.invalidateFaceMatchProgressRequests()" in method
+    assert "this.faceMatchProgressRequestId += 1" in invalidation
+    assert "this.faceMatchProgressRequestPending = false" in invalidation
     assert "this.faceMatchLoading = true" in method
 
 

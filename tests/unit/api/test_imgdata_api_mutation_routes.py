@@ -472,6 +472,56 @@ def test_checks_replace_metadata_face_name_uses_requested_review_type_for_refres
     assert refresh_kwargs["resolved_delta"] == 1
 
 
+def test_checks_replace_metadata_face_name_refreshes_stale_duplicate_on_not_found(monkeypatch):
+    face = {
+        "source": "embedded_xmp_parsed",
+        "source_format": "ACD",
+        "name": "Klaus Heine",
+        "x": 0.81373,
+        "y": 0.54292,
+        "w": 0.10247,
+        "h": 0.18215,
+    }
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/duplicate.jpg",
+            "face": face,
+            "new_name": "Werner Kodantke",
+            "review_type": "duplicate_faces",
+        }
+
+    replace = Mock(return_value={
+        "updated": False,
+        "warning": "checks:warning_face_replace_not_found",
+        "operation": "metadata_write",
+    })
+    safe_refresh = Mock(return_value=({
+        "image_path": "photo/duplicate.jpg",
+        "image_entries": [],
+        "count": 0,
+    }, None))
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "replaceChecksFaceName", replace)
+    monkeypatch.setattr(imgdata_api, "_safe_refresh_checks_mutation_state", safe_refresh)
+
+    response = _run(imgdata_api.checks_replace_metadata_face_name(object()))
+    payload = _json_response_payload(response)
+
+    assert payload["success"] is True
+    assert payload["data"]["updated"] is False
+    assert payload["data"]["warning"] == "checks:warning_face_replace_not_found"
+    assert payload["data"]["findings_update"]["image_entries"] == []
+    refresh_kwargs = safe_refresh.call_args.kwargs
+    assert refresh_kwargs["check_type"] == "duplicate_faces"
+    assert refresh_kwargs["image_path"] == "photo/duplicate.jpg"
+    assert "original_face_data" not in refresh_kwargs
+    assert "replacement_face_data" not in refresh_kwargs
+    assert "resolved_delta" not in refresh_kwargs
+
+
 def test_checks_replace_metadata_face_name_snapshot_removes_nested_metadata_signature_name(monkeypatch):
     image_path = "/volume1/photo/2019/2019.08.29-30 - Kaareli ja Jelizaveta pulm/2019.08.30 - kaareli ja jelizaveta pulm073.jpg"
     face = {

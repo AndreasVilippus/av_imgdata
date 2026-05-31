@@ -170,6 +170,26 @@ def test_regression_stale_face_match_progress_is_not_active_without_thread():
     assert progress["stop_requested"] is False
 
 
+def test_regression_stale_face_match_stop_message_becomes_stopped():
+    service = _service()
+
+    progress = service._normalizeFaceMatchingProgressForDisplay("user", {
+        "action": "search_photo_face_in_file",
+        "running": False,
+        "finished": True,
+        "message_key": "face_match:progress_stopping",
+        "message": "face_match:progress_stopping",
+        "stop_requested": False,
+    })
+
+    assert progress["running"] is False
+    assert progress["active"] is False
+    assert progress["stale"] is True
+    assert progress["stop_requested"] is False
+    assert progress["message_key"] == "face_match:progress_stopped"
+    assert progress["message"] == "face_match:progress_stopped"
+
+
 def test_regression_persisted_face_match_progress_gets_status_payload():
     service = _service()
     service.file_analysis.readRuntimeState = lambda _key, _user: {

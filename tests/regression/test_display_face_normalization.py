@@ -1006,6 +1006,42 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertFalse(progress.get("resume_available"))
         self.assertEqual(progress.get("findings_count"), 2)
 
+    def test_finished_interactive_face_matching_progress_keeps_result_for_ui(self):
+        result = {
+            "searched": True,
+            "image_path": "/volume1/photo/tests/match.jpg",
+            "metadata_face": {"name": "Person Candidate"},
+            "matched_person": {"id": 27353, "name": "Person Candidate"},
+            "findings_count": 1,
+            "save_only": False,
+        }
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+            "operation_id": "face_match-existing",
+            "running": False,
+            "finished": True,
+            "action": "search_photo_face_in_file",
+            "save_only": False,
+            "message_key": "face_match:result_named_match_with_id",
+            "message_params": {"id": 27353},
+            "findings_count": 1,
+            "result": result,
+            "resume_cursor": {
+                "skip_face_ids": [123],
+                "findings_count": 1,
+            },
+        }
+
+        progress = self.service.getFaceMatchingProgress("user", compact_for_response=True)
+
+        self.assertFalse(progress.get("running"))
+        self.assertTrue(progress.get("finished"))
+        self.assertTrue(progress.get("stale"))
+        self.assertEqual(progress.get("message_key"), "face_match:result_named_match_with_id")
+        self.assertEqual(progress.get("findings_count"), 1)
+        self.assertEqual(progress.get("result"), result)
+        self.assertNotIn("resume_cursor", progress)
+        self.assertFalse(progress.get("resume_available"))
+
     def test_face_matching_progress_syncs_counts_from_resume_cursor(self):
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {}
         self.service.file_analysis.writeRuntimeState = Mock()
@@ -2904,6 +2940,41 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertRegex(written["xmp"], r"\by=\"0\.3\"|\bns\d+:y=\"0\.3\"")
         self.assertRegex(written["xmp"], r"\bw=\"0\.4\"|\bns\d+:w=\"0\.4\"")
         self.assertRegex(written["xmp"], r"\bh=\"0\.1\"|\bns\d+:h=\"0\.1\"")
+
+    def test_replace_metadata_face_position_rejects_same_source_format(self):
+        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+
+        with patch.object(self.service, "_readImageMetadata", return_value=payload), \
+             patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
+             patch.object(self.service.exiftool_handler, "loadEmbeddedXmp", return_value=XMP_MWG_AND_MICROSOFT), \
+             patch.object(self.service.exiftool_handler, "writeXmpDetailed") as write_mock:
+            result = self.service.replaceMetadataFacePosition(
+                image_path="dev/test.jpg",
+                face_data={
+                    "name": "Person Alpha",
+                    "x": 0.462214,
+                    "y": 0.154412,
+                    "w": 0.435866,
+                    "h": 0.308824,
+                    "source": "embedded_xmp_parsed",
+                    "source_format": "MWG_REGIONS",
+                    "orientation": 6,
+                    "display_normalized": True,
+                },
+                source_face_data={
+                    "name": "Person Alpha",
+                    "x": 0.7,
+                    "y": 0.2,
+                    "w": 0.1,
+                    "h": 0.4,
+                    "source": "embedded_xmp_parsed",
+                    "source_format": "MWG_REGIONS",
+                },
+            )
+
+        self.assertFalse(result["updated"])
+        self.assertEqual(result["warning"], "checks:warning_face_position_same_source")
+        write_mock.assert_not_called()
 
     def test_duplicate_support_prefers_safe_reinforcement_when_totals_tie(self):
         mwg_bottom = MetadataFace.from_center_box(

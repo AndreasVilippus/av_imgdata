@@ -244,6 +244,7 @@ warning_photos_face_id_missing="The Photos face could not be reassigned because 
 warning_face_replace_failed="The face name could not be replaced in metadata."
 warning_face_position_replace_not_found="The face position could not be found in metadata."
 warning_face_position_replace_failed="The face position could not be replaced in metadata."
+warning_face_position_same_source="The face position is not copied between faces from the same source."
 counter_processed="Processed"
 counter_findings="Findings"
 counter_stored_findings="In match list"
