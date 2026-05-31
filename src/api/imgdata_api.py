@@ -527,9 +527,7 @@ def _snapshot_name_conflicts_mutation_state(
                     resume_cursor["pending_entries"] = []
                 progress["resume_cursor"] = resume_cursor
             state_key = IMGDATA._checksStateKey(session_ctx["user_key"], normalized_type)
-            with IMGDATA._checks_progress_lock:
-                IMGDATA._checks_progress[state_key] = progress
-            IMGDATA.file_analysis.writeRuntimeState("checks_progress", state_key, progress)
+            IMGDATA.runtime_state.write("checks_progress", state_key, progress)
 
         compact = _compact_checks_findings_update(updated_payload, image_path=normalized_path)
         if isinstance(compact, dict):
@@ -1525,7 +1523,7 @@ async def checks_start(request: Request):
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
-            lambda: IMGDATA.startChecksReview(
+            lambda: IMGDATA.checks_workflow.start_review(
                 user_key=session_ctx["user_key"],
                 cookies=session_ctx["cookies"],
                 base_url=session_ctx["base_url"],

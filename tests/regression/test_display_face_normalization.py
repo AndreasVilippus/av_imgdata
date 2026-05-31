@@ -2042,8 +2042,8 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "updates": updates,
         }) or original_set(user_key, check_type, message_key, **updates)
 
-        with patch("imgdata.Thread", DummyThread):
-            self.service.startChecksScanDiscovery(
+        with patch("services.checks_workflow_service.Thread", DummyThread):
+            self.service.checks_workflow.start_scan(
                 user_key="user",
                 cookies={},
                 base_url="https://example.test",
@@ -3624,7 +3624,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "save_only": True,
             "entries": stored_entries,
         }):
-            result = self.service.startChecksReview(
+            result = self.service.checks_workflow.start_review(
                 user_key="user",
                 cookies={},
                 base_url="http://example.test",
@@ -3640,7 +3640,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
     def test_start_checks_review_clears_persisted_stop_state_for_findings(self):
         state_key = self.service._checksStateKey("user", "name_conflicts")
-        self.service._checks_progress[state_key] = {
+        self.service.runtime_state.memory("checks_progress")[state_key] = {
             "check_type": "name_conflicts",
             "source_mode": "findings",
             "stop_requested": True,
@@ -3651,7 +3651,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "save_only": True,
             "entries": [{"review_type": "name_conflicts", "image_path": "photo/a.jpg"}],
         }):
-            result = self.service.startChecksReview(
+            result = self.service.checks_workflow.start_review(
                 user_key="user",
                 cookies={},
                 base_url="http://example.test",
@@ -3660,7 +3660,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             )
 
         self.assertEqual(result["count"], 1)
-        progress = self.service._checks_progress[state_key]
+        progress = self.service.runtime_state.memory("checks_progress")[state_key]
         self.assertFalse(progress["stop_requested"])
         self.assertNotIn("stop_requested_at", progress)
 
@@ -3678,11 +3678,11 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "findings_count": 4,
         }
         state_key = self.service._checksStateKey("user", "name_conflicts")
-        self.service._checks_progress[state_key] = dict(running_progress)
-        self.service._checks_threads[state_key] = AliveThread()
+        self.service.runtime_state.memory("checks_progress")[state_key] = dict(running_progress)
+        self.service.runtime_state.values("checks_threads")[state_key] = AliveThread()
 
-        with patch("imgdata.Thread") as thread_cls:
-            result = self.service.startChecksScanDiscovery(
+        with patch("services.checks_workflow_service.Thread") as thread_cls:
+            result = self.service.checks_workflow.start_scan(
                 user_key="user",
                 cookies={},
                 base_url="http://example.test",
@@ -3696,7 +3696,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         thread_cls.assert_not_called()
 
     def test_file_analysis_start_ignores_stale_face_matching_progress_without_worker(self):
-        self.service._face_matching_progress["user"] = {
+        self.service.runtime_state.memory("face_match_progress")["user"] = {
             "operation_id": "face-match-running",
             "running": True,
             "finished": False,
@@ -3716,12 +3716,12 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         thread_cls.assert_called_once()
 
     def test_face_matching_start_blocks_when_file_analysis_is_running(self):
-        self.service._file_analysis_progress = {
+        self.service.runtime_state.replace_singleton("file_analysis_progress", {
             "operation_id": "file-analysis-running",
             "running": True,
             "finished": False,
             "status": "running",
-        }
+        })
 
         with patch("imgdata.Thread") as thread_cls:
             result = self.service.startFaceMatchingDiscovery(
@@ -3741,15 +3741,15 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
     def test_checks_scan_start_blocks_when_cleanup_is_running(self):
         state_key = self.service._cleanupStateKey("user", "normalize_names")
-        self.service._cleanup_progress[state_key] = {
+        self.service.runtime_state.memory("cleanup_progress")[state_key] = {
             "operation_id": "cleanup-running",
             "running": True,
             "finished": False,
             "action": "normalize_names",
         }
 
-        with patch("imgdata.Thread") as thread_cls:
-            result = self.service.startChecksScanDiscovery(
+        with patch("services.checks_workflow_service.Thread") as thread_cls:
+            result = self.service.checks_workflow.start_scan(
                 user_key="user",
                 cookies={},
                 base_url="http://example.test",
@@ -3767,7 +3767,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
     def test_cleanup_start_blocks_when_checks_scan_is_running(self):
         state_key = self.service._checksStateKey("user", "name_conflicts")
-        self.service._checks_progress[state_key] = {
+        self.service.runtime_state.memory("checks_progress")[state_key] = {
             "operation_id": "checks-running",
             "running": True,
             "source_mode": "scan",

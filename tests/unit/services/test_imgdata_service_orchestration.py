@@ -39,6 +39,71 @@ def test_write_operation_lock_keeps_structured_conflict_details():
     assert details["image_path"] == "/volume1/photo/a.jpg"
 
 
+def test_photo_face_write_lock_conflict_includes_affected_face_identity():
+    service = make_service()
+
+    with service._writeOperationLock(
+        service._photosFaceWriteLockKey(77),
+        phase="photos_face_assign",
+        context={"face_id": 77, "item_id": 42},
+    ):
+        try:
+            with service._writeOperationLock(
+                service._photosFaceWriteLockKey(77),
+                phase="photos_person_create_from_face",
+                context={"face_id": 77, "item_id": 42},
+            ):
+                pass
+        except ImgDataOperationError as exc:
+            details = exc.details
+        else:
+            raise AssertionError("expected write conflict")
+
+    assert details["code"] == "write_conflict"
+    assert details["phase"] == "photos_person_create_from_face"
+    assert details["lock_key"] == "photos:face:77"
+    assert details["retryable"] is True
+    assert details["face_id"] == 77
+    assert details["item_id"] == 42
+
+
+def test_photo_item_write_lock_conflict_includes_affected_item_identity():
+    service = make_service()
+
+    with service._writeOperationLock(
+        service._photosItemWriteLockKey(42),
+        phase="photos_face_create_from_metadata",
+        context={"item_id": 42, "image_path": "/volume1/photo/a.jpg"},
+    ):
+        try:
+            with service._writeOperationLock(
+                service._photosItemWriteLockKey(42),
+                phase="photos_face_create_from_metadata",
+                context={"item_id": 42, "image_path": "/volume1/photo/a.jpg"},
+            ):
+                pass
+        except ImgDataOperationError as exc:
+            details = exc.details
+        else:
+            raise AssertionError("expected write conflict")
+
+    assert details["code"] == "write_conflict"
+    assert details["phase"] == "photos_face_create_from_metadata"
+    assert details["lock_key"] == "photos:item:42"
+    assert details["retryable"] is True
+    assert details["item_id"] == 42
+    assert details["image_path"] == "/volume1/photo/a.jpg"
+
+
+def test_unrelated_metadata_face_and_photo_item_writes_do_not_block_each_other():
+    service = make_service()
+
+    with service._writeOperationLock(service._metadataWriteLockKey("/a.jpg"), phase="metadata_write"):
+        with service._writeOperationLock(service._photosFaceWriteLockKey(77), phase="photos_face_assign"):
+            with service._writeOperationLock(service._photosItemWriteLockKey(42), phase="photos_face_create"):
+                pass
+
+
 def test_photo_face_match_assignment_mutation_updates_photos_findings_and_mapping():
     service = make_service()
     calls = []
@@ -535,7 +600,7 @@ def test_run_checks_scan_preserves_latest_progress_on_session_error():
     detail = {"error": "api_failed", "api": "SYNO.FotoTeam.Browse.Item", "response": {"success": False, "error": {"code": 902}}}
     service.searchNextChecksItem = lambda **kwargs: (_ for _ in ()).throw(SessionManagerError(detail))
 
-    service._runChecksScan(
+    service.checks_workflow._run_scan(
         user_key="user",
         cookies={},
         base_url="https://example.test",

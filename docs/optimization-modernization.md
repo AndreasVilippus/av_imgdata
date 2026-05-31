@@ -24,16 +24,19 @@ Confirmed implemented or materially started:
 - Checks and FaceMatch status payload builders are implemented inside `StatusPayloadBuilder`.
 - Counter relevance filtering and `show_when_zero` handling are implemented in the status builder.
 - `src/services/runtime_operation_service.py` exists and contains operation IDs, revisions, timestamps, stale stopping detection, and blocked-operation payload construction.
+- `src/services/runtime_state_service.py` exists and normalizes operation, action, mode, and phase before progress is stamped or exposed.
 - `src/services/write_lock_service.py` exists and provides non-blocking keyed write locks with structured conflict error creation through `ImgDataService`.
 - `ui/src/services/runtime-polling.js` exists and implements named runtime polling with `skipIfPending`, pending state, run IDs, and `finally` cleanup.
+- `ui/src/services/dsm-api-client.js` owns DSM credential resume context, token/cookie handling, endpoint timeouts, request construction, and response normalization.
+- `ui/src/services/backend-error-formatter.js` owns backend error detail and retryability rendering.
 - `src/parser/metadata_parser.py` delegates schema-specific parsing to ACD, Microsoft, and MWG parser modules.
 - `FileAnalysisService` remains JSON-backed and provides current persisted findings/runtime-state primitives.
 
 Confirmed remaining structural issues:
 
-- `src/imgdata.py` still owns too much workflow and runtime orchestration: progress dictionaries, thread references, stop requests, candidate caches, runtime context, Photos access, metadata reads, findings handling, and mutation flow coordination.
-- `ui/src/App.vue` still contains DSM API client behavior, backend error formatting, DSM credential context handling, endpoint timeout mapping, and root-component coordination.
-- Runtime identity is implemented as primitives, but the plan must still prove consistent use across file analysis, checks, face match, and cleanup.
+- `src/imgdata.py` still owns too much workflow orchestration: candidate caches, operation start locks, Photos access, metadata reads, findings handling, and mutation flow coordination.
+- `ui/src/App.vue` still contains root-component coordination, while DSM API client behavior and backend error formatting now have dedicated services.
+- Runtime identity, keyed runtime containers, and the FileAnalysis singleton runtime state are centralized in `RuntimeStateService`.
 - Findings persistence exists as JSON primitives, but no storage boundary exists that can support cheap status reads, page reads, or future SQLite evaluation.
 
 ## Planning Rules
@@ -164,7 +167,7 @@ Stability impact: High.
 
 ## 1.1 Complete runtime identity consistency across all long-running operations
 
-Status: Partial.
+Status: Done.
 
 ### Current state
 
@@ -176,14 +179,11 @@ Status: Partial.
 - stale stopping detection
 - blocked-operation response construction
 
+`RuntimeStateService` now applies the common normalized fields to file analysis, Checks, FaceMatch, and cleanup progress before writes and when older persisted payloads are exposed.
+
 ### Remaining work
 
-Apply the same runtime identity model consistently across:
-
-- file analysis
-- checks
-- face match
-- cleanup
+Move the mutable progress containers, stop-request state, persisted-state coordination, and current-running-operation lookup into the runtime state boundary. Keep proving reconnect and scoped stop behavior as each workflow seam moves.
 
 Required fields for persisted or polled long-running progress:
 
@@ -220,15 +220,15 @@ Stability impact: High.
 
 ## 1.2 Finish save-only findings persistence and resume correctness
 
-Status: Partial.
+Status: Done.
 
 ### Current state
 
-JSON-backed persisted findings and runtime-state primitives exist in `FileAnalysisService`. Status and stored review behavior have improved.
+JSON-backed persisted findings and runtime-state primitives exist in `FileAnalysisService`. Checks and every FaceMatch scan path now resume from persisted findings, deduplicate appended entries by stable identity, rebuild skip lists from persisted entries, debounce running writes, and preserve persisted entries on terminal writes.
 
-### Remaining work
+### Completed implementation
 
-Ensure Checks and FaceMatch consistently:
+Checks and FaceMatch consistently:
 
 - debounce findings writes during scans
 - force-write findings on `stopped`, `failed`, and `finished`
@@ -261,21 +261,21 @@ Stability impact: High.
 
 ## 1.3 Complete write-lock coverage and tests
 
-Status: Partial.
+Status: Done.
 
 ### Current state
 
-`WriteLockService` exists and keyed non-blocking write locks are integrated through `ImgDataService`.
+`WriteLockService` exists and keyed non-blocking write locks are integrated through `ImgDataService`. Metadata writes lock the actual embedded or sidecar target path, Photos face assignment and Photos person creation from a face lock the face ID, and Photos face creation from metadata locks the item ID. Conflicts are rejected before the second write begins and retain structured context through the API and UI error formatter.
 
-### Remaining work
+### Completed verification
 
-Verify and, if needed, extend lock coverage for:
+Verified lock coverage for:
 
 - metadata path
 - sidecar path
 - Photos face
 - Photos item
-- person-related operations where required
+- person-related operations where required; current person-related writes mutate a face association and therefore use the face lock
 
 Conflict responses should include:
 
@@ -312,11 +312,15 @@ Stability impact: High.
 
 ## 2.1 Extract runtime state handling from `ImgDataService`
 
-Status: Open.
+Status: Done.
 
-### Problem
+### Current state
 
-`ImgDataService` still stores progress dictionaries, thread references, stop requests, active context, candidate caches, and operation start locks directly.
+`RuntimeStateService` now normalizes and stamps the common runtime identity fields for file analysis, Checks, FaceMatch, and cleanup. It owns the keyed in-memory progress stores and locks for Checks, FaceMatch, and cleanup, the keyed thread registers, the FileAnalysis singleton progress and worker state, Checks stop-request state, the active Checks context, and the generic selection of a blocking running operation. It delegates persisted runtime-state reads and writes to `FileAnalysisService`. `ImgDataService` uses the service directly and no longer keeps runtime-state compatibility references or properties.
+
+### Remaining workflow-owned state
+
+Candidate caches and operation start locks remain local until their owning workflows move.
 
 ### Target
 
@@ -350,7 +354,15 @@ Stability impact: High.
 
 ## 2.2 Extract Checks workflow seam
 
-Status: Open.
+Status: Partial.
+
+### Current state
+
+`ChecksWorkflowService` owns Checks review-mode dispatch, scan start orchestration, cross-operation blocking, worker creation, and worker terminal error handling. API routes call the workflow service directly. The moved lifecycle methods no longer exist in `ImgDataService`.
+
+### Remaining work
+
+Move the Checks scan core, candidate listing, save-only findings writes, stored findings refresh mutations, and auto-apply/rebuild flow behind the same workflow boundary.
 
 ### Target
 
@@ -476,7 +488,7 @@ Stability impact: High.
 
 ## 3.2 Extract DSM API client behavior from `App.vue`
 
-Status: Open.
+Status: Done.
 
 ### Target module
 
@@ -506,7 +518,7 @@ Stability impact: High.
 
 ## 3.3 Extract backend error formatting from `App.vue`
 
-Status: Open.
+Status: Done.
 
 ### Target module
 
@@ -866,15 +878,15 @@ Do not prioritize:
 |---:|---|---|---:|---|---|---|
 | 1 | Backend status contract tests | Open | 0 | runtime extraction | Indirect | High |
 | 2 | UI/static status contract tests | Open | 0 | UI/root extraction | Indirect | High |
-| 3 | Complete runtime identity across all long-running operations | Partial | 1 | workflow extraction | Medium | High |
-| 4 | Finish save-only findings persistence and resume correctness | Partial | 1 | findings abstraction | Medium | High |
-| 5 | Complete write-lock coverage and tests | Partial | 1 | workflow extraction | Low | High |
-| 6 | Extract runtime state handling from `ImgDataService` | Open | 2 | Checks/FaceMatch extraction | Low | High |
-| 7 | Extract Checks workflow seam | Open | 2 | route cleanup | Low to Medium | High |
+| 3 | Complete runtime identity across all long-running operations | Done | 1 | workflow extraction | Medium | High |
+| 4 | Finish save-only findings persistence and resume correctness | Done | 1 | findings abstraction | Medium | High |
+| 5 | Complete write-lock coverage and tests | Done | 1 | workflow extraction | Low | High |
+| 6 | Extract runtime state handling from `ImgDataService` | Done | 2 | Checks/FaceMatch extraction | Low | High |
+| 7 | Extract Checks workflow seam | Partial | 2 | route cleanup | Low to Medium | High |
 | 8 | Extract FaceMatch workflow seam | Open | 2 | route cleanup | Low to Medium | High |
 | 9 | Keep API routes thin after service extraction | Partial | 2 | broader backend cleanup | Low | High |
-| 10 | Extract DSM API client from `App.vue` | Open | 3 | UI cleanup | Low to Medium | High |
-| 11 | Extract backend error formatter from `App.vue` | Open | 3 | UI cleanup | Low | Medium to High |
+| 10 | Extract DSM API client from `App.vue` | Done | 3 | UI cleanup | Low to Medium | High |
+| 11 | Extract backend error formatter from `App.vue` | Done | 3 | UI cleanup | Low | Medium to High |
 | 12 | Add findings storage abstraction | Open | 4 | pagination/SQLite | Medium | High |
 | 13 | Add findings pagination | Open | 4 | SQLite evaluation | High for large libraries | Medium to High |
 | 14 | Keep metadata parser split stable with tests | Done | 5 | parser changes | Low | Medium to High |
@@ -888,4 +900,4 @@ Do not prioritize:
 
 The next implementation step is not another broad refactor. The next step is contract coverage.
 
-After contract coverage, complete runtime identity consistency, save-only findings correctness, and write-lock coverage. Only then extract workflow orchestration from `ImgDataService` one seam at a time.
+Runtime identity consistency, save-only findings correctness, and write-lock coverage are complete. Checks lifecycle orchestration has moved into `ChecksWorkflowService`; continue moving the Checks scan core behind that boundary before starting FaceMatch workflow extraction.

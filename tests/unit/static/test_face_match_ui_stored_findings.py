@@ -64,9 +64,9 @@ def test_file_source_preview_labels_distinguish_name_source_and_file_target():
 
 
 def test_dsm_api_type_error_gets_explicit_network_failure_message():
-    source = Path("ui/src/App.vue").read_text(encoding="utf-8")
-    method_start = source.index("async callDsmApi(apiPath, body = {}, options = {})")
-    method_end = source.index("async callFileAnalysisApi", method_start)
+    source = Path("ui/src/services/dsm-api-client.js").read_text(encoding="utf-8")
+    method_start = source.index("async function callDsmApi(apiPath, body = {}, options = {})")
+    method_end = source.index("return {", method_start)
     method_source = source[method_start:method_end]
 
     assert "err instanceof TypeError" in method_source

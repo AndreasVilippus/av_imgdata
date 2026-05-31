@@ -28,6 +28,7 @@ from models.photos_face import PhotosFace
 from parser.metadata_parser import MetadataParser, NS_ACD, NS_MICROSOFT, NS_MWG_REGIONS
 from services.bbox_normalizer import denormalize_xmp_face, from_photos, from_xmp, to_display_face
 from services.config_service import ConfigService
+from services.checks_workflow_service import ChecksWorkflowService
 from services.exiftool_service import ExifToolService
 from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
@@ -36,6 +37,7 @@ from services.face_match_mutation_service import FaceMatchMutationService
 from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
 from services.runtime_operation_service import RuntimeOperationService
+from services.runtime_state_service import RuntimeStateService
 from services.status_payload_builder import StatusPayloadBuilder
 from services.write_lock_service import WriteLockService
 
@@ -147,25 +149,11 @@ class ImgDataService:
         self.face_matcher = FaceMatcher()
         self.file_analysis = FileAnalysisService()
         self._debug_logger: Optional[Callable[..., None]] = None
-        self._face_matching_progress: Dict[str, Dict[str, Any]] = {}
-        self._face_matching_progress_lock = Lock()
-        self._face_matching_threads: Dict[str, Thread] = {}
         self._face_matching_candidate_paths_cache: Dict[str, Dict[str, Any]] = {}
         self._face_matching_candidate_paths_cache_lock = Lock()
-        self._checks_progress: Dict[str, Dict[str, Any]] = {}
-        self._checks_progress_lock = Lock()
-        self._checks_stop_requests: Dict[str, str] = {}
-        self._checks_active_context: Dict[str, Any] = {}
         self._checks_start_lock = Lock()
-        self._checks_threads: Dict[str, Thread] = {}
         self._checks_candidate_paths_cache: Dict[str, Dict[str, Any]] = {}
         self._checks_candidate_paths_cache_lock = Lock()
-        self._cleanup_progress: Dict[str, Dict[str, Any]] = {}
-        self._cleanup_progress_lock = Lock()
-        self._cleanup_threads: Dict[str, Thread] = {}
-        self._file_analysis_progress: Dict[str, Any] = {}
-        self._file_analysis_progress_lock = Lock()
-        self._file_analysis_thread: Optional[Thread] = None
         self.write_locks = WriteLockService(self._buildWriteConflictError)
         self.face_match_mutations = FaceMatchMutationService(self, self._debugLog)
         self.status_builder = StatusPayloadBuilder()
@@ -174,7 +162,12 @@ class ImgDataService:
             status_builder=self.status_builder,
             stale_stopping_seconds=self.STOPPING_PROGRESS_STALE_SECONDS,
         )
-
+        self.runtime_state = RuntimeStateService(
+            runtime_operations=self.runtime_operations,
+            status_builder=self.status_builder,
+            persistence=self.file_analysis,
+        )
+        self.checks_workflow = ChecksWorkflowService(self, ImgDataOperationError)
     @staticmethod
     def _buildWriteConflictError(
         lock_key: str,
@@ -424,13 +417,12 @@ class ImgDataService:
         return keys
 
     def _setActiveChecksContext(self, *, user_key: str = "", check_type: str = "", save_only: bool = False) -> None:
-        with self._checks_progress_lock:
-            self._checks_active_context = {
-                "user_key": str(user_key or "").strip(),
-                "check_type": str(check_type or "").strip().lower(),
-                "save_only": bool(save_only),
-                "last_progress_at": self._utcNowIso(),
-            }
+        self.runtime_state.replace_values("checks_active_context", {
+            "user_key": str(user_key or "").strip(),
+            "check_type": str(check_type or "").strip().lower(),
+            "save_only": bool(save_only),
+            "last_progress_at": self._utcNowIso(),
+        })
 
     def _clearChecksStopRequest(self, *, user_key: str = "", check_type: str = "") -> None:
         normalized_user = str(user_key or "").strip()
@@ -443,40 +435,36 @@ class ImgDataService:
                 self._checksStateKey(normalized_user, candidate_type)
                 for candidate_type in self._checksTypeOptions()
             )
-        with self._checks_progress_lock:
-            if not hasattr(self, "_checks_stop_requests"):
-                self._checks_stop_requests = {}
+        with self.runtime_state.lock("checks_progress"):
             for key in self._checksProgressKeys(user_key, check_type):
-                self._checks_stop_requests.pop(key, None)
-            self._checks_stop_requests.pop("*", None)
+                self.runtime_state.values("checks_stop_requests").pop(key, None)
+            self.runtime_state.values("checks_stop_requests").pop("*", None)
             for state_key in progress_state_keys:
-                progress = dict(self._checks_progress.get(state_key, {}))
+                progress = dict(self.runtime_state.memory("checks_progress").get(state_key, {}))
                 if not progress:
-                    progress = self.file_analysis.readRuntimeState("checks_progress", state_key)
+                    progress = self.runtime_state.read_persisted("checks_progress", state_key)
                     progress = dict(progress) if isinstance(progress, dict) else {}
                 if not isinstance(progress, dict) or not progress.get("stop_requested"):
                     continue
                 progress["stop_requested"] = False
                 progress.pop("stop_requested_at", None)
                 progress["last_updated_at"] = self._timestamp_now()
-                self._checks_progress[state_key] = progress
-                self.file_analysis.writeRuntimeState("checks_progress", state_key, progress)
+                self.runtime_state.memory("checks_progress")[state_key] = progress
+                self.runtime_state.persist("checks_progress", state_key, progress)
 
     def requestStopChecks(self, user_key: str = "", check_type: str = "") -> Dict[str, Any]:
         normalized_user = str(user_key or "").strip()
         normalized_type = str(check_type or "").strip().lower()
         now = self._utcNowIso()
-        with self._checks_progress_lock:
-            if not hasattr(self, "_checks_stop_requests"):
-                self._checks_stop_requests = {}
+        with self.runtime_state.lock("checks_progress"):
             keys = self._checksProgressKeys(normalized_user, normalized_type)
             if not keys:
                 keys = ["*"]
             for key in keys:
-                self._checks_stop_requests[key] = now
+                self.runtime_state.values("checks_stop_requests")[key] = now
 
             updated_progress = {}
-            for key, progress in list(self._checks_progress.items()):
+            for key, progress in list(self.runtime_state.memory("checks_progress").items()):
                 if not isinstance(progress, dict):
                     continue
                 progress_type = str(progress.get("check_type") or "").strip().lower()
@@ -493,14 +481,14 @@ class ImgDataService:
             }
 
     def _isChecksStopRequested(self, *, user_key: str = "", check_type: str = "") -> bool:
-        with self._checks_progress_lock:
-            stop_requests = getattr(self, "_checks_stop_requests", {})
+        with self.runtime_state.lock("checks_progress"):
+            stop_requests = self.runtime_state.values("checks_stop_requests")
             if stop_requests.get("*"):
                 return True
             for key in self._checksProgressKeys(user_key, check_type):
                 if stop_requests.get(key):
                     return True
-            context = getattr(self, "_checks_active_context", {})
+            context = self.runtime_state.values("checks_active_context")
             context_user = str(context.get("user_key") or "").strip() if isinstance(context, dict) else ""
             context_type = str(context.get("check_type") or "").strip().lower() if isinstance(context, dict) else ""
             for key in self._checksProgressKeys(context_user, context_type):
@@ -509,7 +497,7 @@ class ImgDataService:
             return False
 
     def _raiseIfChecksStopRequested(self) -> None:
-        context = getattr(self, "_checks_active_context", {})
+        context = self.runtime_state.values("checks_active_context")
         user_key = str(context.get("user_key") or "").strip() if isinstance(context, dict) else ""
         check_type = str(context.get("check_type") or "").strip().lower() if isinstance(context, dict) else ""
         if not self._isChecksStopRequested(user_key=user_key, check_type=check_type):
@@ -525,7 +513,7 @@ class ImgDataService:
         )
 
     def _updateChecksProgressHeartbeat(self, *, current_path: str = "", finding_delta: int = 0, flush: bool = False) -> None:
-        context = getattr(self, "_checks_active_context", {})
+        context = self.runtime_state.values("checks_active_context")
         if not isinstance(context, dict):
             return
         user_key = str(context.get("user_key") or "").strip()
@@ -534,9 +522,9 @@ class ImgDataService:
             return
         now = self._utcNowIso()
         normalized_path = str(current_path or "").strip()
-        with self._checks_progress_lock:
+        with self.runtime_state.lock("checks_progress"):
             for key in self._checksProgressKeys(user_key, check_type):
-                progress = self._checks_progress.get(key)
+                progress = self.runtime_state.memory("checks_progress").get(key)
                 if not isinstance(progress, dict):
                     continue
                 progress["last_progress_at"] = now
@@ -551,7 +539,7 @@ class ImgDataService:
                 if flush:
                     progress["last_flush_at"] = now
                     progress["last_flush_count"] = int(progress.get("findings_count") or 0)
-                self.file_analysis.writeRuntimeState("checks_progress", key, dict(progress))
+                self.runtime_state.persist("checks_progress", key, dict(progress))
 
     def update_session_context(
         self,
@@ -661,7 +649,7 @@ class ImgDataService:
         def get_exiftool_metadata_context(*, include_xmp: bool = True) -> Optional[Dict[str, Any]]:
             nonlocal exiftool_context
             self._raiseIfChecksStopRequested()
-            checks_context = getattr(self, "_checks_active_context", {})
+            checks_context = self.runtime_state.values("checks_active_context")
             checks_user_key = str(checks_context.get("user_key") or "").strip() if isinstance(checks_context, dict) else ""
             checks_type = str(checks_context.get("check_type") or "").strip().lower() if isinstance(checks_context, dict) else ""
             if checks_user_key and checks_type and self._shouldStopChecks(checks_user_key, checks_type):
@@ -1537,17 +1525,17 @@ class ImgDataService:
         }
 
     def _setFaceMatchingProgress(self, user_key: str, **updates: Any) -> None:
-        with self._face_matching_progress_lock:
-            current = dict(self._face_matching_progress.get(user_key, {}))
+        with self.runtime_state.lock("face_match_progress"):
+            current = dict(self.runtime_state.memory("face_match_progress").get(user_key, {}))
             current.update(updates)
             self._syncFaceMatchProgressCountsFromCursor(current, explicit_fields=set(updates.keys()))
-            current = self.runtime_operations.stamp_progress(
+            current = self.runtime_state.stamp_progress(
                 current,
-                operation_prefix="face_match",
+                operation="face_match",
             )
             current = self._jsonSafeProgressValue(current)
-            self._face_matching_progress[user_key] = current
-        self.file_analysis.writeRuntimeState("face_match_progress", user_key, current)
+            self.runtime_state.memory("face_match_progress")[user_key] = current
+        self.runtime_state.persist("face_match_progress", user_key, current)
 
     @staticmethod
     def _jsonSafeProgressValue(value: Any) -> Any:
@@ -1841,8 +1829,8 @@ class ImgDataService:
             }
 
         thread = None
-        with self._face_matching_progress_lock:
-            thread = self._face_matching_threads.get(str(user_key or "").strip())
+        with self.runtime_state.lock("face_match_progress"):
+            thread = self.runtime_state.values("face_match_threads").get(str(user_key or "").strip())
         thread_alive = bool(thread and thread.is_alive())
 
         resume_cursor = display_progress.get("resume_cursor") if isinstance(display_progress.get("resume_cursor"), dict) else {}
@@ -1931,14 +1919,14 @@ class ImgDataService:
         candidate_keys.append("face_match")
 
         memory_progress: Dict[str, Any] = {}
-        with self._face_matching_progress_lock:
+        with self.runtime_state.lock("face_match_progress"):
             for key in candidate_keys:
-                progress = self._face_matching_progress.get(key)
+                progress = self.runtime_state.memory("face_match_progress").get(key)
                 if isinstance(progress, dict) and progress:
                     memory_progress = dict(progress)
                     break
-            if not memory_progress and len(self._face_matching_progress) == 1:
-                only_progress = next(iter(self._face_matching_progress.values()))
+            if not memory_progress and len(self.runtime_state.memory("face_match_progress")) == 1:
+                only_progress = next(iter(self.runtime_state.memory("face_match_progress").values()))
                 if isinstance(only_progress, dict) and only_progress:
                     memory_progress = dict(only_progress)
 
@@ -1956,10 +1944,10 @@ class ImgDataService:
 
 
     def _getFaceMatchingProgressCore(self, user_key: str) -> Dict[str, Any]:
-        current = self.file_analysis.readRuntimeState("face_match_progress", user_key)
+        current = self.runtime_state.read_persisted("face_match_progress", user_key)
         if not isinstance(current, dict) or not current:
-            with self._face_matching_progress_lock:
-                current = self._face_matching_progress.get(user_key, {})
+            with self.runtime_state.lock("face_match_progress"):
+                current = self.runtime_state.memory("face_match_progress").get(user_key, {})
         payload = dict(current) if isinstance(current, dict) else {}
         return self._attachFaceMatchStatusPayload(
             self._normalizeFaceMatchingProgressForDisplay(
@@ -1971,7 +1959,10 @@ class ImgDataService:
     def _normalizeFaceMatchingProgress(self, user_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
         self._syncFaceMatchProgressCountsFromCursor(current)
-        return current
+        return self.runtime_state.normalize_progress(
+            current,
+            operation="face_match",
+        )
 
     def requestStopFaceMatching(self, user_key: str) -> Dict[str, Any]:
         self._setFaceMatchingProgressMessage(
@@ -2014,17 +2005,18 @@ class ImgDataService:
     def _setChecksProgress(self, user_key: str, **updates: Any) -> None:
         check_type = self._normalizeChecksType(updates.get("check_type"))
         state_key = self._checksStateKey(user_key, check_type)
-        with self._checks_progress_lock:
-            current = dict(self._checks_progress.get(state_key, {}))
+        with self.runtime_state.lock("checks_progress"):
+            current = dict(self.runtime_state.memory("checks_progress").get(state_key, {}))
             current.update(updates)
             current["check_type"] = check_type
-            current = self.runtime_operations.stamp_progress(
+            current = self.runtime_state.stamp_progress(
                 current,
-                operation_prefix="checks",
+                operation="checks",
+                action=check_type,
                 operation_discriminator=check_type,
             )
-            self._checks_progress[state_key] = current
-        self.file_analysis.writeRuntimeState("checks_progress", state_key, current)
+            self.runtime_state.memory("checks_progress")[state_key] = current
+        self.runtime_state.persist("checks_progress", state_key, current)
 
     def _setChecksProgressMessage(
         self,
@@ -2075,8 +2067,8 @@ class ImgDataService:
                 continue
 
             state_key = self._checksStateKey(user_key, candidate_type)
-            with self._checks_progress_lock:
-                memory_progress = dict(self._checks_progress.get(state_key, {}))
+            with self.runtime_state.lock("checks_progress"):
+                memory_progress = dict(self.runtime_state.memory("checks_progress").get(state_key, {}))
 
             if is_running_scan(memory_progress, candidate_type):
                 return memory_progress
@@ -2097,35 +2089,20 @@ class ImgDataService:
     def _runningOperationProgress(self, user_key: str, *, exclude_operation: str = "") -> Optional[Dict[str, Any]]:
         excluded = str(exclude_operation or "").strip().lower()
 
-        if excluded != "file_analysis":
-            progress = self.getFileAnalysisProgress()
-            if self._isBlockingRunningProgress(progress):
-                payload = dict(progress)
-                payload.setdefault("operation", "file_analysis")
-                return payload
+        def candidates():
+            if excluded != "file_analysis":
+                yield "file_analysis", self.getFileAnalysisProgress()
+            if excluded != "face_match":
+                yield "face_match", self.getFaceMatchingProgress(user_key)
+            if excluded != "checks":
+                yield "checks", self._runningChecksScanProgress(user_key)
+            if excluded != "cleanup":
+                yield "cleanup", self.getCleanupProgress(user_key, "normalize_names")
 
-        if excluded != "face_match":
-            progress = self.getFaceMatchingProgress(user_key)
-            if self._isBlockingRunningProgress(progress):
-                payload = dict(progress)
-                payload.setdefault("operation", "face_match")
-                return payload
-
-        if excluded != "checks":
-            progress = self._runningChecksScanProgress(user_key)
-            if self._isBlockingRunningProgress(progress):
-                payload = dict(progress)
-                payload.setdefault("operation", "checks")
-                return payload
-
-        if excluded != "cleanup":
-            progress = self.getCleanupProgress(user_key, "normalize_names")
-            if self._isBlockingRunningProgress(progress):
-                payload = dict(progress)
-                payload.setdefault("operation", "cleanup")
-                return payload
-
-        return None
+        return self.runtime_state.first_blocking_progress(
+            candidates(),
+            exclude_operation=excluded,
+        )
 
     def _buildStartBlockedByRunningOperationPayload(
         self,
@@ -2410,7 +2387,11 @@ class ImgDataService:
         current["findings_count"] = max(0, int(current.get("findings_count") or 0))
         current["resolved_count"] = max(0, int(current.get("resolved_count") or 0))
         current["ignored_count"] = max(0, int(current.get("ignored_count") or 0))
-        return current
+        return self.runtime_state.normalize_progress(
+            current,
+            operation="checks",
+            action=normalized_type,
+        )
 
     def getChecksProgress(self, user_key: str, check_type: str) -> Dict[str, Any]:
         normalized_user = str(user_key or "").strip()
@@ -2435,14 +2416,14 @@ class ImgDataService:
             candidate_keys.append(normalized_user)
 
         memory_progress: Dict[str, Any] = {}
-        with self._checks_progress_lock:
+        with self.runtime_state.lock("checks_progress"):
             for key in candidate_keys:
-                progress = self._checks_progress.get(key)
+                progress = self.runtime_state.memory("checks_progress").get(key)
                 if isinstance(progress, dict) and progress:
                     memory_progress = dict(progress)
                     break
-            if not memory_progress and len(self._checks_progress) == 1:
-                only_progress = next(iter(self._checks_progress.values()))
+            if not memory_progress and len(self.runtime_state.memory("checks_progress")) == 1:
+                only_progress = next(iter(self.runtime_state.memory("checks_progress").values()))
                 if isinstance(only_progress, dict) and only_progress:
                     progress_type = str(only_progress.get("check_type") or "").strip().lower()
                     if not normalized_type or not progress_type or progress_type == normalized_type:
@@ -2457,10 +2438,10 @@ class ImgDataService:
     def _getChecksProgressCore(self, user_key: str, check_type: str) -> Dict[str, Any]:
         normalized_type = self._normalizeChecksType(check_type)
         state_key = self._checksStateKey(user_key, normalized_type)
-        current = self.file_analysis.readRuntimeState("checks_progress", state_key)
+        current = self.runtime_state.read_persisted("checks_progress", state_key)
         if not isinstance(current, dict) or not current:
-            with self._checks_progress_lock:
-                current = self._checks_progress.get(state_key, {})
+            with self.runtime_state.lock("checks_progress"):
+                current = self.runtime_state.memory("checks_progress").get(state_key, {})
         return self._normalizeChecksProgress(user_key, normalized_type, dict(current) if isinstance(current, dict) else {})
 
     def requestStopChecks(self, user_key: str, check_type: str) -> Dict[str, Any]:
@@ -2502,23 +2483,28 @@ class ImgDataService:
         normalized_action = self._normalizeCleanupAction(action or current.get("action"))
         current["action"] = normalized_action
         current["targets"] = self._normalizeCleanupTargets(current.get("targets"))
-        return current
+        return self.runtime_state.normalize_progress(
+            current,
+            operation="cleanup",
+            action=normalized_action,
+        )
 
     def _setCleanupProgress(self, user_key: str, **updates: Any) -> Dict[str, Any]:
         action = self._normalizeCleanupAction(updates.get("action"))
         state_key = self._cleanupStateKey(user_key, action)
-        with self._cleanup_progress_lock:
-            current = dict(self._cleanup_progress.get(state_key, {}))
+        with self.runtime_state.lock("cleanup_progress"):
+            current = dict(self.runtime_state.memory("cleanup_progress").get(state_key, {}))
             current.update(updates)
             current["action"] = action
             current["targets"] = self._normalizeCleanupTargets(current.get("targets"))
-            current = self.runtime_operations.stamp_progress(
+            current = self.runtime_state.stamp_progress(
                 current,
-                operation_prefix="cleanup",
+                operation="cleanup",
+                action=action,
                 operation_discriminator=action,
             )
-            self._cleanup_progress[state_key] = current
-        self.file_analysis.writeRuntimeState("cleanup_progress", state_key, current)
+            self.runtime_state.memory("cleanup_progress")[state_key] = current
+        self.runtime_state.persist("cleanup_progress", state_key, current)
         return current
 
     def _setCleanupProgressMessage(
@@ -2543,10 +2529,10 @@ class ImgDataService:
     def getCleanupProgress(self, user_key: str, action: str = "normalize_names") -> Dict[str, Any]:
         normalized_action = self._normalizeCleanupAction(action)
         state_key = self._cleanupStateKey(user_key, normalized_action)
-        current = self.file_analysis.readRuntimeState("cleanup_progress", state_key)
+        current = self.runtime_state.read_persisted("cleanup_progress", state_key)
         if not isinstance(current, dict) or not current:
-            with self._cleanup_progress_lock:
-                current = self._cleanup_progress.get(state_key, {})
+            with self.runtime_state.lock("cleanup_progress"):
+                current = self.runtime_state.memory("cleanup_progress").get(state_key, {})
         return self._normalizeCleanupProgress(user_key, normalized_action, dict(current) if isinstance(current, dict) else {})
 
     def requestStopCleanup(self, user_key: str, action: str = "normalize_names") -> Dict[str, Any]:
@@ -2782,6 +2768,58 @@ class ImgDataService:
             "finished_at": self._timestamp_now(),
         }
         return self.file_analysis.writeCheckFindings(check_type, payload)
+
+    def _resumeChecksSavedEntries(
+        self,
+        *,
+        check_type: str,
+        save_only: bool,
+        resume_cursor: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if not save_only or not isinstance(resume_cursor, dict):
+            return []
+        findings = self.file_analysis.readCheckFindings(check_type)
+        if str(findings.get("check_type") or check_type).strip().lower() != str(check_type or "").strip().lower():
+            return []
+        if not bool(findings.get("save_only")):
+            return []
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        return self._appendUniqueChecksFindings([], entries)
+
+    def _appendUniqueChecksFindings(
+        self,
+        existing_entries: List[Dict[str, Any]],
+        new_entries: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        seen_tokens = {
+            token
+            for token in (self._checksEntryToken(entry) for entry in existing_entries)
+            if token
+        }
+        for entry in new_entries:
+            if not isinstance(entry, dict):
+                continue
+            token = self._checksEntryToken(entry)
+            if token and token in seen_tokens:
+                continue
+            if token:
+                seen_tokens.add(token)
+            existing_entries.append(entry)
+        return existing_entries
+
+    def _writePersistedChecksFindingsStatus(self, *, check_type: str, status: str, save_only: bool) -> None:
+        if not save_only:
+            return
+        findings = self.file_analysis.readCheckFindings(check_type)
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        self._writeChecksFindings(
+            check_type=check_type,
+            status=status,
+            shared_folder=str(findings.get("shared_folder") or ""),
+            source_mode="scan",
+            save_only=True,
+            entries=[entry for entry in entries if isinstance(entry, dict)],
+        )
 
     def getChecksFindingEntries(self, *, check_type: str) -> Dict[str, Any]:
         findings = self.file_analysis.readCheckFindings(check_type)
@@ -3466,6 +3504,14 @@ class ImgDataService:
                 transferred_count=progress_updates.get("transferred_count"),
             )
         except (SessionBootstrapRequired, SessionManagerError) as exc:
+            current_progress = self.getFaceMatchingProgress(user_key)
+            self._writePersistedFaceMatchFindingsStatus(
+                action=action,
+                status="failed",
+                auto=auto,
+                save_only=save_only,
+                transferred_count=int(current_progress.get("transferred_count") or 0),
+            )
             self._setFaceMatchingSessionExceptionProgress(
                 user_key,
                 exc,
@@ -3484,6 +3530,14 @@ class ImgDataService:
                 error=str(exc),
             )
         except Exception as exc:
+            current_progress = self.getFaceMatchingProgress(user_key)
+            self._writePersistedFaceMatchFindingsStatus(
+                action=action,
+                status="failed",
+                auto=auto,
+                save_only=save_only,
+                transferred_count=int(current_progress.get("transferred_count") or 0),
+            )
             error_message = self._formatExceptionForProgress(exc)
             error_traceback = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-4000:]
             self._setFaceMatchingProgressMessage(
@@ -3509,27 +3563,32 @@ class ImgDataService:
                 traceback=error_traceback,
             )
         finally:
-            self._face_matching_threads.pop(user_key, None)
+            self.runtime_state.values("face_match_threads").pop(user_key, None)
 
     @staticmethod
     def _timestamp_now() -> str:
         return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
     def _setFileAnalysisProgress(self, persist: bool = True, **updates: Any) -> None:
-        with self._file_analysis_progress_lock:
-            current = dict(self._file_analysis_progress)
+        with self.runtime_state.lock("file_analysis_progress"):
+            current = dict(self.runtime_state.singleton("file_analysis_progress"))
             current.update(updates)
-            current = self.runtime_operations.stamp_progress(
+            current = self.runtime_state.stamp_progress(
                 current,
-                operation_prefix="file_analysis",
+                operation="file_analysis",
+                action=current.get("action") or "file_analysis",
             )
-            self._file_analysis_progress = current
+            self.runtime_state.replace_singleton("file_analysis_progress", current)
         if persist:
-            self.file_analysis.writeRuntimeState("file_analysis_progress", "default", current)
+            self.runtime_state.persist("file_analysis_progress", "default", current)
 
     def _normalizeFileAnalysisProgress(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
-        return current
+        return self.runtime_state.normalize_progress(
+            current,
+            operation="file_analysis",
+            action=current.get("action") or "file_analysis",
+        )
 
     def _enrichFileAnalysisProgressWithFindings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
@@ -3557,15 +3616,16 @@ class ImgDataService:
         return current
 
     def getFileAnalysisProgress(self) -> Dict[str, Any]:
-        if self._file_analysis_thread and self._file_analysis_thread.is_alive():
-            with self._file_analysis_progress_lock:
-                current = dict(self._file_analysis_progress)
+        worker = self.runtime_state.get_value("file_analysis_threads", "default")
+        if worker and worker.is_alive():
+            with self.runtime_state.lock("file_analysis_progress"):
+                current = dict(self.runtime_state.singleton("file_analysis_progress"))
             if current:
                 return self._enrichFileAnalysisProgressWithFindings(self._normalizeFileAnalysisProgress(current))
-        current = self.file_analysis.readRuntimeState("file_analysis_progress", "default")
+        current = self.runtime_state.read_persisted("file_analysis_progress", "default")
         if not isinstance(current, dict) or not current:
-            with self._file_analysis_progress_lock:
-                current = dict(self._file_analysis_progress)
+            with self.runtime_state.lock("file_analysis_progress"):
+                current = dict(self.runtime_state.singleton("file_analysis_progress"))
         if current:
             return self._enrichFileAnalysisProgressWithFindings(self._normalizeFileAnalysisProgress(current))
         latest = self.file_analysis.readLatestResult()
@@ -3592,7 +3652,90 @@ class ImgDataService:
         if not bool(findings.get("save_only")):
             return []
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        return [self._normalizeFaceMatchEntry(entry) for entry in entries if isinstance(entry, dict)]
+        normalized_entries: List[Dict[str, Any]] = []
+        seen_tokens = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            normalized_entry = self._normalizeFaceMatchEntry(entry)
+            token = self._faceMatchFindingEntryToken(normalized_entry)
+            if token and token in seen_tokens:
+                continue
+            if token:
+                seen_tokens.add(token)
+            normalized_entries.append(normalized_entry)
+        return normalized_entries
+
+    def _faceMatchFindingEntryToken(self, entry: Any) -> str:
+        if not isinstance(entry, dict):
+            return ""
+        face = entry.get("face")
+        if isinstance(face, dict) and face.get("face_id") not in (None, ""):
+            return json.dumps(
+                {
+                    "action": str(entry.get("action") or "search_photo_face_in_file").strip().lower(),
+                    "face_id": face.get("face_id"),
+                },
+                sort_keys=True,
+                ensure_ascii=True,
+            )
+        image_path = str(entry.get("image_path") or "").strip()
+        metadata_face = entry.get("metadata_face")
+        if image_path and isinstance(metadata_face, dict):
+            return self._faceMatchTargetToken(image_path=image_path, face=metadata_face)
+        return ""
+
+    def _appendUniqueFaceMatchFinding(
+        self,
+        entries: List[Dict[str, Any]],
+        entry: Dict[str, Any],
+    ) -> bool:
+        normalized_entry = self._normalizeFaceMatchEntry(entry)
+        token = self._faceMatchFindingEntryToken(normalized_entry)
+        if token and any(self._faceMatchFindingEntryToken(existing) == token for existing in entries):
+            return False
+        entries.append(normalized_entry)
+        return True
+
+    def _faceMatchSavedEntryFaceIds(self, entries: List[Dict[str, Any]]) -> List[int]:
+        face_ids: List[int] = []
+        seen = set()
+        for entry in entries:
+            face = entry.get("face") if isinstance(entry, dict) else None
+            face_id = face.get("face_id") if isinstance(face, dict) else None
+            try:
+                normalized_face_id = int(face_id)
+            except (TypeError, ValueError):
+                continue
+            if normalized_face_id not in seen:
+                seen.add(normalized_face_id)
+                face_ids.append(normalized_face_id)
+        return face_ids
+
+    def _writePersistedFaceMatchFindingsStatus(
+        self,
+        *,
+        action: str,
+        status: str,
+        auto: bool,
+        save_only: bool,
+        transferred_count: int,
+    ) -> None:
+        if not save_only:
+            return
+        findings = self.getFaceMatchFindings()
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        self._writeFaceMatchFindings(
+            status=status,
+            shared_folder=str(findings.get("shared_folder") or ""),
+            action=action,
+            auto=auto,
+            save_only=True,
+            transferred_count=transferred_count,
+            entries=[entry for entry in entries if isinstance(entry, dict)],
+            job_id=str(findings.get("job_id") or ""),
+            started_at=str(findings.get("started_at") or ""),
+        )
 
     def _faceMatchSavedEntryTargetTokens(self, entries: List[Dict[str, Any]]) -> List[str]:
         tokens: List[str] = []
@@ -5441,292 +5584,6 @@ class ImgDataService:
             "right_reference_faces": [],
         }
 
-    def startChecksReview(
-        self,
-        *,
-        user_key: str,
-        cookies: Dict[str, str],
-        base_url: str,
-        source_mode: str,
-        check_type: str,
-        save_only: bool = False,
-        resume_from_progress: bool = False,
-        auto_apply_suggested_names: bool = False,
-        auto_apply_suggested_duplicates: bool = False,
-        advance_current_result: bool = False,
-        changed_since_days: int = 0,
-    ) -> Dict[str, Any]:
-        self._clearChecksStopRequest(user_key=user_key, check_type=check_type)
-        self._setActiveChecksContext(user_key=user_key, check_type=check_type, save_only=save_only)
-        source_mode_normalized = str(source_mode or "findings").strip().lower()
-        if source_mode_normalized not in {"findings", "scan"}:
-            source_mode_normalized = "findings"
-
-        check_type_normalized = str(check_type or "dimension_issues").strip().lower()
-        supported_types = {"dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts"}
-        if check_type_normalized not in supported_types:
-            check_type_normalized = "dimension_issues"
-
-        if source_mode_normalized == "scan":
-            return self.startChecksScanDiscovery(
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                check_type=check_type_normalized,
-                save_only=save_only,
-                resume_from_progress=resume_from_progress,
-                auto_apply_suggested_names=auto_apply_suggested_names,
-                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
-                advance_current_result=advance_current_result,
-                changed_since_days=changed_since_days,
-            )
-
-        if source_mode_normalized == "findings":
-            findings_payload = self.getChecksFindingEntries(check_type=check_type_normalized)
-            stored_entries = findings_payload.get("entries") if isinstance(findings_payload.get("entries"), list) else []
-            if stored_entries:
-                entries = [entry for entry in stored_entries if isinstance(entry, dict)]
-                return {
-                    "check_type": check_type_normalized,
-                    "source_mode": source_mode_normalized,
-                    "save_only": bool(findings_payload.get("save_only")),
-                    "count": len(entries),
-                    "entries": entries,
-                }
-            return {
-                "check_type": check_type_normalized,
-                "source_mode": source_mode_normalized,
-                "save_only": bool(findings_payload.get("save_only")),
-                "count": 0,
-                "entries": [],
-            }
-
-    def startChecksScanDiscovery(
-        self,
-        *,
-        user_key: str,
-        cookies: Dict[str, str],
-        base_url: str,
-        check_type: str,
-        save_only: bool = False,
-        resume_from_progress: bool = False,
-        auto_apply_suggested_names: bool = False,
-        auto_apply_suggested_duplicates: bool = False,
-        advance_current_result: bool = False,
-        changed_since_days: int = 0,
-    ) -> Dict[str, Any]:
-        check_type = self._normalizeChecksType(check_type)
-        with self._checks_start_lock:
-            current = self.getChecksProgress(user_key, check_type)
-            state_key = self._checksStateKey(user_key, check_type)
-            worker = self._checks_threads.get(state_key)
-            current_source_mode = str(current.get("source_mode") or "").strip().lower() if isinstance(current, dict) else ""
-            if current.get("running") and current_source_mode == "scan":
-                return self._buildChecksStartBlockedPayload(
-                    current,
-                    requested_check_type=check_type,
-                )
-
-            running_progress = self._runningChecksScanProgress(user_key, exclude_check_type=check_type)
-            if running_progress:
-                return self._buildChecksStartBlockedPayload(
-                    running_progress,
-                    requested_check_type=check_type,
-                )
-
-            running_operation = self._runningOperationProgress(user_key, exclude_operation="checks")
-            if running_operation:
-                return self._buildStartBlockedByRunningOperationPayload(
-                    running_operation,
-                    requested_operation="checks",
-                )
-
-            resume_cursor = current.get("resume_cursor") if resume_from_progress and isinstance(current.get("resume_cursor"), dict) else {}
-            if resume_cursor:
-                resume_cursor = self._trustedChecksResumeCursor(
-                    current,
-                    check_type=check_type,
-                    save_only=save_only,
-                    advance_current_result=advance_current_result,
-                )
-                save_only = bool(resume_cursor.get("save_only", save_only))
-                changed_since_days = max(0, int(resume_cursor.get("changed_since_days", changed_since_days) or 0))
-                check_type = str(resume_cursor.get("check_type") or check_type or "dimension_issues").strip().lower()
-                state_key = self._checksStateKey(user_key, check_type)
-            else:
-                self._invalidateChecksCandidatePathsCache(user_key, check_type)
-            operation_id = (
-                str(current.get("operation_id") or "").strip()
-                if resume_cursor and str(current.get("operation_id") or "").strip()
-                else f"checks-{check_type}-{uuid4().hex}"
-            )
-
-            self._setChecksProgressMessage(
-                user_key,
-                check_type,
-                "checks:status_preparing_scan",
-                operation_id=operation_id,
-                running=True,
-                finished=False,
-                stop_requested=False,
-                source_mode="scan",
-                save_only=save_only,
-                changed_since_days=changed_since_days,
-                files_scanned=0,
-                total_files=0,
-                findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
-                resolved_count=int(resume_cursor.get("resolved_count") or 0) if resume_cursor else 0,
-                ignored_count=int(resume_cursor.get("ignored_count") or 0) if resume_cursor else 0,
-                current_path="",
-                result=None,
-                resume_cursor=resume_cursor or self._buildChecksResumeCursor(
-                    path_index=0,
-                    pending_entries=[],
-                    source_mode="scan",
-                    check_type=check_type,
-                    save_only=save_only,
-                    findings_count=0,
-                    resolved_count=0,
-                    ignored_count=0,
-                    changed_since_days=changed_since_days,
-                ),
-            )
-            worker = Thread(
-                target=self._runChecksScan,
-                kwargs={
-                    "user_key": user_key,
-                    "cookies": dict(cookies),
-                    "base_url": base_url,
-                    "check_type": check_type,
-                    "save_only": save_only,
-                    "changed_since_days": changed_since_days,
-                    "auto_apply_suggested_names": auto_apply_suggested_names,
-                    "auto_apply_suggested_duplicates": auto_apply_suggested_duplicates,
-                    "resume_cursor": resume_cursor if resume_cursor else None,
-                },
-                daemon=True,
-            )
-            self._checks_threads[state_key] = worker
-            worker.start()
-        return self.getChecksProgress(user_key, check_type)
-
-    def _runChecksScan(
-        self,
-        *,
-        user_key: str,
-        cookies: Dict[str, str],
-        base_url: str,
-        check_type: str,
-        save_only: bool,
-        resume_cursor: Optional[Dict[str, Any]] = None,
-        auto_apply_suggested_names: bool = False,
-        auto_apply_suggested_duplicates: bool = False,
-        changed_since_days: int = 0,
-    ) -> None:
-        try:
-            result = self.searchNextChecksItem(
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                check_type=check_type,
-                save_only=save_only,
-                changed_since_days=changed_since_days,
-                resume_cursor=resume_cursor,
-                auto_apply_suggested_names=auto_apply_suggested_names,
-                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
-            )
-            self._setChecksProgress(
-                user_key,
-                **result,
-            )
-        except (SessionBootstrapRequired, SessionManagerError) as exc:
-            current_progress = self.getChecksProgress(user_key, check_type)
-            current_resume_cursor = current_progress.get("resume_cursor") if isinstance(current_progress.get("resume_cursor"), dict) else {}
-            detail = exc.detail if isinstance(exc, SessionManagerError) and isinstance(exc.detail, dict) else {}
-            self._setChecksProgressMessage(
-                user_key,
-                check_type,
-                "checks:progress_failed",
-                message=str(exc),
-                running=False,
-                finished=False,
-                stop_requested=False,
-                error=str(exc),
-                error_details=detail,
-                save_only=save_only,
-                source_mode="scan",
-                changed_since_days=changed_since_days,
-                files_scanned=int(current_progress.get("files_scanned") or 0),
-                total_files=int(current_progress.get("total_files") or 0),
-                findings_count=int(current_progress.get("findings_count") or 0),
-                resolved_count=int(current_progress.get("resolved_count") or 0),
-                ignored_count=int(current_progress.get("ignored_count") or 0),
-                current_path=str(current_progress.get("current_path") or ""),
-                resume_cursor=current_resume_cursor or resume_cursor or self._buildChecksResumeCursor(
-                    path_index=0,
-                    pending_entries=[],
-                    source_mode="scan",
-                    check_type=check_type,
-                    save_only=save_only,
-                    findings_count=0,
-                    resolved_count=0,
-                    ignored_count=0,
-                    changed_since_days=changed_since_days,
-                ),
-            )
-        except ImgDataOperationError as exc:
-            details = exc.details if isinstance(exc.details, dict) else {}
-            if str(details.get("code") or "") == "checks_stop_requested":
-                current_progress = self.getChecksProgress(user_key, check_type)
-                current_resume_cursor = current_progress.get("resume_cursor") if isinstance(current_progress.get("resume_cursor"), dict) else {}
-                self._setChecksProgressMessage(
-                    user_key,
-                    check_type,
-                    "checks:progress_stopped",
-                    message="Checks scan stopped.",
-                    running=False,
-                    finished=True,
-                    stop_requested=True,
-                    save_only=save_only,
-                    source_mode="scan",
-                    changed_since_days=changed_since_days,
-                    files_scanned=int(current_progress.get("files_scanned") or 0),
-                    total_files=int(current_progress.get("total_files") or 0),
-                    findings_count=int(current_progress.get("findings_count") or 0),
-                    resolved_count=int(current_progress.get("resolved_count") or 0),
-                    ignored_count=int(current_progress.get("ignored_count") or 0),
-                    current_path=str(current_progress.get("current_path") or ""),
-                    resume_cursor=current_resume_cursor or resume_cursor or self._buildChecksResumeCursor(
-                        path_index=0,
-                        pending_entries=[],
-                        source_mode="scan",
-                        check_type=check_type,
-                        save_only=save_only,
-                        findings_count=0,
-                        resolved_count=0,
-                        ignored_count=0,
-                        changed_since_days=changed_since_days,
-                    ),
-                )
-                return
-            raise
-        except Exception as exc:
-            self._setChecksProgressMessage(
-                user_key,
-                check_type,
-                "checks:progress_failed",
-                message="Checks scan failed.",
-                running=False,
-                finished=True,
-                stop_requested=False,
-                error=str(exc),
-                save_only=save_only,
-                source_mode="scan",
-                changed_since_days=changed_since_days,
-            )
-        finally:
-            self._checks_threads.pop(self._checksStateKey(user_key, check_type), None)
-
     def searchNextChecksItem(
         self,
         *,
@@ -5771,7 +5628,13 @@ class ImgDataService:
         ignored_count = int(resume_cursor.get("ignored_count") or 0) if metrics_trusted and isinstance(resume_cursor, dict) else 0
         if not save_only and not metrics_trusted:
             findings_count = self._countOpenChecksScanFindings(None, pending_entries)
-        saved_entries: List[Dict[str, Any]] = []
+        saved_entries = self._resumeChecksSavedEntries(
+            check_type=check_type,
+            save_only=save_only,
+            resume_cursor=resume_cursor,
+        )
+        if save_only:
+            findings_count = len(saved_entries)
         checks_findings_debouncer = WriteDebouncer(
             self.CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS,
             self.CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL,
@@ -5798,10 +5661,10 @@ class ImgDataService:
             checks_findings_debouncer.mark_flushed(len(saved_entries))
             progress_key = self._checksStateKey(user_key, check_type)
             self._updateChecksProgressHeartbeat(flush=True)
-            with self._checks_progress_lock:
-                progress = self._checks_progress.get(progress_key)
+            with self.runtime_state.lock("checks_progress"):
+                progress = self.runtime_state.memory("checks_progress").get(progress_key)
                 if not isinstance(progress, dict):
-                    progress = self.file_analysis.readRuntimeState("checks_progress", progress_key)
+                    progress = self.runtime_state.read_persisted("checks_progress", progress_key)
                 if not isinstance(progress, dict):
                     progress = {}
                 progress = dict(progress)
@@ -5822,8 +5685,8 @@ class ImgDataService:
                     "findings": len(saved_entries),
                 }
                 progress["last_flush_reason"] = str(reason or "save_only_findings_flush")
-                self._checks_progress[progress_key] = progress
-                self.file_analysis.writeRuntimeState("checks_progress", progress_key, dict(progress))
+                self.runtime_state.memory("checks_progress")[progress_key] = progress
+                self.runtime_state.persist("checks_progress", progress_key, dict(progress))
             return True
 
         candidate_paths = self._getChecksCandidatePaths(
@@ -5879,6 +5742,7 @@ class ImgDataService:
                 shared_folder=shared_folder,
             )
             if resolved.get("stop_requested"):
+                flush_saved_checks_findings(force=True, status="stopped", reason="stop_requested")
                 return self._buildChecksScanPayload(
                     check_type=check_type,
                     save_only=save_only,
@@ -6006,6 +5870,7 @@ class ImgDataService:
                 last_keepalive_at=last_keepalive_at,
             )
             if self._shouldStopChecks(user_key, check_type):
+                flush_saved_checks_findings(force=True, status="stopped", reason="stop_requested")
                 return self._buildChecksScanPayload(
                     check_type=check_type,
                     save_only=save_only,
@@ -6093,6 +5958,7 @@ class ImgDataService:
                     shared_folder=shared_folder,
                 )
                 if resolved.get("stop_requested"):
+                    flush_saved_checks_findings(force=True, status="stopped", reason="stop_requested")
                     return self._buildChecksScanPayload(
                         check_type=check_type,
                         save_only=save_only,
@@ -6119,7 +5985,7 @@ class ImgDataService:
                     if check_type == "name_conflicts":
                         resolved_count += auto_applied_count
                 if resolved.get("auto_apply_warning"):
-                    saved_entries.extend(entries)
+                    self._appendUniqueChecksFindings(saved_entries, entries)
                     findings_count = len(saved_entries)
                     flush_saved_checks_findings(force=True, reason="auto_apply_warning")
                     self._setChecksProgressMessage(
@@ -6169,7 +6035,7 @@ class ImgDataService:
                         )
 
                 if refreshed_entries:
-                    saved_entries.extend(refreshed_entries)
+                    self._appendUniqueChecksFindings(saved_entries, refreshed_entries)
                     findings_count = len(saved_entries)
                     flush_saved_checks_findings(reason="save_only_result")
                 else:
@@ -6218,6 +6084,7 @@ class ImgDataService:
                 shared_folder=shared_folder,
             )
             if resolved.get("stop_requested"):
+                flush_saved_checks_findings(force=True, status="stopped", reason="stop_requested")
                 return self._buildChecksScanPayload(
                     check_type=check_type,
                     save_only=False,
@@ -6659,7 +6526,7 @@ class ImgDataService:
                     io_metrics=scan_context.io_metrics.snapshot() if scan_context.io_metrics else None,
                 )
             )
-            self._file_analysis_thread = None
+            self.runtime_state.pop_value("file_analysis_threads", "default", None)
             return
 
         self._setFileAnalysisProgress(
@@ -6791,7 +6658,7 @@ class ImgDataService:
                             stop_requested=False,
                         )
                     )
-                    self._file_analysis_thread = None
+                    self.runtime_state.pop_value("file_analysis_threads", "default", None)
                     return
                 for filename in filenames:
                     current_path = str(Path(dirpath) / filename)
@@ -6870,7 +6737,7 @@ class ImgDataService:
                                 stop_requested=False,
                             )
                         )
-                        self._file_analysis_thread = None
+                        self.runtime_state.pop_value("file_analysis_threads", "default", None)
                         return
 
             self._persistFileAnalysisResult(
@@ -6973,7 +6840,7 @@ class ImgDataService:
                             stop_requested=False,
                         )
                     )
-                    self._file_analysis_thread = None
+                    self.runtime_state.pop_value("file_analysis_threads", "default", None)
                     return
 
                 current_file_number = files_analyzed + 1
@@ -7342,7 +7209,7 @@ class ImgDataService:
                 )
             )
         finally:
-            self._file_analysis_thread = None
+            self.runtime_state.pop_value("file_analysis_threads", "default", None)
 
     def startFileAnalysisDiscovery(
         self,
@@ -7422,7 +7289,7 @@ class ImgDataService:
             },
             daemon=True,
         )
-        self._file_analysis_thread = worker
+        self.runtime_state.set_value("file_analysis_threads", "default", worker)
         worker.start()
         return self.getFileAnalysisProgress()
 
@@ -7603,7 +7470,7 @@ class ImgDataService:
             },
             daemon=True,
         )
-        self._face_matching_threads[user_key] = worker
+        self.runtime_state.values("face_match_threads")[user_key] = worker
         worker.start()
         return self.getFaceMatchingProgress(user_key)
     
@@ -7622,10 +7489,14 @@ class ImgDataService:
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
         known_persons_cache: Optional[List[Dict[str, Any]]] = None
-        saved_entries: List[Dict[str, Any]] = []
+        saved_entries = self._resumeFaceMatchSavedEntries(
+            action="search_photo_face_in_file",
+            save_only=save_only,
+            resume_cursor=resume_cursor,
+        )
         findings_job_id = f"face_match-{uuid4().hex}"
         findings_started_at = self._timestamp_now()
-        last_findings_flush_count = 0
+        last_findings_flush_count = len(saved_entries)
         last_findings_flush_at = monotonic()
         skip_face_ids_set = {
             int(face_id) for face_id in (skip_face_ids or [])
@@ -7636,6 +7507,7 @@ class ImgDataService:
             int(face_id) for face_id in resume_skip_face_ids
             if isinstance(face_id, int) or str(face_id).isdigit()
         )
+        skip_face_ids_set.update(self._faceMatchSavedEntryFaceIds(saved_entries))
         persons_read = int(resume_cursor.get("persons_read") or 0) if isinstance(resume_cursor, dict) else 0
         images_read = int(resume_cursor.get("images_read") or 0) if isinstance(resume_cursor, dict) else 0
         faces_read = int(resume_cursor.get("faces_read") or 0) if isinstance(resume_cursor, dict) else 0
@@ -7643,8 +7515,11 @@ class ImgDataService:
         metadata_faces_read = int(resume_cursor.get("metadata_faces_read") or 0) if isinstance(resume_cursor, dict) else 0
         transferred_count = int(resume_cursor.get("transferred_count") or 0) if isinstance(resume_cursor, dict) else 0
         findings_count = int(resume_cursor.get("findings_count") or 0) if isinstance(resume_cursor, dict) else 0
+        if save_only:
+            findings_count = len(saved_entries)
         final_message_key = "face_match:progress_finished"
         final_message_params: Dict[str, Any] = {}
+        shared_folder = ""
         self._setFaceMatchingProgressMessage(
             user_key,
             "face_match:status_starting",
@@ -7691,7 +7566,7 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         transferred_count=transferred_count,
-                        entries=[],
+                        entries=saved_entries,
                         job_id=findings_job_id,
                         started_at=findings_started_at,
                     )
@@ -8123,8 +7998,8 @@ class ImgDataService:
                     if result_entry is None:
                         continue
                     if save_only:
-                        saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
-                        findings_count += 1
+                        if self._appendUniqueFaceMatchFinding(saved_entries, result_entry):
+                            findings_count = len(saved_entries)
                         skip_face_ids_set.add(face_id_int)
                         if self._shouldFlushFaceMatchFindings(
                             entries_count=len(saved_entries),
@@ -8230,7 +8105,11 @@ class ImgDataService:
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
-        saved_entries: List[Dict[str, Any]] = []
+        saved_entries = self._resumeFaceMatchSavedEntries(
+            action="search_file_face_in_sources",
+            save_only=save_only,
+            resume_cursor=resume_cursor,
+        )
         transferred_count = int(resume_cursor.get("transferred_count") or 0) if isinstance(resume_cursor, dict) else 0
         findings_count = int(resume_cursor.get("findings_count") or 0) if isinstance(resume_cursor, dict) else 0
         path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
@@ -8240,6 +8119,13 @@ class ImgDataService:
                 normalized = str(token or "").strip()
                 if normalized and normalized not in skip_target_tokens:
                     skip_target_tokens.append(normalized)
+        for token in self._faceMatchSavedEntryTargetTokens(saved_entries):
+            if token not in skip_target_tokens:
+                skip_target_tokens.append(token)
+        if save_only:
+            findings_count = len(saved_entries)
+        last_findings_flush_count = len(saved_entries)
+        last_findings_flush_at = monotonic()
 
         source_scope = self._fileFaceMatchSourceScope()
         use_photos = source_scope in {"both", "photos"}
@@ -8288,6 +8174,16 @@ class ImgDataService:
             )
             if not shared_folder:
                 final_message_key = "face_match:progress_shared_folder_missing"
+                if save_only:
+                    self._writeFaceMatchFindings(
+                        status="failed",
+                        shared_folder="",
+                        action="search_file_face_in_sources",
+                        auto=auto,
+                        save_only=save_only,
+                        transferred_count=transferred_count,
+                        entries=saved_entries,
+                    )
                 return {
                     "searched": False,
                     "error": "shared_folder_not_found",
@@ -8678,8 +8574,26 @@ class ImgDataService:
 
                     findings_count += 1
                     if save_only:
-                        saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
+                        self._appendUniqueFaceMatchFinding(saved_entries, result_entry)
+                        findings_count = len(saved_entries)
                         skip_target_tokens.append(target_token)
+                        if self._shouldFlushFaceMatchFindings(
+                            entries_count=len(saved_entries),
+                            last_flush_count=last_findings_flush_count,
+                            last_flush_at=last_findings_flush_at,
+                        ):
+                            self._writeFaceMatchFindings(
+                                status="running",
+                                shared_folder=shared_folder,
+                                action="search_file_face_in_sources",
+                                auto=auto,
+                                save_only=save_only,
+                                transferred_count=transferred_count,
+                                entries=saved_entries,
+                                finished=False,
+                            )
+                            last_findings_flush_count = len(saved_entries)
+                            last_findings_flush_at = monotonic()
                         self._setFaceMatchingProgress(
                             user_key,
                             findings_count=findings_count,
@@ -8838,6 +8752,16 @@ class ImgDataService:
             )
             if not shared_folder:
                 final_message_key = "face_match:progress_shared_folder_missing"
+                if save_only:
+                    self._writeFaceMatchFindings(
+                        status="failed",
+                        shared_folder="",
+                        action="mark_missing_photos_faces",
+                        auto=auto,
+                        save_only=save_only,
+                        transferred_count=transferred_count,
+                        entries=saved_entries,
+                    )
                 return {
                     "searched": False,
                     "error": "shared_folder_not_found",
@@ -9123,7 +9047,8 @@ class ImgDataService:
 
                 findings_count += 1
                 if save_only:
-                    saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
+                    self._appendUniqueFaceMatchFinding(saved_entries, result_entry)
+                    findings_count = len(saved_entries)
                     skip_target_tokens.append(target_token)
                     if self._shouldFlushFaceMatchFindings(
                         entries_count=len(saved_entries),
@@ -9234,7 +9159,12 @@ class ImgDataService:
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
-        saved_entries: List[Dict[str, Any]] = []
+        action = "search_missing_faces_insightface"
+        saved_entries = self._resumeFaceMatchSavedEntries(
+            action=action,
+            save_only=save_only,
+            resume_cursor=resume_cursor,
+        )
         transferred_count = int(resume_cursor.get("transferred_count") or 0) if isinstance(resume_cursor, dict) else 0
         path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
         skip_target_tokens = [str(value) for value in (skip_targets or []) if str(value or "").strip()]
@@ -9243,6 +9173,11 @@ class ImgDataService:
                 normalized = str(token or "").strip()
                 if normalized and normalized not in skip_target_tokens:
                     skip_target_tokens.append(normalized)
+        for token in self._faceMatchSavedEntryTargetTokens(saved_entries):
+            if token not in skip_target_tokens:
+                skip_target_tokens.append(token)
+        last_findings_flush_count = len(saved_entries)
+        last_findings_flush_at = monotonic()
 
         persons_read = 0
         images_read = int(resume_cursor.get("images_read") or path_index) if isinstance(resume_cursor, dict) else 0
@@ -9251,7 +9186,7 @@ class ImgDataService:
         metadata_faces_read = int(resume_cursor.get("metadata_faces_read") or 0) if isinstance(resume_cursor, dict) else 0
         final_message_key = "face_match:progress_finished"
         final_message_params: Dict[str, Any] = {}
-        action = "search_missing_faces_insightface"
+        shared_folder = ""
 
         self._setFaceMatchingProgressMessage(
             user_key,
@@ -9286,6 +9221,16 @@ class ImgDataService:
         try:
             if not self.pipPackagesStatus().get("packages", {}).get("INSIGHTFACE", {}).get("installed"):
                 final_message_key = "face_match:progress_insightface_missing"
+                if save_only:
+                    self._writeFaceMatchFindings(
+                        status="failed",
+                        shared_folder="",
+                        action=action,
+                        auto=auto,
+                        save_only=save_only,
+                        transferred_count=transferred_count,
+                        entries=saved_entries,
+                    )
                 return {
                     "searched": False,
                     "error": "insightface_not_installed",
@@ -9302,6 +9247,16 @@ class ImgDataService:
             )
             if not shared_folder:
                 final_message_key = "face_match:progress_shared_folder_missing"
+                if save_only:
+                    self._writeFaceMatchFindings(
+                        status="failed",
+                        shared_folder="",
+                        action=action,
+                        auto=auto,
+                        save_only=save_only,
+                        transferred_count=transferred_count,
+                        entries=saved_entries,
+                    )
                 return {
                     "searched": False,
                     "error": "shared_folder_not_found",
@@ -9538,8 +9493,25 @@ class ImgDataService:
                 }
 
                 if save_only:
-                    saved_entries.append(self._normalizeFaceMatchEntry(result_entry))
+                    self._appendUniqueFaceMatchFinding(saved_entries, result_entry)
                     skip_target_tokens.append(target_token)
+                    if self._shouldFlushFaceMatchFindings(
+                        entries_count=len(saved_entries),
+                        last_flush_count=last_findings_flush_count,
+                        last_flush_at=last_findings_flush_at,
+                    ):
+                        self._writeFaceMatchFindings(
+                            status="running",
+                            shared_folder=shared_folder,
+                            action=action,
+                            auto=auto,
+                            save_only=save_only,
+                            transferred_count=transferred_count,
+                            entries=saved_entries,
+                            finished=False,
+                        )
+                        last_findings_flush_count = len(saved_entries)
+                        last_findings_flush_at = monotonic()
                     self._setFaceMatchingProgress(
                         user_key,
                         findings_count=len(saved_entries),
@@ -9597,6 +9569,16 @@ class ImgDataService:
         except FaceDetectorUnavailable as exc:
             final_message_key = "face_match:progress_insightface_unavailable"
             final_message_params = {"error": str(exc)}
+            if save_only:
+                self._writeFaceMatchFindings(
+                    status="failed",
+                    shared_folder=shared_folder,
+                    action=action,
+                    auto=auto,
+                    save_only=save_only,
+                    transferred_count=transferred_count,
+                    entries=saved_entries,
+                )
             return {
                 "searched": False,
                 "error": str(exc),
@@ -10304,7 +10286,13 @@ class ImgDataService:
         with self._writeOperationLock(
             self._photosFaceWriteLockKey(face_id),
             phase="photos_face_assign",
-            context={"face_id": face_id, "person_id": person_id, "person_name": person_name},
+            context={
+                "face_id": face_id,
+                "item_id": item_id,
+                "image_path": str(image_path or "").strip(),
+                "person_id": person_id,
+                "person_name": person_name,
+            },
         ):
             before_face = None
             if item_id is not None:
@@ -10883,7 +10871,12 @@ class ImgDataService:
         with self._writeOperationLock(
             self._photosFaceWriteLockKey(face_id),
             phase="photos_person_create_from_face",
-            context={"face_id": face_id, "person_name": person_name},
+            context={
+                "face_id": face_id,
+                "item_id": item_id,
+                "image_path": str(image_path or "").strip(),
+                "person_name": person_name,
+            },
         ):
             before_face = None
             if item_id is not None:
@@ -11187,7 +11180,7 @@ class ImgDataService:
             },
             daemon=True,
         )
-        self._cleanup_threads[state_key] = worker
+        self.runtime_state.values("cleanup_threads")[state_key] = worker
         worker.start()
         return self.getCleanupProgress(user_key, normalized_action)
 
@@ -11412,7 +11405,7 @@ class ImgDataService:
                 error=str(exc),
             )
         finally:
-            self._cleanup_threads.pop(self._cleanupStateKey(user_key, normalized_action), None)
+            self.runtime_state.values("cleanup_threads").pop(self._cleanupStateKey(user_key, normalized_action), None)
 
     def suggestPersonsByName(
         self,

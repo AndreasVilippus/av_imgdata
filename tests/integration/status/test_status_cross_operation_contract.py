@@ -48,9 +48,9 @@ def test_cross_operation_block_payload_has_schema_status_without_foreign_progres
 
 def test_all_long_running_operation_starts_check_cross_operation_blocking():
     source = Path("src/imgdata.py").read_text(encoding="utf-8")
+    checks_source = Path("src/services/checks_workflow_service.py").read_text(encoding="utf-8")
 
     expectations = {
-        "startChecksScanDiscovery": 'exclude_operation="checks"',
         "startFaceMatchingDiscovery": 'exclude_operation="face_match"',
         "startCleanupRun": 'exclude_operation="cleanup"',
         "startFileAnalysisDiscovery": 'exclude_operation="file_analysis"',
@@ -65,6 +65,14 @@ def test_all_long_running_operation_starts_check_cross_operation_blocking():
         assert "_runningOperationProgress" in body
         assert exclude_call in body
         assert "_buildStartBlockedByRunningOperationPayload" in body
+
+    checks_start = checks_source.find("def start_scan(")
+    assert checks_start >= 0
+    checks_end = checks_source.find("\n    def ", checks_start + 1)
+    checks_body = checks_source[checks_start:checks_end]
+    assert "_runningOperationProgress" in checks_body
+    assert 'exclude_operation="checks"' in checks_body
+    assert "_buildStartBlockedByRunningOperationPayload" in checks_body
 
 
 def test_stale_stopping_progress_does_not_block_new_operations():

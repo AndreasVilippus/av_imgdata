@@ -312,19 +312,19 @@ def check_session_cookie_alignment() -> int:
     cgi_path = ROOT / "ui" / "index.cgi"
     api_path = ROOT / "src" / "api" / "imgdata_api.py"
     session_manager_path = ROOT / "src" / "api" / "session_manager.py"
-    app_path = ROOT / "ui" / "src" / "App.vue"
+    dsm_api_client_path = ROOT / "ui" / "src" / "services" / "dsm-api-client.js"
 
     cgi_source = cgi_path.read_text(encoding="utf-8")
     api_source = api_path.read_text(encoding="utf-8")
     session_source = session_manager_path.read_text(encoding="utf-8")
-    app_source = app_path.read_text(encoding="utf-8")
+    dsm_api_client_source = dsm_api_client_path.read_text(encoding="utf-8")
 
     expected_cookies = {"_SSID", "id"}
 
     for cookie_name in expected_cookies:
-        if f"{cookie_name}: this.readCookie('{cookie_name}')" not in app_source:
+        if f"{cookie_name}: readCookie('{cookie_name}')" not in dsm_api_client_source:
             errors += 1
-            fail(f"ui/src/App.vue: DSM cookie {cookie_name} is not collected for backend requests")
+            fail(f"ui/src/services/dsm-api-client.js: DSM cookie {cookie_name} is not collected for backend requests")
         if f'"{cookie_name}" not in cookies' not in api_source and f'cookies.get("{cookie_name}")' not in session_source:
             errors += 1
             fail(f"backend session handling: DSM cookie {cookie_name} is not accepted")

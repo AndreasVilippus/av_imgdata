@@ -10,9 +10,9 @@ def test_save_only_flush_reconstructs_and_persists_running_progress():
     helper = source[start:end]
 
     assert 'progress_key = self._checksStateKey(user_key, check_type)' in helper
-    assert 'readRuntimeState("checks_progress", progress_key)' in helper
+    assert 'self.runtime_state.read_persisted("checks_progress", progress_key)' in helper
     assert 'progress["running"] = status not in {"finished", "stopped", "failed"}' in helper
-    assert 'writeRuntimeState("checks_progress", progress_key, dict(progress))' in helper
+    assert 'self.runtime_state.persist("checks_progress", progress_key, dict(progress))' in helper
 
 
 def test_checks_heartbeat_sets_running_true_and_persists():
@@ -25,4 +25,4 @@ def test_checks_heartbeat_sets_running_true_and_persists():
 
     assert 'progress["running"] = True' in method
     assert 'progress["finished"] = False' in method
-    assert 'writeRuntimeState("checks_progress", key, dict(progress))' in method
+    assert 'self.runtime_state.persist("checks_progress", key, dict(progress))' in method

@@ -2,10 +2,7 @@ from pathlib import Path
 
 
 def test_operation_start_and_write_endpoints_use_extended_timeout():
-    source = Path("ui/src/App.vue").read_text(encoding="utf-8")
-    method_start = source.index("getDsmApiTimeoutMs(apiPath, options = {})")
-    method_end = source.index("formatBackendError", method_start)
-    method_source = source[method_start:method_end]
+    method_source = Path("ui/src/services/dsm-api-client.js").read_text(encoding="utf-8")
 
     for endpoint in (
         "checks_start",

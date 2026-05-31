@@ -3,7 +3,7 @@ from pathlib import Path
 
 def _run_checks_scan_excerpt() -> str:
     source = Path("src/imgdata.py").read_text(encoding="utf-8")
-    start = source.find("def _runChecksScan(")
+    start = source.find("def searchNextChecksItem(")
     assert start >= 0
     end = source.find("def getChecksReviewItem(", start)
     assert end > start
@@ -23,8 +23,8 @@ def test_save_only_checks_flushes_saved_entries_during_scan():
 def test_save_only_checks_flush_runs_after_entries_are_added():
     excerpt = _run_checks_scan_excerpt()
 
-    assert "saved_entries.extend(entries)" in excerpt
-    assert "saved_entries.extend(refreshed_entries)" in excerpt
+    assert "self._appendUniqueChecksFindings(saved_entries, entries)" in excerpt
+    assert "self._appendUniqueChecksFindings(saved_entries, refreshed_entries)" in excerpt
     assert "reason=\"auto_apply_warning\"" in excerpt
     assert "reason=\"save_only_result\"" in excerpt
 
