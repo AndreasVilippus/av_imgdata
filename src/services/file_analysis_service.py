@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 import json
 import os
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from threading import RLock, local
 from typing import Any, Dict, List, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Synology and the test environment provide fcntl.
+    fcntl = None
 
 
 class FileAnalysisService:
@@ -26,6 +34,50 @@ class FileAnalysisService:
         self._findings_dir = self._result_path.parent / "analysis_findings"
         self._runtime_dir = self._result_path.parent / "runtime_state"
         self._findings_storage_format = self._normalize_findings_storage_format(findings_storage_format)
+        self._finding_locks_guard = RLock()
+        self._finding_locks: Dict[str, RLock] = {}
+        self._finding_lock_local = local()
+
+    @contextmanager
+    def lockCheckFindings(self, finding_type: str):
+        candidate = self._finding_path(finding_type)
+        key = str(candidate)
+        with self._finding_locks_guard:
+            thread_lock = self._finding_locks.setdefault(key, RLock())
+
+        with thread_lock:
+            depths = getattr(self._finding_lock_local, "depths", {})
+            handles = getattr(self._finding_lock_local, "handles", {})
+            depth = int(depths.get(key) or 0)
+            if depth == 0:
+                handle = None
+                try:
+                    candidate.parent.mkdir(parents=True, exist_ok=True)
+                    lock_path = candidate.parent / f".{candidate.name}.lock"
+                    handle = lock_path.open("a+")
+                    if fcntl is not None:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                except OSError:
+                    if handle is not None:
+                        handle.close()
+                    handle = None
+                handles[key] = handle
+            depths[key] = depth + 1
+            self._finding_lock_local.depths = depths
+            self._finding_lock_local.handles = handles
+            try:
+                yield
+            finally:
+                remaining_depth = int(depths.get(key) or 1) - 1
+                if remaining_depth > 0:
+                    depths[key] = remaining_depth
+                else:
+                    depths.pop(key, None)
+                    handle = handles.pop(key, None)
+                    if handle is not None:
+                        if fcntl is not None:
+                            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                        handle.close()
 
     @staticmethod
     def _normalize_findings_storage_format(value: str) -> str:
@@ -69,10 +121,15 @@ class FileAnalysisService:
         temp_path = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = path.parent / f"{path.name}.tmp"
-            
-            # Schreibe in temporäre Datei (atomar durch write_bytes)
-            temp_path.write_bytes(new_bytes)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temp_path = Path(handle.name)
+                handle.write(new_bytes)
             
             # Ersetze original
             temp_path.replace(path)
@@ -104,43 +161,47 @@ class FileAnalysisService:
         return self._write_json_if_changed(self._result_path, result, pretty=True)
 
     def readCheckFindings(self, finding_type: str) -> Dict[str, Any]:
-        candidate = self._finding_path(finding_type)
-        if not candidate.exists() or not candidate.is_file():
-            return {}
-        try:
-            with candidate.open("r", encoding="utf-8") as handle:
-                data = json.load(handle)
-        except Exception:
-            return {}
-        return data if isinstance(data, dict) else {}
+        with self.lockCheckFindings(finding_type):
+            candidate = self._finding_path(finding_type)
+            if not candidate.exists() or not candidate.is_file():
+                return {}
+            try:
+                with candidate.open("r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+            except Exception:
+                return {}
+            return data if isinstance(data, dict) else {}
 
     def writeCheckFindings(self, finding_type: str, payload: Dict[str, Any]) -> bool:
         if not isinstance(payload, dict):
             return False
-        candidate = self._finding_path(finding_type)
-        return self._write_json_if_changed(candidate, payload, pretty=True)
+        with self.lockCheckFindings(finding_type):
+            candidate = self._finding_path(finding_type)
+            return self._write_json_if_changed(candidate, payload, pretty=True)
 
     def appendCheckFindingEntries(self, finding_type: str, entries: List[Dict[str, Any]]) -> bool:
         if not isinstance(entries, list):
             return False
 
-        payload = self.readCheckFindings(finding_type)
-        if not isinstance(payload, dict):
-            payload = {}
-        existing_entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
-        payload["entries"] = list(existing_entries) + [dict(entry) for entry in entries if isinstance(entry, dict)]
-        payload["count"] = len(payload["entries"])
-        return self.writeCheckFindings(finding_type, payload)
+        with self.lockCheckFindings(finding_type):
+            payload = self.readCheckFindings(finding_type)
+            if not isinstance(payload, dict):
+                payload = {}
+            existing_entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+            payload["entries"] = list(existing_entries) + [dict(entry) for entry in entries if isinstance(entry, dict)]
+            payload["count"] = len(payload["entries"])
+            return self.writeCheckFindings(finding_type, payload)
 
     def deleteCheckFindings(self, finding_type: str) -> bool:
-        candidate = self._finding_path(finding_type)
-        if not candidate.exists():
+        with self.lockCheckFindings(finding_type):
+            candidate = self._finding_path(finding_type)
+            if not candidate.exists():
+                return True
+            try:
+                candidate.unlink()
+            except Exception:
+                return False
             return True
-        try:
-            candidate.unlink()
-        except Exception:
-            return False
-        return True
 
     def readRuntimeState(self, state_type: str, state_key: str) -> Dict[str, Any]:
         candidate = self._runtime_state_path(state_type, state_key)

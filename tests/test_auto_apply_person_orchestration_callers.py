@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath("src"))
 
-from api.session_manager import SessionManager
-from imgdata import ImgDataService
+from api.session_manager import SessionManager, SessionManagerError
+from imgdata import ImgDataOperationError, ImgDataService
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
 
@@ -58,6 +58,229 @@ class AutoApplyPersonOrchestrationCallerTests(unittest.TestCase):
         self.assertEqual(persist_mock.call_args.kwargs["transferred_count"], 1)
         self.assertEqual(result["entries"], [])
         self.assertEqual(result["transferred_count"], 1)
+
+    def test_findings_auto_apply_keeps_later_api_failure_after_checkpointing_success(self):
+        first_entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/first.jpg",
+            "face": {"face_id": 456, "item_id": 789, "source_format": "PHOTOS"},
+            "matched_person": {"id": 123, "name": "Alice"},
+        }
+        second_entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/second.jpg",
+            "face": {"face_id": 457, "item_id": 790, "source_format": "PHOTOS"},
+            "matched_person": {"id": 123, "name": "Alice"},
+        }
+        findings = {
+            "status": "finished",
+            "shared_folder": "/volume1/photo",
+            "transferred_count": 0,
+            "entries": [first_entry, second_entry],
+        }
+
+        with patch.object(self.service, "getFaceMatchFindings", return_value=findings), \
+             patch.object(self.service.photos, "listFotoTeamPersonKnown", return_value=[]), \
+             patch.object(self.service.photos, "sortPersonsForFaceMatch", side_effect=lambda persons: persons), \
+             patch.object(self.service, "_storedFaceMatchEntryExists", return_value=True), \
+             patch.object(self.service, "_resolveStoredFaceMatchEntry", side_effect=lambda **kwargs: kwargs["entry"]), \
+             patch.object(
+                 self.service,
+                 "resolveOrCreatePhotosPersonForExistingFace",
+                 side_effect=[
+                     {"updated": True, "operation": "photos_assign"},
+                     SessionManagerError({
+                         "error": "api_failed",
+                         "api": "SYNO.FotoTeam.Browse.Person",
+                         "response": {"success": False, "error": {"code": 117}},
+                     }, status_code=502),
+                 ],
+             ), \
+             patch.object(self.service, "_persistFaceMatchFindingsEntries") as persist_mock:
+            result = self.service.getFaceMatchFindingEntries(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                auto=True,
+            )
+
+        persist_mock.assert_called_once()
+        self.assertEqual(persist_mock.call_args.kwargs["entries"], [second_entry])
+        self.assertEqual(persist_mock.call_args.kwargs["transferred_count"], 1)
+        self.assertEqual(result["entries"], [second_entry])
+        self.assertEqual(result["transferred_count"], 1)
+
+    def test_findings_auto_apply_persists_remapped_item_id_for_open_entry(self):
+        entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/image.jpg",
+            "image": {"id": 100},
+            "face": {"face_id": 456},
+        }
+        findings = {
+            "status": "finished",
+            "shared_folder": "/volume1/photo",
+            "entries": [entry],
+        }
+
+        def remap_item_id(**kwargs):
+            kwargs["entry"]["image"]["id"] = 200
+            kwargs["entry"]["face"]["item_id"] = 200
+            return True
+
+        with patch.object(self.service, "getFaceMatchFindings", return_value=findings), \
+             patch.object(self.service.photos, "listFotoTeamPersonKnown", return_value=[]), \
+             patch.object(self.service.photos, "sortPersonsForFaceMatch", side_effect=lambda persons: persons), \
+             patch.object(self.service, "_storedFaceMatchEntryExists", side_effect=remap_item_id), \
+             patch.object(self.service, "_resolveStoredFaceMatchEntry", side_effect=lambda **kwargs: kwargs["entry"]), \
+             patch.object(self.service, "_persistFaceMatchFindingsEntries") as persist_mock:
+            result = self.service.getFaceMatchFindingEntries(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                auto=True,
+            )
+
+        persist_mock.assert_called_once()
+        self.assertEqual(persist_mock.call_args.kwargs["entries"][0]["image"]["id"], 200)
+        self.assertEqual(persist_mock.call_args.kwargs["entries"][0]["face"]["item_id"], 200)
+        self.assertEqual(result["entries"][0]["image"]["id"], 200)
+        self.assertEqual(result["entries"][0]["face"]["item_id"], 200)
+
+    def test_findings_auto_apply_stops_at_unreadable_item_before_later_known_face(self):
+        unreadable_entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/unreadable.jpg",
+            "image": {"id": 100},
+            "face": {"face_id": 456, "item_id": 100, "source_format": "PHOTOS"},
+            "matched_person": {"id": 123, "name": "Alice"},
+        }
+        assignable_entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/assignable.jpg",
+            "image": {"id": 101},
+            "face": {"face_id": 457, "item_id": 101, "source_format": "PHOTOS"},
+            "matched_person": {"id": 123, "name": "Alice"},
+        }
+        findings = {
+            "status": "finished",
+            "shared_folder": "/volume1/photo",
+            "transferred_count": 0,
+            "entries": [unreadable_entry, assignable_entry],
+        }
+        item_error = SessionManagerError({
+            "error": "api_failed",
+            "api": "SYNO.FotoTeam.Browse.Item",
+            "response": {"success": False, "error": {"code": 117}},
+        }, status_code=502)
+
+        with patch.object(self.service, "getFaceMatchFindings", return_value=findings), \
+             patch.object(self.service.photos, "listFotoTeamPersonKnown", return_value=[]), \
+             patch.object(self.service.photos, "sortPersonsForFaceMatch", side_effect=lambda persons: persons), \
+             patch.object(self.service, "_storedFaceMatchEntryExists", side_effect=[item_error, True]), \
+             patch.object(self.service, "_resolveStoredFaceMatchEntry", side_effect=lambda **kwargs: kwargs["entry"]), \
+             patch.object(
+                 self.service,
+                 "resolveOrCreatePhotosPersonForExistingFace",
+                 return_value={"updated": True, "operation": "photos_assign"},
+             ) as orchestrate_mock, \
+             patch.object(self.service, "_persistFaceMatchFindingsEntries") as persist_mock:
+            result = self.service.getFaceMatchFindingEntries(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                auto=True,
+            )
+
+        orchestrate_mock.assert_not_called()
+        persist_mock.assert_not_called()
+        self.assertEqual(result["entries"], [unreadable_entry, assignable_entry])
+        self.assertEqual(result["transferred_count"], 0)
+
+    def test_findings_auto_apply_stops_at_first_unknown_before_later_known_face(self):
+        unknown_entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/unknown.jpg",
+            "face": {"face_id": 456, "item_id": 100, "source_format": "PHOTOS"},
+        }
+        assignable_entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/assignable.jpg",
+            "face": {"face_id": 457, "item_id": 101, "source_format": "PHOTOS"},
+            "matched_person": {"id": 123, "name": "Alice"},
+        }
+        findings = {
+            "status": "finished",
+            "shared_folder": "/volume1/photo",
+            "transferred_count": 0,
+            "entries": [unknown_entry, assignable_entry],
+        }
+
+        with patch.object(self.service, "getFaceMatchFindings", return_value=findings), \
+             patch.object(self.service.photos, "listFotoTeamPersonKnown", return_value=[]), \
+             patch.object(self.service.photos, "sortPersonsForFaceMatch", side_effect=lambda persons: persons), \
+             patch.object(self.service, "_storedFaceMatchEntryExists", return_value=True), \
+             patch.object(self.service, "_resolveStoredFaceMatchEntry", side_effect=lambda **kwargs: kwargs["entry"]), \
+             patch.object(
+                 self.service,
+                 "resolveOrCreatePhotosPersonForExistingFace",
+                 return_value={"updated": True, "operation": "photos_assign"},
+             ) as orchestrate_mock:
+            result = self.service.getFaceMatchFindingEntries(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                auto=True,
+            )
+
+        orchestrate_mock.assert_not_called()
+        self.assertEqual(result["entries"][0]["face"]["face_id"], 456)
+        self.assertIsNone(result["entries"][0]["matched_person"])
+        self.assertEqual(result["entries"][1], assignable_entry)
+        progress = self.service.getFaceMatchingProgress("user")
+        self.assertEqual(progress["message_key"], "face_match:progress_review_required")
+        self.assertEqual(progress["entries_current"], 1)
+        self.assertEqual(progress["entries_total"], 2)
+        self.assertFalse(progress["running"])
+
+    def test_findings_auto_apply_does_not_swallow_login_required_error(self):
+        entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/image.jpg",
+            "image": {"id": 100},
+            "face": {"face_id": 456, "item_id": 100, "source_format": "PHOTOS"},
+        }
+        findings = {"entries": [entry]}
+        login_error = SessionManagerError({
+            "error": "api_failed",
+            "api": "SYNO.FotoTeam.Browse.Item",
+            "response": {"success": False, "error": {"code": 106}},
+        }, status_code=401)
+
+        with patch.object(self.service, "getFaceMatchFindings", return_value=findings), \
+             patch.object(self.service.photos, "listFotoTeamPersonKnown", return_value=[]), \
+             patch.object(self.service.photos, "sortPersonsForFaceMatch", side_effect=lambda persons: persons), \
+             patch.object(self.service, "_storedFaceMatchEntryExists", side_effect=login_error):
+            with self.assertRaises(SessionManagerError):
+                self.service.getFaceMatchFindingEntries(
+                    user_key="user",
+                    cookies={},
+                    base_url="https://example.test",
+                    auto=True,
+                )
+
+    def test_findings_auto_apply_lock_rejects_parallel_run(self):
+        lock_key = "face_match:findings:auto:user"
+        with self.service._writeOperationLock(lock_key, phase="test"):
+            with self.assertRaises(ImgDataOperationError) as error:
+                self.service.getFaceMatchFindingEntriesLocked(
+                    user_key="user",
+                    cookies={},
+                    base_url="https://example.test",
+                    auto=True,
+                )
+
+        self.assertEqual(error.exception.args[0], "write_conflict")
 
     def test_search_missing_photos_faces_auto_uses_metadata_orchestration(self):
         image_path = "/volume1/photo/image.jpg"

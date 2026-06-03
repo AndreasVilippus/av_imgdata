@@ -354,15 +354,15 @@ Stability impact: High.
 
 ## 2.2 Extract Checks workflow seam
 
-Status: Partial.
+Status: Done.
 
 ### Current state
 
-`ChecksWorkflowService` owns Checks review-mode dispatch, scan start orchestration, cross-operation blocking, worker creation, and worker terminal error handling. API routes call the workflow service directly. The moved lifecycle methods no longer exist in `ImgDataService`.
+`ChecksWorkflowService` owns Checks review-mode dispatch, scan start orchestration, cross-operation blocking, worker creation, worker terminal error handling, candidate listing including cache invalidation and changed-since filtering, scan state construction including resume cursors and result payloads, the scan loop including streaming save-only flushes, stored findings persistence including resume loading and deduplication, stored findings refresh mutations, mutation progress rebuilds, and auto-apply/rebuild orchestration. API routes call the workflow service directly. Compatibility wrappers preserve the existing `ImgDataService` call surface.
 
 ### Remaining work
 
-Move the Checks scan core, candidate listing, save-only findings writes, stored findings refresh mutations, and auto-apply/rebuild flow behind the same workflow boundary.
+Checks-specific workflow orchestration has moved behind the workflow boundary. Keep compatibility wrappers until dependent callers are migrated or removed deliberately.
 
 ### Target
 
@@ -398,7 +398,20 @@ Stability impact: High.
 
 ## 2.3 Extract FaceMatch workflow seam
 
-Status: Open.
+Status: Done.
+
+### Current state
+
+`FaceMatchWorkflowService` now owns scan start orchestration, cross-operation
+blocking, worker creation, scan dispatch, terminal worker error handling, and
+candidate listing cache management, stop-request state changes, save-only
+findings resume/persistence, findings flush decisions, and stored findings
+review loading, auto-apply orchestration, locking, and entry removal mutations.
+Compatibility delegates remain on `ImgDataService`.
+
+FaceMatch-specific workflow orchestration has moved behind workflow and
+mutation service boundaries. Keep compatibility wrappers until dependent
+callers are migrated or removed deliberately.
 
 ### Target
 
@@ -882,8 +895,8 @@ Do not prioritize:
 | 4 | Finish save-only findings persistence and resume correctness | Done | 1 | findings abstraction | Medium | High |
 | 5 | Complete write-lock coverage and tests | Done | 1 | workflow extraction | Low | High |
 | 6 | Extract runtime state handling from `ImgDataService` | Done | 2 | Checks/FaceMatch extraction | Low | High |
-| 7 | Extract Checks workflow seam | Partial | 2 | route cleanup | Low to Medium | High |
-| 8 | Extract FaceMatch workflow seam | Open | 2 | route cleanup | Low to Medium | High |
+| 7 | Extract Checks workflow seam | Done | 2 | route cleanup | Low to Medium | High |
+| 8 | Extract FaceMatch workflow seam | Done | 2 | route cleanup | Low to Medium | High |
 | 9 | Keep API routes thin after service extraction | Partial | 2 | broader backend cleanup | Low | High |
 | 10 | Extract DSM API client from `App.vue` | Done | 3 | UI cleanup | Low to Medium | High |
 | 11 | Extract backend error formatter from `App.vue` | Done | 3 | UI cleanup | Low | Medium to High |
@@ -900,4 +913,4 @@ Do not prioritize:
 
 The next implementation step is not another broad refactor. The next step is contract coverage.
 
-Runtime identity consistency, save-only findings correctness, and write-lock coverage are complete. Checks lifecycle orchestration has moved into `ChecksWorkflowService`; continue moving the Checks scan core behind that boundary before starting FaceMatch workflow extraction.
+Runtime identity consistency, save-only findings correctness, write-lock coverage, Checks workflow extraction, and FaceMatch workflow extraction are complete. The next step is keeping API routes thin and retiring compatibility wrappers where callers have been migrated.

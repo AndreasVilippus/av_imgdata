@@ -20,6 +20,18 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_session_exception_debug_detail_preserves_structured_synology_api_failure():
+    detail = {
+        "error": "api_failed",
+        "api": "SYNO.FotoTeam.Browse.Person",
+        "response": {"success": False, "error": {"code": 117}},
+    }
+
+    assert imgdata_api._session_exception_debug_detail(
+        SessionManagerError(detail, status_code=502)
+    ) == detail
+
+
 def test_face_matching_action_normalizes_request_and_starts_discovery(monkeypatch):
     async def request_body(_request):
         return {

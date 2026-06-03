@@ -329,7 +329,7 @@ export default {
 			return !!(
 				this.selectedFaceMatchingAction === 'search_photo_face_in_file'
 				&& !this.faceMatchUseStoredFindings
-				&& this.faceMatchSaveOnly
+				&& (this.faceMatchSaveOnly || this.hasFaceMatchStoredFindings)
 				&& this.faceMatchIsPaused
 				&& !this.faceMatchLoading
 				&& !this.faceMatchAuthRequired
@@ -858,13 +858,39 @@ export default {
 			this.faceMatchFindingEntries = remainingEntries;
 			await this.loadFaceMatchFindingAtIndex(Math.min(currentIndex, remainingEntries.length - 1));
 		},
-		async loadStoredFaceMatchFindings() {
-			const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
-				action: 'load_photo_face_match_findings',
-				findings_action: this.getFaceMatchFindingsSourceAction(),
-				auto: this.faceMatchAutoAssignKnown,
-			});
-			const payload = this.getResponseDataObject(data, 'face_matches');
+			async loadStoredFaceMatchFindings({ refresh = false } = {}) {
+				const autoApplying = !!this.faceMatchAutoAssignKnown;
+				if (autoApplying) {
+					this.faceMatchLoading = true;
+					this.faceMatchProgress = {
+						...(this.faceMatchProgress || {}),
+						action: 'load_photo_face_match_findings',
+						source_mode: 'findings',
+						running: true,
+						finished: false,
+						message_key: 'face_match:progress_applying_known_findings',
+						message: this.$avt('face_match:progress_applying_known_findings', 'Applying known persons from saved findings...'),
+					};
+					this.startFaceMatchProgressPolling();
+				}
+				let data;
+				try {
+					data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
+						action: 'load_photo_face_match_findings',
+						findings_action: this.getFaceMatchFindingsSourceAction(),
+						auto: autoApplying,
+						refresh: !!refresh,
+					});
+					if (autoApplying) {
+						await this.fetchFaceMatchingProgress();
+					}
+				} finally {
+					if (autoApplying) {
+						this.faceMatchLoading = false;
+						this.stopFaceMatchProgressPolling();
+					}
+				}
+				const payload = this.getResponseDataObject(data, 'face_matches');
 			const entries = this.filterSkippedFaceMatchFindings(Array.isArray(payload.entries) ? payload.entries : []);
 			const remainingCount = Number(payload.count) || entries.length;
 			const transferredCount = Math.max(0, Number(payload.transferred_count) || 0);
@@ -1142,15 +1168,27 @@ export default {
 		getFaceMatchThumbnailUrl(image) {
 			return this.getPhotoThumbnailUrl(image);
 		},
+		getCurrentFaceMatchImageFallbackUrl() {
+			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
+			return imagePath
+				? `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${encodeURIComponent(imagePath)}`
+				: '';
+		},
 		getCurrentFaceMatchImageUrl() {
 			const thumbnailUrl = this.getFaceMatchThumbnailUrl(this.faceMatchResult && this.faceMatchResult.image);
 			if (thumbnailUrl) {
 				return thumbnailUrl;
 			}
-			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
-			return imagePath
-				? `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${encodeURIComponent(imagePath)}`
-				: '';
+			return this.getCurrentFaceMatchImageFallbackUrl();
+		},
+		handleFaceMatchImagePreviewError(event) {
+			const image = event && event.target;
+			const fallbackUrl = this.getCurrentFaceMatchImageFallbackUrl();
+			if (!image || !fallbackUrl || image.dataset.avFallbackApplied === 'true') {
+				return;
+			}
+			image.dataset.avFallbackApplied = 'true';
+			image.src = fallbackUrl;
 		},
 		getFaceMatchPersonThumbnailUrl(person) {
 			const personId = person && person.id;
@@ -1639,7 +1677,7 @@ export default {
 					);
 					this.output = JSON.stringify(data, null, 2);
 					if (this.faceMatchReviewingStoredFindings) {
-						await this.advanceFaceMatchFindingsAfterTransfer(data);
+							await this.loadStoredFaceMatchFindings({ refresh: true });
 					} else {
 						this.faceMatchTransferredCount += 1;
 						if (isMetadataPhotosCreate) {

@@ -7,6 +7,8 @@ import importlib.util
 import shutil
 import traceback
 import zipfile
+from contextlib import nullcontext
+from copy import deepcopy
 from importlib import metadata as importlib_metadata
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -34,6 +36,7 @@ from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
 from services.face_match_mutation_service import FaceMatchMutationService
+from services.face_match_workflow_service import FaceMatchWorkflowService
 from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
 from services.runtime_operation_service import RuntimeOperationService
@@ -149,11 +152,7 @@ class ImgDataService:
         self.face_matcher = FaceMatcher()
         self.file_analysis = FileAnalysisService()
         self._debug_logger: Optional[Callable[..., None]] = None
-        self._face_matching_candidate_paths_cache: Dict[str, Dict[str, Any]] = {}
-        self._face_matching_candidate_paths_cache_lock = Lock()
         self._checks_start_lock = Lock()
-        self._checks_candidate_paths_cache: Dict[str, Dict[str, Any]] = {}
-        self._checks_candidate_paths_cache_lock = Lock()
         self.write_locks = WriteLockService(self._buildWriteConflictError)
         self.face_match_mutations = FaceMatchMutationService(self, self._debugLog)
         self.status_builder = StatusPayloadBuilder()
@@ -168,6 +167,7 @@ class ImgDataService:
             persistence=self.file_analysis,
         )
         self.checks_workflow = ChecksWorkflowService(self, ImgDataOperationError)
+        self.face_match_workflow = FaceMatchWorkflowService(self)
     @staticmethod
     def _buildWriteConflictError(
         lock_key: str,
@@ -194,6 +194,11 @@ class ImgDataService:
         context: Optional[Dict[str, Any]] = None,
     ):
         return self.write_locks.acquire(key, phase=phase, context=context)
+
+    def _checkFindingsLock(self, finding_type: str):
+        lock_factory = getattr(self.file_analysis, "lockCheckFindings", None)
+        lock = lock_factory(finding_type) if callable(lock_factory) else None
+        return lock if hasattr(lock, "__enter__") and hasattr(lock, "__exit__") else nullcontext()
 
     @staticmethod
     def _metadataWriteLockKey(path: Any) -> str:
@@ -1666,7 +1671,7 @@ class ImgDataService:
 
     @staticmethod
     def _faceMatchCandidatePathsCacheKey(user_key: str, action: Any) -> str:
-        return f"{str(user_key or '').strip()}:{str(action or '').strip().lower()}"
+        return FaceMatchWorkflowService.candidate_paths_cache_key(user_key, action)
 
     def _getFaceMatchCandidatePaths(
         self,
@@ -1676,26 +1681,12 @@ class ImgDataService:
         shared_folder: str,
         use_cache: bool = True,
     ) -> List[str]:
-        state_key = self._faceMatchCandidatePathsCacheKey(user_key, action)
-        normalized_shared_folder = str(shared_folder or "").strip()
-        if not normalized_shared_folder:
-            return []
-        if use_cache:
-            with self._face_matching_candidate_paths_cache_lock:
-                cached = self._face_matching_candidate_paths_cache.get(state_key)
-                if (
-                    isinstance(cached, dict)
-                    and str(cached.get("shared_folder") or "") == normalized_shared_folder
-                    and isinstance(cached.get("paths"), list)
-                ):
-                    return list(cached.get("paths") or [])
-        candidate_paths = self.files.listImageFiles(normalized_shared_folder)
-        with self._face_matching_candidate_paths_cache_lock:
-            self._face_matching_candidate_paths_cache[state_key] = {
-                "shared_folder": normalized_shared_folder,
-                "paths": list(candidate_paths),
-            }
-        return candidate_paths
+        return self.face_match_workflow.get_candidate_paths(
+            user_key=user_key,
+            action=action,
+            shared_folder=shared_folder,
+            use_cache=use_cache,
+        )
 
     @staticmethod
     def _formatExceptionForProgress(exc: Exception) -> str:
@@ -1828,11 +1819,6 @@ class ImgDataService:
                 "resume_cursor": {},
             }
 
-        thread = None
-        with self.runtime_state.lock("face_match_progress"):
-            thread = self.runtime_state.values("face_match_threads").get(str(user_key or "").strip())
-        thread_alive = bool(thread and thread.is_alive())
-
         resume_cursor = display_progress.get("resume_cursor") if isinstance(display_progress.get("resume_cursor"), dict) else {}
         display_progress["resume_available"] = bool(resume_cursor)
         display_progress["resume_cursor"] = resume_cursor
@@ -1857,25 +1843,10 @@ class ImgDataService:
                 resume_cursor["findings_count"] = stored_count
                 display_progress["resume_cursor"] = resume_cursor
 
-        if display_progress.get("running") and thread_alive:
+        if display_progress.get("running"):
             display_progress["active"] = True
             display_progress["stale"] = False
-            return display_progress
-
-        if display_progress.get("running") and not thread_alive:
-            self._debugLog(
-                "face_matching_progress_marked_stale_without_worker",
-                operation_id=display_progress.get("operation_id"),
-                action=display_progress.get("action"),
-                message_key=display_progress.get("message_key") or display_progress.get("message"),
-                findings_count=int(display_progress.get("findings_count") or 0),
-                transferred_count=int(display_progress.get("transferred_count") or 0),
-            )
-            display_progress["running"] = False
-            display_progress["active"] = False
-            display_progress["stale"] = True
-            display_progress["stop_requested"] = False
-            normalize_stale_stop_message()
+            display_progress.setdefault("stop_requested", False)
             return display_progress
 
         display_progress["running"] = False
@@ -1965,16 +1936,10 @@ class ImgDataService:
         )
 
     def requestStopFaceMatching(self, user_key: str) -> Dict[str, Any]:
-        self._setFaceMatchingProgressMessage(
-            user_key,
-            "face_match:progress_stopping",
-            stop_requested=True,
-        )
-        return self.getFaceMatchingProgress(user_key)
+        return self.face_match_workflow.request_stop(user_key)
 
     def _shouldStopFaceMatching(self, user_key: str) -> bool:
-        progress = self.getFaceMatchingProgress(user_key)
-        return bool(progress.get("stop_requested"))
+        return self.face_match_workflow.should_stop(user_key)
 
     def _refreshSessionIfNeeded(
         self,
@@ -2324,12 +2289,7 @@ class ImgDataService:
         return payload
 
     def _invalidateChecksCandidatePathsCache(self, user_key: str, check_type: Any) -> None:
-        state_key = self._checksStateKey(user_key, check_type)
-        with self._checks_candidate_paths_cache_lock:
-            for key in list(self._checks_candidate_paths_cache.keys()):
-                if str(key).startswith(f"{state_key}:"):
-                    self._checks_candidate_paths_cache.pop(key, None)
-            self._checks_candidate_paths_cache.pop(state_key, None)
+        self.checks_workflow.invalidate_candidate_paths_cache(user_key, check_type)
 
     def _getChecksCandidatePaths(
         self,
@@ -2340,45 +2300,13 @@ class ImgDataService:
         changed_since_days: int = 0,
         use_cache: bool = True,
     ) -> List[str]:
-        normalized_days = max(0, int(changed_since_days or 0))
-        state_key = f"{self._checksStateKey(user_key, check_type)}:days-{normalized_days}"
-        normalized_shared_folder = str(shared_folder or "").strip()
-        if not normalized_shared_folder:
-            return []
-
-        if use_cache:
-            with self._checks_candidate_paths_cache_lock:
-                cached = self._checks_candidate_paths_cache.get(state_key)
-                if (
-                    isinstance(cached, dict)
-                    and str(cached.get("shared_folder") or "") == normalized_shared_folder
-                    and isinstance(cached.get("paths"), list)
-                ):
-                    return list(cached.get("paths") or [])
-
-        candidate_paths = self.files.listImageFiles(normalized_shared_folder)
-        if normalized_days > 0:
-            cutoff_mtime_ns = int((datetime.now(timezone.utc).timestamp() - (normalized_days * 86400)) * 1_000_000_000)
-            lookup_cache = SidecarLookupCache()
-            changed_paths: List[str] = []
-            for image_path in candidate_paths:
-                normalized_path = str(image_path or "").strip()
-                if not normalized_path:
-                    continue
-                if self._fileChangedSince(normalized_path, cutoff_mtime_ns):
-                    changed_paths.append(normalized_path)
-                    continue
-                sidecar_path = self.files.findXmpForImage(normalized_path, lookup_cache=lookup_cache)
-                if sidecar_path and self._fileChangedSince(sidecar_path, cutoff_mtime_ns):
-                    changed_paths.append(normalized_path)
-            candidate_paths = changed_paths
-        with self._checks_candidate_paths_cache_lock:
-            self._checks_candidate_paths_cache[state_key] = {
-                "shared_folder": normalized_shared_folder,
-                "changed_since_days": normalized_days,
-                "paths": list(candidate_paths),
-            }
-        return candidate_paths
+        return self.checks_workflow.get_candidate_paths(
+            user_key=user_key,
+            check_type=check_type,
+            shared_folder=shared_folder,
+            changed_since_days=changed_since_days,
+            use_cache=use_cache,
+        )
 
     def _normalizeChecksProgress(self, user_key: str, check_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(payload) if isinstance(payload, dict) else {}
@@ -2549,8 +2477,8 @@ class ImgDataService:
         progress = self.getCleanupProgress(user_key, action)
         return bool(progress.get("stop_requested"))
 
-    @staticmethod
     def _buildChecksResumeCursor(
+        self,
         *,
         path_index: int,
         pending_entries: Optional[List[Dict[str, Any]]] = None,
@@ -2563,19 +2491,18 @@ class ImgDataService:
         metrics_trusted: bool = True,
         changed_since_days: int = 0,
     ) -> Dict[str, Any]:
-        normalized_days = max(0, int(changed_since_days or 0))
-        return {
-            "path_index": max(0, int(path_index)),
-            "pending_entries": list(pending_entries or []),
-            "source_mode": str(source_mode or "scan"),
-            "check_type": str(check_type or "dimension_issues"),
-            "save_only": bool(save_only),
-            "findings_count": max(0, int(findings_count)),
-            "resolved_count": max(0, int(resolved_count)),
-            "ignored_count": max(0, int(ignored_count)),
-            "metrics_trusted": bool(metrics_trusted),
-            "changed_since_days": normalized_days,
-        }
+        return self.checks_workflow.build_resume_cursor(
+            path_index=path_index,
+            pending_entries=pending_entries,
+            source_mode=source_mode,
+            check_type=check_type,
+            save_only=save_only,
+            findings_count=findings_count,
+            resolved_count=resolved_count,
+            ignored_count=ignored_count,
+            metrics_trusted=metrics_trusted,
+            changed_since_days=changed_since_days,
+        )
 
     def _buildChecksScanPayload(
         self,
@@ -2599,67 +2526,39 @@ class ImgDataService:
         ignored_count: int = 0,
         changed_since_days: int = 0,
     ) -> Dict[str, Any]:
-        normalized_days = max(0, int(changed_since_days or 0))
-        return {
-            "running": running,
-            "finished": finished,
-            "stop_requested": stop_requested,
-            "source_mode": "scan",
-            "check_type": check_type,
-            "save_only": save_only,
-            "changed_since_days": normalized_days,
-            "files_scanned": files_scanned,
-            "total_files": total_files,
-            "findings_count": findings_count,
-            "resolved_count": max(0, int(resolved_count)),
-            "ignored_count": max(0, int(ignored_count)),
-            "current_path": current_path,
-            "result": result,
-            "resume_cursor": self._buildChecksResumeCursor(
-                path_index=path_index,
-                pending_entries=pending_entries,
-                source_mode="scan",
-                check_type=check_type,
-                save_only=save_only,
-                findings_count=findings_count,
-                resolved_count=resolved_count,
-                ignored_count=ignored_count,
-                changed_since_days=normalized_days,
-            ),
-            "message_key": message_key,
-            "message": message,
-            "message_params": message_params or {},
-        }
+        return self.checks_workflow.build_scan_payload(
+            check_type=check_type,
+            save_only=save_only,
+            files_scanned=files_scanned,
+            total_files=total_files,
+            findings_count=findings_count,
+            path_index=path_index,
+            pending_entries=pending_entries,
+            current_path=current_path,
+            result=result,
+            message_key=message_key,
+            message=message,
+            message_params=message_params,
+            running=running,
+            finished=finished,
+            stop_requested=stop_requested,
+            resolved_count=resolved_count,
+            ignored_count=ignored_count,
+            changed_since_days=changed_since_days,
+        )
 
-    @staticmethod
     def _countOpenChecksScanFindings(
+        self,
         current_entry: Optional[Dict[str, Any]] = None,
         pending_entries: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
-        count = 0
-        if isinstance(current_entry, dict) and current_entry:
-            count += 1
-        for entry in pending_entries or []:
-            if isinstance(entry, dict) and entry:
-                count += 1
-        return count
+        return self.checks_workflow.count_open_scan_findings(current_entry, pending_entries)
 
-    @staticmethod
-    def _markChecksEntriesManualReviewRequired(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        marked_entries: List[Dict[str, Any]] = []
-        for entry in entries or []:
-            if not isinstance(entry, dict):
-                continue
-            marked_entry = dict(entry)
-            marked_entry["_manual_review_required"] = True
-            marked_entries.append(marked_entry)
-        return marked_entries
+    def _markChecksEntriesManualReviewRequired(self, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return self.checks_workflow.mark_entries_manual_review_required(entries)
 
-    @staticmethod
-    def _currentChecksResultEntry(progress: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        result = progress.get("result") if isinstance(progress, dict) and isinstance(progress.get("result"), dict) else {}
-        entry = result.get("entry") if isinstance(result.get("entry"), dict) else None
-        return entry if isinstance(entry, dict) and entry else None
+    def _currentChecksResultEntry(self, progress: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        return self.checks_workflow.current_result_entry(progress)
 
     def _trustedChecksResumeCursor(
         self,
@@ -2669,27 +2568,21 @@ class ImgDataService:
         save_only: bool,
         advance_current_result: bool = False,
     ) -> Dict[str, Any]:
-        progress = current_progress if isinstance(current_progress, dict) else {}
-        resume_cursor = progress.get("resume_cursor") if isinstance(progress.get("resume_cursor"), dict) else {}
-        resolved_count = int(progress.get("resolved_count") or 0)
-        ignored_count = int(progress.get("ignored_count") or 0)
-        if (
-            advance_current_result
-            and str(check_type or "").strip().lower() == "name_conflicts"
-            and self._currentChecksResultEntry(progress) is not None
-        ):
-            ignored_count += 1
-        return self._buildChecksResumeCursor(
-            path_index=int(resume_cursor.get("path_index") or 0),
-            pending_entries=resume_cursor.get("pending_entries") if isinstance(resume_cursor.get("pending_entries"), list) else [],
-            source_mode=str(resume_cursor.get("source_mode") or "scan"),
-            check_type=str(resume_cursor.get("check_type") or check_type or "dimension_issues"),
-            save_only=bool(resume_cursor.get("save_only", save_only)),
-            findings_count=int(progress.get("findings_count") or 0),
-            resolved_count=resolved_count,
-            ignored_count=ignored_count,
-            metrics_trusted=True,
+        return self.checks_workflow.trusted_resume_cursor(
+            current_progress,
+            check_type=check_type,
+            save_only=save_only,
+            advance_current_result=advance_current_result,
         )
+
+    def _newChecksFindingsDebouncer(self) -> WriteDebouncer:
+        return WriteDebouncer(
+            self.CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS,
+            self.CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL,
+        )
+
+    def _newChecksScanContext(self) -> ScanContext:
+        return ScanContext(self.config.readMergedConfig())
 
     def _buildCheckEntriesForType(
         self,
@@ -2752,22 +2645,14 @@ class ImgDataService:
         save_only: bool,
         entries: List[Dict[str, Any]],
     ) -> bool:
-        payload = {
-            "status": status,
-            "shared_folder": shared_folder,
-            "source_mode": source_mode,
-            "check_type": check_type,
-            "save_only": save_only,
-            "count": len(entries),
-            "paths": sorted({
-                str(entry.get("image_path") or "").strip()
-                for entry in entries
-                if isinstance(entry, dict) and str(entry.get("image_path") or "").strip()
-            }),
-            "entries": entries,
-            "finished_at": self._timestamp_now(),
-        }
-        return self.file_analysis.writeCheckFindings(check_type, payload)
+        return self.checks_workflow.write_findings(
+            check_type=check_type,
+            status=status,
+            shared_folder=shared_folder,
+            source_mode=source_mode,
+            save_only=save_only,
+            entries=entries,
+        )
 
     def _resumeChecksSavedEntries(
         self,
@@ -2776,62 +2661,28 @@ class ImgDataService:
         save_only: bool,
         resume_cursor: Optional[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        if not save_only or not isinstance(resume_cursor, dict):
-            return []
-        findings = self.file_analysis.readCheckFindings(check_type)
-        if str(findings.get("check_type") or check_type).strip().lower() != str(check_type or "").strip().lower():
-            return []
-        if not bool(findings.get("save_only")):
-            return []
-        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        return self._appendUniqueChecksFindings([], entries)
+        return self.checks_workflow.resume_saved_entries(
+            check_type=check_type,
+            save_only=save_only,
+            resume_cursor=resume_cursor,
+        )
 
     def _appendUniqueChecksFindings(
         self,
         existing_entries: List[Dict[str, Any]],
         new_entries: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        seen_tokens = {
-            token
-            for token in (self._checksEntryToken(entry) for entry in existing_entries)
-            if token
-        }
-        for entry in new_entries:
-            if not isinstance(entry, dict):
-                continue
-            token = self._checksEntryToken(entry)
-            if token and token in seen_tokens:
-                continue
-            if token:
-                seen_tokens.add(token)
-            existing_entries.append(entry)
-        return existing_entries
+        return self.checks_workflow.append_unique_findings(existing_entries, new_entries)
 
     def _writePersistedChecksFindingsStatus(self, *, check_type: str, status: str, save_only: bool) -> None:
-        if not save_only:
-            return
-        findings = self.file_analysis.readCheckFindings(check_type)
-        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        self._writeChecksFindings(
+        self.checks_workflow.write_persisted_findings_status(
             check_type=check_type,
             status=status,
-            shared_folder=str(findings.get("shared_folder") or ""),
-            source_mode="scan",
-            save_only=True,
-            entries=[entry for entry in entries if isinstance(entry, dict)],
+            save_only=save_only,
         )
 
     def getChecksFindingEntries(self, *, check_type: str) -> Dict[str, Any]:
-        findings = self.file_analysis.readCheckFindings(check_type)
-        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        return {
-            "status": str(findings.get("status") or ""),
-            "check_type": str(findings.get("check_type") or check_type),
-            "source_mode": str(findings.get("source_mode") or "findings"),
-            "save_only": bool(findings.get("save_only")),
-            "count": len(entries),
-            "entries": entries,
-        }
+        return self.checks_workflow.get_finding_entries(check_type=check_type)
 
     def refreshChecksFindingEntries(
         self,
@@ -2842,49 +2693,30 @@ class ImgDataService:
         base_url: str = "",
         shared_folder: str = "",
     ) -> Dict[str, Any]:
-        normalized_type = self._normalizeChecksType(check_type)
-        findings = self.file_analysis.readCheckFindings(normalized_type)
-        if not isinstance(findings, dict) or not isinstance(findings.get("entries"), list):
-            return self.getChecksFindingEntries(check_type=normalized_type)
-
-        shared_folder = str(findings.get("shared_folder") or "")
-        status = str(findings.get("status") or "finished")
-        source_mode = str(findings.get("source_mode") or "findings")
-        save_only = bool(findings.get("save_only"))
-        stored_entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        candidate_paths: List[str] = []
-        seen_paths = set()
-        for entry in stored_entries:
-            if not isinstance(entry, dict):
-                continue
-            image_path = str(entry.get("image_path") or "").strip()
-            if not image_path or image_path in seen_paths:
-                continue
-            seen_paths.add(image_path)
-            candidate_paths.append(image_path)
-
-        refreshed_entries: List[Dict[str, Any]] = []
-        for image_path in candidate_paths:
-            refreshed_entries.extend(
-                self._buildCheckEntriesForType(
-                    image_path=image_path,
-                    review_type=normalized_type,
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    shared_folder=shared_folder,
-                )
-            )
-
-        self._writeChecksFindings(
-            check_type=normalized_type,
-            status=status,
+        return self.checks_workflow.refresh_finding_entries(
+            check_type=check_type,
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
             shared_folder=shared_folder,
-            source_mode=source_mode,
-            save_only=save_only,
-            entries=refreshed_entries,
         )
-        return self.getChecksFindingEntries(check_type=normalized_type)
+
+    def _refreshChecksFindingEntriesUnlocked(
+        self,
+        *,
+        check_type: str,
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: str = "",
+        shared_folder: str = "",
+    ) -> Dict[str, Any]:
+        return self.checks_workflow._refresh_finding_entries_unlocked(
+            check_type=check_type,
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            shared_folder=shared_folder,
+        )
 
     def refreshChecksFindingEntriesForImage(
         self,
@@ -2898,59 +2730,39 @@ class ImgDataService:
         original_face_data: Optional[Dict[str, Any]] = None,
         replacement_face_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        normalized_type = self._normalizeChecksType(check_type)
-        normalized_path = str(image_path or "").strip()
-        if not normalized_path:
-            return self.getChecksFindingEntries(check_type=normalized_type)
-
-        findings = self.file_analysis.readCheckFindings(normalized_type)
-        existing_entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        if not existing_entries:
-            return self.getChecksFindingEntries(check_type=normalized_type)
-
-        photo_faces = self._loadPhotoFacesForImageWithOverride(
+        return self.checks_workflow.refresh_finding_entries_for_image(
+            check_type=check_type,
+            image_path=image_path,
             user_key=user_key,
             cookies=cookies,
             base_url=base_url,
             shared_folder=shared_folder,
-            image_path=normalized_path,
             original_face_data=original_face_data,
             replacement_face_data=replacement_face_data,
         )
-        rebuilt_entries = self._buildCheckEntriesForType(
-            image_path=normalized_path,
-            review_type=normalized_type,
+
+    def _refreshChecksFindingEntriesForImageUnlocked(
+        self,
+        *,
+        check_type: str,
+        image_path: str,
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: str = "",
+        shared_folder: str = "",
+        original_face_data: Optional[Dict[str, Any]] = None,
+        replacement_face_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return self.checks_workflow._refresh_finding_entries_for_image_unlocked(
+            check_type=check_type,
+            image_path=image_path,
             user_key=user_key,
             cookies=cookies,
             base_url=base_url,
             shared_folder=shared_folder,
-            photo_faces=photo_faces,
+            original_face_data=original_face_data,
+            replacement_face_data=replacement_face_data,
         )
-
-        updated_entries: List[Dict[str, Any]] = []
-        replaced = False
-        for entry in existing_entries:
-            if not isinstance(entry, dict):
-                continue
-            if str(entry.get("image_path") or "").strip() == normalized_path:
-                if not replaced:
-                    updated_entries.extend(rebuilt_entries)
-                    replaced = True
-                continue
-            updated_entries.append(entry)
-
-        if not replaced:
-            return self.getChecksFindingEntries(check_type=normalized_type)
-
-        self._writeChecksFindings(
-            check_type=normalized_type,
-            status=str(findings.get("status") or "finished"),
-            shared_folder=str(findings.get("shared_folder") or ""),
-            source_mode=str(findings.get("source_mode") or "findings"),
-            save_only=bool(findings.get("save_only")),
-            entries=updated_entries,
-        )
-        return self.getChecksFindingEntries(check_type=normalized_type)
 
     def refreshChecksScanProgressForImage(
         self,
@@ -2966,448 +2778,36 @@ class ImgDataService:
         resolved_delta: int = 0,
         ignored_delta: int = 0,
     ) -> Dict[str, Any]:
-        normalized_type = self._normalizeChecksType(check_type)
-        normalized_path = str(image_path or "").strip()
-        if not normalized_path:
-            return self.getChecksProgress(user_key, normalized_type)
-
-        current = self.getChecksProgress(user_key, normalized_type)
-        if not isinstance(current, dict) or str(current.get("source_mode") or "").strip().lower() != "scan":
-            return current
-
-        resume_cursor = current.get("resume_cursor") if isinstance(current.get("resume_cursor"), dict) else {}
-        pending_entries = resume_cursor.get("pending_entries") if isinstance(resume_cursor.get("pending_entries"), list) else []
-        current_result = current.get("result") if isinstance(current.get("result"), dict) else {}
-        current_entry = current_result.get("entry") if isinstance(current_result.get("entry"), dict) else {}
-
-        photo_faces = self._loadPhotoFacesForImageWithOverride(
+        return self.checks_workflow.refresh_scan_progress_for_image(
             user_key=user_key,
+            check_type=check_type,
+            image_path=image_path,
             cookies=cookies,
             base_url=base_url,
             shared_folder=shared_folder,
-            image_path=normalized_path,
             original_face_data=original_face_data,
             replacement_face_data=replacement_face_data,
+            resolved_delta=resolved_delta,
+            ignored_delta=ignored_delta,
         )
-        rebuilt_entries = self._buildCheckEntriesForType(
-            image_path=normalized_path,
-            review_type=normalized_type,
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            shared_folder=shared_folder,
-            photo_faces=photo_faces,
-        )
-        processed_tokens: List[str] = []
-        if isinstance(current_entry, dict) and str(current_entry.get("image_path") or "").strip() == normalized_path:
-            current_entry_token = self._checksEntryToken(current_entry)
-            if current_entry_token:
-                processed_tokens.append(current_entry_token)
-        replacement_entries = self._markChecksEntriesManualReviewRequired(
-            self._excludeChecksEntriesByTokens(rebuilt_entries, processed_tokens)
-        )
-
-        remaining_pending_entries: List[Dict[str, Any]] = []
-        for entry in pending_entries:
-            if not isinstance(entry, dict):
-                continue
-            if str(entry.get("image_path") or "").strip() == normalized_path:
-                continue
-            remaining_pending_entries.append(entry)
-        remaining_pending_entries = replacement_entries + remaining_pending_entries
-
-        findings_count = int(current.get("findings_count") or 0)
-        resolved_count = int(current.get("resolved_count") or 0)
-        ignored_count = int(current.get("ignored_count") or 0)
-        resolved_count += max(0, int(resolved_delta or 0))
-        ignored_count += max(0, int(ignored_delta or 0))
-
-        updated_resume_cursor = self._buildChecksResumeCursor(
-            path_index=int(resume_cursor.get("path_index") or 0),
-            pending_entries=remaining_pending_entries,
-            source_mode=str(resume_cursor.get("source_mode") or "scan"),
-            check_type=str(resume_cursor.get("check_type") or normalized_type),
-            save_only=bool(resume_cursor.get("save_only", current.get("save_only"))),
-            findings_count=findings_count,
-            resolved_count=resolved_count,
-            ignored_count=ignored_count,
-        )
-
-        updated_progress = dict(current)
-        updated_progress.update({
-            "check_type": normalized_type,
-            "findings_count": findings_count,
-            "resolved_count": resolved_count,
-            "ignored_count": ignored_count,
-            "result": None,
-            "resume_cursor": updated_resume_cursor,
-        })
-        self._setChecksProgress(user_key, **updated_progress)
-        return self.getChecksProgress(user_key, normalized_type)
 
     def _getSuggestedNameConflictRename(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not isinstance(item, dict) or str(item.get("review_type") or "").strip().lower() != "name_conflicts":
-            return None
-
-        left_state = str(item.get("left_state") or "").strip().lower()
-        right_state = str(item.get("right_state") or "").strip().lower()
-        left_face = item.get("left_face_target") if isinstance(item.get("left_face_target"), dict) else item.get("left_face")
-        right_face = item.get("right_face_target") if isinstance(item.get("right_face_target"), dict) else item.get("right_face")
-        left_name = str(item.get("left_name") or "").strip()
-        right_name = str(item.get("right_name") or "").strip()
-
-        if right_state == "suggested" and isinstance(left_face, dict) and right_name:
-            return {
-                "face": left_face,
-                "new_name": right_name,
-                "source_name": str(left_face.get("name") or "").strip(),
-            }
-        if left_state == "suggested" and isinstance(right_face, dict) and left_name:
-            return {
-                "face": right_face,
-                "new_name": left_name,
-                "source_name": str(right_face.get("name") or "").strip(),
-            }
-        return None
+        return self.checks_workflow.get_suggested_name_conflict_rename(item)
 
     def _getSuggestedDuplicateFaceDeletion(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not isinstance(item, dict) or str(item.get("review_type") or "").strip().lower() != "duplicate_faces":
-            return None
+        return self.checks_workflow.get_suggested_duplicate_face_deletion(item)
 
-        left_state = str(item.get("left_state") or "").strip().lower()
-        right_state = str(item.get("right_state") or "").strip().lower()
-        left_face = item.get("left_face_target") if isinstance(item.get("left_face_target"), dict) else item.get("left_face")
-        right_face = item.get("right_face_target") if isinstance(item.get("right_face_target"), dict) else item.get("right_face")
-
-        if left_state == "suggested" and right_state != "suggested" and isinstance(right_face, dict):
-            return {
-                "face": right_face,
-                "kept_side": "left",
-                "removed_side": "right",
-            }
-        if right_state == "suggested" and left_state != "suggested" and isinstance(left_face, dict):
-            return {
-                "face": left_face,
-                "kept_side": "right",
-                "removed_side": "left",
-            }
-        return None
-
-    @staticmethod
-    def _storedChecksFaceFromEntry(face: Any) -> Dict[str, Any]:
-        if isinstance(face, MetadataFace):
-            face = face.to_dict()
-        if not isinstance(face, dict):
-            return {}
-        return dict(face)
+    def _storedChecksFaceFromEntry(self, face: Any) -> Dict[str, Any]:
+        return self.checks_workflow.stored_checks_face_from_entry(face)
 
     def _buildStoredChecksReviewItemFromEntry(self, entry: Any) -> Optional[Dict[str, Any]]:
-        if not isinstance(entry, dict):
-            return None
-        review_type = str(entry.get("review_type") or "").strip().lower()
-        image_path = str(entry.get("image_path") or "").strip()
-        if not review_type or not image_path:
-            return None
-
-        if review_type in {"name_conflicts", "duplicate_faces", "position_deviations"}:
-            left_face = self._storedChecksFaceFromEntry(
-                entry.get("left_face_target")
-                or entry.get("left_face_signature")
-                or entry.get("left_face")
-            )
-            right_face = self._storedChecksFaceFromEntry(
-                entry.get("right_face_target")
-                or entry.get("right_face_signature")
-                or entry.get("right_face")
-            )
-            if not left_face or not right_face:
-                return None
-
-            left_name = str(entry.get("left_name") or left_face.get("name") or entry.get("face_name") or "").strip()
-            right_name = str(entry.get("right_name") or right_face.get("name") or entry.get("face_name") or "").strip()
-
-            item = dict(entry)
-            item.update({
-                "review_type": review_type,
-                "image_path": image_path,
-                "left_name": left_name,
-                "right_name": right_name,
-                "left_format": str(left_face.get("source_format") or entry.get("left_format") or "").strip(),
-                "right_format": str(right_face.get("source_format") or entry.get("right_format") or "").strip(),
-                "left_source": str(left_face.get("source") or entry.get("left_source") or "").strip(),
-                "right_source": str(right_face.get("source") or entry.get("right_source") or "").strip(),
-                "left_face": to_display_face(left_face),
-                "right_face": to_display_face(right_face),
-                "left_face_target": left_face,
-                "right_face_target": right_face,
-                "left_face_signature": left_face,
-                "right_face_signature": right_face,
-                "left_state": str(entry.get("left_state") or "alert").strip() or "alert",
-                "right_state": str(entry.get("right_state") or "alert").strip() or "alert",
-                "left_alert_faces": list(entry.get("left_alert_faces") or []),
-                "left_reference_faces": list(entry.get("left_reference_faces") or []),
-                "right_alert_faces": list(entry.get("right_alert_faces") or []),
-                "right_reference_faces": list(entry.get("right_reference_faces") or []),
-                "from_stored_finding": True,
-            })
-            return item
-
-        if review_type == "dimension_issues":
-            item = dict(entry)
-            item.setdefault("review_type", review_type)
-            item.setdefault("image_path", image_path)
-            item["from_stored_finding"] = True
-            return item
-
-        return None
+        return self.checks_workflow.build_stored_checks_review_item_from_entry(entry)
 
     def _resolveChecksReviewEntry(self, *, entry: Dict[str, Any], **kwargs) -> Dict[str, Any]:
-        resolved = self._resolveChecksReviewEntryCore(entry=entry, **kwargs)
-        if not isinstance(resolved, dict):
-            return resolved
+        return self.checks_workflow.resolve_checks_review_entry(entry=entry, **kwargs)
 
-        if (
-            resolved.get("entry") is None
-            and resolved.get("item") is None
-            and int(resolved.get("auto_applied_count") or 0) == 0
-            and not resolved.get("stop_requested")
-        ):
-            stored_item = self._buildStoredChecksReviewItemFromEntry(entry)
-            if stored_item is not None:
-                next_resolved = dict(resolved)
-                next_resolved["entry"] = entry
-                next_resolved["item"] = stored_item
-                next_resolved["stale"] = False
-                next_resolved["from_stored_finding"] = True
-                return next_resolved
-
-        return resolved
-
-    def _resolveChecksReviewEntryCore(
-        self,
-        *,
-        entry: Dict[str, Any],
-        auto_apply_suggested_names: bool = False,
-        auto_apply_suggested_duplicates: bool = False,
-        include_item: bool = True,
-        user_key: Optional[str] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        base_url: str = "",
-        shared_folder: str = "",
-        max_auto_apply_actions: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        normalized_entry = dict(entry or {})
-        auto_applied_count = 0
-        seen_entry_tokens = set()
-        try:
-            auto_apply_limit = int(max_auto_apply_actions) if max_auto_apply_actions is not None else self.CHECKS_AUTO_APPLY_MAX_ACTIONS_PER_CALL
-        except (TypeError, ValueError):
-            auto_apply_limit = self.CHECKS_AUTO_APPLY_MAX_ACTIONS_PER_CALL
-        auto_apply_limit = max(1, auto_apply_limit)
-
-        def auto_apply_limit_reached() -> bool:
-            return auto_apply_limit > 0 and auto_applied_count >= auto_apply_limit
-
-        def stop_requested() -> bool:
-            review_type = str(normalized_entry.get("review_type") or "").strip().lower()
-            return self._shouldStopChecks(str(user_key or ""), review_type)
-
-        def stopped_result() -> Dict[str, Any]:
-            return {
-                "entry": None,
-                "item": None,
-                "auto_applied_count": auto_applied_count,
-                "processed_entry_tokens": list(seen_entry_tokens),
-                "stop_requested": True,
-                "finished": True,
-            }
-
-        while True:
-            if stop_requested():
-                return stopped_result()
-            if not include_item and not auto_apply_suggested_names and not auto_apply_suggested_duplicates:
-                return {
-                    "entry": normalized_entry,
-                    "item": None,
-                    "auto_applied_count": auto_applied_count,
-                    "finished": True,
-                }
-            item = self.getChecksReviewItem(
-                entry=normalized_entry,
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                shared_folder=shared_folder,
-            )
-            if not item:
-                return {
-                    "entry": None,
-                    "item": None,
-                    "auto_applied_count": auto_applied_count,
-                    "processed_entry_tokens": list(seen_entry_tokens),
-                    "finished": True,
-                }
-
-            action = (
-                self._getSuggestedNameConflictRename(item)
-                if auto_apply_suggested_names
-                else None
-            )
-            delete_action = (
-                self._getSuggestedDuplicateFaceDeletion(item)
-                if auto_apply_suggested_duplicates
-                else None
-            )
-            if not action:
-                if not delete_action:
-                    return {
-                        "entry": normalized_entry,
-                        "item": item,
-                        "auto_applied_count": auto_applied_count,
-                        "processed_entry_tokens": list(seen_entry_tokens),
-                        "finished": True,
-                    }
-            if delete_action:
-                current_entry_token = self._checksEntryToken(normalized_entry)
-                if current_entry_token:
-                    seen_entry_tokens.add(current_entry_token)
-                result = self.deleteMetadataFace(
-                    image_path=str(item.get("image_path") or ""),
-                    face_data=delete_action["face"],
-                )
-                if not result.get("deleted"):
-                    return {
-                        "entry": normalized_entry,
-                        "item": item,
-                        "auto_applied_count": auto_applied_count,
-                        "auto_apply_warning": str(result.get("warning") or ""),
-                        "finished": True,
-                    }
-                auto_applied_count += 1
-                if auto_apply_limit_reached():
-                    return {
-                        "entry": None,
-                        "item": None,
-                        "auto_applied_count": auto_applied_count,
-                        "processed_entry_tokens": list(seen_entry_tokens),
-                        "auto_apply_limit_reached": True,
-                        "finished": True,
-                    }
-                if stop_requested():
-                    return stopped_result()
-                if (
-                    self._isChecksFacePairType(item.get("review_type"))
-                    and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
-                ):
-                    return {
-                        "entry": None,
-                        "item": None,
-                        "auto_applied_count": auto_applied_count,
-                        "processed_entry_tokens": list(seen_entry_tokens),
-                    }
-                next_entry = next(
-                    (
-                        candidate
-                        for candidate in self._buildCheckEntriesForType(
-                            image_path=str(item.get("image_path") or ""),
-                            review_type=str(item.get("review_type") or ""),
-                            user_key=user_key,
-                            cookies=cookies,
-                            base_url=base_url,
-                            shared_folder=shared_folder,
-                        )
-                        if self._checksEntryToken(candidate) not in seen_entry_tokens
-                    ),
-                    None,
-                )
-                if not next_entry:
-                    return {
-                        "entry": None,
-                        "item": None,
-                        "auto_applied_count": auto_applied_count,
-                        "processed_entry_tokens": list(seen_entry_tokens),
-                    }
-                normalized_entry = next_entry
-                continue
-            if not action:
-                return {
-                    "entry": normalized_entry,
-                    "item": item,
-                    "auto_applied_count": auto_applied_count,
-                }
-
-            result = self.replaceChecksFaceName(
-                user_key=str(user_key or ""),
-                cookies=dict(cookies or {}),
-                base_url=base_url,
-                image_path=str(item.get("image_path") or ""),
-                face_data=action["face"],
-                new_name=str(action["new_name"] or ""),
-            )
-            current_entry_token = self._checksEntryToken(normalized_entry)
-            if current_entry_token:
-                seen_entry_tokens.add(current_entry_token)
-            if not result.get("updated"):
-                return {
-                    "entry": normalized_entry,
-                    "item": item,
-                    "auto_applied_count": auto_applied_count,
-                    "auto_apply_warning": str(result.get("warning") or ""),
-                    "finished": True,
-                }
-
-            auto_applied_count += 1
-            if auto_apply_limit_reached():
-                return {
-                    "entry": None,
-                    "item": None,
-                    "auto_applied_count": auto_applied_count,
-                    "processed_entry_tokens": list(seen_entry_tokens),
-                    "auto_apply_limit_reached": True,
-                }
-            if stop_requested():
-                return stopped_result()
-            if str(item.get("review_type") or "").strip().lower() == "name_conflicts":
-                return {
-                    "entry": None,
-                    "item": None,
-                    "auto_applied_count": auto_applied_count,
-                    "processed_entry_tokens": list(seen_entry_tokens),
-                    "finished": True,
-                }
-            if (
-                self._isChecksFacePairType(item.get("review_type"))
-                and str(item.get("review_type") or "").strip().lower() != "name_conflicts"
-            ):
-                return {
-                    "entry": None,
-                    "item": None,
-                    "auto_applied_count": auto_applied_count,
-                    "processed_entry_tokens": list(seen_entry_tokens),
-                }
-            next_entry = next(
-                (
-                    candidate
-                    for candidate in self._buildCheckEntriesForType(
-                        image_path=str(item.get("image_path") or ""),
-                        review_type=str(item.get("review_type") or ""),
-                        user_key=user_key,
-                        cookies=cookies,
-                        base_url=base_url,
-                        shared_folder=shared_folder,
-                    )
-                    if self._checksEntryToken(candidate) not in seen_entry_tokens
-                ),
-                None,
-            )
-            if not next_entry:
-                return {
-                    "entry": None,
-                    "item": None,
-                    "auto_applied_count": auto_applied_count,
-                    "processed_entry_tokens": list(seen_entry_tokens),
-                }
-            normalized_entry = next_entry
+    def _resolveChecksReviewEntryCore(self, *, entry: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        return self.checks_workflow.resolve_checks_review_entry_core(entry=entry, **kwargs)
 
     def _runFaceMatching(
         self,
@@ -3424,146 +2824,19 @@ class ImgDataService:
         save_only: bool,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> None:
-        started = monotonic()
-        self._debugLog(
-            "face_matching_worker_start",
+        self.face_match_workflow._run_face_matching(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
             action=action,
-            auto=auto,
-            save_only=save_only,
             limit=limit,
             offset=offset,
-            skip_face_ids_count=len(skip_face_ids or []),
-            skip_targets_count=len(skip_targets or []),
-            resume=bool(resume_cursor),
+            skip_face_ids=skip_face_ids,
+            skip_targets=skip_targets,
+            auto=auto,
+            save_only=save_only,
+            resume_cursor=resume_cursor,
         )
-        try:
-            self.session_manager.keepalive(user_key, base_url=base_url)
-            if action == "search_file_face_in_sources":
-                result = self.searchFileFaceInSources(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    skip_targets=skip_targets,
-                    auto=auto,
-                    save_only=save_only,
-                    resume_cursor=resume_cursor,
-                )
-            elif action == "mark_missing_photos_faces":
-                result = self.searchMissingPhotosFaces(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    skip_targets=skip_targets,
-                    auto=auto,
-                    save_only=save_only,
-                    resume_cursor=resume_cursor,
-                )
-            elif action == "search_missing_faces_insightface":
-                result = self.searchMissingPhotosFacesWithInsightFace(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    skip_targets=skip_targets,
-                    auto=auto,
-                    save_only=save_only,
-                    resume_cursor=resume_cursor,
-                )
-            else:
-                result = self.searchPhotoFaceInFile(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    limit=limit,
-                    offset=offset,
-                    skip_face_ids=skip_face_ids,
-                    auto=auto,
-                    save_only=save_only,
-                    resume_cursor=resume_cursor,
-                )
-            progress_updates: Dict[str, Any] = {
-                "result": result,
-                "running": False,
-                "finished": True,
-                "stop_requested": False,
-                "action": action,
-                "auto": auto,
-                "save_only": save_only,
-            }
-            if isinstance(result, dict):
-                for field in ("findings_count", "transferred_count"):
-                    if field in result:
-                        progress_updates[field] = result.get(field)
-            self._setFaceMatchingProgress(user_key, **progress_updates)
-            self._debugLog(
-                "face_matching_worker_finished",
-                action=action,
-                auto=auto,
-                save_only=save_only,
-                duration_ms=round((monotonic() - started) * 1000, 2),
-                findings_count=progress_updates.get("findings_count"),
-                transferred_count=progress_updates.get("transferred_count"),
-            )
-        except (SessionBootstrapRequired, SessionManagerError) as exc:
-            current_progress = self.getFaceMatchingProgress(user_key)
-            self._writePersistedFaceMatchFindingsStatus(
-                action=action,
-                status="failed",
-                auto=auto,
-                save_only=save_only,
-                transferred_count=int(current_progress.get("transferred_count") or 0),
-            )
-            self._setFaceMatchingSessionExceptionProgress(
-                user_key,
-                exc,
-                action=action,
-                auto=auto,
-                save_only=save_only,
-                resume_cursor=resume_cursor,
-                skip_face_ids=skip_face_ids,
-                skip_targets=skip_targets,
-            )
-            self._debugLog(
-                "face_matching_worker_session_exception",
-                action=action,
-                duration_ms=round((monotonic() - started) * 1000, 2),
-                error_type=type(exc).__name__,
-                error=str(exc),
-            )
-        except Exception as exc:
-            current_progress = self.getFaceMatchingProgress(user_key)
-            self._writePersistedFaceMatchFindingsStatus(
-                action=action,
-                status="failed",
-                auto=auto,
-                save_only=save_only,
-                transferred_count=int(current_progress.get("transferred_count") or 0),
-            )
-            error_message = self._formatExceptionForProgress(exc)
-            error_traceback = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-4000:]
-            self._setFaceMatchingProgressMessage(
-                user_key,
-                "face_match:progress_failed",
-                message="Face matching failed.",
-                running=False,
-                finished=True,
-                paused=False,
-                auth_required=False,
-                error=error_message,
-                error_traceback=error_traceback,
-                action=action,
-                auto=auto,
-                save_only=save_only,
-            )
-            self._debugLog(
-                "face_matching_worker_exception",
-                action=action,
-                duration_ms=round((monotonic() - started) * 1000, 2),
-                error_type=type(exc).__name__,
-                error=error_message,
-                traceback=error_traceback,
-            )
-        finally:
-            self.runtime_state.values("face_match_threads").pop(user_key, None)
 
     @staticmethod
     def _timestamp_now() -> str:
@@ -3634,8 +2907,7 @@ class ImgDataService:
         return self._enrichFileAnalysisProgressWithFindings(self._normalizeFileAnalysisProgress(latest))
 
     def getFaceMatchFindings(self) -> Dict[str, Any]:
-        findings = self.file_analysis.readCheckFindings("face_match")
-        return findings if isinstance(findings, dict) else {}
+        return self.face_match_workflow.get_findings()
 
     def _resumeFaceMatchSavedEntries(
         self,
@@ -3644,27 +2916,11 @@ class ImgDataService:
         save_only: bool,
         resume_cursor: Optional[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        if not save_only or not isinstance(resume_cursor, dict):
-            return []
-        findings = self.getFaceMatchFindings()
-        if str(findings.get("action") or "").strip().lower() != str(action or "").strip().lower():
-            return []
-        if not bool(findings.get("save_only")):
-            return []
-        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        normalized_entries: List[Dict[str, Any]] = []
-        seen_tokens = set()
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            normalized_entry = self._normalizeFaceMatchEntry(entry)
-            token = self._faceMatchFindingEntryToken(normalized_entry)
-            if token and token in seen_tokens:
-                continue
-            if token:
-                seen_tokens.add(token)
-            normalized_entries.append(normalized_entry)
-        return normalized_entries
+        return self.face_match_workflow.resume_saved_entries(
+            action=action,
+            save_only=save_only,
+            resume_cursor=resume_cursor,
+        )
 
     def _faceMatchFindingEntryToken(self, entry: Any) -> str:
         if not isinstance(entry, dict):
@@ -3690,12 +2946,7 @@ class ImgDataService:
         entries: List[Dict[str, Any]],
         entry: Dict[str, Any],
     ) -> bool:
-        normalized_entry = self._normalizeFaceMatchEntry(entry)
-        token = self._faceMatchFindingEntryToken(normalized_entry)
-        if token and any(self._faceMatchFindingEntryToken(existing) == token for existing in entries):
-            return False
-        entries.append(normalized_entry)
-        return True
+        return self.face_match_workflow.append_unique_finding(entries, entry)
 
     def _faceMatchSavedEntryFaceIds(self, entries: List[Dict[str, Any]]) -> List[int]:
         face_ids: List[int] = []
@@ -3721,20 +2972,12 @@ class ImgDataService:
         save_only: bool,
         transferred_count: int,
     ) -> None:
-        if not save_only:
-            return
-        findings = self.getFaceMatchFindings()
-        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        self._writeFaceMatchFindings(
-            status=status,
-            shared_folder=str(findings.get("shared_folder") or ""),
+        self.face_match_workflow.write_persisted_findings_status(
             action=action,
+            status=status,
             auto=auto,
-            save_only=True,
+            save_only=save_only,
             transferred_count=transferred_count,
-            entries=[entry for entry in entries if isinstance(entry, dict)],
-            job_id=str(findings.get("job_id") or ""),
-            started_at=str(findings.get("started_at") or ""),
         )
 
     def _faceMatchSavedEntryTargetTokens(self, entries: List[Dict[str, Any]]) -> List[str]:
@@ -3842,25 +3085,17 @@ class ImgDataService:
         started_at: Optional[str] = None,
         finished: bool = True,
     ) -> None:
-        timestamp = self._timestamp_now()
-        effective_job_id = str(job_id or timestamp)
-        effective_started_at = str(started_at or timestamp)
-        self.file_analysis.writeCheckFindings(
-            "face_match",
-            {
-                "job_id": effective_job_id,
-                "started_at": effective_started_at,
-                "finished_at": timestamp if finished else "",
-                "last_updated_at": timestamp,
-                "status": status,
-                "shared_folder": shared_folder,
-                "action": action,
-                "auto": auto,
-                "save_only": save_only,
-                "transferred_count": transferred_count,
-                "count": len(entries),
-                "entries": entries,
-            }
+        self.face_match_workflow.write_findings(
+            status=status,
+            shared_folder=shared_folder,
+            action=action,
+            auto=auto,
+            save_only=save_only,
+            transferred_count=transferred_count,
+            entries=entries,
+            job_id=job_id,
+            started_at=started_at,
+            finished=finished,
         )
 
     def _shouldFlushFaceMatchFindings(
@@ -3870,13 +3105,11 @@ class ImgDataService:
         last_flush_count: int,
         last_flush_at: float,
     ) -> bool:
-        debouncer = WriteDebouncer(
-            self.FACE_MATCH_FINDINGS_FLUSH_INTERVAL_SECONDS,
-            self.FACE_MATCH_FINDINGS_FLUSH_ENTRY_INTERVAL,
+        return self.face_match_workflow.should_flush_findings(
+            entries_count=entries_count,
+            last_flush_count=last_flush_count,
+            last_flush_at=last_flush_at,
         )
-        debouncer._last_entry_count = max(0, int(last_flush_count or 0))
-        debouncer._last_flush_at = max(0.0, float(last_flush_at or 0.0))
-        return debouncer.should_flush(entry_count=entries_count)
 
     def _writeReverseFaceMatchCandidates(
         self,
@@ -4198,31 +3431,10 @@ class ImgDataService:
         entries: List[Dict[str, Any]],
         transferred_count: int,
     ) -> None:
-        if not entries:
-            self.file_analysis.deleteCheckFindings("face_match")
-            return
-
-        timestamp = self._timestamp_now()
-        self.file_analysis.writeCheckFindings(
-            "face_match",
-            {
-                "job_id": str(findings.get("job_id") or timestamp),
-                "started_at": str(findings.get("started_at") or timestamp),
-                "finished_at": str(findings.get("finished_at") or timestamp),
-                "last_updated_at": timestamp,
-                "status": str(findings.get("status") or "finished"),
-                "shared_folder": str(findings.get("shared_folder") or ""),
-                "action": str(findings.get("action") or "search_photo_face_in_file"),
-                "auto": bool(findings.get("auto")),
-                "save_only": bool(findings.get("save_only")),
-                "transferred_count": int(transferred_count),
-                "count": len(entries),
-                "entries": [
-                    self._compactFaceMatchFindingEntryForStorage(entry)
-                    for entry in entries
-                    if isinstance(entry, dict)
-                ],
-            },
+        self.face_match_workflow.persist_findings_entries(
+            findings=findings,
+            entries=entries,
+            transferred_count=transferred_count,
         )
 
     def _fileFaceMatchSourceScope(self) -> str:
@@ -4560,12 +3772,58 @@ class ImgDataService:
             return False
 
         if image_id not in image_faces_cache:
-            image_faces_cache[image_id] = self.photos.list_faceFotoTeamItems(
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                id_item=image_id,
-            )
+            try:
+                image_faces_cache[image_id] = self.photos.list_faceFotoTeamItems(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    id_item=image_id,
+                )
+            except SessionManagerError:
+                image_path = str(entry.get("image_path") or "").strip()
+                shared_folder = self.core.getSharedFolder(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    folder_name="photo",
+                )
+                refreshed_item = self.photos.findFotoTeamItemByPath(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder or "",
+                    image_path=image_path,
+                    additional=["thumbnail"],
+                    lookup_cache=None,
+                ) if shared_folder and image_path else None
+                try:
+                    refreshed_image_id = int(refreshed_item.get("id")) if isinstance(refreshed_item, dict) else None
+                except (TypeError, ValueError):
+                    refreshed_image_id = None
+                if refreshed_image_id is None or refreshed_image_id == image_id:
+                    raise
+                self._debugLog(
+                    "face_match_findings_item_remapped",
+                    action=action,
+                    image_path=image_path,
+                    previous_item_id=image_id,
+                    refreshed_item_id=refreshed_image_id,
+                    face_id=face_id,
+                )
+                image_id = refreshed_image_id
+                entry["image"] = {
+                    **image,
+                    **refreshed_item,
+                }
+                image_faces_cache[image_id] = self.photos.list_faceFotoTeamItems(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    id_item=image_id,
+                )
+
+        face["item_id"] = image_id
+        entry["face"] = face
 
         for image_face in image_faces_cache[image_id]:
             try:
@@ -4805,20 +4063,7 @@ class ImgDataService:
         entries: List[Dict[str, Any]],
         excluded_tokens: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        normalized_tokens = {
-            str(token or "").strip()
-            for token in (excluded_tokens or [])
-            if str(token or "").strip()
-        }
-        filtered_entries: List[Dict[str, Any]] = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            entry_token = self._checksEntryToken(entry)
-            if entry_token and entry_token in normalized_tokens:
-                continue
-            filtered_entries.append(entry)
-        return filtered_entries
+        return self.checks_workflow.exclude_checks_entries_by_tokens(entries, excluded_tokens)
 
     def _rebuildChecksEntriesForImageAfterMutation(
         self,
@@ -4831,15 +4076,15 @@ class ImgDataService:
         shared_folder: str = "",
         excluded_tokens: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        rebuilt_entries = self._buildCheckEntriesForType(
+        return self.checks_workflow.rebuild_checks_entries_for_image_after_mutation(
             image_path=image_path,
             review_type=review_type,
             user_key=user_key,
             cookies=cookies,
             base_url=base_url,
             shared_folder=shared_folder,
+            excluded_tokens=excluded_tokens,
         )
-        return self._excludeChecksEntriesByTokens(rebuilt_entries, excluded_tokens)
 
     def _buildCheckEntry(
         self,
@@ -5597,625 +4842,15 @@ class ImgDataService:
         auto_apply_suggested_duplicates: bool = False,
         changed_since_days: int = 0,
     ) -> Dict[str, Any]:
-        last_keepalive_at = monotonic()
-        shared_folder = self.core.getSharedFolder(
+        return self.checks_workflow.search_next_item(
             user_key=user_key,
             cookies=cookies,
             base_url=base_url,
-            folder_name="photo",
-        )
-        if not shared_folder:
-            return self._buildChecksScanPayload(
-                check_type=check_type,
-                save_only=save_only,
-                files_scanned=0,
-                total_files=0,
-                findings_count=0,
-                path_index=0,
-                pending_entries=[],
-                message_key="checks:progress_shared_folder_missing",
-                message="Shared folder could not be resolved.",
-                changed_since_days=changed_since_days,
-            )
-
-        if isinstance(resume_cursor, dict):
-            changed_since_days = max(0, int(resume_cursor.get("changed_since_days", changed_since_days) or 0))
-        path_index = int(resume_cursor.get("path_index") or 0) if isinstance(resume_cursor, dict) else 0
-        pending_entries = resume_cursor.get("pending_entries") if isinstance(resume_cursor, dict) and isinstance(resume_cursor.get("pending_entries"), list) else []
-        metrics_trusted = bool(resume_cursor.get("metrics_trusted")) if isinstance(resume_cursor, dict) else False
-        findings_count = int(resume_cursor.get("findings_count") or 0) if metrics_trusted and isinstance(resume_cursor, dict) else 0
-        resolved_count = int(resume_cursor.get("resolved_count") or 0) if metrics_trusted and isinstance(resume_cursor, dict) else 0
-        ignored_count = int(resume_cursor.get("ignored_count") or 0) if metrics_trusted and isinstance(resume_cursor, dict) else 0
-        if not save_only and not metrics_trusted:
-            findings_count = self._countOpenChecksScanFindings(None, pending_entries)
-        saved_entries = self._resumeChecksSavedEntries(
             check_type=check_type,
             save_only=save_only,
             resume_cursor=resume_cursor,
-        )
-        if save_only:
-            findings_count = len(saved_entries)
-        checks_findings_debouncer = WriteDebouncer(
-            self.CHECKS_FINDINGS_FLUSH_INTERVAL_SECONDS,
-            self.CHECKS_FINDINGS_FLUSH_ENTRY_INTERVAL,
-        )
-        scan_context = ScanContext(self.config.readMergedConfig())
-
-        def flush_saved_checks_findings(*, force: bool = False, status: str = "running", reason: str = "") -> bool:
-            if not save_only:
-                return False
-            if not saved_entries and not force:
-                return False
-
-            if not checks_findings_debouncer.should_flush(force=force, entry_count=len(saved_entries)):
-                return False
-
-            self._writeChecksFindings(
-                check_type=check_type,
-                status=status,
-                shared_folder=shared_folder,
-                source_mode="scan",
-                save_only=True,
-                entries=saved_entries,
-            )
-            checks_findings_debouncer.mark_flushed(len(saved_entries))
-            progress_key = self._checksStateKey(user_key, check_type)
-            self._updateChecksProgressHeartbeat(flush=True)
-            with self.runtime_state.lock("checks_progress"):
-                progress = self.runtime_state.memory("checks_progress").get(progress_key)
-                if not isinstance(progress, dict):
-                    progress = self.runtime_state.read_persisted("checks_progress", progress_key)
-                if not isinstance(progress, dict):
-                    progress = {}
-                progress = dict(progress)
-                progress["check_type"] = check_type
-                progress["source_mode"] = "scan"
-                progress["save_only"] = True
-                progress["changed_since_days"] = max(0, int(changed_since_days or 0))
-                progress["running"] = status not in {"finished", "stopped", "failed"}
-                progress["finished"] = status in {"finished", "stopped", "failed"}
-                progress["last_progress_at"] = self._utcNowIso()
-                progress["heartbeat_at"] = progress["last_progress_at"]
-                progress["last_flush_at"] = progress["last_progress_at"]
-                progress["last_flush_count"] = len(saved_entries)
-                progress["findings_count"] = len(saved_entries)
-                progress["message_params"] = {
-                    **(progress.get("message_params") if isinstance(progress.get("message_params"), dict) else {}),
-                    "count": len(saved_entries),
-                    "findings": len(saved_entries),
-                }
-                progress["last_flush_reason"] = str(reason or "save_only_findings_flush")
-                self.runtime_state.memory("checks_progress")[progress_key] = progress
-                self.runtime_state.persist("checks_progress", progress_key, dict(progress))
-            return True
-
-        candidate_paths = self._getChecksCandidatePaths(
-            user_key=user_key,
-            check_type=check_type,
-            shared_folder=shared_folder,
-            changed_since_days=changed_since_days,
-            use_cache=True,
-        )
-        total_files = len(candidate_paths)
-        self._setChecksProgressMessage(
-            user_key,
-            check_type,
-            "checks:progress_scanning",
-            message_params={"current": max(0, path_index), "total": total_files, "findings": findings_count},
-            running=True,
-            finished=False,
-            stop_requested=False,
-            source_mode="scan",
-            save_only=save_only,
-            changed_since_days=changed_since_days,
-            files_scanned=max(0, path_index),
-            total_files=total_files,
-            findings_count=findings_count,
-            resolved_count=resolved_count,
-            ignored_count=ignored_count,
-            current_path="",
-            resume_cursor=self._buildChecksResumeCursor(
-                path_index=path_index,
-                pending_entries=pending_entries,
-                source_mode="scan",
-                check_type=check_type,
-                save_only=save_only,
-                findings_count=findings_count,
-                resolved_count=resolved_count,
-                ignored_count=ignored_count,
-                changed_since_days=changed_since_days,
-            ),
-        )
-
-        if pending_entries and not save_only:
-            entry = pending_entries[0]
-            remaining_entries = pending_entries[1:]
-            manual_review_required = bool(entry.get("_manual_review_required")) if isinstance(entry, dict) else False
-            resolved = self._resolveChecksReviewEntry(
-                entry=entry,
-                auto_apply_suggested_names=auto_apply_suggested_names and not manual_review_required,
-                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates and not manual_review_required,
-                include_item=auto_apply_suggested_names or auto_apply_suggested_duplicates,
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                shared_folder=shared_folder,
-            )
-            if resolved.get("stop_requested"):
-                flush_saved_checks_findings(force=True, status="stopped", reason="stop_requested")
-                return self._buildChecksScanPayload(
-                    check_type=check_type,
-                    save_only=save_only,
-                    files_scanned=min(path_index, total_files),
-                    total_files=total_files,
-                    findings_count=findings_count,
-                    resolved_count=resolved_count + int(resolved.get("auto_applied_count") or 0),
-                    ignored_count=ignored_count,
-                    path_index=path_index,
-                    pending_entries=[entry] + remaining_entries if entry else remaining_entries,
-                    current_path=str((entry or {}).get("image_path") or ""),
-                    message_key="checks:progress_stopped",
-                    message="Checks scan stopped.",
-                    message_params={"count": findings_count},
-                    changed_since_days=changed_since_days,
-                )
-            entry = resolved.get("entry")
-            item = resolved.get("item")
-            auto_applied_count = int(resolved.get("auto_applied_count") or 0)
-            processed_entry_tokens = [
-                str(token or "").strip()
-                for token in resolved.get("processed_entry_tokens") or []
-                if str(token or "").strip()
-            ]
-            if auto_applied_count:
-                if check_type == "name_conflicts":
-                    resolved_count += auto_applied_count
-                target_entry = entry or pending_entries[0]
-                target_image_path = str(target_entry.get("image_path") or "").strip()
-                if check_type == "name_conflicts":
-                    rebuilt_same_image_entries = self._excludeChecksEntriesByTokens(
-                        [
-                            candidate
-                            for candidate in remaining_entries
-                            if str(candidate.get("image_path") or "").strip() == target_image_path
-                        ],
-                        processed_entry_tokens,
-                    )
-                else:
-                    rebuilt_same_image_entries = self._rebuildChecksEntriesForImageAfterMutation(
-                        image_path=target_image_path,
-                        review_type=str(target_entry.get("review_type") or check_type),
-                        user_key=user_key,
-                        cookies=cookies,
-                        base_url=base_url,
-                        shared_folder=shared_folder,
-                        excluded_tokens=processed_entry_tokens,
-                    )
-                other_remaining_entries = [
-                    candidate
-                    for candidate in remaining_entries
-                    if str(candidate.get("image_path") or "").strip()
-                    != target_image_path
-                ]
-                refreshed_pending_entries = rebuilt_same_image_entries + other_remaining_entries
-                findings_count = self._countOpenChecksScanFindings(
-                    refreshed_pending_entries[0] if refreshed_pending_entries else None,
-                    refreshed_pending_entries[1:] if refreshed_pending_entries else [],
-                )
-                if refreshed_pending_entries:
-                    entry = refreshed_pending_entries[0]
-                    remaining_entries = refreshed_pending_entries[1:]
-                    if check_type == "name_conflicts":
-                        item = None
-                    else:
-                        item = self.getChecksReviewItem(
-                            entry=entry,
-                            user_key=user_key,
-                            cookies=cookies,
-                            base_url=base_url,
-                            shared_folder=shared_folder,
-                        )
-                else:
-                    entry = None
-                    item = None
-                    remaining_entries = []
-            if resolved.get("auto_apply_warning"):
-                return self._buildChecksScanPayload(
-                    check_type=check_type,
-                    save_only=save_only,
-                    files_scanned=min(path_index, total_files),
-                    total_files=total_files,
-                    findings_count=findings_count,
-                    resolved_count=resolved_count,
-                    ignored_count=ignored_count,
-                    path_index=path_index,
-                    pending_entries=remaining_entries,
-                    current_path=str((entry or {}).get("image_path") or ""),
-                    result={"entry": entry, "item": item} if entry and item else None,
-                    message_key=str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
-                    message="Suggested name could not be applied automatically.",
-                    message_params={"count": findings_count},
-                    changed_since_days=changed_since_days,
-                )
-            if not entry:
-                findings_count = self._countOpenChecksScanFindings(None, remaining_entries)
-                pending_entries = remaining_entries
-            else:
-                findings_count = self._countOpenChecksScanFindings(entry, remaining_entries)
-                return self._buildChecksScanPayload(
-                    check_type=check_type,
-                    save_only=save_only,
-                    files_scanned=min(path_index, total_files),
-                    total_files=total_files,
-                    findings_count=findings_count,
-                    resolved_count=resolved_count,
-                    ignored_count=ignored_count,
-                    path_index=path_index,
-                    pending_entries=remaining_entries,
-                    current_path=str(entry.get("image_path") or ""),
-                    result={
-                        "entry": entry,
-                        "item": item,
-                    },
-                    message_key="checks:progress_result_found",
-                    message="Check finding found.",
-                    message_params={"count": findings_count},
-                    changed_since_days=changed_since_days,
-                )
-
-        for index in range(max(0, path_index), total_files):
-            last_keepalive_at = self._refreshSessionIfNeeded(
-                user_key=user_key,
-                base_url=base_url,
-                last_keepalive_at=last_keepalive_at,
-            )
-            if self._shouldStopChecks(user_key, check_type):
-                flush_saved_checks_findings(force=True, status="stopped", reason="stop_requested")
-                return self._buildChecksScanPayload(
-                    check_type=check_type,
-                    save_only=save_only,
-                    files_scanned=index,
-                    total_files=total_files,
-                    findings_count=findings_count,
-                    resolved_count=resolved_count,
-                    ignored_count=ignored_count,
-                    path_index=index,
-                    pending_entries=[],
-                    message_key="checks:progress_stopped",
-                    message="Checks scan stopped.",
-                    message_params={"count": findings_count},
-                    changed_since_days=changed_since_days,
-                )
-            image_path = candidate_paths[index]
-            scanned_count = index + 1
-            self._setChecksProgressMessage(
-                user_key,
-                check_type,
-                "checks:progress_scanning",
-                message_params={"current": scanned_count, "total": total_files, "findings": findings_count},
-                running=True,
-                finished=False,
-                stop_requested=False,
-                source_mode="scan",
-                save_only=save_only,
-                changed_since_days=changed_since_days,
-                files_scanned=scanned_count,
-                total_files=total_files,
-                findings_count=findings_count,
-                resolved_count=resolved_count,
-                ignored_count=ignored_count,
-                current_path=image_path,
-                resume_cursor=self._buildChecksResumeCursor(
-                    path_index=index,
-                    pending_entries=[],
-                    source_mode="scan",
-                    check_type=check_type,
-                    save_only=save_only,
-                    findings_count=findings_count,
-                    resolved_count=resolved_count,
-                    ignored_count=ignored_count,
-                    changed_since_days=changed_since_days,
-                ),
-            )
-            if self._shouldSkipRawFaceCheckWithoutSidecar(image_path, check_type, scan_context):
-                continue
-
-            jpeg_context_override = None
-            if self._shouldProbeJpegFaceCheckWithoutSidecar(image_path, check_type, scan_context):
-                jpeg_context_override = self.files.readJpegContext(image_path)
-                if not jpeg_context_override.get("xmp_content"):
-                    continue
-
-            analysis = self.files.analyzeMetadata(
-                self._readImageMetadata(
-                    image_path,
-                    scan_context=scan_context,
-                    jpeg_context_override=jpeg_context_override,
-                )
-            )
-            entries = self._buildCheckEntriesForType(
-                image_path=image_path,
-                review_type=check_type,
-                analysis=analysis,
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                shared_folder=shared_folder,
-            )
-            if not entries:
-                continue
-
-            findings_count = self._countOpenChecksScanFindings(entries[0], entries[1:])
-            if save_only:
-                entry = entries[0]
-                resolved = self._resolveChecksReviewEntry(
-                    entry=entry,
-                    auto_apply_suggested_names=auto_apply_suggested_names,
-                    auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    shared_folder=shared_folder,
-                )
-                if resolved.get("stop_requested"):
-                    flush_saved_checks_findings(force=True, status="stopped", reason="stop_requested")
-                    return self._buildChecksScanPayload(
-                        check_type=check_type,
-                        save_only=save_only,
-                        files_scanned=scanned_count,
-                        total_files=total_files,
-                        findings_count=findings_count,
-                        resolved_count=resolved_count + int(resolved.get("auto_applied_count") or 0),
-                        ignored_count=ignored_count,
-                        path_index=index + 1,
-                        pending_entries=entries,
-                        current_path=image_path,
-                        message_key="checks:progress_stopped",
-                        message="Checks scan stopped.",
-                        message_params={"count": findings_count},
-                        changed_since_days=changed_since_days,
-                    )
-                auto_applied_count = int(resolved.get("auto_applied_count") or 0)
-                processed_entry_tokens = [
-                    str(token or "").strip()
-                    for token in resolved.get("processed_entry_tokens") or []
-                    if str(token or "").strip()
-                ]
-                if auto_applied_count:
-                    if check_type == "name_conflicts":
-                        resolved_count += auto_applied_count
-                if resolved.get("auto_apply_warning"):
-                    self._appendUniqueChecksFindings(saved_entries, entries)
-                    findings_count = len(saved_entries)
-                    flush_saved_checks_findings(force=True, reason="auto_apply_warning")
-                    self._setChecksProgressMessage(
-                        user_key,
-                        check_type,
-                        str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
-                        message="Suggested solution could not be applied automatically. The finding was saved for later review.",
-                        message_params={"count": findings_count},
-                        running=True,
-                        finished=False,
-                        source_mode="scan",
-                        save_only=True,
-                        changed_since_days=changed_since_days,
-                        files_scanned=scanned_count,
-                        total_files=total_files,
-                        findings_count=findings_count,
-                        resolved_count=resolved_count,
-                        ignored_count=ignored_count,
-                        current_path=image_path,
-                        result=None,
-                        resume_cursor=self._buildChecksResumeCursor(
-                            path_index=index + 1,
-                            pending_entries=[],
-                            source_mode="scan",
-                            check_type=check_type,
-                            save_only=True,
-                            findings_count=findings_count,
-                            resolved_count=resolved_count,
-                            ignored_count=ignored_count,
-                            changed_since_days=changed_since_days,
-                        ),
-                    )
-                    continue
-
-                refreshed_entries = entries
-                if auto_applied_count:
-                    if check_type == "name_conflicts":
-                        refreshed_entries = self._excludeChecksEntriesByTokens(entries[1:], processed_entry_tokens)
-                    else:
-                        refreshed_entries = self._buildCheckEntriesForType(
-                            image_path=image_path,
-                            review_type=check_type,
-                            user_key=user_key,
-                            cookies=cookies,
-                            base_url=base_url,
-                            shared_folder=shared_folder,
-                        )
-
-                if refreshed_entries:
-                    self._appendUniqueChecksFindings(saved_entries, refreshed_entries)
-                    findings_count = len(saved_entries)
-                    flush_saved_checks_findings(reason="save_only_result")
-                else:
-                    findings_count = len(saved_entries)
-                self._setChecksProgressMessage(
-                    user_key,
-                    check_type,
-                    "checks:progress_scanning",
-                    message_params={"current": scanned_count, "total": total_files, "findings": findings_count},
-                    running=True,
-                    finished=False,
-                    source_mode="scan",
-                    save_only=True,
-                    changed_since_days=changed_since_days,
-                    files_scanned=scanned_count,
-                    total_files=total_files,
-                    findings_count=findings_count,
-                    resolved_count=resolved_count,
-                    ignored_count=ignored_count,
-                    current_path=image_path,
-                    resume_cursor=self._buildChecksResumeCursor(
-                        path_index=index + 1,
-                        pending_entries=[],
-                        source_mode="scan",
-                        check_type=check_type,
-                        save_only=True,
-                        findings_count=findings_count,
-                        resolved_count=resolved_count,
-                        ignored_count=ignored_count,
-                        changed_since_days=changed_since_days,
-                    ),
-                )
-                continue
-
-            entry = entries[0]
-            item = None
-            remaining_entries = entries[1:]
-            resolved = self._resolveChecksReviewEntry(
-                entry=entry,
-                auto_apply_suggested_names=auto_apply_suggested_names,
-                auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
-                include_item=save_only or auto_apply_suggested_names or auto_apply_suggested_duplicates,
-                user_key=user_key,
-                cookies=cookies,
-                base_url=base_url,
-                shared_folder=shared_folder,
-            )
-            if resolved.get("stop_requested"):
-                flush_saved_checks_findings(force=True, status="stopped", reason="stop_requested")
-                return self._buildChecksScanPayload(
-                    check_type=check_type,
-                    save_only=False,
-                    files_scanned=scanned_count,
-                    total_files=total_files,
-                    findings_count=findings_count,
-                    resolved_count=resolved_count + int(resolved.get("auto_applied_count") or 0),
-                    ignored_count=ignored_count,
-                    path_index=index + 1,
-                    pending_entries=[entry] + remaining_entries if entry else remaining_entries,
-                    current_path=image_path,
-                    message_key="checks:progress_stopped",
-                    message="Checks scan stopped.",
-                    message_params={"count": findings_count},
-                    changed_since_days=changed_since_days,
-                )
-            entry = resolved.get("entry")
-            item = resolved.get("item")
-            auto_applied_count = int(resolved.get("auto_applied_count") or 0)
-            processed_entry_tokens = [
-                str(token or "").strip()
-                for token in resolved.get("processed_entry_tokens") or []
-                if str(token or "").strip()
-            ]
-            if auto_applied_count:
-                if check_type == "name_conflicts":
-                    resolved_count += auto_applied_count
-                if check_type == "name_conflicts":
-                    refreshed_entries = self._excludeChecksEntriesByTokens(remaining_entries, processed_entry_tokens)
-                else:
-                    refreshed_entries = self._rebuildChecksEntriesForImageAfterMutation(
-                        image_path=image_path,
-                        review_type=check_type,
-                        user_key=user_key,
-                        cookies=cookies,
-                        base_url=base_url,
-                        shared_folder=shared_folder,
-                        excluded_tokens=processed_entry_tokens,
-                    )
-                findings_count = self._countOpenChecksScanFindings(
-                    refreshed_entries[0] if refreshed_entries else None,
-                    refreshed_entries[1:] if refreshed_entries else [],
-                )
-                if not refreshed_entries:
-                    continue
-                entry = refreshed_entries[0]
-                remaining_entries = refreshed_entries[1:]
-                if check_type == "name_conflicts":
-                    item = None
-                else:
-                    item = self.getChecksReviewItem(
-                        entry=entry,
-                        user_key=user_key,
-                        cookies=cookies,
-                        base_url=base_url,
-                        shared_folder=shared_folder,
-                    )
-            if resolved.get("auto_apply_warning"):
-                return self._buildChecksScanPayload(
-                    check_type=check_type,
-                    save_only=False,
-                    files_scanned=scanned_count,
-                    total_files=total_files,
-                    findings_count=findings_count,
-                    resolved_count=resolved_count,
-                    ignored_count=ignored_count,
-                    path_index=index + 1,
-                    pending_entries=remaining_entries,
-                    current_path=image_path,
-                    result={"entry": entry, "item": item} if entry and item else None,
-                    message_key=str(resolved.get("auto_apply_warning") or "checks:progress_result_found"),
-                    message="Suggested name could not be applied automatically.",
-                    message_params={"count": findings_count},
-                    changed_since_days=changed_since_days,
-                )
-            if not entry:
-                findings_count = 0
-                continue
-            findings_count = self._countOpenChecksScanFindings(entry, remaining_entries)
-            return self._buildChecksScanPayload(
-                check_type=check_type,
-                save_only=False,
-                files_scanned=scanned_count,
-                total_files=total_files,
-                findings_count=findings_count,
-                resolved_count=resolved_count,
-                ignored_count=ignored_count,
-                path_index=index + 1,
-                pending_entries=remaining_entries,
-                current_path=image_path,
-                result={
-                    "entry": entry,
-                    "item": item,
-                },
-                message_key="checks:progress_result_found",
-                message="Check finding found.",
-                message_params={"count": findings_count},
-                changed_since_days=changed_since_days,
-            )
-
-        if save_only:
-            flush_saved_checks_findings(force=True, status="finished", reason="final")
-            return self._buildChecksScanPayload(
-                check_type=check_type,
-                save_only=True,
-                files_scanned=total_files,
-                total_files=total_files,
-                findings_count=len(saved_entries),
-                resolved_count=resolved_count,
-                ignored_count=ignored_count,
-                path_index=total_files,
-                pending_entries=[],
-                message_key="checks:progress_findings_saved" if saved_entries else "checks:progress_findings_empty",
-                message="Checks findings saved." if saved_entries else "No checks findings were saved.",
-                message_params={"count": len(saved_entries)},
-                changed_since_days=changed_since_days,
-            )
-
-        return self._buildChecksScanPayload(
-            check_type=check_type,
-            save_only=False,
-            files_scanned=total_files,
-            total_files=total_files,
-            findings_count=findings_count,
-            resolved_count=resolved_count,
-            ignored_count=ignored_count,
-            path_index=total_files,
-            pending_entries=[],
-            message_key="checks:progress_finished_no_match",
-            message="No further checks findings found.",
-            message_params={"count": findings_count},
+            auto_apply_suggested_names=auto_apply_suggested_names,
+            auto_apply_suggested_duplicates=auto_apply_suggested_duplicates,
             changed_since_days=changed_since_days,
         )
 
@@ -7322,158 +5957,20 @@ class ImgDataService:
         save_only: bool = False,
         resume_from_progress: bool = False,
     ) -> Dict[str, Any]:
-        current = self.getFaceMatchingProgress(user_key)
-        if current.get("running"):
-            self._debugLog(
-                "face_matching_start_reused_running_progress",
-                operation_id=current.get("operation_id"),
-                action=current.get("action"),
-                active=bool(current.get("active")),
-                stale=bool(current.get("stale")),
-            )
-            return current
-        running_operation = self._runningOperationProgress(user_key, exclude_operation="face_match")
-        if running_operation:
-            self._debugLog(
-                "face_matching_start_blocked_by_running_operation",
-                requested_operation="face_match",
-                running_operation=running_operation.get("operation"),
-                running_operation_id=running_operation.get("operation_id"),
-                running_phase=running_operation.get("phase"),
-            )
-            return self._buildStartBlockedByRunningOperationPayload(
-                running_operation,
-                requested_operation="face_match",
-            )
-
-        normalized_action = str(action or "search_photo_face_in_file").strip().lower()
-        current_resume_cursor = current.get("resume_cursor") if isinstance(current.get("resume_cursor"), dict) else {}
-        current_action = str(current_resume_cursor.get("action") or current.get("action") or "").strip().lower()
-        should_continue_current = (
-            (resume_from_progress or bool(skip_face_ids) or bool(skip_targets))
-            and isinstance(current_resume_cursor, dict)
-            and current_action == normalized_action
-        )
-        resume_cursor = dict(current_resume_cursor) if should_continue_current else {}
-        if resume_cursor:
-            if not resume_cursor.get("path_index"):
-                resume_cursor["path_index"] = int(current.get("images_read") or 0)
-            for field in (
-                "transferred_count",
-                "findings_count",
-                "persons_read",
-                "images_read",
-                "faces_read",
-                "target_faces_read",
-                "metadata_faces_read",
-            ):
-                if field not in resume_cursor:
-                    resume_cursor[field] = int(current.get(field) or 0)
-        cursor_skip_face_ids = resume_cursor.get("skip_face_ids") if isinstance(resume_cursor.get("skip_face_ids"), list) else []
-        combined_skip_face_ids = list(skip_face_ids or [])
-        combined_skip_targets = [str(value) for value in (skip_targets or []) if str(value or "").strip()]
-        for face_id in cursor_skip_face_ids:
-            try:
-                normalized_face_id = int(face_id)
-            except Exception:
-                continue
-            if normalized_face_id not in combined_skip_face_ids:
-                combined_skip_face_ids.append(normalized_face_id)
-        cursor_skip_targets = resume_cursor.get("skip_targets") if isinstance(resume_cursor.get("skip_targets"), list) else []
-        for token in cursor_skip_targets:
-            normalized_token = str(token or "").strip()
-            if normalized_token and normalized_token not in combined_skip_targets:
-                combined_skip_targets.append(normalized_token)
-        if resume_cursor:
-            auto = bool(resume_cursor.get("auto", auto))
-            save_only = bool(resume_cursor.get("save_only", save_only))
-            normalized_action = str(resume_cursor.get("action") or normalized_action).strip().lower() or normalized_action
-        continue_existing_operation = bool(resume_cursor or combined_skip_face_ids or combined_skip_targets)
-        resume_path_index = int(resume_cursor.get("path_index") or 0) if resume_cursor else 0
-        operation_id = (
-            str(current.get("operation_id") or "").strip()
-            if continue_existing_operation and str(current.get("operation_id") or "").strip()
-            else f"face_match-{uuid4().hex}"
-        )
-        start_message_key = (
-            "face_match:status_preparing_scan"
-            if normalized_action in {"search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"}
-            else "face_match:status_starting"
-        )
-        self._debugLog(
-            "face_matching_start",
-            operation_id=operation_id,
-            action=normalized_action,
+        return self.face_match_workflow.start_discovery(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            action=action,
+            limit=limit,
+            offset=offset,
+            skip_face_ids=skip_face_ids,
+            skip_targets=skip_targets,
             auto=auto,
             save_only=save_only,
-            resume=bool(resume_cursor),
-            continue_existing_operation=continue_existing_operation,
-            skip_face_ids_count=len(combined_skip_face_ids),
-            skip_targets_count=len(combined_skip_targets),
-            resume_path_index=resume_path_index,
+            resume_from_progress=resume_from_progress,
         )
 
-        self._setFaceMatchingProgressMessage(
-            user_key,
-            start_message_key,
-            operation_id=operation_id,
-            running=True,
-            finished=False,
-            paused=False,
-            auth_required=False,
-            stop_requested=False,
-            action=normalized_action,
-            result=None,
-            error="",
-            auto=auto,
-            save_only=save_only,
-            persons_read=int(resume_cursor.get("persons_read") or 0) if resume_cursor else 0,
-            images_read=int(resume_cursor.get("images_read") or 0) if resume_cursor else resume_path_index,
-            faces_read=int(resume_cursor.get("faces_read") or 0) if resume_cursor else 0,
-            target_faces_read=int(resume_cursor.get("target_faces_read") or 0) if resume_cursor else 0,
-            current_person_id=None,
-            current_image_id=None,
-            current_face_id=None,
-            metadata_faces_read=int(resume_cursor.get("metadata_faces_read") or 0) if resume_cursor else 0,
-            transferred_count=int(resume_cursor.get("transferred_count") or 0) if resume_cursor else 0,
-            findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
-            resume_cursor=self._buildFaceMatchResumeCursor(
-                skip_face_ids=combined_skip_face_ids,
-                skip_targets=combined_skip_targets,
-                transferred_count=int(resume_cursor.get("transferred_count") or 0) if resume_cursor else 0,
-                auto=auto,
-                save_only=save_only,
-                action=normalized_action,
-                findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
-                path_index=resume_path_index,
-                persons_read=int(resume_cursor.get("persons_read") or 0) if resume_cursor else 0,
-                images_read=int(resume_cursor.get("images_read") or 0) if resume_cursor else resume_path_index,
-                faces_read=int(resume_cursor.get("faces_read") or 0) if resume_cursor else 0,
-                target_faces_read=int(resume_cursor.get("target_faces_read") or 0) if resume_cursor else 0,
-                metadata_faces_read=int(resume_cursor.get("metadata_faces_read") or 0) if resume_cursor else 0,
-            ),
-        )
-        worker = Thread(
-            target=self._runFaceMatching,
-            kwargs={
-                "user_key": user_key,
-                "cookies": dict(cookies),
-                "base_url": base_url,
-                "action": normalized_action,
-                "limit": limit,
-                "offset": offset,
-                "skip_face_ids": combined_skip_face_ids,
-                "skip_targets": combined_skip_targets,
-                "auto": auto,
-                "save_only": save_only,
-                "resume_cursor": resume_cursor if resume_cursor else None,
-            },
-            daemon=True,
-        )
-        self.runtime_state.values("face_match_threads")[user_key] = worker
-        worker.start()
-        return self.getFaceMatchingProgress(user_key)
-    
     def searchPhotoFaceInFile(
         self,
         *,
@@ -9625,135 +8122,33 @@ class ImgDataService:
         auto: bool = False,
         refresh: bool = False,
     ) -> Dict[str, Any]:
-        findings = self.getFaceMatchFindings()
-        requested_action = str(action or "").strip().lower()
-        findings_action = str(findings.get("action") or "").strip().lower()
-        if requested_action and findings_action and requested_action != findings_action:
-            return {
-                "status": str(findings.get("status") or ""),
-                "shared_folder": str(findings.get("shared_folder") or ""),
-                "action": findings_action,
-                "requested_action": requested_action,
-                "count": 0,
-                "entries": [],
-                "transferred_count": 0,
-                "save_only": False,
-                "auto": bool(auto),
-            }
-        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        resolved_entries = entries
-        transferred_count = int(findings.get("transferred_count") or 0)
-        if (refresh or auto) and user_key and isinstance(cookies, dict) and base_url:
-            known_persons_cache = self.photos.sortPersonsForFaceMatch(
-                self.photos.listFotoTeamPersonKnown(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    additional=["thumbnail"],
-                )
-            )
-            image_faces_cache: Dict[int, List[Dict[str, Any]]] = {}
-            photos_lookup_cache = getattr(self, "photos_lookup_cache", None)
-            next_entries = []
-            findings_changed = False
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    findings_changed = True
-                    continue
-                if not self._storedFaceMatchEntryExists(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    entry=entry,
-                    image_faces_cache=image_faces_cache,
-                    photos_lookup_cache=photos_lookup_cache,
-                ):
-                    findings_changed = True
-                    continue
-                resolved_entry = self._resolveStoredFaceMatchEntry(
-                    user_key=user_key,
-                    cookies=cookies,
-                    base_url=base_url,
-                    entry=entry,
-                    known_persons_cache=known_persons_cache,
-                )
-                action = str(resolved_entry.get("action") or "search_photo_face_in_file").strip().lower()
-                if action in {"search_file_face_in_sources", "mark_missing_photos_faces"} and not str(resolved_entry.get("source_name") or "").strip():
-                    findings_changed = True
-                    continue
-                if auto and action in {"search_file_face_in_sources", "mark_missing_photos_faces"}:
-                    metadata_face = resolved_entry.get("metadata_face")
-                    image_path = str(resolved_entry.get("image_path") or "").strip()
-                    source_name = str(resolved_entry.get("source_name") or "").strip()
-                    if image_path and isinstance(metadata_face, dict) and source_name:
-                        if action == "mark_missing_photos_faces":
-                            result = self.resolveOrCreatePhotosPersonForMetadataFace(
-                                user_key=user_key,
-                                cookies=cookies,
-                                base_url=base_url,
-                                image_path=image_path,
-                                metadata_face=metadata_face,
-                                person_name=source_name,
-                                create_missing_person=False,
-                            )
-                            if result.get("updated"):
-                                transferred_count += 1
-                                findings_changed = True
-                                continue
-                        else:
-                            result = self.replaceMetadataFaceName(
-                                image_path=image_path,
-                                face_data=metadata_face,
-                                new_name=source_name,
-                            )
-                            if result.get("updated"):
-                                transferred_count += 1
-                                findings_changed = True
-                                continue
-                if auto and action != "search_file_face_in_sources":
-                    matched_person = resolved_entry.get("matched_person")
-                    matched_person_name = matched_person.get("name") if isinstance(matched_person, dict) else None
-                    face = resolved_entry.get("face")
-                    face_id = face.get("face_id") if isinstance(face, dict) else None
-                    if matched_person_name and face_id is not None:
-                        result = self.resolveOrCreatePhotosPersonForExistingFace(
-                            user_key=user_key,
-                            cookies=cookies,
-                            base_url=base_url,
-                            image_path=str(resolved_entry.get("image_path") or "").strip(),
-                            face_id=int(face_id),
-                            person_name=str(matched_person_name),
-                            item_id=face.get("item_id") if isinstance(face, dict) and face.get("item_id") is not None else None,
-                            create_missing_person=False,
-                        )
-                        if result.get("updated"):
-                            transferred_count += 1
-                            findings_changed = True
-                            continue
-                next_entries.append(resolved_entry)
-            resolved_entries = next_entries
-            if findings_changed:
-                self._persistFaceMatchFindingsEntries(
-                    findings=findings,
-                    entries=resolved_entries,
-                    transferred_count=transferred_count,
-                )
-        response_entries = [
-            self._compactFaceMatchFindingEntryForResponse(entry)
-            for entry in resolved_entries
-            if isinstance(entry, dict)
-        ]
-        return {
-            "status": str(findings.get("status") or ""),
-            "shared_folder": str(findings.get("shared_folder") or ""),
-            "action": findings_action,
-            "requested_action": requested_action,
-            "count": len(resolved_entries),
-            "entries": response_entries,
-            "transferred_count": transferred_count,
-            "save_only": bool(findings.get("save_only")),
-            "auto": bool(auto or findings.get("auto")),
-        }
+        return self.face_match_workflow.get_finding_entries(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            action=action,
+            auto=auto,
+            refresh=refresh,
+        )
+
+    def getFaceMatchFindingEntriesLocked(
+        self,
+        *,
+        user_key: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        base_url: Optional[str] = None,
+        action: str = "",
+        auto: bool = False,
+        refresh: bool = False,
+    ) -> Dict[str, Any]:
+        return self.face_match_workflow.get_finding_entries_locked(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            action=action,
+            auto=auto,
+            refresh=refresh,
+        )
 
     def removeFaceMatchFindingMetadataEntry(
         self,
@@ -9762,105 +8157,24 @@ class ImgDataService:
         metadata_face: Dict[str, Any],
         increment_transferred_count: bool = True,
     ) -> Dict[str, Any]:
-        started = monotonic()
-        findings = self.getFaceMatchFindings()
-        self._debugLog(
-            "face_match_findings_remove_phase",
-            phase="read",
-            duration_ms=round((monotonic() - started) * 1000, 2),
-            mode="metadata",
-        )
-        filter_started = monotonic()
-        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        remaining_entries = []
-        removed_count = 0
-
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            entry_image_path = str(entry.get("image_path") or "").strip()
-            entry_metadata_face = entry.get("metadata_face")
-            if entry_image_path == str(image_path or "").strip() and isinstance(entry_metadata_face, dict):
-                if self._faceMatchTargetToken(image_path=entry_image_path, face=entry_metadata_face) == self._faceMatchTargetToken(image_path=image_path, face=metadata_face):
-                    removed_count += 1
-                    continue
-            remaining_entries.append(entry)
-        self._debugLog(
-            "face_match_findings_remove_phase",
-            phase="filter",
-            duration_ms=round((monotonic() - filter_started) * 1000, 2),
-            mode="metadata",
-            entries_count=len(entries),
-            remaining_count=len(remaining_entries),
-            removed_count=removed_count,
+        return self.face_match_workflow.remove_metadata_entry(
+            image_path=image_path,
+            metadata_face=metadata_face,
+            increment_transferred_count=increment_transferred_count,
         )
 
-        if removed_count == 0:
-            return {
-                "removed": False,
-                "removed_count": 0,
-                "remaining_count": len(entries),
-                "deleted": False,
-            }
-
-        transferred_count = int(findings.get("transferred_count") or 0)
-        if increment_transferred_count:
-            transferred_count += removed_count
-
-        if not remaining_entries:
-            write_started = monotonic()
-            deleted = self.file_analysis.deleteCheckFindings("face_match")
-            self._debugLog(
-                "face_match_findings_remove_phase",
-                phase="delete",
-                duration_ms=round((monotonic() - write_started) * 1000, 2),
-                mode="metadata",
-                removed_count=removed_count,
-            )
-            return {
-                "removed": deleted,
-                "removed_count": removed_count,
-                "remaining_count": 0,
-                "deleted": bool(deleted),
-                "transferred_count": transferred_count,
-            }
-
-        timestamp = self._timestamp_now()
-        updated_payload = {
-            "job_id": str(findings.get("job_id") or timestamp),
-            "started_at": str(findings.get("started_at") or timestamp),
-            "finished_at": str(findings.get("finished_at") or timestamp),
-            "last_updated_at": timestamp,
-            "status": str(findings.get("status") or "finished"),
-            "shared_folder": str(findings.get("shared_folder") or ""),
-            "action": str(findings.get("action") or "search_photo_face_in_file"),
-            "auto": bool(findings.get("auto")),
-            "save_only": bool(findings.get("save_only")),
-            "transferred_count": transferred_count,
-            "count": len(remaining_entries),
-            "entries": [
-                self._compactFaceMatchFindingEntryForStorage(entry)
-                for entry in remaining_entries
-                if isinstance(entry, dict)
-            ],
-        }
-        write_started = monotonic()
-        written = self.file_analysis.writeCheckFindings("face_match", updated_payload)
-        self._debugLog(
-            "face_match_findings_remove_phase",
-            phase="write",
-            duration_ms=round((monotonic() - write_started) * 1000, 2),
-            mode="metadata",
-            remaining_count=len(remaining_entries),
-            removed_count=removed_count,
+    def _removeFaceMatchFindingMetadataEntryUnlocked(
+        self,
+        *,
+        image_path: str,
+        metadata_face: Dict[str, Any],
+        increment_transferred_count: bool = True,
+    ) -> Dict[str, Any]:
+        return self.face_match_workflow.remove_metadata_entry_unlocked(
+            image_path=image_path,
+            metadata_face=metadata_face,
+            increment_transferred_count=increment_transferred_count,
         )
-        return {
-            "removed": bool(written),
-            "removed_count": removed_count,
-            "remaining_count": len(remaining_entries),
-            "deleted": False,
-            "transferred_count": transferred_count,
-        }
 
     def removeFaceMatchFindingEntry(
         self,
@@ -9868,113 +8182,21 @@ class ImgDataService:
         face_id: int,
         increment_transferred_count: bool = True,
     ) -> Dict[str, Any]:
-        started = monotonic()
-        findings = self.getFaceMatchFindings()
-        self._debugLog(
-            "face_match_findings_remove_phase",
-            phase="read",
-            duration_ms=round((monotonic() - started) * 1000, 2),
-            mode="photos_face",
+        return self.face_match_workflow.remove_entry(
             face_id=face_id,
-        )
-        filter_started = monotonic()
-        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        remaining_entries = []
-        removed_count = 0
-
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            face = entry.get("face")
-            entry_face_id = None
-            if isinstance(face, dict):
-                try:
-                    entry_face_id = int(face.get("face_id"))
-                except (TypeError, ValueError):
-                    entry_face_id = None
-            if entry_face_id == int(face_id):
-                removed_count += 1
-                continue
-            remaining_entries.append(entry)
-        self._debugLog(
-            "face_match_findings_remove_phase",
-            phase="filter",
-            duration_ms=round((monotonic() - filter_started) * 1000, 2),
-            mode="photos_face",
-            face_id=face_id,
-            entries_count=len(entries),
-            remaining_count=len(remaining_entries),
-            removed_count=removed_count,
+            increment_transferred_count=increment_transferred_count,
         )
 
-        if removed_count == 0:
-            return {
-                "removed": False,
-                "removed_count": 0,
-                "remaining_count": len(entries),
-                "deleted": False,
-            }
-
-        transferred_count = int(findings.get("transferred_count") or 0)
-        if increment_transferred_count:
-            transferred_count += removed_count
-
-        if not remaining_entries:
-            write_started = monotonic()
-            deleted = self.file_analysis.deleteCheckFindings("face_match")
-            self._debugLog(
-                "face_match_findings_remove_phase",
-                phase="delete",
-                duration_ms=round((monotonic() - write_started) * 1000, 2),
-                mode="photos_face",
-                face_id=face_id,
-                removed_count=removed_count,
-            )
-            return {
-                "removed": deleted,
-                "removed_count": removed_count,
-                "remaining_count": 0,
-                "deleted": bool(deleted),
-                "transferred_count": transferred_count,
-            }
-
-        timestamp = self._timestamp_now()
-        updated_payload = {
-            "job_id": str(findings.get("job_id") or timestamp),
-            "started_at": str(findings.get("started_at") or timestamp),
-            "finished_at": str(findings.get("finished_at") or timestamp),
-            "last_updated_at": timestamp,
-            "status": str(findings.get("status") or "finished"),
-            "shared_folder": str(findings.get("shared_folder") or ""),
-            "action": str(findings.get("action") or "search_photo_face_in_file"),
-            "auto": bool(findings.get("auto")),
-            "save_only": bool(findings.get("save_only")),
-            "transferred_count": transferred_count,
-            "count": len(remaining_entries),
-            "entries": [
-                self._compactFaceMatchFindingEntryForStorage(entry)
-                for entry in remaining_entries
-                if isinstance(entry, dict)
-            ],
-        }
-        write_started = monotonic()
-        written = self.file_analysis.writeCheckFindings("face_match", updated_payload)
-        self._debugLog(
-            "face_match_findings_remove_phase",
-            phase="write",
-            duration_ms=round((monotonic() - write_started) * 1000, 2),
-            mode="photos_face",
+    def _removeFaceMatchFindingEntryUnlocked(
+        self,
+        *,
+        face_id: int,
+        increment_transferred_count: bool = True,
+    ) -> Dict[str, Any]:
+        return self.face_match_workflow.remove_entry_unlocked(
             face_id=face_id,
-            remaining_count=len(remaining_entries),
-            removed_count=removed_count,
+            increment_transferred_count=increment_transferred_count,
         )
-        return {
-            "removed": bool(written),
-            "removed_count": removed_count,
-            "remaining_count": len(remaining_entries),
-            "deleted": False,
-            "transferred_count": transferred_count,
-        }
 
     def read_file_text(self, *, path: str, max_bytes: int = 1024 * 1024) -> Dict[str, object]:
         return self.files.read_text(path=path, max_bytes=max_bytes)

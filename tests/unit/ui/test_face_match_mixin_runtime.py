@@ -253,6 +253,118 @@ def test_load_stored_findings_sends_selected_source_action_runtime():
     assert result["useStored"] is False
 
 
+def test_stored_findings_person_creation_reloads_for_auto_assignment_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const events = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchUseStoredFindings: true,
+              faceMatchAutoAssignKnown: true,
+              faceMatchEditableName: 'Sven',
+              faceMatchResult: {
+                action: 'search_photo_face_in_file',
+                face: { face_id: 149661 },
+                image_path: '/volume1/photo/sven.jpg',
+              },
+              resolveFaceMatchNameMappingPreference: async () => ({
+                saveMapping: false,
+                sourceName: 'Sven',
+              }),
+              callDsmApi: async (_path, body) => {
+                events.push({ type: 'create', body });
+                return { success: true, data: { person_id: 40309 } };
+              },
+              loadStoredFaceMatchFindings: async (options) => {
+                events.push({ type: 'reload', auto: component.faceMatchAutoAssignKnown, options });
+              },
+              advanceFaceMatchFindingsAfterTransfer: async () => {
+                events.push({ type: 'local-advance' });
+              },
+            });
+
+            await component.createFaceMatchPerson();
+
+            assert.strictEqual(events.length, 2);
+            assert.strictEqual(events[0].type, 'create');
+            assert.strictEqual(events[0].body.person_name, 'Sven');
+            assert.strictEqual(events[1].type, 'reload');
+            assert.strictEqual(events[1].auto, true);
+            console.log(JSON.stringify({ events }));
+            """
+        )
+    )
+
+    assert result == {
+        "events": [
+            {
+                "type": "create",
+                    "body": {
+                        "face_id": 149661,
+                        "image_path": "/volume1/photo/sven.jpg",
+                        "person_name": "Sven",
+                        "save_mapping": False,
+                        "source_name": "Sven",
+                },
+            },
+            {"type": "reload", "auto": True, "options": {"refresh": True}},
+        ],
+    }
+
+
+def test_stored_findings_auto_apply_polls_progress_while_request_is_running_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const events = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchAutoAssignKnown: true,
+              startFaceMatchProgressPolling: () => events.push('start-polling'),
+              stopFaceMatchProgressPolling: () => events.push('stop-polling'),
+              fetchFaceMatchingProgress: async () => events.push('fetch-progress'),
+              callFileAnalysisApi: async (_path, body) => {
+                events.push({ type: 'request', body });
+                return {
+                  success: true,
+                  data: {
+                    face_matches: {
+                      action: 'search_photo_face_in_file',
+                      requested_action: 'search_photo_face_in_file',
+                      count: 1,
+                      entries: [{ id: 1 }],
+                    },
+                  },
+                };
+              },
+            });
+
+            await component.loadStoredFaceMatchFindings({ refresh: true });
+
+            assert.strictEqual(JSON.stringify(events), JSON.stringify([
+              'start-polling',
+              {
+                type: 'request',
+                body: {
+                  action: 'load_photo_face_match_findings',
+                  findings_action: 'search_photo_face_in_file',
+                  auto: true,
+                  refresh: true,
+                },
+              },
+              'fetch-progress',
+              'stop-polling',
+            ]));
+            assert.strictEqual(component.faceMatchLoading, false);
+            console.log(JSON.stringify({ events, loading: component.faceMatchLoading }));
+            """
+        )
+    )
+
+    assert result["loading"] is False
+
+
 def test_stored_findings_status_uses_active_finding_action_runtime():
     result = run_node(
         face_match_runtime_script(
@@ -809,6 +921,63 @@ def test_primary_button_uses_backend_running_progress_as_stop_state_runtime():
     )
 
     assert result == {"label": "Stop", "disabled": True}
+
+
+def test_primary_button_uses_restart_for_paused_file_search_with_stored_findings_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchSaveOnly: false,
+              faceMatchUseStoredFindings: false,
+              faceMatchFindingsStatus: {
+                action: 'search_photo_face_in_file',
+                count: 3,
+              },
+              faceMatchResult: { searched: true },
+            });
+
+            assert.strictEqual(component.hasFaceMatchStoredFindings, true);
+            assert.strictEqual(component.faceMatchCanRestartSavedFileSearch, true);
+            assert.strictEqual(component.faceMatchPrimaryButtonLabel, 'Restart');
+            console.log(JSON.stringify({ label: component.faceMatchPrimaryButtonLabel }));
+            """
+        )
+    )
+
+    assert result == {"label": "Restart"}
+
+
+def test_thumbnail_error_switches_to_backend_image_fallback_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              faceMatchResult: {
+                image_path: '/volume1/photo/Familie/Test Bild.jpg',
+                image: { id: 115579 },
+              },
+              getPhotoThumbnailUrl: () => '/synofoto/api/v2/t/Thumbnail/get?id=115579',
+            });
+            const image = { dataset: {}, src: component.getCurrentFaceMatchImageUrl() };
+
+            component.handleFaceMatchImagePreviewError({ target: image });
+            const firstFallback = image.src;
+            component.handleFaceMatchImagePreviewError({ target: image });
+
+            assert.strictEqual(
+              firstFallback,
+              '/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=%2Fvolume1%2Fphoto%2FFamilie%2FTest%20Bild.jpg'
+            );
+            assert.strictEqual(image.src, firstFallback);
+            assert.strictEqual(image.dataset.avFallbackApplied, 'true');
+            console.log(JSON.stringify({ fallback: image.src }));
+            """
+        )
+    )
+
+    assert result["fallback"].endswith("Test%20Bild.jpg")
 
 
 def test_stale_backend_running_phase_does_not_keep_stop_state_runtime():

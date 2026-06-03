@@ -63,6 +63,17 @@ def test_file_source_preview_labels_distinguish_name_source_and_file_target():
     assert "vm.faceMatchImageContextPath" in view
 
 
+def test_face_match_image_preview_uses_backend_fallback_after_thumbnail_error():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+
+    assert "getCurrentFaceMatchImageFallbackUrl()" in source
+    assert "handleFaceMatchImagePreviewError(event)" in source
+    assert "image.dataset.avFallbackApplied = 'true'" in source
+    assert "image.src = fallbackUrl" in source
+    assert view.count('@error="vm.handleFaceMatchImagePreviewError"') == 4
+
+
 def test_dsm_api_type_error_gets_explicit_network_failure_message():
     source = Path("ui/src/services/dsm-api-client.js").read_text(encoding="utf-8")
     method_start = source.index("async function callDsmApi(apiPath, body = {}, options = {})")

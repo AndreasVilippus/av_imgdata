@@ -26,7 +26,7 @@ def test_face_match_restart_button_is_limited_to_saved_file_search():
     assert "selectedFaceMatchingAction === 'search_photo_face_in_file'" in guard
     assert "!this.faceMatchUseStoredFindings" in guard
     assert "faceMatchSaveOnly" in guard
-    assert "hasFaceMatchStoredFindings" not in guard
+    assert "hasFaceMatchStoredFindings" in guard
     assert "faceMatchIsPaused" in guard
     assert "!this.faceMatchLoading" in guard
     assert "!this.faceMatchAuthRequired" in guard

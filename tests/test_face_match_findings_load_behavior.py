@@ -6,10 +6,12 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from imgdata import ImgDataService
+from services.face_match_workflow_service import FaceMatchWorkflowService
 
 
 def make_service():
     service = ImgDataService.__new__(ImgDataService)
+    service.face_match_workflow = FaceMatchWorkflowService(service)
     service.photos = Mock()
     service.photos.listFotoTeamPersonKnown.return_value = [{"id": 1, "name": "Person A"}]
     service.photos.sortPersonsForFaceMatch.side_effect = lambda persons: persons

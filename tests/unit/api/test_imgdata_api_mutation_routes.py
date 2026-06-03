@@ -74,7 +74,7 @@ def test_face_matching_action_passes_selected_findings_action_to_loader(monkeypa
     monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
     monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
     monkeypatch.setattr(imgdata_api.asyncio, "get_running_loop", lambda: FakeLoop())
-    monkeypatch.setattr(imgdata_api.IMGDATA, "getFaceMatchFindingEntries", load_entries)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getFaceMatchFindingEntriesLocked", load_entries)
 
     payload = _run(imgdata_api.face_matching_action(object()))
 

@@ -12,6 +12,12 @@ sys.path.insert(0, os.path.abspath("src"))
 from services.file_analysis_service import FileAnalysisService
 
 
+def _append_finding_entry_from_process(args):
+    result_path, entry_id = args
+    service = FileAnalysisService(result_path)
+    return service.appendCheckFindingEntries("duplicate_faces", [{"id": entry_id}])
+
+
 class TestFileAnalysisServiceAtomicWrites(unittest.TestCase):
     """Tests für AP9: Atomare JSON-Schreibvorgänge."""
 
@@ -325,6 +331,68 @@ class TestFileAnalysisServiceAtomicWrites(unittest.TestCase):
         read_back = service.readCheckFindings("dimension_issues")
         self.assertEqual(read_back["count"], 1)
         self.assertEqual(read_back["entries"], [{"id": 1}])
+
+    def test_appendCheckFindingEntries_preserves_parallel_updates(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        service = FileAnalysisService(str(self.result_file))
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(
+                lambda entry_id: service.appendCheckFindingEntries(
+                    "duplicate_faces",
+                    [{"id": entry_id}],
+                ),
+                range(40),
+            ))
+
+        self.assertTrue(all(results))
+        read_back = service.readCheckFindings("duplicate_faces")
+        self.assertEqual(read_back["count"], 40)
+        self.assertEqual(
+            sorted(entry["id"] for entry in read_back["entries"]),
+            list(range(40)),
+        )
+
+    def test_parallel_runtime_writes_use_independent_temp_files(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        service = FileAnalysisService(str(self.result_file))
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(
+                lambda progress: service.writeRuntimeState(
+                    "checks_progress",
+                    "user_dimension_issues",
+                    {"progress": progress},
+                ),
+                range(40),
+            ))
+
+        self.assertTrue(all(results))
+        read_back = service.readRuntimeState("checks_progress", "user_dimension_issues")
+        self.assertIn(read_back["progress"], range(40))
+        self.assertEqual(
+            list(service._runtime_dir.glob("*.tmp")),
+            [],
+        )
+
+    def test_appendCheckFindingEntries_preserves_parallel_process_updates(self):
+        from concurrent.futures import ProcessPoolExecutor
+
+        service = FileAnalysisService(str(self.result_file))
+        args = [(str(self.result_file), entry_id) for entry_id in range(20)]
+
+        with ProcessPoolExecutor(max_workers=4) as executor:
+            results = list(executor.map(_append_finding_entry_from_process, args))
+
+        self.assertTrue(all(results))
+        read_back = service.readCheckFindings("duplicate_faces")
+        self.assertEqual(read_back["count"], 20)
+        self.assertEqual(
+            sorted(entry["id"] for entry in read_back["entries"]),
+            list(range(20)),
+        )
 
 
 if __name__ == "__main__":

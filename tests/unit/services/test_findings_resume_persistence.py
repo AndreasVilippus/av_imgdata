@@ -1,11 +1,15 @@
 from unittest.mock import Mock
 
-from imgdata import ImgDataService
+from imgdata import ImgDataOperationError, ImgDataService
+from services.checks_workflow_service import ChecksWorkflowService
+from services.face_match_workflow_service import FaceMatchWorkflowService
 
 
 def make_service():
     service = ImgDataService.__new__(ImgDataService)
     service.file_analysis = Mock()
+    service.checks_workflow = ChecksWorkflowService(service, ImgDataOperationError)
+    service.face_match_workflow = FaceMatchWorkflowService(service)
     return service
 
 
@@ -64,7 +68,7 @@ def test_checks_failed_terminal_write_preserves_persisted_entries():
         "shared_folder": "/volume1/photo",
         "entries": entries,
     }
-    service._writeChecksFindings = Mock()
+    service.checks_workflow.write_findings = Mock()
 
     service._writePersistedChecksFindingsStatus(
         check_type="dimension_issues",
@@ -72,7 +76,7 @@ def test_checks_failed_terminal_write_preserves_persisted_entries():
         save_only=True,
     )
 
-    service._writeChecksFindings.assert_called_once_with(
+    service.checks_workflow.write_findings.assert_called_once_with(
         check_type="dimension_issues",
         status="failed",
         shared_folder="/volume1/photo",

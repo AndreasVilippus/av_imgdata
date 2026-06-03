@@ -269,6 +269,12 @@ def _session_exception_response(
     }
 
 
+def _session_exception_debug_detail(exc: Union[SessionBootstrapRequired, SessionManagerError]) -> Dict[str, Any]:
+    if not isinstance(exc, SessionManagerError) or not isinstance(exc.detail, dict):
+        return {}
+    return exc.detail
+
+
 def _exception_details(exc: Exception) -> Any:
     if isinstance(exc, ImgDataOperationError):
         return exc.details
@@ -423,6 +429,30 @@ def _snapshot_name_conflicts_mutation_state(
     if normalized_type != "name_conflicts" or not normalized_path:
         return None, None
 
+    with IMGDATA.file_analysis.lockCheckFindings(normalized_type):
+        return _snapshot_name_conflicts_mutation_state_locked(
+            session_ctx,
+            check_type=normalized_type,
+            image_path=normalized_path,
+            original_face_data=original_face_data,
+            replacement_face_data=replacement_face_data,
+            resolved_delta=resolved_delta,
+            ignored_delta=ignored_delta,
+        )
+
+
+def _snapshot_name_conflicts_mutation_state_locked(
+    session_ctx: Dict[str, Any],
+    *,
+    check_type: str,
+    image_path: str,
+    original_face_data: Optional[Dict[str, Any]] = None,
+    replacement_face_data: Optional[Dict[str, Any]] = None,
+    resolved_delta: int = 0,
+    ignored_delta: int = 0,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    normalized_type = str(check_type or "").strip().lower()
+    normalized_path = str(image_path or "").strip()
     try:
         findings = IMGDATA.file_analysis.readCheckFindings(normalized_type)
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
@@ -876,7 +906,7 @@ async def face_matching_action(request: Request):
             loop = asyncio.get_running_loop()
             face_matches = await loop.run_in_executor(
                 None,
-                lambda: IMGDATA.getFaceMatchFindingEntries(
+                lambda: IMGDATA.getFaceMatchFindingEntriesLocked(
                     user_key=session_ctx["user_key"],
                     cookies=session_ctx["cookies"],
                     base_url=session_ctx["base_url"],
@@ -893,6 +923,7 @@ async def face_matching_action(request: Request):
             action=action,
             error_type=type(exc).__name__,
             error=str(exc),
+            error_detail=_session_exception_debug_detail(exc),
         )
         return _session_exception_response(exc, bootstrap_message="face_matching_action_bootstrap_required")
     except Exception as exc:
@@ -1081,6 +1112,7 @@ async def face_assign_match(request: Request):
             person_id=person_id,
             error_type=type(exc).__name__,
             error=str(exc),
+            error_detail=_session_exception_debug_detail(exc),
         )
         return _session_exception_response(exc, bootstrap_message="face_assign_match_bootstrap_required")
     except Exception as exc:
@@ -1161,6 +1193,7 @@ async def face_create_match(request: Request):
             face_id=face_id,
             error_type=type(exc).__name__,
             error=str(exc),
+            error_detail=_session_exception_debug_detail(exc),
         )
         return _session_exception_response(exc, bootstrap_message="face_create_match_bootstrap_required")
     except Exception as exc:

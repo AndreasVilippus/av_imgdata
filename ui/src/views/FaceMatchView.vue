@@ -183,11 +183,11 @@
 					<div v-if="vm.getCurrentFaceMatchImageUrl()" class="face-match-thumbnail-wrap">
 						<template v-if="vm.isFaceOnlyPreview">
 							<div v-if="vm.getFaceMatchCropStyle(vm.getLeftFaceMatchFace())" class="face-match-crop-frame">
-								<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.getLeftFaceMatchFace())" />
+								<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.getLeftFaceMatchFace())" @error="vm.handleFaceMatchImagePreviewError" />
 							</div>
 						</template>
 						<div v-else class="face-match-preview">
-							<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:thumbnail_alt', 'Thumbnail')" class="face-match-thumbnail" />
+							<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:thumbnail_alt', 'Thumbnail')" class="face-match-thumbnail" @error="vm.handleFaceMatchImagePreviewError" />
 							<div v-for="(maskStyle, index) in vm.getFaceMatchMaskStyles(vm.getLeftFaceMatchFace())" :key="`photo-mask-${index}`" class="face-match-mask" :style="maskStyle"></div>
 							<div v-if="vm.getFaceMatchBoxStyle(vm.getLeftFaceMatchFace())" class="face-match-bbox" :style="vm.getFaceMatchBoxStyle(vm.getLeftFaceMatchFace())"></div>
 						</div>
@@ -199,11 +199,11 @@
 					<div v-if="vm.getCurrentFaceMatchImageUrl()" class="face-match-thumbnail-wrap">
 						<template v-if="vm.isFaceOnlyPreview">
 							<div v-if="vm.getFaceMatchCropStyle(vm.getRightFaceMatchFace())" class="face-match-crop-frame">
-								<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.getRightFaceMatchFace())" />
+								<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.getRightFaceMatchFace())" @error="vm.handleFaceMatchImagePreviewError" />
 							</div>
 						</template>
 						<div v-else class="face-match-preview">
-							<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:thumbnail_alt', 'Thumbnail')" class="face-match-thumbnail" />
+							<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:thumbnail_alt', 'Thumbnail')" class="face-match-thumbnail" @error="vm.handleFaceMatchImagePreviewError" />
 							<div v-for="(maskStyle, index) in vm.getFaceMatchMaskStyles(vm.getRightFaceMatchFace())" :key="`metadata-mask-${index}`" class="face-match-mask" :style="maskStyle"></div>
 							<div v-if="vm.getFaceMatchBoxStyle(vm.getRightFaceMatchFace())" class="face-match-bbox" :style="vm.getFaceMatchBoxStyle(vm.getRightFaceMatchFace())"></div>
 						</div>

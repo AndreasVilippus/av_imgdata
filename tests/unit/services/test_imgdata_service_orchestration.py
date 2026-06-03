@@ -386,6 +386,143 @@ def test_checks_candidate_paths_changed_since_days_zero_keeps_all_paths():
     ) == paths
 
 
+def test_checks_candidate_paths_cache_is_owned_and_invalidated_by_workflow_service():
+    service = make_service()
+    listed_paths = [["/volume1/photo/a.jpg"], ["/volume1/photo/b.jpg"]]
+    service.files.listImageFiles = lambda shared_folder: listed_paths.pop(0)
+
+    assert service._getChecksCandidatePaths(
+        user_key="user",
+        check_type="name_conflicts",
+        shared_folder="/volume1/photo",
+    ) == ["/volume1/photo/a.jpg"]
+    assert service._getChecksCandidatePaths(
+        user_key="user",
+        check_type="name_conflicts",
+        shared_folder="/volume1/photo",
+    ) == ["/volume1/photo/a.jpg"]
+
+    service._invalidateChecksCandidatePathsCache("user", "name_conflicts")
+
+    assert service._getChecksCandidatePaths(
+        user_key="user",
+        check_type="name_conflicts",
+        shared_folder="/volume1/photo",
+    ) == ["/volume1/photo/b.jpg"]
+    assert listed_paths == []
+
+
+def test_face_match_candidate_paths_cache_is_owned_by_workflow_service():
+    service = make_service()
+    listed_paths = [
+        ["/volume1/photo/a.jpg"],
+        ["/volume1/photo/b.jpg"],
+        ["/volume1/other/c.jpg"],
+    ]
+    requested_folders = []
+
+    def list_image_files(shared_folder):
+        requested_folders.append(shared_folder)
+        return listed_paths.pop(0)
+
+    service.files.listImageFiles = list_image_files
+
+    assert service._getFaceMatchCandidatePaths(
+        user_key="user",
+        action="search_missing_faces_insightface",
+        shared_folder="/volume1/photo",
+    ) == ["/volume1/photo/a.jpg"]
+    assert service._getFaceMatchCandidatePaths(
+        user_key="user",
+        action="search_missing_faces_insightface",
+        shared_folder="/volume1/photo",
+    ) == ["/volume1/photo/a.jpg"]
+    assert service._getFaceMatchCandidatePaths(
+        user_key="user",
+        action="search_missing_faces_insightface",
+        shared_folder="/volume1/photo",
+        use_cache=False,
+    ) == ["/volume1/photo/b.jpg"]
+    assert service._getFaceMatchCandidatePaths(
+        user_key="user",
+        action="search_missing_faces_insightface",
+        shared_folder="/volume1/other",
+    ) == ["/volume1/other/c.jpg"]
+
+    assert requested_folders == ["/volume1/photo", "/volume1/photo", "/volume1/other"]
+    assert listed_paths == []
+
+
+def test_face_match_stop_request_is_owned_by_workflow_service():
+    service = make_service()
+    service._setFaceMatchingProgress(
+        "user",
+        operation_id="face-match-running",
+        running=True,
+        finished=False,
+        action="search_photo_face_in_file",
+    )
+
+    progress = service.requestStopFaceMatching("user")
+
+    assert progress["message_key"] == "face_match:progress_stopping"
+    assert progress["stop_requested"] is True
+    assert service._shouldStopFaceMatching("user") is True
+
+
+def test_face_match_findings_flush_decision_is_owned_by_workflow_service():
+    service = make_service()
+
+    assert service._shouldFlushFaceMatchFindings(
+        entries_count=1,
+        last_flush_count=0,
+        last_flush_at=0.0,
+    ) is True
+    assert service._shouldFlushFaceMatchFindings(
+        entries_count=1,
+        last_flush_count=1,
+        last_flush_at=0.0,
+    ) is False
+    assert service._shouldFlushFaceMatchFindings(
+        entries_count=service.FACE_MATCH_FINDINGS_FLUSH_ENTRY_INTERVAL + 1,
+        last_flush_count=1,
+        last_flush_at=0.0,
+    ) is True
+
+
+def test_checks_workflow_builds_scan_payload_and_advances_name_conflict_resume_state():
+    service = make_service()
+    payload = service.checks_workflow.build_scan_payload(
+        check_type="name_conflicts",
+        save_only=False,
+        files_scanned=3,
+        total_files=10,
+        findings_count=4,
+        path_index=3,
+        pending_entries=[{"image_path": "photo/test.jpg"}],
+        current_path="photo/test.jpg",
+        result={"entry": {"image_path": "photo/test.jpg"}},
+    )
+
+    resume_cursor = service.checks_workflow.trusted_resume_cursor(
+        {
+            **payload,
+            "resolved_count": 2,
+            "ignored_count": 1,
+        },
+        check_type="name_conflicts",
+        save_only=False,
+        advance_current_result=True,
+    )
+
+    assert payload["resume_cursor"]["path_index"] == 3
+    assert payload["resume_cursor"]["pending_entries"] == [{"image_path": "photo/test.jpg"}]
+    assert resume_cursor["findings_count"] == 4
+    assert resume_cursor["resolved_count"] == 2
+    assert resume_cursor["ignored_count"] == 2
+    assert resume_cursor["metrics_trusted"] is True
+
+
 def test_search_missing_photos_faces_resumes_from_path_index():
     service = make_service()
     analyzed = []
@@ -493,7 +630,7 @@ def test_start_face_matching_discovery_reuses_progress_cursor_when_skipping_targ
         },
     )
 
-    with patch("imgdata.Thread", FakeThread):
+    with patch("services.face_match_workflow_service.Thread", FakeThread):
         progress = service.startFaceMatchingDiscovery(
             user_key="user",
             cookies={},
@@ -550,7 +687,7 @@ def test_start_face_matching_discovery_preserves_search_photo_progress_when_skip
         },
     )
 
-    with patch("imgdata.Thread", FakeThread):
+    with patch("services.face_match_workflow_service.Thread", FakeThread):
         progress = service.startFaceMatchingDiscovery(
             user_key="user",
             cookies={},
@@ -598,7 +735,7 @@ def test_run_checks_scan_preserves_latest_progress_on_session_error():
     )
 
     detail = {"error": "api_failed", "api": "SYNO.FotoTeam.Browse.Item", "response": {"success": False, "error": {"code": 902}}}
-    service.searchNextChecksItem = lambda **kwargs: (_ for _ in ()).throw(SessionManagerError(detail))
+    service.checks_workflow.search_next_item = lambda **kwargs: (_ for _ in ()).throw(SessionManagerError(detail))
 
     service.checks_workflow._run_scan(
         user_key="user",
@@ -653,7 +790,7 @@ def test_checks_save_only_auto_apply_progress_counts_stored_and_resolved_separat
         "auto_applied_count": 1,
         "processed_entry_tokens": [service._checksEntryToken(resolved_entry)],
     })
-    service._writeChecksFindings = lambda **kwargs: captured_writes.append(kwargs)
+    service.checks_workflow.write_findings = lambda **kwargs: captured_writes.append(kwargs)
 
     result = service.searchNextChecksItem(
         user_key="user",

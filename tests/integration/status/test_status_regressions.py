@@ -148,7 +148,7 @@ def test_regression_finished_face_match_save_only_progress_uses_stored_finding_c
     assert progress["resume_cursor"]["findings_count"] == 0
 
 
-def test_regression_stale_face_match_progress_is_not_active_without_thread():
+def test_regression_persisted_running_face_match_progress_remains_active_without_local_thread():
     service = _service()
 
     progress = service._normalizeFaceMatchingProgressForDisplay("user", {
@@ -164,9 +164,9 @@ def test_regression_stale_face_match_progress_is_not_active_without_thread():
         },
     })
 
-    assert progress["running"] is False
-    assert progress["active"] is False
-    assert progress["stale"] is True
+    assert progress["running"] is True
+    assert progress["active"] is True
+    assert progress["stale"] is False
     assert progress["stop_requested"] is False
 
 

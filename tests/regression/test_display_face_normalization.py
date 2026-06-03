@@ -943,7 +943,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(progress.get("files_scanned"), 945)
         self.assertEqual(written, {})
 
-    def test_get_face_matching_progress_marks_persisted_running_state_stale_without_local_worker(self):
+    def test_get_face_matching_progress_preserves_persisted_running_state_without_local_worker(self):
         written = {}
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
             "operation_id": "face_match-existing",
@@ -968,14 +968,14 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         progress = self.service.getFaceMatchingProgress("user", compact_for_response=True)
 
-        self.assertFalse(progress.get("running"))
+        self.assertTrue(progress.get("running"))
         self.assertFalse(progress.get("finished"))
         self.assertFalse(progress.get("stop_requested"))
-        self.assertFalse(progress.get("active"))
-        self.assertTrue(progress.get("stale"))
+        self.assertTrue(progress.get("active"))
+        self.assertFalse(progress.get("stale"))
         self.assertEqual(progress.get("findings_count"), 7)
         self.assertEqual(progress.get("status", {}).get("schema_version"), 1)
-        self.assertNotEqual(progress.get("status", {}).get("phase"), "running")
+        self.assertEqual(progress.get("status", {}).get("phase"), "running")
         self.assertEqual(written, {})
 
     def test_finished_stale_face_matching_progress_omits_heavy_resume_payload(self):
@@ -1257,7 +1257,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "auto_applied_count": 1,
             "processed_entry_tokens": [],
         }
-        self.service._writeChecksFindings = lambda **kwargs: captured.update({"saved_findings": kwargs}) or True
+        self.service.checks_workflow.write_findings = lambda **kwargs: captured.update({"saved_findings": kwargs}) or True
 
         result = self.service.searchNextChecksItem(
             user_key="user",
@@ -1307,7 +1307,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             }
 
         self.service._resolveChecksReviewEntry = resolve_entry
-        self.service._writeChecksFindings = lambda **kwargs: captured.update({"saved_findings": kwargs}) or True
+        self.service.checks_workflow.write_findings = lambda **kwargs: captured.update({"saved_findings": kwargs}) or True
 
         result = self.service.searchNextChecksItem(
             user_key="user",
@@ -1345,7 +1345,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "item": None,
             "auto_applied_count": 1,
         }
-        self.service._writeChecksFindings = lambda **kwargs: captured.update({"saved_findings": kwargs}) or True
+        self.service.checks_workflow.write_findings = lambda **kwargs: captured.update({"saved_findings": kwargs}) or True
 
         result = self.service.searchNextChecksItem(
             user_key="user",
@@ -2119,7 +2119,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.service._buildCheckEntriesForType = lambda **kwargs: []
         self.service.session_manager.keepalive = Mock(return_value={})
 
-        with patch("imgdata.monotonic", side_effect=[0, 181]):
+        with patch("services.checks_workflow_service.monotonic", side_effect=[0, 181]):
             result = self.service.searchNextChecksItem(
                 user_key="user",
                 cookies={"_SSID": "sid"},
@@ -3254,6 +3254,67 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(exists)
         self.assertEqual(captured_flags, [True])
 
+    def test_stored_photos_face_entry_remaps_stale_item_id_by_path(self):
+        entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "image": {"id": 100, "filename": "test.jpg"},
+            "face": {"face_id": 5678, "person_id": 91},
+        }
+        stale_item_error = SessionManagerError({
+            "error": "api_failed",
+            "api": "SYNO.FotoTeam.Browse.Item",
+            "response": {"success": False, "error": {"code": 117}},
+        }, status_code=502)
+        self.service.core.getSharedFolder = Mock(return_value="/volume1/photo")
+        self.service.photos.findFotoTeamItemByPath = Mock(return_value={"id": 200, "filename": "test.jpg"})
+        self.service.photos.list_faceFotoTeamItems = Mock(side_effect=[
+            stale_item_error,
+            [{"face_id": 5678, "person_id": 91}],
+        ])
+
+        exists = self.service._storedFaceMatchEntryExists(
+            user_key="user",
+            cookies={},
+            base_url="http://example.test",
+            entry=entry,
+            image_faces_cache={},
+        )
+
+        self.assertTrue(exists)
+        self.assertEqual(entry["image"]["id"], 200)
+        self.assertEqual(entry["face"]["item_id"], 200)
+        self.assertEqual(
+            [call.kwargs["id_item"] for call in self.service.photos.list_faceFotoTeamItems.call_args_list],
+            [100, 200],
+        )
+        self.assertIsNone(self.service.photos.findFotoTeamItemByPath.call_args.kwargs["lookup_cache"])
+
+    def test_stored_photos_face_entry_keeps_error_when_path_resolves_same_item_id(self):
+        entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "image": {"id": 100},
+            "face": {"face_id": 5678},
+        }
+        stale_item_error = SessionManagerError({
+            "error": "api_failed",
+            "api": "SYNO.FotoTeam.Browse.Item",
+            "response": {"success": False, "error": {"code": 117}},
+        }, status_code=502)
+        self.service.core.getSharedFolder = Mock(return_value="/volume1/photo")
+        self.service.photos.findFotoTeamItemByPath = Mock(return_value={"id": 100})
+        self.service.photos.list_faceFotoTeamItems = Mock(side_effect=stale_item_error)
+
+        with self.assertRaises(SessionManagerError):
+            self.service._storedFaceMatchEntryExists(
+                user_key="user",
+                cookies={},
+                base_url="http://example.test",
+                entry=entry,
+                image_faces_cache={},
+            )
+
     def test_stored_missing_photos_face_entry_is_removed_when_photos_face_exists(self):
         metadata_face = MetadataFace.from_center_box(
             name="Person Known",
@@ -3620,7 +3681,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             {"review_type": "name_conflicts", "image_path": "photo/a.jpg"},
             {"review_type": "name_conflicts", "image_path": "photo/b.jpg"},
         ]
-        with patch.object(self.service, "getChecksFindingEntries", return_value={
+        with patch.object(self.service.checks_workflow, "get_finding_entries", return_value={
             "save_only": True,
             "entries": stored_entries,
         }):
@@ -3647,7 +3708,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "stop_requested_at": "2026-05-08T00:00:00+00:00",
         }
 
-        with patch.object(self.service, "getChecksFindingEntries", return_value={
+        with patch.object(self.service.checks_workflow, "get_finding_entries", return_value={
             "save_only": True,
             "entries": [{"review_type": "name_conflicts", "image_path": "photo/a.jpg"}],
         }):
@@ -3695,7 +3756,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["running"])
         thread_cls.assert_not_called()
 
-    def test_file_analysis_start_ignores_stale_face_matching_progress_without_worker(self):
+    def test_file_analysis_start_blocks_for_persisted_running_face_matching_progress_without_local_worker(self):
         self.service.runtime_state.memory("face_match_progress")["user"] = {
             "operation_id": "face-match-running",
             "running": True,
@@ -3710,10 +3771,10 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                 base_url="http://example.test",
             )
 
-        self.assertFalse(result.get("blocked_by_running_operation", False))
-        self.assertTrue(result["running"])
-        self.assertEqual(result["status"], "running")
-        thread_cls.assert_called_once()
+        self.assertTrue(result["blocked_by_running_operation"])
+        self.assertEqual(result["requested_operation"], "file_analysis")
+        self.assertEqual(result["running_operation"], "face_match")
+        thread_cls.assert_not_called()
 
     def test_face_matching_start_blocks_when_file_analysis_is_running(self):
         self.service.runtime_state.replace_singleton("file_analysis_progress", {
@@ -3723,7 +3784,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             "status": "running",
         })
 
-        with patch("imgdata.Thread") as thread_cls:
+        with patch("services.face_match_workflow_service.Thread") as thread_cls:
             result = self.service.startFaceMatchingDiscovery(
                 user_key="user",
                 cookies={},
