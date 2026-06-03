@@ -192,6 +192,69 @@ class MissingPhotosFacesEarlySkipTests(unittest.TestCase):
         self.assertEqual(len(running_writes[0]["entries"]), 1)
         self.assertEqual(write_findings_mock.call_args_list[-1].kwargs["status"], "finished")
 
+    def test_save_only_insightface_missing_faces_updates_findings_count(self):
+        image_path = "/volume1/photo/new.jpg"
+        face = self._face("")
+        detector_marker = object()
+
+        with patch.object(self.service, "pipPackagesStatus", return_value={"packages": {"INSIGHTFACE": {"installed": True}}}), \
+             patch.object(self.service.core, "getSharedFolder", return_value="/volume1/photo"), \
+             patch.object(self.service, "_getFaceMatchCandidatePaths", return_value=[image_path]), \
+             patch("imgdata.InsightFaceDetector") as detector_cls, \
+             patch.object(self.service, "_insightFaceDetectionToMetadataFace", return_value=face), \
+             patch.object(self.service, "_refreshFaceMatchingSessionIfNeeded", return_value=0.0), \
+             patch.object(self.service, "_shouldStopFaceMatching", return_value=False), \
+             patch.object(self.service.photos, "findFotoTeamItemByPath", return_value={"id": 42, "filename": "new.jpg"}), \
+             patch.object(self.service.photos, "list_faceFotoTeamItems", return_value=[]), \
+             patch.object(self.service, "_selectMissingPhotosFaceCandidate", return_value=(face, {"INSIGHTFACE": 1})), \
+             patch.object(self.service, "_writeFaceMatchFindings") as write_findings_mock:
+            detector_cls.return_value.detect.return_value = [detector_marker]
+            result = self.service.searchMissingPhotosFacesWithInsightFace(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                save_only=True,
+            )
+
+        self.assertTrue(result["searched"])
+        self.assertEqual(result["findings_count"], 1)
+        raw_progress = self.service.runtime_state.memory("face_match_progress")["user"]
+        self.assertEqual(raw_progress["findings_count"], 1)
+        self.assertEqual(raw_progress["resume_cursor"]["findings_count"], 1)
+        final_write = write_findings_mock.call_args_list[-1].kwargs
+        self.assertEqual(final_write["status"], "finished")
+        self.assertEqual(len(final_write["entries"]), 1)
+
+    def test_non_save_only_insightface_missing_face_checkpoints_result_before_return(self):
+        image_path = "/volume1/photo/new.jpg"
+        face = self._face("")
+        detector_marker = object()
+
+        with patch.object(self.service, "pipPackagesStatus", return_value={"packages": {"INSIGHTFACE": {"installed": True}}}), \
+             patch.object(self.service.core, "getSharedFolder", return_value="/volume1/photo"), \
+             patch.object(self.service, "_getFaceMatchCandidatePaths", return_value=[image_path]), \
+             patch("imgdata.InsightFaceDetector") as detector_cls, \
+             patch.object(self.service, "_insightFaceDetectionToMetadataFace", return_value=face), \
+             patch.object(self.service, "_refreshFaceMatchingSessionIfNeeded", return_value=0.0), \
+             patch.object(self.service, "_shouldStopFaceMatching", return_value=False), \
+             patch.object(self.service.photos, "findFotoTeamItemByPath", return_value={"id": 42, "filename": "new.jpg"}), \
+             patch.object(self.service.photos, "list_faceFotoTeamItems", return_value=[]), \
+             patch.object(self.service, "_selectMissingPhotosFaceCandidate", return_value=(face, {"INSIGHTFACE": 1})):
+            detector_cls.return_value.detect.return_value = [detector_marker]
+            result = self.service.searchMissingPhotosFacesWithInsightFace(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                save_only=False,
+            )
+
+        self.assertTrue(result["searched"])
+        self.assertEqual(result["findings_count"], 1)
+        raw_progress = self.service.runtime_state.memory("face_match_progress")["user"]
+        self.assertEqual(raw_progress["findings_count"], 1)
+        self.assertEqual(raw_progress["result"]["image_path"], image_path)
+        self.assertEqual(raw_progress["resume_cursor"]["findings_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
