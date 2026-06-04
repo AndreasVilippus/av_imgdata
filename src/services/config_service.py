@@ -88,6 +88,7 @@ class ConfigService:
                     "ACD": True,
                     "MICROSOFT": True,
                     "MWG_REGIONS": True,
+                    "IPTC_EXT_REGIONS": True,
                 },
             },
             "analysis": {
@@ -168,224 +169,44 @@ class ConfigService:
         self._merged_config_cache_signature = None
         return True
 
-    @staticmethod
-    def _normalize_checks_ignore_list(values: Any) -> list:
-        source = values if isinstance(values, list) else []
-        normalized = []
-        seen = set()
-        for value in source:
-            token = str(value or "").strip()
-            if not token or token in seen:
+    def normalizeConfig(self, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        return self._mergeDefaults(self.defaultConfig(), config if isinstance(config, dict) else {})
+
+    def _config_signature(self) -> Tuple[Any, ...]:
+        try:
+            stat = self._config_path.stat()
+            return (str(self._config_path), stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return (str(self._config_path), None, None)
+
+    @classmethod
+    def _mergeDefaults(cls, defaults: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
+        result = copy.deepcopy(defaults)
+        cls._deepUpdateKnownKeys(result, current)
+        return result
+
+    @classmethod
+    def _deepUpdateKnownKeys(cls, target: Dict[str, Any], source: Dict[str, Any]) -> None:
+        for key, value in source.items():
+            if key not in target:
                 continue
-            seen.add(token)
-            normalized.append(token)
-        return normalized
-
-    @classmethod
-    def checksIgnoreListDefinition(cls, review_type: Any) -> Dict[str, str]:
-        normalized_type = str(review_type or "").strip().lower()
-        return dict(cls.CHECKS_IGNORE_LISTS.get(normalized_type, {}))
-
-    @classmethod
-    def checksIgnoreEnabledKey(cls, review_type: Any) -> str:
-        return cls.checksIgnoreListDefinition(review_type).get("enabled_key", "")
-
-    def checksIgnoreListPath(self, review_type: Any) -> Optional[Path]:
-        definition = self.checksIgnoreListDefinition(review_type)
-        filename = definition.get("filename", "")
-        if not filename:
-            return None
-        return self._config_path.parent / "ignore_lists" / filename
-
-    def readChecksIgnoreList(self, review_type: Any) -> list:
-        candidate = self.checksIgnoreListPath(review_type)
-        if candidate is None or not candidate.exists() or not candidate.is_file():
-            return []
-        try:
-            with candidate.open("r", encoding="utf-8") as handle:
-                values = [line.rstrip("\r\n") for line in handle]
-        except Exception:
-            return []
-        return self._normalize_checks_ignore_list(values)
-
-    def writeChecksIgnoreList(self, review_type: Any, values: Any) -> bool:
-        candidate = self.checksIgnoreListPath(review_type)
-        if candidate is None:
-            return False
-        normalized = self._normalize_checks_ignore_list(values)
-        try:
-            candidate.parent.mkdir(parents=True, exist_ok=True)
-            with candidate.open("w", encoding="utf-8") as handle:
-                for token in normalized:
-                    handle.write(token)
-                    handle.write("\n")
-        except Exception:
-            return False
-
-        self._merged_config_cache = None
-        self._merged_config_cache_signature = None
-        return True
-
-    def appendChecksIgnoreToken(self, review_type: Any, token: Any) -> Dict[str, Any]:
-        normalized_type = str(review_type or "").strip().lower()
-        normalized_token = str(token or "").strip()
-        if not normalized_type or not normalized_token:
-            return {"saved": False, "reason": "invalid_ignore_entry"}
-        current = self.readChecksIgnoreList(normalized_type)
-        updated = self._normalize_checks_ignore_list([*current, normalized_token])
-        saved = self.writeChecksIgnoreList(normalized_type, updated)
-        return {
-            "saved": bool(saved),
-            "count": len(updated),
-            "token": normalized_token,
-            "path": str(self.checksIgnoreListPath(normalized_type) or ""),
-        }
-
-    def clearChecksIgnoreList(self, review_type: Any) -> bool:
-        return self.writeChecksIgnoreList(review_type, [])
-
-    def getChecksIgnoreListsStatus(self) -> Dict[str, Dict[str, Any]]:
-        status: Dict[str, Dict[str, Any]] = {}
-        for review_type in self.CHECKS_IGNORE_LISTS:
-            candidate = self.checksIgnoreListPath(review_type)
-            entries = self.readChecksIgnoreList(review_type)
-            status[review_type] = {
-                "count": len(entries),
-                "path": str(candidate) if candidate is not None else "",
-            }
-        return status
+            if isinstance(target[key], dict) and isinstance(value, dict):
+                cls._deepUpdateKnownKeys(target[key], value)
+            else:
+                target[key] = value
 
     def migrateLegacyChecksIgnoreLists(self, config: Dict[str, Any]) -> None:
         if not isinstance(config, dict):
             return
-        analysis = config.get("analysis") if isinstance(config.get("analysis"), dict) else {}
-        checks = analysis.get("CHECKS") if isinstance(analysis.get("CHECKS"), dict) else {}
-        for review_type, definition in self.CHECKS_IGNORE_LISTS.items():
-            legacy_values = self._normalize_checks_ignore_list(checks.get(definition["legacy_key"]))
-            if not legacy_values:
+        review = config.setdefault("review", {})
+        if not isinstance(review, dict):
+            return
+        ignore_lists = review.setdefault("CHECKS_IGNORE_LISTS", {})
+        if not isinstance(ignore_lists, dict):
+            return
+        for spec in self.CHECKS_IGNORE_LISTS.values():
+            legacy_key = spec["legacy_key"]
+            enabled_key = spec["enabled_key"]
+            if legacy_key not in review:
                 continue
-            current_values = self.readChecksIgnoreList(review_type)
-            merged_values = self._normalize_checks_ignore_list([*current_values, *legacy_values])
-            self.writeChecksIgnoreList(review_type, merged_values)
-
-    def _config_signature(self) -> Tuple[Any, ...]:
-        signature_parts: list = [str(self._config_path)]
-        try:
-            stat = self._config_path.stat()
-            signature_parts.append((stat.st_mtime_ns, stat.st_size))
-        except (FileNotFoundError, OSError):
-            signature_parts.append((0, 0))
-
-        for review_type in sorted(self.CHECKS_IGNORE_LISTS.keys()):
-            candidate = self.checksIgnoreListPath(review_type)
-            try:
-                stat = candidate.stat()
-                signature_parts.append((review_type, stat.st_mtime_ns, stat.st_size))
-            except (FileNotFoundError, OSError, AttributeError):
-                signature_parts.append((review_type, 0, 0))
-
-        return tuple(signature_parts)
-
-    @classmethod
-    def normalizeConfig(cls, config: Dict[str, Any]) -> Dict[str, Any]:
-        root = cls._merge_valid_config(cls.defaultConfig(), config if isinstance(config, dict) else {})
-
-        analysis = root.get("analysis") if isinstance(root.get("analysis"), dict) else {}
-        checks = analysis.get("CHECKS") if isinstance(analysis.get("CHECKS"), dict) else {}
-        checks["DUPLICATE_FACES"] = bool(checks.get("DUPLICATE_FACES", True))
-        checks["POSITION_DEVIATIONS"] = bool(checks.get("POSITION_DEVIATIONS", True))
-        checks["POSITION_DEVIATIONS_INCLUDE_PHOTOS"] = bool(checks.get("POSITION_DEVIATIONS_INCLUDE_PHOTOS", True))
-        checks["DIMENSION_ISSUES"] = bool(checks.get("DIMENSION_ISSUES", True))
-        checks["NAME_CONFLICTS"] = bool(checks.get("NAME_CONFLICTS", True))
-        checks["NAME_CONFLICTS_INCLUDE_PHOTOS"] = bool(checks.get("NAME_CONFLICTS_INCLUDE_PHOTOS", True))
-        checks["NAME_CONFLICT_OVERLAP_THRESHOLD"] = cls._clamp_float(checks.get("NAME_CONFLICT_OVERLAP_THRESHOLD", 0.75), 0.0, 1.0, 0.75)
-        checks["NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"] = bool(checks.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH", True))
-        checks["NAME_CONFLICT_MIN_BEST_MATCH_MARGIN"] = cls._clamp_float(checks.get("NAME_CONFLICT_MIN_BEST_MATCH_MARGIN", 0.05), 0.0, 1.0, 0.05)
-        checks["SINGLE_SOURCE_OF_TRUTH"] = str(checks.get("SINGLE_SOURCE_OF_TRUTH", ""))
-        analysis["CHECKS"] = checks
-        root["analysis"] = analysis
-
-        runtime = root.get("runtime") if isinstance(root.get("runtime"), dict) else {}
-        findings_storage_format = str(runtime.get("FINDINGS_STORAGE_FORMAT", "json") or "").strip().lower()
-        if findings_storage_format not in {"json"}:
-            findings_storage_format = "json"
-        runtime["FINDINGS_STORAGE_FORMAT"] = findings_storage_format
-        root["runtime"] = runtime
-
-        debug = root.get("debug") if isinstance(root.get("debug"), dict) else {}
-        debug["IO_METRICS_ENABLED"] = bool(debug.get("IO_METRICS_ENABLED", False))
-        debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED", False))
-        debug["BACKEND_DEBUG_LOG_PATH"] = str(debug.get("BACKEND_DEBUG_LOG_PATH") or "")
-        try:
-            backend_debug_log_max_bytes = int(debug.get("BACKEND_DEBUG_LOG_MAX_BYTES") or 1048576)
-        except (TypeError, ValueError):
-            backend_debug_log_max_bytes = 1048576
-        try:
-            backend_debug_log_backups = int(debug.get("BACKEND_DEBUG_LOG_BACKUPS") or 3)
-        except (TypeError, ValueError):
-            backend_debug_log_backups = 3
-        debug["BACKEND_DEBUG_LOG_MAX_BYTES"] = max(65536, min(10485760, backend_debug_log_max_bytes))
-        debug["BACKEND_DEBUG_LOG_BACKUPS"] = max(1, min(10, backend_debug_log_backups))
-        root["debug"] = debug
-
-        review = root.get("review") if isinstance(root.get("review"), dict) else {}
-        review_options = review.get("OPTIONS") if isinstance(review.get("OPTIONS"), dict) else {}
-        review_ignore = review.get("CHECKS_IGNORE_LISTS") if isinstance(review.get("CHECKS_IGNORE_LISTS"), dict) else {}
-        review_options["DUPLICATE_FACE_SUGGESTIONS"] = bool(review_options.get("DUPLICATE_FACE_SUGGESTIONS", True))
-        review_ignore["DUPLICATE_FACES_ENABLED"] = bool(review_ignore.get("DUPLICATE_FACES_ENABLED", True))
-        review_ignore["POSITION_DEVIATIONS_ENABLED"] = bool(review_ignore.get("POSITION_DEVIATIONS_ENABLED", True))
-        review_ignore["NAME_CONFLICTS_ENABLED"] = bool(review_ignore.get("NAME_CONFLICTS_ENABLED", True))
-        review["OPTIONS"] = review_options
-        review["CHECKS_IGNORE_LISTS"] = review_ignore
-        root["review"] = review
-
-        files = root.get("files") if isinstance(root.get("files"), dict) else {}
-        use_exiftool_for_sidecars = bool(files.get("USE_EXIFTOOL_FOR_SIDECARS", False))
-        sidecar_exiftool_fallback_enabled = bool(files.get("SIDECAR_EXIFTOOL_FALLBACK_ENABLED", False))
-        files["USE_EXIFTOOL_FOR_SIDECARS"] = use_exiftool_for_sidecars
-        files["SIDECAR_EXIFTOOL_FALLBACK_ENABLED"] = sidecar_exiftool_fallback_enabled
-        sidecar_read_mode = str(files.get("SIDECAR_READ_MODE", "") or "").strip().lower()
-        if sidecar_read_mode not in {"direct_first", "direct_only", "exiftool_first", "exiftool_only"}:
-            sidecar_read_mode = "direct_first" if (use_exiftool_for_sidecars or sidecar_exiftool_fallback_enabled) else "direct_only"
-        files["SIDECAR_READ_MODE"] = sidecar_read_mode
-        files["EMBEDDED_XMP_FULL_SCAN_ENABLED"] = bool(files.get("EMBEDDED_XMP_FULL_SCAN_ENABLED", False))
-        files["EMBEDDED_XMP_FULL_SCAN_MAX_BYTES"] = cls._clamp_int(files.get("EMBEDDED_XMP_FULL_SCAN_MAX_BYTES", 67108864), 1048576, 536870912, 67108864)
-        files["EXIFTOOL_PERSISTENT_ENABLED"] = bool(files.get("EXIFTOOL_PERSISTENT_ENABLED", True))
-        files["EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS"] = cls._clamp_int(files.get("EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS", 30), 1, 300, 30)
-        root["files"] = files
-
-        return root
-
-    @staticmethod
-    def _clamp_int(value: Any, minimum: int, maximum: int, default: int) -> int:
-        try:
-            numeric = int(value)
-        except (TypeError, ValueError):
-            return int(default)
-        if numeric < minimum:
-            return int(minimum)
-        if numeric > maximum:
-            return int(maximum)
-        return numeric
-
-    @staticmethod
-    def _clamp_float(value: Any, minimum: float, maximum: float, default: float) -> float:
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            return float(default)
-        if numeric < minimum:
-            return float(minimum)
-        if numeric > maximum:
-            return float(maximum)
-        return numeric
-
-    @staticmethod
-    def _merge_valid_config(default: Any, current: Any) -> Any:
-        if isinstance(default, dict):
-            current_dict = current if isinstance(current, dict) else {}
-            return {
-                key: ConfigService._merge_valid_config(value, current_dict.get(key))
-                for key, value in default.items()
-            }
-        return copy.deepcopy(current) if current is not None else copy.deepcopy(default)
+            ignore_lists[enabled_key] = bool(review.pop(legacy_key))
