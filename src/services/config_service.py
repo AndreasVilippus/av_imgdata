@@ -3,7 +3,7 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class ConfigService:
@@ -169,15 +169,26 @@ class ConfigService:
         self._merged_config_cache_signature = None
         return True
 
-    def normalizeConfig(self, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        return self._mergeDefaults(self.defaultConfig(), config if isinstance(config, dict) else {})
+    @classmethod
+    def normalizeConfig(cls, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        normalized = cls._mergeDefaults(cls.defaultConfig(), config if isinstance(config, dict) else {})
+        cls._normalizeConfigValues(normalized)
+        return normalized
 
     def _config_signature(self) -> Tuple[Any, ...]:
+        ignore_signature: List[Tuple[str, Optional[int], Optional[int]]] = []
+        for spec in self.CHECKS_IGNORE_LISTS.values():
+            path = self._checks_ignore_list_path_for_spec(spec)
+            try:
+                stat = path.stat()
+                ignore_signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                ignore_signature.append((str(path), None, None))
         try:
             stat = self._config_path.stat()
-            return (str(self._config_path), stat.st_mtime_ns, stat.st_size)
+            return (str(self._config_path), stat.st_mtime_ns, stat.st_size, tuple(ignore_signature))
         except OSError:
-            return (str(self._config_path), None, None)
+            return (str(self._config_path), None, None, tuple(ignore_signature))
 
     @classmethod
     def _mergeDefaults(cls, defaults: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
@@ -195,9 +206,84 @@ class ConfigService:
             else:
                 target[key] = value
 
+    @classmethod
+    def _normalizeConfigValues(cls, config: Dict[str, Any]) -> None:
+        files = config.get("files", {}) if isinstance(config.get("files"), dict) else {}
+        sidecar_mode = str(files.get("SIDECAR_READ_MODE") or "").strip().lower()
+        if sidecar_mode not in {"direct_first", "direct_only", "exiftool_first", "exiftool_only"}:
+            sidecar_mode = "direct_first"
+        files["SIDECAR_READ_MODE"] = sidecar_mode
+        files["EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS"] = cls._clamp_int(
+            files.get("EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS"),
+            default=30,
+            minimum=1,
+            maximum=300,
+        )
+
+        runtime = config.get("runtime", {}) if isinstance(config.get("runtime"), dict) else {}
+        storage_format = str(runtime.get("FINDINGS_STORAGE_FORMAT") or "").strip().lower()
+        runtime["FINDINGS_STORAGE_FORMAT"] = storage_format if storage_format in {"json"} else "json"
+
+        debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}
+        debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED"))
+        debug["IO_METRICS_ENABLED"] = bool(debug.get("IO_METRICS_ENABLED"))
+        debug["BACKEND_DEBUG_LOG_MAX_BYTES"] = cls._clamp_int(
+            debug.get("BACKEND_DEBUG_LOG_MAX_BYTES"),
+            default=1048576,
+            minimum=65536,
+            maximum=10485760,
+        )
+        debug["BACKEND_DEBUG_LOG_BACKUPS"] = cls._clamp_int(
+            debug.get("BACKEND_DEBUG_LOG_BACKUPS"),
+            default=3,
+            minimum=0,
+            maximum=10,
+        )
+
+        checks = config.get("analysis", {}).get("CHECKS", {}) if isinstance(config.get("analysis"), dict) else {}
+        if isinstance(checks, dict):
+            checks["NAME_CONFLICT_OVERLAP_THRESHOLD"] = cls._clamp_float(
+                checks.get("NAME_CONFLICT_OVERLAP_THRESHOLD"),
+                default=0.75,
+                minimum=0.0,
+                maximum=1.0,
+            )
+            checks["NAME_CONFLICT_MIN_BEST_MATCH_MARGIN"] = cls._clamp_float(
+                checks.get("NAME_CONFLICT_MIN_BEST_MATCH_MARGIN"),
+                default=0.05,
+                minimum=0.0,
+                maximum=1.0,
+            )
+            checks["NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"] = bool(checks.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"))
+
+    @staticmethod
+    def _clamp_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            number = default
+        return max(minimum, min(maximum, number))
+
+    @staticmethod
+    def _clamp_float(value: Any, *, default: float, minimum: float, maximum: float) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = default
+        return max(minimum, min(maximum, number))
+
     def migrateLegacyChecksIgnoreLists(self, config: Dict[str, Any]) -> None:
         if not isinstance(config, dict):
             return
+        analysis = config.get("analysis")
+        checks = analysis.get("CHECKS") if isinstance(analysis, dict) else None
+        if isinstance(checks, dict):
+            for review_type, spec in self.CHECKS_IGNORE_LISTS.items():
+                legacy_key = spec["legacy_key"]
+                legacy_tokens = checks.pop(legacy_key, None)
+                if isinstance(legacy_tokens, list):
+                    existing = self.readChecksIgnoreList(review_type)
+                    self.writeChecksIgnoreList(review_type, existing + legacy_tokens)
         review = config.setdefault("review", {})
         if not isinstance(review, dict):
             return
@@ -210,3 +296,70 @@ class ConfigService:
             if legacy_key not in review:
                 continue
             ignore_lists[enabled_key] = bool(review.pop(legacy_key))
+
+    def readChecksIgnoreList(self, review_type: Any) -> List[str]:
+        spec = self._checks_ignore_list_spec(review_type)
+        if not spec:
+            return []
+        path = self._checks_ignore_list_path_for_spec(spec)
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return self._normalize_ignore_tokens(handle.readlines())
+        except OSError:
+            return []
+
+    def writeChecksIgnoreList(self, review_type: Any, tokens: Any) -> bool:
+        spec = self._checks_ignore_list_spec(review_type)
+        if not spec:
+            return False
+        path = self._checks_ignore_list_path_for_spec(spec)
+        normalized = self._normalize_ignore_tokens(tokens if isinstance(tokens, list) else [])
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", encoding="utf-8") as handle:
+                for token in normalized:
+                    handle.write(f"{token}\n")
+        except OSError:
+            return False
+        self._invalidate_cache()
+        return True
+
+    def appendChecksIgnoreToken(self, review_type: Any, token: Any) -> Dict[str, Any]:
+        normalized_token = str(token or "").strip()
+        if not normalized_token:
+            return {"saved": False, "token": "", "count": len(self.readChecksIgnoreList(review_type))}
+        tokens = self.readChecksIgnoreList(review_type)
+        if normalized_token not in tokens:
+            tokens.append(normalized_token)
+            saved = self.writeChecksIgnoreList(review_type, tokens)
+        else:
+            saved = True
+        return {"saved": bool(saved), "token": normalized_token, "count": len(tokens)}
+
+    def clearChecksIgnoreList(self, review_type: Any) -> bool:
+        return self.writeChecksIgnoreList(review_type, [])
+
+    @classmethod
+    def checksIgnoreEnabledKey(cls, review_type: Any) -> str:
+        spec = cls.CHECKS_IGNORE_LISTS.get(str(review_type or "").strip().lower())
+        return spec["enabled_key"] if spec else ""
+
+    def _checks_ignore_list_spec(self, review_type: Any) -> Optional[Dict[str, str]]:
+        normalized = str(review_type or "").strip().lower()
+        return self.CHECKS_IGNORE_LISTS.get(normalized)
+
+    def _checks_ignore_list_path_for_spec(self, spec: Dict[str, str]) -> Path:
+        return self._config_path.parent / "ignore_lists" / spec["filename"]
+
+    @staticmethod
+    def _normalize_ignore_tokens(tokens: Any) -> List[str]:
+        result: List[str] = []
+        for token in tokens if isinstance(tokens, list) else []:
+            normalized = str(token or "").strip()
+            if normalized and normalized not in result:
+                result.append(normalized)
+        return result
+
+    def _invalidate_cache(self) -> None:
+        self._merged_config_cache = None
+        self._merged_config_cache_signature = None

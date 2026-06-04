@@ -61,11 +61,18 @@ class IptcRegionsParser:
     @staticmethod
     def _iter_region_nodes(root: ET.Element) -> List[ET.Element]:
         nodes: List[ET.Element] = []
+        seen = set()
         for tag_name in ("ImageRegion", "ImageRegions"):
             for container in root.findall(f".//Iptc4xmpExt:{tag_name}", NS_IPTC_EXT):
-                nodes.extend(IptcRegionsParser._region_items_from_container(container))
+                for node in IptcRegionsParser._region_items_from_container(container):
+                    if id(node) not in seen:
+                        seen.add(id(node))
+                        nodes.append(node)
             for container in root.findall(f".//iptcExt:{tag_name}", NS_IPTC_EXT):
-                nodes.extend(IptcRegionsParser._region_items_from_container(container))
+                for node in IptcRegionsParser._region_items_from_container(container):
+                    if id(node) not in seen:
+                        seen.add(id(node))
+                        nodes.append(node)
         return nodes
 
     @staticmethod
