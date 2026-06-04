@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from models.metadata_face import MetadataFace
 from models.metadata_payload import MetadataPayload
 from parser.acd_parser import AcdParser
+from parser.iptc_regions_parser import IptcRegionsParser
 from parser.microsoft_parser import MicrosoftParser
 from parser.mwg_regions_parser import MwgRegionsParser
 from parser.xmp_helpers import (
@@ -30,6 +31,7 @@ class MetadataParser:
         use_acd: bool = True,
         use_microsoft: bool = True,
         use_mwg_regions: bool = True,
+        use_iptc_ext_regions: bool = True,
         include_unnamed_acd: bool = False,
     ) -> MetadataPayload:
         faces: List[MetadataFace] = []
@@ -52,6 +54,8 @@ class MetadataParser:
             if use_mwg_regions:
                 mwg_context = self._extractMwgRegionsContext(xmp_content)
                 faces.extend(self._parseMwgRegionsFaces(xmp_content, source=xmp_source or "metadata"))
+            if use_iptc_ext_regions:
+                faces.extend(self._parseIptcExtRegionsFaces(xmp_content, source=xmp_source or "metadata"))
 
         xmp_orientation = self._extractXmpTiffOrientation(xmp_content) if xmp_content else None
         if image_orientation is None:
@@ -59,7 +63,7 @@ class MetadataParser:
 
         if image_orientation not in (None, 1):
             for face in faces:
-                if face.source_format in {"MWG_REGIONS", "MICROSOFT"}:
+                if face.source_format in {"MWG_REGIONS", "MICROSOFT", "IPTC_EXT_REGIONS"}:
                     face.orientation = image_orientation
 
         applied_dimensions = mwg_context.get("mwg_applied_to_dimensions") if isinstance(mwg_context.get("mwg_applied_to_dimensions"), dict) else {}
@@ -109,6 +113,10 @@ class MetadataParser:
     @staticmethod
     def _parseMwgRegionsFaces(xmp_content: str, *, source: str) -> List[MetadataFace]:
         return MwgRegionsParser.parse_faces(xmp_content, source=source)
+
+    @staticmethod
+    def _parseIptcExtRegionsFaces(xmp_content: str, *, source: str) -> List[MetadataFace]:
+        return IptcRegionsParser.parse_faces(xmp_content, source=source)
 
     @staticmethod
     def _extractMwgRegionsContext(xmp_content: str) -> Dict[str, Any]:
