@@ -24,6 +24,19 @@ NS_MICROSOFT = {
     "MPReg": "http://ns.microsoft.com/photo/1.2/t/Region#",
 }
 
+NS_IPTC_EXT = {
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "Iptc4xmpExt": "http://iptc.org/std/Iptc4xmpExt/2008-02-29/",
+    "iptcExt": "http://iptc.org/std/Iptc4xmpExt/2008-02-29/",
+    "stArea": "http://ns.adobe.com/xmp/sType/Area#",
+}
+
+NS_IPTC_CORE = {
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "Iptc4xmpCore": "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+    "iptcCore": "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+}
+
 
 def read_text_attribute_or_child(node: ET.Element, local_name: str, namespace: str) -> str:
     value = node.get(f"{{{namespace}}}{local_name}")
