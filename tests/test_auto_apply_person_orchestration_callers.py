@@ -59,6 +59,49 @@ class AutoApplyPersonOrchestrationCallerTests(unittest.TestCase):
         self.assertEqual(result["entries"], [])
         self.assertEqual(result["transferred_count"], 1)
 
+    def test_findings_auto_apply_updates_runtime_transferred_count_after_checkpoint(self):
+        entry = {
+            "action": "search_photo_face_in_file",
+            "image_path": "/volume1/photo/image.jpg",
+            "face": {"face_id": 456, "item_id": 789, "source_format": "PHOTOS"},
+            "matched_person": {"id": 123, "name": "Alice"},
+        }
+        findings = {
+            "status": "finished",
+            "shared_folder": "/volume1/photo",
+            "transferred_count": 7,
+            "entries": [entry],
+        }
+
+        with patch.object(self.service, "getFaceMatchFindings", return_value=findings), \
+             patch.object(self.service.photos, "listFotoTeamPersonKnown", return_value=[]), \
+             patch.object(self.service.photos, "sortPersonsForFaceMatch", side_effect=lambda persons: persons), \
+             patch.object(self.service, "_storedFaceMatchEntryExists", return_value=True), \
+             patch.object(self.service, "_resolveStoredFaceMatchEntry", return_value=entry), \
+             patch.object(
+                 self.service,
+                 "resolveOrCreatePhotosPersonForExistingFace",
+                 return_value={"updated": True, "operation": "photos_assign"},
+             ), \
+             patch.object(self.service, "_persistFaceMatchFindingsEntries"), \
+             patch.object(self.service, "_setFaceMatchingProgress") as progress_mock:
+            result = self.service.getFaceMatchFindingEntries(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                auto=True,
+            )
+
+        self.assertEqual(result["transferred_count"], 8)
+        checkpoint_updates = [
+            call.kwargs
+            for call in progress_mock.call_args_list
+            if call.args and call.args[0] == "user" and call.kwargs.get("transferred_count") == 8
+        ]
+        self.assertTrue(checkpoint_updates)
+        self.assertTrue(any(update.get("running") is True for update in checkpoint_updates))
+        self.assertTrue(any(update.get("entries_current") == 1 for update in checkpoint_updates))
+
     def test_findings_auto_apply_keeps_later_api_failure_after_checkpointing_success(self):
         first_entry = {
             "action": "search_photo_face_in_file",
@@ -197,7 +240,7 @@ class AutoApplyPersonOrchestrationCallerTests(unittest.TestCase):
         self.assertEqual(result["entries"], [unreadable_entry, assignable_entry])
         self.assertEqual(result["transferred_count"], 0)
 
-    def test_findings_auto_apply_stops_at_first_unknown_before_later_known_face(self):
+    def test_findings_auto_apply_skips_unknown_and_applies_later_known_face(self):
         unknown_entry = {
             "action": "search_photo_face_in_file",
             "image_path": "/volume1/photo/unknown.jpg",
@@ -225,7 +268,8 @@ class AutoApplyPersonOrchestrationCallerTests(unittest.TestCase):
                  self.service,
                  "resolveOrCreatePhotosPersonForExistingFace",
                  return_value={"updated": True, "operation": "photos_assign"},
-             ) as orchestrate_mock:
+             ) as orchestrate_mock, \
+             patch.object(self.service, "_persistFaceMatchFindingsEntries") as persist_mock:
             result = self.service.getFaceMatchFindingEntries(
                 user_key="user",
                 cookies={},
@@ -233,14 +277,28 @@ class AutoApplyPersonOrchestrationCallerTests(unittest.TestCase):
                 auto=True,
             )
 
-        orchestrate_mock.assert_not_called()
+        orchestrate_mock.assert_called_once_with(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            image_path="/volume1/photo/assignable.jpg",
+            face_id=457,
+            person_name="Alice",
+            item_id=101,
+            create_missing_person=False,
+        )
+        persist_mock.assert_called()
+        self.assertEqual(persist_mock.call_args.kwargs["entries"], [unknown_entry])
+        self.assertEqual(persist_mock.call_args.kwargs["transferred_count"], 1)
+        self.assertEqual(len(result["entries"]), 1)
+        self.assertEqual(result["transferred_count"], 1)
         self.assertEqual(result["entries"][0]["face"]["face_id"], 456)
         self.assertIsNone(result["entries"][0]["matched_person"])
-        self.assertEqual(result["entries"][1], assignable_entry)
         progress = self.service.getFaceMatchingProgress("user")
         self.assertEqual(progress["message_key"], "face_match:progress_review_required")
-        self.assertEqual(progress["entries_current"], 1)
+        self.assertEqual(progress["entries_current"], 2)
         self.assertEqual(progress["entries_total"], 2)
+        self.assertEqual(progress["transferred_count"], 1)
         self.assertFalse(progress["running"])
 
     def test_findings_auto_apply_does_not_swallow_login_required_error(self):

@@ -421,34 +421,68 @@ export default {
 					state.suggestLoading = false;
 				}
 			}
-		},
-		selectChecksDuplicateSuggestion(side, person) {
-			if (!person || !person.id) {
-				return;
-			}
-			const state = this.getChecksDuplicateAssignment(side);
-			state.selectedPerson = person;
-			state.name = person.name || '';
-			state.suggestions = [];
-			state.showSuggestions = false;
-			state.suggestLoading = false;
-		},
-		canAssignChecksFaceToPerson(item, side) {
-			if (!this.isChecksFaceAssignmentSupported(item) || this.checksActionLocked || this.checksLoading || !item || !item.image_path) {
-				return false;
-			}
+			},
+			selectChecksDuplicateSuggestion(side, person) {
+				if (!person || !person.id) {
+					return;
+				}
+				const state = this.getChecksDuplicateAssignment(side);
+				state.selectedPerson = person;
+				state.name = person.name || '';
+				state.suggestions = [];
+				state.showSuggestions = false;
+				state.suggestLoading = false;
+			},
+			async resolveChecksDuplicateExactPerson(side) {
+				const state = this.getChecksDuplicateAssignment(side);
+				if (state.selectedPerson && state.selectedPerson.id) {
+					return state.selectedPerson;
+				}
+				const targetName = String(state.name || '').trim();
+				if (!targetName) {
+					return null;
+				}
+				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_person_suggest', {
+					name_prefix: targetName,
+					limit: 10,
+				});
+				const root = this.getResponseData(data);
+				const suggestions = Array.isArray(root.list) ? root.list : [];
+				const normalizedTarget = this.normalizeFaceMatchName(targetName);
+				const exact = suggestions.find((person) =>
+					person
+					&& person.id
+					&& this.normalizeFaceMatchName(person.name) === normalizedTarget
+				);
+				if (exact) {
+					this.selectChecksDuplicateSuggestion(side, exact);
+					return exact;
+				}
+				return null;
+			},
+			getChecksPhotosFacePersonId(face) {
+				if (!face || !this.isChecksPhotosFace(face)) {
+					return null;
+				}
+				const personId = Number(face.person_id);
+				return Number.isFinite(personId) && personId > 0 ? personId : null;
+			},
+			canAssignChecksFaceToPerson(item, side) {
+				if (!this.isChecksFaceAssignmentSupported(item) || this.checksActionLocked || this.checksLoading || !item || !item.image_path) {
+					return false;
+				}
 			const state = this.getChecksDuplicateAssignment(side);
 			const face = side === 'left'
 				? (item.left_face_target || item.left_face)
 				: (item.right_face_target || item.right_face);
 			const name = String(state.name || '').trim();
 			if (!face || !name) {
-				return false;
-			}
-			return this.isChecksMetadataFace(face) || this.isChecksPhotosFace(face)
-				? true
-				: !!(state.selectedPerson && state.selectedPerson.id);
-		},
+					return false;
+				}
+				return this.isChecksMetadataFace(face) || this.isChecksPhotosFace(face)
+					? true
+					: !!(state.selectedPerson && state.selectedPerson.id);
+			},
 		showChecksPopup(message) {
 			if (typeof window !== 'undefined' && typeof window.alert === 'function') {
 				window.alert(message);
@@ -1227,6 +1261,8 @@ export default {
 				const data = await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_start', {
 					source_mode: this.selectedChecksAction,
 					check_type: this.selectedChecksType,
+					auto_apply_suggested_names: this.checksAutoApplySuggestedNames,
+					auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates,
 				});
 				const root = this.getResponseData(data);
 			this.applyChecksStartProgress(root);
@@ -1262,6 +1298,11 @@ export default {
 		},
 		async loadChecksItemAtIndex(index) {
 			let resolvedIndex = index;
+			const autoApplyActive = !!(
+				this.checksAutoApplySuggestedNames
+				|| this.checksAutoApplySuggestedDuplicates
+			);
+			let deferredReview = null;
 			while (resolvedIndex < this.checksEntries.length) {
 				if (this.checksStopRequested) {
 					this.checksStatusMessage = this.$avt('checks:status_stop_requested', 'Stop requested. The current check action will stop shortly.');
@@ -1306,6 +1347,18 @@ export default {
 					skippedDelta: !Object.keys(item).length && autoAppliedCount <= 0 ? 1 : 0,
 				});
 				if (Object.keys(item).length && this.matchesSelectedChecksType(item.review_type)) {
+					if (autoApplyActive && autoAppliedCount <= 0) {
+						if (!deferredReview) {
+							deferredReview = { index: resolvedIndex, item };
+						}
+						this.checksStatusMessage = this.$avt(
+							'checks:status_finding_deferred',
+							'Entry {current} requires review. Continuing automatic processing...',
+							{ current: resolvedIndex + 1 }
+						);
+						resolvedIndex += 1;
+						continue;
+					}
 					this.checksActionLocked = false;
 					this.checksCurrentItem = item;
 					this.checksCurrentIndex = resolvedIndex;
@@ -1344,6 +1397,18 @@ export default {
 					continue;
 				}
 				resolvedIndex += 1;
+			}
+			if (deferredReview) {
+				this.checksActionLocked = false;
+				this.checksCurrentItem = deferredReview.item;
+				this.checksCurrentIndex = deferredReview.index;
+				this.syncChecksDuplicateAssignmentState(deferredReview.item);
+				this.checksStatusMessage = this.$avt(
+					'checks:status_loaded',
+					'{count} entries loaded.',
+					{ count: this.getChecksListTotalCount() }
+				);
+				return;
 			}
 			this.checksActionLocked = false;
 			this.checksCurrentItem = null;
@@ -1710,29 +1775,34 @@ export default {
 				: (item.right_face_target || item.right_face);
 			if (!this.canAssignChecksFaceToPerson(item, side) || !face) {
 				return;
-			}
-			this.checksActionLocked = true;
-			this.checksLoading = true;
-			let keepLoadingState = false;
-			const reloadIndex = this.checksCurrentIndex;
-			try {
-				const targetName = String(state.name || '').trim();
-				const shouldRenameOrCreate = this.isChecksMetadataFace(face) || !state.selectedPerson;
-				const data = shouldRenameOrCreate
-					? await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_replace_metadata_face_name', {
-						image_path: item.image_path,
-						face,
-						new_name: targetName,
-						review_type: item.review_type,
-						create_missing_person: this.isChecksPhotosFace(face),
-					})
-					: await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_assign_face_person', {
-						image_path: item.image_path,
-						face,
-						person_id: state.selectedPerson.id,
-						person_name: targetName,
-						review_type: item.review_type,
-					});
+				}
+				this.checksActionLocked = true;
+				this.checksLoading = true;
+				let keepLoadingState = false;
+				const reloadIndex = this.checksCurrentIndex;
+				try {
+					const targetName = String(state.name || '').trim();
+					let selectedPerson = state.selectedPerson;
+					if (!selectedPerson && this.isChecksPhotosFace(face)) {
+						selectedPerson = await this.resolveChecksDuplicateExactPerson(side);
+					}
+					const shouldRenameOrCreate = this.isChecksMetadataFace(face) || !selectedPerson;
+					const canCreatePhotosPerson = this.isChecksPhotosFace(face) && !this.getChecksPhotosFacePersonId(face);
+					const data = shouldRenameOrCreate
+						? await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_replace_metadata_face_name', {
+							image_path: item.image_path,
+							face,
+							new_name: targetName,
+							review_type: item.review_type,
+							create_missing_person: canCreatePhotosPerson,
+						})
+						: await this.callChecksApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_assign_face_person', {
+							image_path: item.image_path,
+							face,
+							person_id: selectedPerson.id,
+							person_name: targetName,
+							review_type: item.review_type,
+						});
 				const result = this.getResponseData(data);
 				if (result.warning) {
 					this.checksStatusMessage = this.$avt(

@@ -6,6 +6,7 @@ from copy import deepcopy
 
 sys.path.insert(0, os.path.abspath("src"))
 
+from api.session_manager import SessionManagerError
 from handler.photos_handler import PhotosHandler, PhotosLookupCache
 
 
@@ -40,7 +41,10 @@ class DummySessionManager:
     def call_api_post(self, **kwargs):
         self.post_calls.append(deepcopy(kwargs))
         if self.post_payloads:
-            return self.post_payloads.pop(0)
+            payload = self.post_payloads.pop(0)
+            if isinstance(payload, Exception):
+                raise payload
+            return payload
         return {"success": True, "data": {}}
 
 
@@ -153,6 +157,28 @@ class PhotosHandlerSortTests(unittest.TestCase):
         self.assertEqual(params["face_id"], [146890])
         self.assertEqual(params["name"], '"Jelizaveta Vilippus geb. Kromskaja"')
         self.assertNotIn("target_id", params)
+
+    def test_find_known_person_by_name_treats_suggest_api_failure_as_no_match(self):
+        session_manager = DummySessionManager(
+            get_payloads=[{"success": True, "data": {"list": [{"id": 178, "name": "Andreas Vilippus"}]}}],
+            post_payloads=[SessionManagerError({
+                "error": "api_failed",
+                "api": "SYNO.FotoTeam.Browse.Person",
+                "response": {"success": False, "error": {"code": 902}},
+            })],
+        )
+        handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))
+
+        result = handler.findKnownPersonByName(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            name="Kaire Vilippus",
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(len(session_manager.get_calls), 1)
+        self.assertEqual(len(session_manager.post_calls), 1)
 
     def test_find_item_by_path_resolves_photos_style_folder_keys_and_filename(self):
         session_manager = DummySessionManager(get_payloads=[

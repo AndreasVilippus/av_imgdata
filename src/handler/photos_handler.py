@@ -4,7 +4,7 @@ import threading
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from api.session_manager import SessionManager
+from api.session_manager import SessionManager, SessionManagerError
 from services.config_service import ConfigService
 
 DEFAULT_MAX_PHOTOS_PERSONS = ConfigService.defaultConfig()["photos"]["MAX_PHOTOS_PERSONS"]
@@ -219,14 +219,17 @@ class PhotosHandler:
             if self._normalize_person_name(person.get("name")) == normalized_name:
                 return person
 
-        suggestions = self.suggestFotoTeamPerson(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            name_prefix=name,
-            additional=["thumbnail"],
-            limit=20,
-        )
+        try:
+            suggestions = self.suggestFotoTeamPerson(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                name_prefix=name,
+                additional=["thumbnail"],
+                limit=20,
+            )
+        except SessionManagerError:
+            suggestions = []
         for person in suggestions:
             if self._normalize_person_name(person.get("name")) == normalized_name:
                 return person

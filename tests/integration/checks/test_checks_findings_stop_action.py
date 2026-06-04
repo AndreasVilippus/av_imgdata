@@ -32,6 +32,19 @@ def test_start_checks_review_dispatches_stop_when_findings_are_running():
     assert "this.checksStopRequested = false" in method
 
 
+def test_start_checks_review_passes_auto_apply_flags_for_saved_findings():
+    mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
+
+    start = mixin.find("startChecksReview(")
+    assert start >= 0
+    end = mixin.find("\n\t\t},", start)
+    assert end > start
+    method = mixin[start:end]
+
+    assert "auto_apply_suggested_names: this.checksAutoApplySuggestedNames" in method
+    assert "auto_apply_suggested_duplicates: this.checksAutoApplySuggestedDuplicates" in method
+
+
 def test_stop_checks_review_sets_flag_and_calls_backend_stop():
     mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
 
@@ -147,6 +160,30 @@ def test_load_checks_item_loop_counts_unresolved_entries_as_skipped():
     assert "checks:status_finding_skipped" in guard_block
     assert "resolvedIndex += 1" in guard_block
     assert "continue;" in guard_block
+
+
+def test_load_checks_item_loop_defers_manual_entries_while_auto_apply_is_active():
+    mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
+
+    start = mixin.find("async loadChecksItemAtIndex(")
+    assert start >= 0
+    end = mixin.find("\n\t\t},", start)
+    assert end > start
+    method = mixin[start:end]
+
+    assert "const autoApplyActive = !!(" in method
+    assert "let deferredReview = null;" in method
+    defer_guard = "if (autoApplyActive && autoAppliedCount <= 0)"
+    assert defer_guard in method
+    defer_start = method.find(defer_guard)
+    defer_block = method[defer_start:method.find("\n\t\t\t\t\t}", defer_start)]
+    assert "deferredReview = { index: resolvedIndex, item }" in defer_block
+    assert "checks:status_finding_deferred" in defer_block
+    assert "resolvedIndex += 1" in defer_block
+    assert "continue;" in defer_block
+    assert "if (deferredReview)" in method
+    assert "this.checksCurrentItem = deferredReview.item" in method
+    assert "this.checksCurrentIndex = deferredReview.index" in method
 
 
 def test_ensure_checks_result_item_loaded_stops_on_backend_stop_response():

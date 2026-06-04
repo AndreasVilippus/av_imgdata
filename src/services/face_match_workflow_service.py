@@ -295,6 +295,21 @@ class FaceMatchWorkflowService:
             persisted_entries: Optional[List[Any]] = None
             persisted_transferred_count: Optional[int] = None
 
+            def update_auto_apply_progress() -> None:
+                if not auto:
+                    return
+                backend._setFaceMatchingProgress(
+                    user_key,
+                    action="load_photo_face_match_findings",
+                    source_mode="findings",
+                    running=True,
+                    finished=False,
+                    paused=False,
+                    entries_current=entries_current,
+                    entries_total=entries_total,
+                    transferred_count=transferred_count,
+                )
+
             def persist_checkpoint(remaining_entries: List[Any]) -> None:
                 nonlocal persisted_entries, persisted_transferred_count
                 persisted_entries = [*next_entries, *remaining_entries]
@@ -304,6 +319,7 @@ class FaceMatchWorkflowService:
                     entries=persisted_entries,
                     transferred_count=transferred_count,
                 )
+                update_auto_apply_progress()
 
             def retain_after_photos_error(entry: Dict[str, Any], exc: SessionManagerError, *, stage: str) -> None:
                 if backend._sessionManagerErrorNeedsLogin(exc):
@@ -453,9 +469,8 @@ class FaceMatchWorkflowService:
                             continue
                 next_entries.append(resolved_entry)
                 if auto:
-                    next_entries.extend(entries[entry_index + 1:])
                     review_required = True
-                    break
+                    continue
             resolved_entries = next_entries
             if findings_changed and (
                 resolved_entries != persisted_entries
