@@ -24,6 +24,7 @@ def scan_config():
                 "ACD": False,
                 "MICROSOFT": False,
                 "MWG_REGIONS": False,
+                "IPTC_EXT_REGIONS": False,
             }
         },
     }
@@ -69,6 +70,7 @@ class ScanContextTests(unittest.TestCase):
         self.assertFalse(parse_mock.call_args.kwargs["use_acd"])
         self.assertFalse(parse_mock.call_args.kwargs["use_microsoft"])
         self.assertFalse(parse_mock.call_args.kwargs["use_mwg_regions"])
+        self.assertFalse(parse_mock.call_args.kwargs["use_iptc_ext_regions"])
         self.assertEqual(metadata["image_dimensions"], {"width": 100, "height": 80, "unit": "pixel"})
 
     def test_readImageMetadata_records_io_metrics_when_enabled(self):

@@ -101,6 +101,28 @@ class FileHandlerPhotosComparisonTests(unittest.TestCase):
             {"width": 800, "height": 600, "unit": "pixel"},
         )
 
+    def test_configured_metadata_schemas_includes_iptc_regions(self):
+        defaults = ConfigService.defaultConfig()
+        config = {
+            **defaults,
+            "metadata": {
+                "SCHEMAS": {
+                    **defaults["metadata"]["SCHEMAS"],
+                    "IPTC_EXT_REGIONS": False,
+                },
+            },
+        }
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        config_path = os.path.join(tempdir.name, "config.json")
+        with open(config_path, "w", encoding="utf-8") as handle:
+            json.dump(config, handle)
+
+        schemas = FileHandler(ConfigService(config_path)).configuredMetadataSchemas()
+
+        self.assertIn("IPTC_EXT_REGIONS", schemas)
+        self.assertFalse(schemas["IPTC_EXT_REGIONS"])
+
 
 class FileHandlerRawPreviewTests(unittest.TestCase):
     def test_extract_embedded_jpeg_preview_from_arw_tiff_tags(self):

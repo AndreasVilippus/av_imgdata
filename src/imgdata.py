@@ -843,6 +843,7 @@ class ImgDataService:
             "ACD": bool(configured_schemas.get("ACD", default_schemas["ACD"])),
             "MICROSOFT": bool(configured_schemas.get("MICROSOFT", default_schemas["MICROSOFT"])),
             "MWG_REGIONS": bool(configured_schemas.get("MWG_REGIONS", default_schemas["MWG_REGIONS"])),
+            "IPTC_EXT_REGIONS": bool(configured_schemas.get("IPTC_EXT_REGIONS", default_schemas["IPTC_EXT_REGIONS"])),
         }
         report_progress("metadata_parse")
         return self.metadata_parser.parse(
@@ -855,6 +856,7 @@ class ImgDataService:
             use_acd=schemas["ACD"],
             use_microsoft=schemas["MICROSOFT"],
             use_mwg_regions=schemas["MWG_REGIONS"],
+            use_iptc_ext_regions=schemas["IPTC_EXT_REGIONS"],
             include_unnamed_acd=include_unnamed_acd,
         )
 

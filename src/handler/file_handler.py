@@ -258,6 +258,7 @@ class FileHandler:
             "ACD": bool(schema_config.get("ACD", True)),
             "MICROSOFT": bool(schema_config.get("MICROSOFT", True)),
             "MWG_REGIONS": bool(schema_config.get("MWG_REGIONS", True)),
+            "IPTC_EXT_REGIONS": bool(schema_config.get("IPTC_EXT_REGIONS", True)),
         }
 
     def analyzeMetadata(
