@@ -64,7 +64,8 @@
     "SCHEMAS": {
       "ACD": true,
       "MICROSOFT": true,
-      "MWG_REGIONS": true
+      "MWG_REGIONS": true,
+      "IPTC_EXT_REGIONS": true
     }
   },
   "analysis": {
