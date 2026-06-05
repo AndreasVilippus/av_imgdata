@@ -104,6 +104,46 @@ def test_unrelated_metadata_face_and_photo_item_writes_do_not_block_each_other()
                 pass
 
 
+def test_checks_findings_status_uses_lightweight_status_reader():
+    service = make_service()
+    statuses = {
+        "dimension_issues": {"status": "finished", "count": 946, "save_only": False},
+        "duplicate_faces": {"status": "finished", "count": 67, "save_only": False},
+        "position_deviations": {"status": "finished", "count": 488, "save_only": True},
+        "name_conflicts": {"status": "finished", "count": 1, "save_only": True},
+    }
+    service.file_analysis.readCheckFindingsStatus = Mock(side_effect=lambda check_type: statuses[check_type])
+    service.file_analysis.readCheckFindings = Mock(side_effect=AssertionError("status read must not load entries"))
+
+    payload = service.getChecksFindingsStatus()
+
+    assert payload == {"statuses": statuses}
+    assert service.file_analysis.readCheckFindingsStatus.call_count == 4
+    service.file_analysis.readCheckFindings.assert_not_called()
+
+
+def test_file_analysis_progress_enrichment_uses_lightweight_findings_status_reader():
+    service = make_service()
+    service.runtime_state.get_value = Mock(return_value=None)
+    service.runtime_state.read_persisted = Mock(return_value={})
+    service.file_analysis.readLatestResult = Mock(return_value={
+        "job_id": "job-1",
+        "files_analyzed": 10,
+        "files_matched_total": 10,
+    })
+    service.file_analysis.readCheckFindingsStatus = Mock(side_effect=lambda finding_type: {
+        "job_id": "job-1",
+        "count": 7 if finding_type == "duplicate_faces" else 0,
+    })
+    service.file_analysis.readCheckFindings = Mock(side_effect=AssertionError("progress status must not load finding entries"))
+
+    progress = service.getFileAnalysisProgress()
+
+    assert progress["files_with_duplicate_faces"] == 7
+    assert service.file_analysis.readCheckFindingsStatus.call_count == 4
+    service.file_analysis.readCheckFindings.assert_not_called()
+
+
 def test_photo_face_match_assignment_mutation_updates_photos_findings_and_mapping():
     service = make_service()
     calls = []

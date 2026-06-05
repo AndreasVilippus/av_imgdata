@@ -84,6 +84,120 @@ class FileAnalysisService:
         normalized = str(value or "json").strip().lower()
         return normalized if normalized in {"json"} else "json"
 
+    def _finding_status_path(self, finding_type: str) -> Path:
+        candidate = self._finding_path(finding_type)
+        return candidate.with_name(f"{candidate.stem}.status{candidate.suffix}")
+
+    @staticmethod
+    def _check_findings_status_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        status = {key: value for key, value in payload.items() if key not in {"entries", "paths"}}
+        try:
+            status["count"] = max(0, int(status.get("count") or 0))
+        except (TypeError, ValueError):
+            status["count"] = 0
+        if "count" not in payload:
+            entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+            paths = payload.get("paths") if isinstance(payload.get("paths"), list) else []
+            status["count"] = len(entries) if entries else len(paths)
+        return status
+
+    @staticmethod
+    def _skip_json_value(text: str, start: int) -> int:
+        idx = start
+        length = len(text)
+        while idx < length and text[idx].isspace():
+            idx += 1
+        if idx >= length:
+            return idx
+        if text[idx] == '"':
+            idx += 1
+            escaped = False
+            while idx < length:
+                char = text[idx]
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    return idx + 1
+                idx += 1
+            return idx
+        if text[idx] in "[{":
+            stack = ["]" if text[idx] == "[" else "}"]
+            idx += 1
+            in_string = False
+            escaped = False
+            while idx < length:
+                char = text[idx]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                elif char == '"':
+                    in_string = True
+                elif char in "[{":
+                    stack.append("]" if char == "[" else "}")
+                elif stack and char == stack[-1]:
+                    stack.pop()
+                    if not stack:
+                        return idx + 1
+                idx += 1
+            return idx
+        while idx < length and text[idx] not in ",}]\r\n\t ":
+            idx += 1
+        return idx
+
+    @classmethod
+    def _read_check_findings_status_text(cls, text: str) -> Dict[str, Any]:
+        decoder = json.JSONDecoder()
+        idx = 0
+        length = len(text)
+        while idx < length and text[idx].isspace():
+            idx += 1
+        if idx >= length or text[idx] != "{":
+            return {}
+        idx += 1
+        status: Dict[str, Any] = {}
+        while idx < length:
+            while idx < length and text[idx].isspace():
+                idx += 1
+            if idx < length and text[idx] == "}":
+                break
+            try:
+                key, idx = decoder.raw_decode(text, idx)
+            except ValueError:
+                return {}
+            if not isinstance(key, str):
+                return {}
+            while idx < length and text[idx].isspace():
+                idx += 1
+            if idx >= length or text[idx] != ":":
+                return {}
+            idx += 1
+            while idx < length and text[idx].isspace():
+                idx += 1
+            if key in {"entries", "paths"}:
+                idx = cls._skip_json_value(text, idx)
+            else:
+                try:
+                    value, idx = decoder.raw_decode(text, idx)
+                except ValueError:
+                    return {}
+                status[key] = value
+            while idx < length and text[idx].isspace():
+                idx += 1
+            if idx < length and text[idx] == ",":
+                idx += 1
+                continue
+            if idx < length and text[idx] == "}":
+                break
+        return cls._check_findings_status_payload(status)
+
     def _json_bytes(self, payload: Dict[str, Any], *, pretty: bool = True) -> bytes:
         """
         Serialisiere Payload zu JSON-Bytes.
@@ -172,12 +286,36 @@ class FileAnalysisService:
                 return {}
             return data if isinstance(data, dict) else {}
 
+    def readCheckFindingsStatus(self, finding_type: str) -> Dict[str, Any]:
+        candidate = self._finding_path(finding_type)
+        if not candidate.exists() or not candidate.is_file():
+            return {}
+        status_candidate = self._finding_status_path(finding_type)
+        if status_candidate.exists() and status_candidate.is_file():
+            try:
+                with status_candidate.open("r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+            except Exception:
+                data = {}
+            if isinstance(data, dict):
+                return self._check_findings_status_payload(data)
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except Exception:
+            return {}
+        return self._read_check_findings_status_text(text)
+
     def writeCheckFindings(self, finding_type: str, payload: Dict[str, Any]) -> bool:
         if not isinstance(payload, dict):
             return False
         with self.lockCheckFindings(finding_type):
             candidate = self._finding_path(finding_type)
-            return self._write_json_if_changed(candidate, payload, pretty=True)
+            status_candidate = self._finding_status_path(finding_type)
+            status_payload = self._check_findings_status_payload(payload)
+            return (
+                self._write_json_if_changed(candidate, payload, pretty=True)
+                and self._write_json_if_changed(status_candidate, status_payload, pretty=True)
+            )
 
     def appendCheckFindingEntries(self, finding_type: str, entries: List[Dict[str, Any]]) -> bool:
         if not isinstance(entries, list):
@@ -195,12 +333,14 @@ class FileAnalysisService:
     def deleteCheckFindings(self, finding_type: str) -> bool:
         with self.lockCheckFindings(finding_type):
             candidate = self._finding_path(finding_type)
-            if not candidate.exists():
-                return True
-            try:
-                candidate.unlink()
-            except Exception:
-                return False
+            status_candidate = self._finding_status_path(finding_type)
+            for path in (candidate, status_candidate):
+                if not path.exists():
+                    continue
+                try:
+                    path.unlink()
+                except Exception:
+                    return False
             return True
 
     def readRuntimeState(self, state_type: str, state_key: str) -> Dict[str, Any]:

@@ -27,15 +27,27 @@ def _json_response_payload(response):
     return json.loads(response.body.decode("utf-8"))
 
 
+def _install_backend_call_recorder(monkeypatch):
+    calls = []
+
+    async def recorded_backend_call(func):
+        calls.append(func)
+        return func()
+
+    monkeypatch.setattr(imgdata_api, "_run_backend_call", recorded_backend_call)
+    return calls
+
+
 def test_face_matching_findings_status_filters_by_requested_action(monkeypatch):
     async def request_body(_request):
         return {"action": "search_photo_face_in_file"}
 
+    calls = _install_backend_call_recorder(monkeypatch)
     monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
     monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
     monkeypatch.setattr(
         imgdata_api.IMGDATA,
-        "getFaceMatchFindings",
+        "getFaceMatchFindingsStatus",
         Mock(return_value={
             "status": "finished",
             "action": "mark_missing_photos_faces",
@@ -54,6 +66,38 @@ def test_face_matching_findings_status_filters_by_requested_action(monkeypatch):
     assert payload["data"]["requested_action"] == "search_photo_face_in_file"
     assert payload["data"]["save_only"] is False
     assert payload["data"]["auto"] is False
+    assert len(calls) == 1
+
+
+def test_face_matching_findings_status_uses_count_without_entries(monkeypatch):
+    async def request_body(_request):
+        return {"action": "mark_missing_photos_faces"}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFaceMatchFindingsStatus",
+        Mock(return_value={
+            "status": "running",
+            "action": "mark_missing_photos_faces",
+            "save_only": True,
+            "auto": True,
+            "transferred_count": 3,
+            "count": 1909,
+        }),
+    )
+
+    payload = _run(imgdata_api.face_matching_findings_status(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["count"] == 1909
+    assert payload["data"]["action"] == "mark_missing_photos_faces"
+    assert payload["data"]["save_only"] is True
+    assert payload["data"]["auto"] is True
+    assert payload["data"]["transferred_count"] == 3
+    assert len(calls) == 1
 
 
 def test_face_matching_action_passes_selected_findings_action_to_loader(monkeypatch):

@@ -312,6 +312,25 @@ class ChecksWorkflowService:
             "entries": entries,
         }
 
+    def get_findings_status(self) -> Dict[str, Any]:
+        reader = getattr(self.backend.file_analysis, "readCheckFindingsStatus", None)
+        statuses: Dict[str, Any] = {}
+        for check_type in ("dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts"):
+            findings = reader(check_type) if callable(reader) else self.backend.file_analysis.readCheckFindings(check_type)
+            if not isinstance(findings, dict):
+                findings = {}
+            entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+            try:
+                count = max(0, int(findings.get("count") if "count" in findings else len(entries)))
+            except (TypeError, ValueError):
+                count = len(entries)
+            statuses[check_type] = {
+                "status": str(findings.get("status") or ""),
+                "count": count,
+                "save_only": bool(findings.get("save_only")),
+            }
+        return {"statuses": statuses}
+
     def refresh_finding_entries(
         self,
         *,

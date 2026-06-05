@@ -2686,6 +2686,9 @@ class ImgDataService:
     def getChecksFindingEntries(self, *, check_type: str) -> Dict[str, Any]:
         return self.checks_workflow.get_finding_entries(check_type=check_type)
 
+    def getChecksFindingsStatus(self) -> Dict[str, Any]:
+        return self.checks_workflow.get_findings_status()
+
     def refreshChecksFindingEntries(
         self,
         *,
@@ -2874,7 +2877,8 @@ class ImgDataService:
             "name_conflicts": ["files_with_name_conflicts"],
         }
         for finding_type, fields in field_map.items():
-            findings = self.file_analysis.readCheckFindings(finding_type)
+            status_reader = getattr(self.file_analysis, "readCheckFindingsStatus", None)
+            findings = status_reader(finding_type) if callable(status_reader) else self.file_analysis.readCheckFindings(finding_type)
             if not isinstance(findings, dict):
                 continue
             findings_count = int(findings.get("count") or 0)
@@ -2910,6 +2914,9 @@ class ImgDataService:
 
     def getFaceMatchFindings(self) -> Dict[str, Any]:
         return self.face_match_workflow.get_findings()
+
+    def getFaceMatchFindingsStatus(self) -> Dict[str, Any]:
+        return self.face_match_workflow.get_findings_status()
 
     def _resumeFaceMatchSavedEntries(
         self,

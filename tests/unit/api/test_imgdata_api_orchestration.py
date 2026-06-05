@@ -20,6 +20,17 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _install_backend_call_recorder(monkeypatch):
+    calls = []
+
+    async def recorded_backend_call(func):
+        calls.append(func)
+        return func()
+
+    monkeypatch.setattr(imgdata_api, "_run_backend_call", recorded_backend_call)
+    return calls
+
+
 def test_session_exception_debug_detail_preserves_structured_synology_api_failure():
     detail = {
         "error": "api_failed",
@@ -30,6 +41,20 @@ def test_session_exception_debug_detail_preserves_structured_synology_api_failur
     assert imgdata_api._session_exception_debug_detail(
         SessionManagerError(detail, status_code=502)
     ) == detail
+
+
+def test_run_backend_call_uses_asyncio_executor(monkeypatch):
+    calls = []
+
+    class FakeLoop:
+        async def run_in_executor(self, executor, func):
+            calls.append(executor)
+            return func()
+
+    monkeypatch.setattr(imgdata_api.asyncio, "get_running_loop", lambda: FakeLoop())
+
+    assert _run(imgdata_api._run_backend_call(lambda: "ok")) == "ok"
+    assert calls == [None]
 
 
 def test_face_matching_action_normalizes_request_and_starts_discovery(monkeypatch):
@@ -48,6 +73,7 @@ def test_face_matching_action_normalizes_request_and_starts_discovery(monkeypatc
     runtime_config = Mock(return_value={"photos": {"MAX_PHOTOS_PERSONS": 50}})
     start_discovery = Mock(return_value={"running": True})
 
+    calls = _install_backend_call_recorder(monkeypatch)
     monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
     monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
     monkeypatch.setattr(imgdata_api.IMGDATA, "getRuntimeConfig", runtime_config)
@@ -61,6 +87,7 @@ def test_face_matching_action_normalizes_request_and_starts_discovery(monkeypatc
     assert payload["data"]["save_only"] is True
     assert payload["data"]["resume_from_progress"] is True
     assert payload["data"]["face_matches"] == {"running": True}
+    assert len(calls) == 1
     start_discovery.assert_called_once_with(
         user_key="user-1",
         cookies={"_SSID": "sid-1"},
@@ -117,6 +144,7 @@ def test_config_get_exposes_backend_debug_log_path(monkeypatch, tmp_path):
 def test_face_matching_progress_writes_debug_summary_when_enabled(monkeypatch, tmp_path):
     config_path = tmp_path / "config.json"
     log_path = tmp_path / "debug.log"
+    _install_backend_call_recorder(monkeypatch)
     monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
     monkeypatch.setattr(imgdata_api.IMGDATA.config, "_config_path", config_path)
     monkeypatch.setattr(
@@ -153,6 +181,100 @@ def test_face_matching_progress_writes_debug_summary_when_enabled(monkeypatch, t
     assert '"event": "face_matching_progress"' in log_data
     assert '"status_phase": "idle"' in log_data
     assert '"transferred_count": 19' in log_data
+
+
+def test_status_routes_run_blocking_service_calls_off_event_loop(monkeypatch):
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "backend_debug_log", Mock())
+    monkeypatch.setattr(imgdata_api.IMGDATA, "status_persons", Mock(return_value={"known": 1, "total": 2}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": "/volume1/photo"}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "exiftool_status", Mock(return_value={"installed": True, "available": True}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "pipPackagesStatus", Mock(return_value={"packages": []}))
+
+    status_payload = _run(imgdata_api.status(object()))
+    exiftool_payload = _run(imgdata_api.exiftool_status(object()))
+    packages_payload = _run(imgdata_api.pip_packages_status(object()))
+
+    assert status_payload["success"] is True
+    assert exiftool_payload["success"] is True
+    assert packages_payload["success"] is True
+    assert len(calls) == 4
+    imgdata_api.IMGDATA.status_persons.assert_called_once()
+    imgdata_api.IMGDATA.status_system.assert_called_once()
+    imgdata_api.IMGDATA.exiftool_status.assert_called_once()
+    imgdata_api.IMGDATA.pipPackagesStatus.assert_called_once()
+
+
+def test_progress_and_findings_routes_run_blocking_service_calls_off_event_loop(monkeypatch):
+    async def request_body(_request):
+        return {"check_type": "duplicate_faces", "action": "mark_missing_photos_faces"}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api, "backend_debug_log", Mock())
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFaceMatchFindingsStatus",
+        Mock(return_value={"status": "ready", "action": "mark_missing_photos_faces", "entries": [{}], "transferred_count": 0}),
+    )
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFaceMatchingProgress",
+        Mock(return_value={"status": {"phase": "idle"}, "running": False, "active": False}),
+    )
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFileAnalysisProgress",
+        Mock(return_value={"status": {"phase": "idle"}, "running": False, "active": False}),
+    )
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getChecksProgress",
+        Mock(return_value={"status": {"phase": "idle"}, "entries": [], "findings_count": 0}),
+    )
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getChecksFindingsStatus",
+        Mock(return_value={
+            "statuses": {
+                "dimension_issues": {"status": "ready", "count": 1, "save_only": False},
+                "duplicate_faces": {"status": "ready", "count": 2, "save_only": True},
+            },
+        }),
+    )
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getChecksFindingEntries", Mock(side_effect=AssertionError("status route must not load entries")))
+
+    assert _run(imgdata_api.face_matching_findings_status(object()))["success"] is True
+    assert _run(imgdata_api.face_matching_progress(object()))["success"] is True
+    assert _run(imgdata_api.file_analysis_progress(object()))["success"] is True
+    assert _run(imgdata_api.checks_progress(object()))["success"] is True
+    assert _run(imgdata_api.checks_findings_status(object()))["success"] is True
+
+    assert len(calls) == 5
+    imgdata_api.IMGDATA.getFaceMatchFindingsStatus.assert_called_once()
+    imgdata_api.IMGDATA.getFaceMatchingProgress.assert_called_once_with("user-1", compact_for_response=True)
+    imgdata_api.IMGDATA.getFileAnalysisProgress.assert_called_once()
+    imgdata_api.IMGDATA.getChecksProgress.assert_called_once_with("user-1", "duplicate_faces")
+    imgdata_api.IMGDATA.getChecksFindingsStatus.assert_called_once()
+    imgdata_api.IMGDATA.getChecksFindingEntries.assert_not_called()
+
+
+def test_file_image_runs_synology_status_lookup_off_event_loop(monkeypatch, tmp_path):
+    calls = _install_backend_call_recorder(monkeypatch)
+    image_path = tmp_path / "image.jpg"
+    image_path.write_bytes(b"not-a-real-jpeg")
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": str(tmp_path)}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.files, "extractEmbeddedJpegPreview", Mock(return_value=b"preview"))
+
+    response = _run(imgdata_api.file_image(object(), path=str(image_path)))
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    imgdata_api.IMGDATA.status_system.assert_called_once()
 
 
 def test_face_assign_match_assigns_removes_finding_and_saves_mapping(monkeypatch):

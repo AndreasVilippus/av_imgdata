@@ -111,6 +111,11 @@ def _debug_user_key(user_key: str) -> str:
     return hashlib.sha256(user_key.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
+async def _run_backend_call(func):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func)
+
+
 def backend_debug_log(event: str, **fields: Any) -> None:
     if not is_backend_debug_enabled():
         return
@@ -626,10 +631,12 @@ async def status(request: Request):
 
     try:
         persons_started = time.monotonic()
-        persons_status = IMGDATA.status_persons(
-            user_key=session_ctx["user_key"],
-            cookies=session_ctx["cookies"],
-            base_url=session_ctx["base_url"],
+        persons_status = await _run_backend_call(
+            lambda: IMGDATA.status_persons(
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
         )
         backend_debug_log(
             "status_phase",
@@ -640,10 +647,12 @@ async def status(request: Request):
             total=int(persons_status.get("total") or 0) if isinstance(persons_status, dict) else None,
         )
         system_started = time.monotonic()
-        system_status = IMGDATA.status_system(
-            user_key=session_ctx["user_key"],
-            cookies=session_ctx["cookies"],
-            base_url=session_ctx["base_url"],
+        system_status = await _run_backend_call(
+            lambda: IMGDATA.status_system(
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
         )
         backend_debug_log(
             "status_phase",
@@ -682,7 +691,7 @@ async def exiftool_status(request: Request):
     if error_response:
         return error_response
 
-    data = IMGDATA.exiftool_status()
+    data = await _run_backend_call(lambda: IMGDATA.exiftool_status())
     backend_debug_log(
         "exiftool_status_end",
         duration_ms=round((time.monotonic() - started) * 1000, 2),
@@ -704,7 +713,7 @@ async def pip_packages_status(request: Request):
 
     return {
         "success": True,
-        "data": IMGDATA.pipPackagesStatus(),
+        "data": await _run_backend_call(lambda: IMGDATA.pipPackagesStatus()),
     }
 
 
@@ -889,23 +898,23 @@ async def face_matching_action(request: Request):
             findings_action=str(body.get("findings_action") or body.get("source_action") or "").strip(),
         )
         if action in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"}:
-            face_matches = IMGDATA.startFaceMatchingDiscovery(
-                user_key=session_ctx["user_key"],
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
-                action=action,
-                limit=limit,
-                offset=offset,
-                skip_face_ids=normalized_skip_face_ids,
-                skip_targets=normalized_skip_targets,
-                auto=auto,
-                save_only=save_only,
-                resume_from_progress=resume_from_progress,
+            face_matches = await _run_backend_call(
+                lambda: IMGDATA.startFaceMatchingDiscovery(
+                    user_key=session_ctx["user_key"],
+                    cookies=session_ctx["cookies"],
+                    base_url=session_ctx["base_url"],
+                    action=action,
+                    limit=limit,
+                    offset=offset,
+                    skip_face_ids=normalized_skip_face_ids,
+                    skip_targets=normalized_skip_targets,
+                    auto=auto,
+                    save_only=save_only,
+                    resume_from_progress=resume_from_progress,
+                )
             )
         else:
-            loop = asyncio.get_running_loop()
-            face_matches = await loop.run_in_executor(
-                None,
+            face_matches = await _run_backend_call(
                 lambda: IMGDATA.getFaceMatchFindingEntriesLocked(
                     user_key=session_ctx["user_key"],
                     cookies=session_ctx["cookies"],
@@ -978,12 +987,16 @@ async def face_matching_findings_status(request: Request):
 
     body = await _read_request_body(request)
     requested_action = str(body.get("action") or body.get("source_action") or "").strip().lower()
-    findings = IMGDATA.getFaceMatchFindings()
+    findings = await _run_backend_call(lambda: IMGDATA.getFaceMatchFindingsStatus())
     findings_action = str(findings.get("action") or "").strip().lower()
     if requested_action and findings_action and requested_action != findings_action:
-        entries = []
+        count = 0
     else:
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        try:
+            count = max(0, int(findings.get("count") if "count" in findings else len(entries)))
+        except (TypeError, ValueError):
+            count = len(entries)
     backend_debug_log(
         "face_matching_findings_status",
         duration_ms=round((time.monotonic() - started) * 1000, 2),
@@ -991,7 +1004,7 @@ async def face_matching_findings_status(request: Request):
         requested_action=requested_action,
         findings_action=findings_action,
         status=str(findings.get("status") or ""),
-        count=len(entries),
+        count=count,
         transferred_count=int(findings.get("transferred_count") or 0),
     )
     return {
@@ -1000,10 +1013,10 @@ async def face_matching_findings_status(request: Request):
             "status": str(findings.get("status") or ""),
             "action": findings_action,
             "requested_action": requested_action,
-            "count": len(entries),
+            "count": count,
             "transferred_count": int(findings.get("transferred_count") or 0),
-            "save_only": bool(findings.get("save_only")) if entries else False,
-            "auto": bool(findings.get("auto")) if entries else False,
+            "save_only": bool(findings.get("save_only")) if count else False,
+            "auto": bool(findings.get("auto")) if count else False,
         },
     }
 
@@ -1016,7 +1029,9 @@ async def face_matching_progress(request: Request):
         return error_response
 
     try:
-        progress = IMGDATA.getFaceMatchingProgress(session_ctx["user_key"], compact_for_response=True)
+        progress = await _run_backend_call(
+            lambda: IMGDATA.getFaceMatchingProgress(session_ctx["user_key"], compact_for_response=True)
+        )
     except Exception as exc:
         backend_debug_log(
             "face_matching_progress_exception",
@@ -1473,10 +1488,12 @@ async def file_analysis_start(request: Request):
         return error_response
 
     try:
-        result = IMGDATA.startFileAnalysisDiscovery(
-            user_key=session_ctx["user_key"],
-            cookies=session_ctx["cookies"],
-            base_url=session_ctx["base_url"],
+        result = await _run_backend_call(
+            lambda: IMGDATA.startFileAnalysisDiscovery(
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="file_analysis_start_bootstrap_required")
@@ -1494,7 +1511,7 @@ async def file_analysis_progress(request: Request):
     if error_response:
         return error_response
 
-    progress = IMGDATA.getFileAnalysisProgress()
+    progress = await _run_backend_call(lambda: IMGDATA.getFileAnalysisProgress())
     data = _compact_file_analysis_progress(progress)
     status = progress.get("status") if isinstance(progress, dict) and isinstance(progress.get("status"), dict) else {}
     backend_debug_log(
@@ -1553,9 +1570,7 @@ async def checks_start(request: Request):
         changed_since_days = 0
 
     try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
+        result = await _run_backend_call(
             lambda: IMGDATA.checks_workflow.start_review(
                 user_key=session_ctx["user_key"],
                 cookies=session_ctx["cookies"],
@@ -1608,9 +1623,7 @@ async def checks_item(request: Request):
         }
 
     try:
-        loop = asyncio.get_running_loop()
-        resolved = await loop.run_in_executor(
-            None,
+        resolved = await _run_backend_call(
             lambda: IMGDATA._resolveChecksReviewEntry(
                 entry=entry,
                 auto_apply_suggested_names=auto_apply_suggested_names,
@@ -1690,10 +1703,13 @@ async def checks_progress(request: Request):
         return error_response
     body = await _read_request_body(request)
     check_type = body.get("check_type", "dimension_issues")
+    progress = await _run_backend_call(
+        lambda: IMGDATA.getChecksProgress(session_ctx["user_key"], str(check_type or "dimension_issues"))
+    )
 
     return {
         "success": True,
-        "data": _enrich_checks_progress_counters(IMGDATA.getChecksProgress(session_ctx["user_key"], str(check_type or "dimension_issues"))),
+        "data": _enrich_checks_progress_counters(progress),
     }
 
 
@@ -1703,16 +1719,8 @@ async def checks_findings_status(request: Request):
     if error_response:
         return error_response
 
-    check_types = ("dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts")
-    statuses = {}
-    for check_type in check_types:
-        findings = IMGDATA.getChecksFindingEntries(check_type=check_type)
-        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
-        statuses[check_type] = {
-            "status": str(findings.get("status") or ""),
-            "count": len(entries),
-            "save_only": bool(findings.get("save_only")),
-        }
+    result = await _run_backend_call(lambda: IMGDATA.getChecksFindingsStatus())
+    statuses = result.get("statuses") if isinstance(result, dict) and isinstance(result.get("statuses"), dict) else {}
     return {
         "success": True,
         "data": {
@@ -1729,7 +1737,9 @@ async def checks_stop(request: Request):
     body = await _read_request_body(request)
     check_type = body.get("check_type", "dimension_issues")
 
-    result = IMGDATA.requestStopChecks(session_ctx["user_key"], str(check_type or "dimension_issues"))
+    result = await _run_backend_call(
+        lambda: IMGDATA.requestStopChecks(session_ctx["user_key"], str(check_type or "dimension_issues"))
+    )
     result = _attach_checks_status_for_response(
         result if isinstance(result, dict) else {},
         check_type=str(check_type or "dimension_issues"),
@@ -1752,9 +1762,7 @@ async def cleanup_start(request: Request):
     targets = body.get("targets", [])
 
     try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
+        result = await _run_backend_call(
             lambda: IMGDATA.startCleanupRun(
                 user_key=session_ctx["user_key"],
                 cookies=session_ctx["cookies"],
@@ -2050,11 +2058,13 @@ async def file_image(request: Request, path: str = ""):
         return error_response
 
     try:
-        shared_folder = IMGDATA.status_system(
-            user_key=session_ctx["user_key"],
-            cookies=session_ctx["cookies"],
-            base_url=session_ctx["base_url"],
-        ).get("shared_folder", "")
+        shared_folder = (await _run_backend_call(
+            lambda: IMGDATA.status_system(
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
+        )).get("shared_folder", "")
     except (SessionBootstrapRequired, SessionManagerError) as exc:
         return _session_exception_response(exc, bootstrap_message="file_image_bootstrap_required")
 

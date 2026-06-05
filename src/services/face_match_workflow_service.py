@@ -71,6 +71,11 @@ class FaceMatchWorkflowService:
         findings = self.backend.file_analysis.readCheckFindings("face_match")
         return findings if isinstance(findings, dict) else {}
 
+    def get_findings_status(self) -> Dict[str, Any]:
+        reader = getattr(self.backend.file_analysis, "readCheckFindingsStatus", None)
+        findings = reader("face_match") if callable(reader) else self.backend.file_analysis.readCheckFindings("face_match")
+        return findings if isinstance(findings, dict) else {}
+
     def resume_saved_entries(
         self,
         *,
