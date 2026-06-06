@@ -94,6 +94,95 @@ def test_get_face_match_finding_entries_strips_debug_payload_from_response():
     }
 
 
+def test_get_face_match_finding_entries_repairs_stream_compacted_legacy_file():
+    service = make_service()
+    entry = {
+        "action": "mark_missing_photos_faces",
+        "image_path": "/volume1/photo/a.jpg",
+        "metadata_face": {"name": "Person A"},
+    }
+    service.getFaceMatchFindings.return_value = {
+        "_stream_compacted": True,
+        "status": "finished",
+        "shared_folder": "/volume1/photo",
+        "action": "mark_missing_photos_faces",
+        "save_only": True,
+        "auto": False,
+        "transferred_count": 0,
+        "entries": [entry],
+    }
+
+    result = service.getFaceMatchFindingEntries(action="mark_missing_photos_faces")
+
+    assert result["count"] == 1
+    service._persistFaceMatchFindingsEntries.assert_called_once_with(
+        findings={
+            "status": "finished",
+            "shared_folder": "/volume1/photo",
+            "action": "mark_missing_photos_faces",
+            "save_only": True,
+            "auto": False,
+            "transferred_count": 0,
+            "entries": [entry],
+        },
+        entries=[entry],
+        transferred_count=0,
+    )
+
+
+def test_face_match_append_unique_finding_compacts_storage_entry():
+    service = make_service()
+    entries = []
+
+    appended = service.face_match_workflow.append_unique_finding(entries, {
+        "action": "mark_missing_photos_faces",
+        "image_path": "/volume1/photo/a.jpg",
+        "metadata_face": {"name": "Person A"},
+        "lookup_debug": {"large": list(range(100))},
+        "resume_cursor": {"skip_targets": ["/volume1/photo/a.jpg"]},
+    })
+
+    assert appended is True
+    assert len(entries) == 1
+    assert "lookup_debug" not in entries[0]
+    assert "resume_cursor" not in entries[0]
+    assert entries[0]["image_path"] == "/volume1/photo/a.jpg"
+
+
+def test_face_match_write_findings_compacts_storage_entries():
+    service = make_service()
+    written = {}
+    service._timestamp_now = lambda: "2026-06-05T12:00:00+02:00"
+    service.file_analysis = Mock()
+    service.file_analysis.writeCheckFindings.side_effect = lambda finding_type, payload: written.update({
+        "finding_type": finding_type,
+        "payload": payload,
+    }) or True
+
+    service.face_match_workflow.write_findings(
+        status="running",
+        shared_folder="/volume1/photo",
+        action="mark_missing_photos_faces",
+        auto=False,
+        save_only=True,
+        transferred_count=0,
+        entries=[{
+            "action": "mark_missing_photos_faces",
+            "image_path": "/volume1/photo/a.jpg",
+            "metadata_face": {"name": "Person A"},
+            "lookup_debug": {"large": list(range(100))},
+            "resume_cursor": {"skip_targets": ["/volume1/photo/a.jpg"]},
+        }],
+        finished=False,
+    )
+
+    entry = written["payload"]["entries"][0]
+    assert written["finding_type"] == "face_match"
+    assert "lookup_debug" not in entry
+    assert "resume_cursor" not in entry
+    assert entry["image_path"] == "/volume1/photo/a.jpg"
+
+
 def test_get_face_match_finding_entries_refresh_true_revalidates_stored_entries():
     service = make_service()
 
@@ -110,6 +199,47 @@ def test_get_face_match_finding_entries_refresh_true_revalidates_stored_entries(
     service.photos.sortPersonsForFaceMatch.assert_called_once()
     service._storedFaceMatchEntryExists.assert_called_once()
     service._resolveStoredFaceMatchEntry.assert_called_once()
+
+
+def test_get_face_match_finding_entries_auto_stops_at_first_manual_entry():
+    service = make_service()
+    entries = [
+        {
+            "action": "mark_missing_photos_faces",
+            "image_path": "/volume1/photo/a.jpg",
+            "source_name": "Manual",
+            "metadata_face": {"name": "Manual"},
+        },
+        {
+            "action": "mark_missing_photos_faces",
+            "image_path": "/volume1/photo/b.jpg",
+            "source_name": "Known",
+            "metadata_face": {"name": "Known"},
+        },
+    ]
+    service.getFaceMatchFindings.return_value["entries"] = entries
+    service._storedFaceMatchEntryExists.return_value = True
+    service._resolveStoredFaceMatchEntry.side_effect = lambda **kwargs: dict(kwargs["entry"])
+    service.resolveOrCreatePhotosPersonForMetadataFace = Mock(return_value={"updated": False})
+    service._shouldStopFaceMatching = Mock(return_value=False)
+    service._setFaceMatchingProgressMessage = Mock()
+    service._setFaceMatchingProgress = Mock()
+
+    result = service.getFaceMatchFindingEntries(
+        user_key="user",
+        cookies={"id": "session"},
+        base_url="https://dsm.example.test",
+        auto=True,
+    )
+
+    assert result["count"] == 2
+    assert service._storedFaceMatchEntryExists.call_count == 1
+    assert service._resolveStoredFaceMatchEntry.call_count == 1
+    service.resolveOrCreatePhotosPersonForMetadataFace.assert_called_once()
+    assert result["entries"][0]["image_path"] == "/volume1/photo/a.jpg"
+    assert result["entries"][1]["image_path"] == "/volume1/photo/b.jpg"
+    assert service._setFaceMatchingProgressMessage.call_args.kwargs["running"] is False
+    assert service._setFaceMatchingProgressMessage.call_args.args[1] == "face_match:progress_review_required"
 
 
 def test_get_face_match_finding_entries_returns_empty_for_other_action():

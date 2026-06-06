@@ -253,7 +253,95 @@ def test_load_stored_findings_sends_selected_source_action_runtime():
     assert result["useStored"] is False
 
 
-def test_stored_findings_person_creation_reloads_for_auto_assignment_runtime():
+def test_primary_button_loads_stored_findings_when_enabled_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const events = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'mark_missing_photos_faces',
+              faceMatchUseStoredFindings: true,
+              faceMatchFindingsStatus: {
+                action: 'mark_missing_photos_faces',
+                requested_action: 'mark_missing_photos_faces',
+                count: 1,
+              },
+              loadStoredFaceMatchFindings: async () => events.push('load-stored'),
+              startFaceMatchingAction: async () => events.push('start-scan'),
+            });
+
+            await component.handlePrimaryFaceMatchButton();
+
+            assert.deepStrictEqual(events, ['load-stored']);
+            assert.strictEqual(component.faceMatchLoading, false);
+            console.log(JSON.stringify({ events, loading: component.faceMatchLoading }));
+            """
+        )
+    )
+
+    assert result == {"events": ["load-stored"], "loading": False}
+
+
+def test_stored_findings_person_creation_advances_without_full_refresh_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const events = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchUseStoredFindings: true,
+              faceMatchAutoAssignKnown: false,
+              faceMatchEditableName: 'Sven',
+              faceMatchResult: {
+                action: 'search_photo_face_in_file',
+                face: { face_id: 149661 },
+                image_path: '/volume1/photo/sven.jpg',
+              },
+              resolveFaceMatchNameMappingPreference: async () => ({
+                saveMapping: false,
+                sourceName: 'Sven',
+              }),
+              callDsmApi: async (_path, body) => {
+                events.push({ type: 'create', body });
+                return { success: true, data: { person_id: 40309 } };
+              },
+              loadStoredFaceMatchFindings: async (options) => {
+                events.push({ type: 'reload', auto: component.faceMatchAutoAssignKnown, options });
+              },
+              advanceFaceMatchFindingsAfterTransfer: async () => {
+                events.push({ type: 'local-advance' });
+              },
+            });
+
+            await component.createFaceMatchPerson();
+
+            assert.strictEqual(events.length, 2);
+            assert.strictEqual(events[0].type, 'create');
+            assert.strictEqual(events[0].body.person_name, 'Sven');
+            assert.strictEqual(events[1].type, 'local-advance');
+            console.log(JSON.stringify({ events }));
+            """
+        )
+    )
+
+    assert result == {
+        "events": [
+            {
+                "type": "create",
+                    "body": {
+                        "face_id": 149661,
+                        "image_path": "/volume1/photo/sven.jpg",
+                        "person_name": "Sven",
+                        "save_mapping": False,
+                        "source_name": "Sven",
+                },
+            },
+            {"type": "local-advance"},
+        ],
+    }
+
+
+def test_stored_findings_person_creation_auto_assign_reloads_without_refresh_runtime():
     result = run_node(
         face_match_runtime_script(
             """
@@ -288,9 +376,9 @@ def test_stored_findings_person_creation_reloads_for_auto_assignment_runtime():
 
             assert.strictEqual(events.length, 2);
             assert.strictEqual(events[0].type, 'create');
-            assert.strictEqual(events[0].body.person_name, 'Sven');
             assert.strictEqual(events[1].type, 'reload');
             assert.strictEqual(events[1].auto, true);
+            assert.deepStrictEqual(events[1].options, undefined);
             console.log(JSON.stringify({ events }));
             """
         )
@@ -308,7 +396,7 @@ def test_stored_findings_person_creation_reloads_for_auto_assignment_runtime():
                         "source_name": "Sven",
                 },
             },
-            {"type": "reload", "auto": True, "options": {"refresh": True}},
+            {"type": "reload", "auto": True},
         ],
     }
 

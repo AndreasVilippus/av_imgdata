@@ -1,7 +1,7 @@
 {
     "name": "av_imgdata",
     "private": true,
-    "version": "0.7.3",
+    "version": "0.7.4",
     "description": "",
     "main": "webpack.config.js",
     "scripts": {

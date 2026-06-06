@@ -1609,6 +1609,23 @@ export default {
 				await this.stopFaceMatchingAction();
 				return;
 			}
+			if (this.faceMatchUseStoredFindings) {
+				this.faceMatchLoading = true;
+				this.faceMatchResult = null;
+				this.resetFaceMatchSelectionState();
+				try {
+					await this.loadStoredFaceMatchFindings();
+				} catch (err) {
+					this.faceMatchResult = null;
+					this.faceMatchProgress = {
+						...(this.faceMatchProgress || {}),
+						message: `Error: ${err.message}`,
+					};
+				} finally {
+					this.faceMatchLoading = false;
+				}
+				return;
+			}
 			await this.startFaceMatchingAction({
 				resetSkippedFaceIds: !this.faceMatchAuthRequired,
 				resumeFromProgress: this.faceMatchAuthRequired,
@@ -1677,7 +1694,11 @@ export default {
 					);
 					this.output = JSON.stringify(data, null, 2);
 					if (this.faceMatchReviewingStoredFindings) {
-							await this.loadStoredFaceMatchFindings({ refresh: true });
+						if (this.faceMatchAutoAssignKnown) {
+							await this.loadStoredFaceMatchFindings();
+						} else {
+							await this.advanceFaceMatchFindingsAfterTransfer(data);
+						}
 					} else {
 						this.faceMatchTransferredCount += 1;
 						if (isMetadataPhotosCreate) {

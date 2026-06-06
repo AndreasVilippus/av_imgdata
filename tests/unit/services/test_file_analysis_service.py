@@ -3,10 +3,31 @@ import json
 import sys
 import tempfile
 import unittest
+from io import StringIO
 
 sys.path.insert(0, os.path.abspath("src"))
 
 from services.file_analysis_service import FileAnalysisService
+
+
+class StopAfterEntriesStart:
+    def __init__(self, text):
+        self.text = text
+        self.index = 0
+        self.seen_entries_start = False
+
+    def read(self, size=1):
+        if size != 1:
+            raise AssertionError("test handle only supports single-character reads")
+        if self.seen_entries_start:
+            raise AssertionError("status reader must not scan entries payload")
+        if self.index >= len(self.text):
+            return ""
+        char = self.text[self.index]
+        self.index += 1
+        if self.text[:self.index].endswith('"entries": ['):
+            self.seen_entries_start = True
+        return char
 
 
 class FileAnalysisServiceTests(unittest.TestCase):
@@ -47,34 +68,13 @@ class FileAnalysisServiceTests(unittest.TestCase):
             self.assertTrue(service.writeCheckFindings("face_match", payload))
             status = service.readCheckFindingsStatus("face_match")
 
-            self.assertEqual(status.get("status"), "running")
             self.assertEqual(status.get("action"), "mark_missing_photos_faces")
             self.assertEqual(status.get("count"), 1909)
-            self.assertTrue(status.get("save_only"))
+            self.assertNotIn("status", status)
+            self.assertNotIn("save_only", status)
             self.assertNotIn("entries", status)
 
-    def test_check_findings_status_writes_lightweight_sidecar(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            service = FileAnalysisService(result_path=os.path.join(tmpdir, "file_analysis.json"))
-            self.assertTrue(service.writeCheckFindings("face_match", {
-                "status": "running",
-                "action": "mark_missing_photos_faces",
-                "save_only": True,
-                "count": 2,
-                "entries": [
-                    {"image_path": "/volume1/photo/a.jpg", "debug": {"large": "x" * 100}},
-                    {"image_path": "/volume1/photo/b.jpg", "debug": {"large": "y" * 100}},
-                ],
-            }))
-
-            status_path = service._finding_status_path("face_match")
-            self.assertTrue(status_path.exists())
-            stored_status = json.loads(status_path.read_text(encoding="utf-8"))
-            self.assertEqual(stored_status.get("count"), 2)
-            self.assertEqual(stored_status.get("action"), "mark_missing_photos_faces")
-            self.assertNotIn("entries", stored_status)
-
-    def test_check_findings_status_fallback_skips_legacy_entries_payload(self):
+    def test_check_findings_status_streams_top_level_fields_and_skips_entries_payload(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             service = FileAnalysisService(result_path=os.path.join(tmpdir, "file_analysis.json"))
             finding_path = service._finding_path("face_match")
@@ -96,16 +96,73 @@ class FileAnalysisServiceTests(unittest.TestCase):
 
             self.assertEqual(status.get("action"), "mark_missing_photos_faces")
             self.assertEqual(status.get("count"), 1909)
-            self.assertEqual(status.get("status"), "running")
-            self.assertEqual(status.get("transferred_count"), 7)
-            self.assertTrue(status.get("save_only"))
+            self.assertNotIn("status", status)
+            self.assertNotIn("transferred_count", status)
+            self.assertNotIn("save_only", status)
             self.assertNotIn("entries", status)
+
+    def test_check_findings_status_stops_before_entries_payload(self):
+        payload = (
+            '{"action": "mark_missing_photos_faces", "auto": true, "count": 1909, '
+            '"entries": [{"image_path": "/volume1/photo/test.jpg"}], '
+            '"save_only": true, "status": "running", "transferred_count": 7}'
+        )
+
+        status = FileAnalysisService._read_check_findings_status_stream(StopAfterEntriesStart(payload))
+
+        self.assertEqual(status.get("action"), "mark_missing_photos_faces")
+        self.assertEqual(status.get("count"), 1909)
+        self.assertTrue(status.get("auto"))
+        self.assertNotIn("status", status)
+        self.assertNotIn("entries", status)
+
+    def test_check_findings_entries_skips_obsolete_paths_payload(self):
+        payload = (
+            '{"action": "mark_missing_photos_faces", "auto": false, "count": 1909, '
+            '"entries": [{"image_path": "/volume1/photo/test.jpg"}], '
+            '"paths": ["/volume1/photo/huge-legacy-path-list.jpg"], '
+            '"save_only": false, "status": "finished", "transferred_count": 0}'
+        )
+
+        findings = FileAnalysisService._read_check_findings_without_keys_stream(
+            StringIO(payload),
+            {"paths"},
+        )
+
+        self.assertEqual(findings.get("action"), "mark_missing_photos_faces")
+        self.assertEqual(findings.get("count"), 1909)
+        self.assertEqual(findings.get("entries"), [{"image_path": "/volume1/photo/test.jpg"}])
+        self.assertEqual(findings.get("status"), "finished")
+        self.assertNotIn("paths", findings)
+
+    def test_check_findings_entries_skips_legacy_heavy_entry_fields(self):
+        payload = (
+            '{"action": "mark_missing_photos_faces", "count": 1, '
+            '"entries": [{"action": "mark_missing_photos_faces", '
+            '"debug": {"candidate_persons": ["large legacy payload"]}, '
+            '"image_path": "/volume1/photo/test.jpg"}], '
+            '"paths": ["/volume1/photo/huge-legacy-path-list.jpg"]}'
+        )
+
+        findings = FileAnalysisService._read_check_findings_without_keys_stream(
+            StringIO(payload),
+            {"paths"},
+            stop_after_keys={"entries"},
+            entry_skip_keys={"debug"},
+        )
+
+        self.assertEqual(findings.get("entries"), [{
+            "action": "mark_missing_photos_faces",
+            "image_path": "/volume1/photo/test.jpg",
+        }])
+        self.assertTrue(findings.get("_stream_compacted"))
 
     def test_check_findings_status_reads_without_findings_lock(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             service = FileAnalysisService(result_path=os.path.join(tmpdir, "file_analysis.json"))
             self.assertTrue(service.writeCheckFindings("face_match", {
                 "status": "finished",
+                "count": 1,
                 "entries": [{"image_path": "/volume1/photo/test.jpg"}],
             }))
 
@@ -116,9 +173,23 @@ class FileAnalysisServiceTests(unittest.TestCase):
             status = service.readCheckFindingsStatus("face_match")
 
             self.assertEqual(status.get("count"), 1)
-            self.assertEqual(status.get("status"), "finished")
+            self.assertNotIn("status", status)
 
-    def test_delete_check_findings_removes_status_sidecar(self):
+    def test_check_findings_status_without_top_level_count_does_not_count_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = FileAnalysisService(result_path=os.path.join(tmpdir, "file_analysis.json"))
+            self.assertTrue(service.writeCheckFindings("face_match", {
+                "status": "finished",
+                "entries": [{"image_path": "/volume1/photo/test.jpg"}],
+            }))
+
+            status = service.readCheckFindingsStatus("face_match")
+
+            self.assertEqual(status.get("count"), 0)
+            self.assertNotIn("status", status)
+            self.assertNotIn("entries", status)
+
+    def test_delete_check_findings_removes_findings_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             service = FileAnalysisService(result_path=os.path.join(tmpdir, "file_analysis.json"))
             self.assertTrue(service.writeCheckFindings("face_match", {
@@ -129,7 +200,6 @@ class FileAnalysisServiceTests(unittest.TestCase):
             self.assertTrue(service.deleteCheckFindings("face_match"))
 
             self.assertFalse(service._finding_path("face_match").exists())
-            self.assertFalse(service._finding_status_path("face_match").exists())
 
 
 if __name__ == "__main__":

@@ -68,7 +68,10 @@ class FaceMatchWorkflowService:
         return bool(progress.get("stop_requested"))
 
     def get_findings(self) -> Dict[str, Any]:
-        findings = self.backend.file_analysis.readCheckFindings("face_match")
+        reader = getattr(self.backend.file_analysis, "readCheckFindingsEntries", None)
+        findings = reader("face_match") if callable(reader) else None
+        if not isinstance(findings, dict):
+            findings = self.backend.file_analysis.readCheckFindings("face_match")
         return findings if isinstance(findings, dict) else {}
 
     def get_findings_status(self) -> Dict[str, Any]:
@@ -116,7 +119,7 @@ class FaceMatchWorkflowService:
         token = backend._faceMatchFindingEntryToken(normalized_entry)
         if token and any(backend._faceMatchFindingEntryToken(existing) == token for existing in entries):
             return False
-        entries.append(normalized_entry)
+        entries.append(backend._compactFaceMatchFindingEntryForStorage(normalized_entry))
         return True
 
     def write_persisted_findings_status(
@@ -177,7 +180,11 @@ class FaceMatchWorkflowService:
                 "save_only": save_only,
                 "transferred_count": transferred_count,
                 "count": len(entries),
-                "entries": entries,
+                "entries": [
+                    self.backend._compactFaceMatchFindingEntryForStorage(entry)
+                    for entry in entries
+                    if isinstance(entry, dict)
+                ],
             }
         )
 
@@ -247,6 +254,7 @@ class FaceMatchWorkflowService:
     ) -> Dict[str, Any]:
         backend = self.backend
         findings = backend.getFaceMatchFindings()
+        stream_compacted = bool(findings.pop("_stream_compacted", False))
         requested_action = str(action or "").strip().lower()
         findings_action = str(findings.get("action") or "").strip().lower()
         if requested_action and findings_action and requested_action != findings_action:
@@ -264,6 +272,12 @@ class FaceMatchWorkflowService:
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
         resolved_entries = entries
         transferred_count = int(findings.get("transferred_count") or 0)
+        if stream_compacted and entries and not refresh and not auto:
+            backend._persistFaceMatchFindingsEntries(
+                findings=findings,
+                entries=[entry for entry in entries if isinstance(entry, dict)],
+                transferred_count=transferred_count,
+            )
         if (refresh or auto) and user_key and isinstance(cookies, dict) and base_url:
             entries_total = len(entries)
             entries_current = 0
@@ -474,8 +488,9 @@ class FaceMatchWorkflowService:
                             continue
                 next_entries.append(resolved_entry)
                 if auto:
+                    next_entries.extend(entries[entry_index + 1:])
                     review_required = True
-                    continue
+                    break
             resolved_entries = next_entries
             if findings_changed and (
                 resolved_entries != persisted_entries

@@ -240,7 +240,7 @@ class AutoApplyPersonOrchestrationCallerTests(unittest.TestCase):
         self.assertEqual(result["entries"], [unreadable_entry, assignable_entry])
         self.assertEqual(result["transferred_count"], 0)
 
-    def test_findings_auto_apply_skips_unknown_and_applies_later_known_face(self):
+    def test_findings_auto_apply_stops_at_unknown_before_later_known_face(self):
         unknown_entry = {
             "action": "search_photo_face_in_file",
             "image_path": "/volume1/photo/unknown.jpg",
@@ -277,28 +277,17 @@ class AutoApplyPersonOrchestrationCallerTests(unittest.TestCase):
                 auto=True,
             )
 
-        orchestrate_mock.assert_called_once_with(
-            user_key="user",
-            cookies={},
-            base_url="https://example.test",
-            image_path="/volume1/photo/assignable.jpg",
-            face_id=457,
-            person_name="Alice",
-            item_id=101,
-            create_missing_person=False,
-        )
-        persist_mock.assert_called()
-        self.assertEqual(persist_mock.call_args.kwargs["entries"], [unknown_entry])
-        self.assertEqual(persist_mock.call_args.kwargs["transferred_count"], 1)
-        self.assertEqual(len(result["entries"]), 1)
-        self.assertEqual(result["transferred_count"], 1)
+        orchestrate_mock.assert_not_called()
+        persist_mock.assert_not_called()
+        self.assertEqual(len(result["entries"]), 2)
+        self.assertEqual(result["transferred_count"], 0)
         self.assertEqual(result["entries"][0]["face"]["face_id"], 456)
-        self.assertIsNone(result["entries"][0]["matched_person"])
+        self.assertEqual(result["entries"][1]["face"]["face_id"], 457)
         progress = self.service.getFaceMatchingProgress("user")
         self.assertEqual(progress["message_key"], "face_match:progress_review_required")
-        self.assertEqual(progress["entries_current"], 2)
+        self.assertEqual(progress["entries_current"], 1)
         self.assertEqual(progress["entries_total"], 2)
-        self.assertEqual(progress["transferred_count"], 1)
+        self.assertEqual(progress["transferred_count"], 0)
         self.assertFalse(progress["running"])
 
     def test_findings_auto_apply_does_not_swallow_login_required_error(self):

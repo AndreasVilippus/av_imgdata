@@ -13,6 +13,21 @@ except ImportError:  # pragma: no cover - Synology and the test environment prov
     fcntl = None
 
 
+class _JsonCharReader:
+    def __init__(self, handle):
+        self._handle = handle
+        self._buffer: List[str] = []
+
+    def read(self) -> str:
+        if self._buffer:
+            return self._buffer.pop()
+        return self._handle.read(1)
+
+    def unread(self, char: str) -> None:
+        if char:
+            self._buffer.append(char)
+
+
 class FileAnalysisService:
     """Persistence for the latest file analysis result."""
 
@@ -84,10 +99,6 @@ class FileAnalysisService:
         normalized = str(value or "json").strip().lower()
         return normalized if normalized in {"json"} else "json"
 
-    def _finding_status_path(self, finding_type: str) -> Path:
-        candidate = self._finding_path(finding_type)
-        return candidate.with_name(f"{candidate.stem}.status{candidate.suffix}")
-
     @staticmethod
     def _check_findings_status_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(payload, dict):
@@ -104,33 +115,52 @@ class FileAnalysisService:
         return status
 
     @staticmethod
-    def _skip_json_value(text: str, start: int) -> int:
-        idx = start
-        length = len(text)
-        while idx < length and text[idx].isspace():
-            idx += 1
-        if idx >= length:
-            return idx
-        if text[idx] == '"':
-            idx += 1
+    def _read_json_non_whitespace(reader: _JsonCharReader) -> str:
+        while True:
+            char = reader.read()
+            if not char or not char.isspace():
+                return char
+
+    @staticmethod
+    def _read_json_string_after_quote(reader: _JsonCharReader) -> str:
+        buffer = ['"']
+        escaped = False
+        while True:
+            char = reader.read()
+            if not char:
+                raise ValueError("unterminated JSON string")
+            buffer.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                return json.loads("".join(buffer))
+
+    @classmethod
+    def _skip_json_stream_value(cls, reader: _JsonCharReader, first_char: str) -> None:
+        if not first_char:
+            return
+        if first_char == '"':
             escaped = False
-            while idx < length:
-                char = text[idx]
+            while True:
+                char = reader.read()
+                if not char:
+                    return
                 if escaped:
                     escaped = False
                 elif char == "\\":
                     escaped = True
                 elif char == '"':
-                    return idx + 1
-                idx += 1
-            return idx
-        if text[idx] in "[{":
-            stack = ["]" if text[idx] == "[" else "}"]
-            idx += 1
+                    return
+        if first_char in "[{":
+            stack = ["]" if first_char == "[" else "}"]
             in_string = False
             escaped = False
-            while idx < length:
-                char = text[idx]
+            while stack:
+                char = reader.read()
+                if not char:
+                    return
                 if in_string:
                     if escaped:
                         escaped = False
@@ -144,58 +174,235 @@ class FileAnalysisService:
                     stack.append("]" if char == "[" else "}")
                 elif stack and char == stack[-1]:
                     stack.pop()
-                    if not stack:
-                        return idx + 1
-                idx += 1
-            return idx
-        while idx < length and text[idx] not in ",}]\r\n\t ":
-            idx += 1
-        return idx
+            return
+        while True:
+            char = reader.read()
+            if not char or char in ",}]":
+                if char:
+                    reader.unread(char)
+                return
+            if char.isspace():
+                return
 
     @classmethod
-    def _read_check_findings_status_text(cls, text: str) -> Dict[str, Any]:
-        decoder = json.JSONDecoder()
-        idx = 0
-        length = len(text)
-        while idx < length and text[idx].isspace():
-            idx += 1
-        if idx >= length or text[idx] != "{":
-            return {}
-        idx += 1
-        status: Dict[str, Any] = {}
-        while idx < length:
-            while idx < length and text[idx].isspace():
-                idx += 1
-            if idx < length and text[idx] == "}":
+    def _read_json_stream_simple_value(cls, reader: _JsonCharReader, first_char: str) -> Any:
+        if first_char == '"':
+            return cls._read_json_string_after_quote(reader)
+        buffer = [first_char]
+        while True:
+            char = reader.read()
+            if not char or char in ",}]":
+                if char:
+                    reader.unread(char)
                 break
+            if char.isspace():
+                break
+            buffer.append(char)
+        return json.loads("".join(buffer))
+
+    @classmethod
+    def _read_json_stream_value(cls, reader: _JsonCharReader, first_char: str) -> Any:
+        if not first_char:
+            raise ValueError("missing JSON value")
+        if first_char == '"':
+            return cls._read_json_string_after_quote(reader)
+        buffer = [first_char]
+        if first_char in "[{":
+            stack = ["]" if first_char == "[" else "}"]
+            in_string = False
+            escaped = False
+            while stack:
+                char = reader.read()
+                if not char:
+                    raise ValueError("unterminated JSON value")
+                buffer.append(char)
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                elif char == '"':
+                    in_string = True
+                elif char in "[{":
+                    stack.append("]" if char == "[" else "}")
+                elif char == stack[-1]:
+                    stack.pop()
+            return json.loads("".join(buffer))
+        while True:
+            char = reader.read()
+            if not char or char in ",}]":
+                if char:
+                    reader.unread(char)
+                break
+            if char.isspace():
+                break
+            buffer.append(char)
+        return json.loads("".join(buffer))
+
+    @classmethod
+    def _read_json_stream_object_without_keys(
+        cls,
+        reader: _JsonCharReader,
+        skip_keys: set,
+        skipped_marker: Optional[List[bool]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        normalized_skip_keys = {str(key or "") for key in skip_keys}
+        while True:
+            key_start = cls._read_json_non_whitespace(reader)
+            if not key_start or key_start == "}":
+                break
+            if key_start != '"':
+                raise ValueError("invalid JSON object key")
+            key = cls._read_json_string_after_quote(reader)
+            if cls._read_json_non_whitespace(reader) != ":":
+                raise ValueError("missing JSON object separator")
+            value_start = cls._read_json_non_whitespace(reader)
+            if not value_start:
+                raise ValueError("missing JSON object value")
+            if key in normalized_skip_keys:
+                if skipped_marker is not None:
+                    skipped_marker.append(True)
+                cls._skip_json_stream_value(reader, value_start)
+            else:
+                payload[key] = cls._read_json_stream_value(reader, value_start)
+            separator = cls._read_json_non_whitespace(reader)
+            if separator == ",":
+                continue
+            if separator == "}":
+                break
+            raise ValueError("invalid JSON object terminator")
+        return payload
+
+    @classmethod
+    def _read_json_stream_array_of_objects_without_keys(
+        cls,
+        reader: _JsonCharReader,
+        first_char: str,
+        skip_keys: set,
+        skipped_marker: Optional[List[bool]] = None,
+    ) -> List[Any]:
+        if first_char != "[":
+            return cls._read_json_stream_value(reader, first_char)
+        entries: List[Any] = []
+        while True:
+            value_start = cls._read_json_non_whitespace(reader)
+            if not value_start:
+                raise ValueError("unterminated JSON array")
+            if value_start == "]":
+                break
+            if value_start == "{":
+                entries.append(cls._read_json_stream_object_without_keys(reader, skip_keys, skipped_marker))
+            else:
+                entries.append(cls._read_json_stream_value(reader, value_start))
+            separator = cls._read_json_non_whitespace(reader)
+            if separator == ",":
+                continue
+            if separator == "]":
+                break
+            raise ValueError("invalid JSON array terminator")
+        return entries
+
+    @classmethod
+    def _read_check_findings_without_keys_stream(
+        cls,
+        handle,
+        skip_keys: set,
+        stop_after_keys: Optional[set] = None,
+        entry_skip_keys: Optional[set] = None,
+    ) -> Dict[str, Any]:
+        reader = _JsonCharReader(handle)
+        first = cls._read_json_non_whitespace(reader)
+        if first != "{":
+            return {}
+        payload: Dict[str, Any] = {}
+        normalized_skip_keys = {str(key or "") for key in skip_keys}
+        normalized_stop_after_keys = {str(key or "") for key in (stop_after_keys or set())}
+        skipped_marker: List[bool] = []
+        while True:
+            key_start = cls._read_json_non_whitespace(reader)
+            if not key_start or key_start == "}":
+                break
+            if key_start != '"':
+                return {}
             try:
-                key, idx = decoder.raw_decode(text, idx)
+                key = cls._read_json_string_after_quote(reader)
             except ValueError:
                 return {}
-            if not isinstance(key, str):
+            if cls._read_json_non_whitespace(reader) != ":":
                 return {}
-            while idx < length and text[idx].isspace():
-                idx += 1
-            if idx >= length or text[idx] != ":":
+            value_start = cls._read_json_non_whitespace(reader)
+            if not value_start:
                 return {}
-            idx += 1
-            while idx < length and text[idx].isspace():
-                idx += 1
+            try:
+                if key in normalized_skip_keys:
+                    cls._skip_json_stream_value(reader, value_start)
+                elif key == "entries" and entry_skip_keys:
+                    payload[key] = cls._read_json_stream_array_of_objects_without_keys(
+                        reader,
+                        value_start,
+                        entry_skip_keys,
+                        skipped_marker,
+                    )
+                else:
+                    payload[key] = cls._read_json_stream_value(reader, value_start)
+            except ValueError:
+                return {}
+            if key in normalized_stop_after_keys:
+                break
+            separator = cls._read_json_non_whitespace(reader)
+            if separator == ",":
+                continue
+            if separator == "}":
+                break
+            return {}
+        if skipped_marker:
+            payload["_stream_compacted"] = True
+        return payload
+
+    @classmethod
+    def _read_check_findings_status_stream(cls, handle) -> Dict[str, Any]:
+        reader = _JsonCharReader(handle)
+        first = cls._read_json_non_whitespace(reader)
+        if first != "{":
+            return {}
+        status: Dict[str, Any] = {}
+        while True:
+            key_start = cls._read_json_non_whitespace(reader)
+            if not key_start or key_start == "}":
+                break
+            if key_start != '"':
+                return {}
+            try:
+                key = cls._read_json_string_after_quote(reader)
+            except ValueError:
+                return {}
+            if cls._read_json_non_whitespace(reader) != ":":
+                return {}
+            value_start = cls._read_json_non_whitespace(reader)
+            if not value_start:
+                return {}
             if key in {"entries", "paths"}:
-                idx = cls._skip_json_value(text, idx)
-            else:
+                break
+            if value_start in "[{":
+                cls._skip_json_stream_value(reader, value_start)
+            elif key in {"job_id", "started_at", "finished_at", "last_updated_at", "status", "shared_folder", "action", "auto", "save_only", "transferred_count", "count", "check_type", "source_mode", "resolved_count", "ignored_count", "skipped_count"}:
                 try:
-                    value, idx = decoder.raw_decode(text, idx)
+                    status[key] = cls._read_json_stream_simple_value(reader, value_start)
                 except ValueError:
                     return {}
-                status[key] = value
-            while idx < length and text[idx].isspace():
-                idx += 1
-            if idx < length and text[idx] == ",":
-                idx += 1
+            else:
+                cls._skip_json_stream_value(reader, value_start)
+            separator = cls._read_json_non_whitespace(reader)
+            if separator == ",":
                 continue
-            if idx < length and text[idx] == "}":
+            if separator == "}":
                 break
+            if not separator:
+                break
+            return {}
         return cls._check_findings_status_payload(status)
 
     def _json_bytes(self, payload: Dict[str, Any], *, pretty: bool = True) -> bytes:
@@ -286,36 +493,60 @@ class FileAnalysisService:
                 return {}
             return data if isinstance(data, dict) else {}
 
+    def readCheckFindingsWithoutKeys(self, finding_type: str, skip_keys: Optional[List[str]] = None) -> Dict[str, Any]:
+        normalized_skip_keys = {str(key or "") for key in (skip_keys or []) if str(key or "")}
+        if not normalized_skip_keys:
+            return self.readCheckFindings(finding_type)
+        with self.lockCheckFindings(finding_type):
+            candidate = self._finding_path(finding_type)
+            if not candidate.exists() or not candidate.is_file():
+                return {}
+            try:
+                with candidate.open("r", encoding="utf-8") as handle:
+                    data = self._read_check_findings_without_keys_stream(handle, normalized_skip_keys)
+            except Exception:
+                return {}
+            return data if isinstance(data, dict) else {}
+
+    def readCheckFindingsEntries(self, finding_type: str) -> Dict[str, Any]:
+        with self.lockCheckFindings(finding_type):
+            candidate = self._finding_path(finding_type)
+            if not candidate.exists() or not candidate.is_file():
+                return {}
+            try:
+                with candidate.open("r", encoding="utf-8") as handle:
+                    data = self._read_check_findings_without_keys_stream(
+                        handle,
+                        {"paths"},
+                        entry_skip_keys={
+                            "lookup_debug",
+                            "debug",
+                            "resume_cursor",
+                            "candidate_persons",
+                            "known_persons",
+                            "person_candidates",
+                        },
+                    )
+            except Exception:
+                return {}
+            return data if isinstance(data, dict) else {}
+
     def readCheckFindingsStatus(self, finding_type: str) -> Dict[str, Any]:
         candidate = self._finding_path(finding_type)
         if not candidate.exists() or not candidate.is_file():
             return {}
-        status_candidate = self._finding_status_path(finding_type)
-        if status_candidate.exists() and status_candidate.is_file():
-            try:
-                with status_candidate.open("r", encoding="utf-8") as handle:
-                    data = json.load(handle)
-            except Exception:
-                data = {}
-            if isinstance(data, dict):
-                return self._check_findings_status_payload(data)
         try:
-            text = candidate.read_text(encoding="utf-8")
+            with candidate.open("r", encoding="utf-8") as handle:
+                return self._read_check_findings_status_stream(handle)
         except Exception:
             return {}
-        return self._read_check_findings_status_text(text)
 
     def writeCheckFindings(self, finding_type: str, payload: Dict[str, Any]) -> bool:
         if not isinstance(payload, dict):
             return False
         with self.lockCheckFindings(finding_type):
             candidate = self._finding_path(finding_type)
-            status_candidate = self._finding_status_path(finding_type)
-            status_payload = self._check_findings_status_payload(payload)
-            return (
-                self._write_json_if_changed(candidate, payload, pretty=True)
-                and self._write_json_if_changed(status_candidate, status_payload, pretty=True)
-            )
+            return self._write_json_if_changed(candidate, payload, pretty=True)
 
     def appendCheckFindingEntries(self, finding_type: str, entries: List[Dict[str, Any]]) -> bool:
         if not isinstance(entries, list):
@@ -333,14 +564,12 @@ class FileAnalysisService:
     def deleteCheckFindings(self, finding_type: str) -> bool:
         with self.lockCheckFindings(finding_type):
             candidate = self._finding_path(finding_type)
-            status_candidate = self._finding_status_path(finding_type)
-            for path in (candidate, status_candidate):
-                if not path.exists():
-                    continue
-                try:
-                    path.unlink()
-                except Exception:
-                    return False
+            if not candidate.exists():
+                return True
+            try:
+                candidate.unlink()
+            except Exception:
+                return False
             return True
 
     def readRuntimeState(self, state_type: str, state_key: str) -> Dict[str, Any]:
