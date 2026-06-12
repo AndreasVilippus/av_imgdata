@@ -138,6 +138,97 @@
 	color: var(--sm-blue);
 }
 
+.database-list-toolbar,
+.database-list-pagination {
+	display: flex;
+	align-items: flex-end;
+	gap: var(--sm-space-2);
+	flex-wrap: wrap;
+}
+
+.database-list-toolbar {
+	margin-bottom: var(--sm-space-3);
+}
+
+.database-list-editor {
+	margin-bottom: var(--sm-space-3);
+}
+
+.database-list-editor-fields {
+	display: grid;
+	grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+	align-items: end;
+	gap: var(--sm-space-2);
+}
+
+.database-list-selector {
+	min-width: 160px;
+}
+
+.database-list-search {
+	flex: 1 1 240px;
+}
+
+.database-list-toolbar-actions {
+	display: flex;
+	gap: var(--sm-space-2);
+}
+
+.database-list-table-wrap {
+	overflow: auto;
+	border: 1px solid var(--sm-border);
+	border-radius: var(--sm-radius-1);
+}
+
+.database-list-table {
+	width: 100%;
+	min-width: 760px;
+	border-collapse: collapse;
+	font-size: var(--sm-font-xs);
+}
+
+.database-list-table th,
+.database-list-table td {
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--sm-border-soft);
+	text-align: left;
+	vertical-align: middle;
+}
+
+.database-list-table th {
+	background: var(--sm-surface-soft);
+	font-weight: 700;
+	white-space: nowrap;
+}
+
+.database-list-table tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.database-list-actions-column {
+	width: 170px;
+	text-align: right !important;
+	white-space: nowrap;
+}
+
+.database-list-empty {
+	padding: 24px !important;
+	text-align: center !important;
+	color: var(--sm-text-muted);
+}
+
+.database-list-pagination {
+	justify-content: flex-end;
+	margin-top: var(--sm-space-3);
+	font-size: var(--sm-font-xs);
+}
+
+.database-list-page-size {
+	display: flex;
+	align-items: center;
+	gap: var(--sm-space-1);
+}
+
 .sm-content {
 	flex: 1;
 	min-width: 0;

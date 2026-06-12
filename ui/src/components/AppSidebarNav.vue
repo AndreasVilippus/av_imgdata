@@ -1,5 +1,6 @@
 <template>
 	<aside class="sm-nav">
+		<div class="sm-nav-group">{{ $avt('nav:group_photos', 'Photos') }}</div>
 		<button
 			class="sm-nav-item"
 			:class="{ active: selectedOption === 'status' }"
@@ -32,6 +33,18 @@
 			<CleanupIcon class="sm-nav-icon" />
 			{{ $avt('nav:cleanup', 'Cleanup') }}
 		</button>
+		<div class="sm-nav-separator"></div>
+		<div class="sm-nav-group">{{ $avt('nav:group_music', 'Music') }}</div>
+		<button
+			class="sm-nav-item"
+			:class="{ active: selectedOption === 'music_ratings' }"
+			@click="$emit('select', 'music_ratings')"
+		>
+			<ModulesIcon class="sm-nav-icon" />
+			{{ $avt('nav:music_ratings', 'Ratings') }}
+		</button>
+		<div class="sm-nav-separator"></div>
+		<div class="sm-nav-group">{{ $avt('nav:group_settings', 'Settings / extensions') }}</div>
 		<button
 			class="sm-nav-item"
 			:class="{ active: selectedOption === 'configuration' }"
@@ -40,7 +53,6 @@
 			<ConfigIcon class="sm-nav-icon" />
 			{{ $avt('nav:configuration', 'Configuration') }}
 		</button>
-		<div class="sm-nav-separator"></div>
 		<button
 			class="sm-nav-item"
 			:class="{ active: selectedOption === 'external_libraries' }"
@@ -48,6 +60,13 @@
 		>
 			<ExternalLibrariesIcon class="sm-nav-icon" />
 			{{ $avt('nav:external_libraries', 'External libraries') }}
+		</button>
+		<button
+			class="sm-nav-item sm-nav-sub-item"
+			:class="{ active: selectedOption === 'database_lists' }"
+			@click="$emit('select', 'database_lists')"
+		>
+			{{ $avt('nav:database_lists', 'Database lists') }}
 		</button>
 		<button
 			class="sm-nav-item sm-nav-sub-item"

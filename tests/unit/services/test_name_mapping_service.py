@@ -96,7 +96,7 @@ class TestNameMappingServiceCache(unittest.TestCase):
         result2 = service.findNameMapping("John Doe")
         self.assertEqual(result2["target_name"], "John")
 
-    def test_readNameMappings_detects_file_change(self):
+    def test_readNameMappings_imports_legacy_file_only_once(self):
         """
         Test: Wenn name_mappings.json sich ändert,
         wird der Cache invalidiert und neu geladen.
@@ -124,9 +124,9 @@ class TestNameMappingServiceCache(unittest.TestCase):
         with self.mapping_file.open("w") as f:
             json.dump({"name_mappings": test_mappings2}, f)
         
-        # Zweiter Aufruf sollte neu laden
+        # Nach erfolgreicher Migration bleibt SQLite die Quelle.
         result2 = service.readNameMappings()
-        self.assertEqual(len(result2), 2)
+        self.assertEqual(result2, [{"source_name": "John", "target_name": "John"}])
 
     def test_saveNameMapping_invalidates_cache(self):
         """
@@ -183,7 +183,7 @@ class TestNameMappingServiceCache(unittest.TestCase):
         result = service.readNameMappings()
         self.assertEqual(len(result), 2)
 
-    def test_saveNameMapping_atomic_write(self):
+    def test_saveNameMapping_writes_sqlite_without_rewriting_legacy_json(self):
         """
         Test: saveNameMapping() schreibt atomar
         (temporäre Datei dann replace).
@@ -192,12 +192,8 @@ class TestNameMappingServiceCache(unittest.TestCase):
         
         service.saveNameMapping(source_name="John", target_name="John")
         
-        # Datei sollte existieren
-        self.assertTrue(self.mapping_file.exists())
-        
-        # Keine temporäre Datei sollte übrig sein
-        temp_path = self.mapping_file.parent / f"{self.mapping_file.name}.tmp"
-        self.assertFalse(temp_path.exists())
+        self.assertFalse(self.mapping_file.exists())
+        self.assertTrue((self.mapping_dir / "imgdata.sqlite3").exists())
 
     def test_saveNameMappingsBatch(self):
         """
@@ -295,6 +291,27 @@ class TestNameMappingServiceCache(unittest.TestCase):
         # Sollte leere Liste und Error-Message liefern
         self.assertEqual(result, [])
         self.assertIn("Expecting", service._last_read_error)
+
+    def test_deleteNameMapping_invalidates_lookup_cache(self):
+        service = NameMappingService(str(self.mapping_file))
+        self.assertTrue(service.saveNameMapping(source_name="Alias", target_name="Person"))
+        mapping_id = service.listNameMappingsPage(search="Alias")["entries"][0]["id"]
+        self.assertIsNotNone(service.findNameMapping("Alias"))
+
+        self.assertTrue(service.deleteNameMapping(mapping_id))
+
+        self.assertIsNone(service.findNameMapping("Alias"))
+        self.assertEqual(service.listNameMappingsPage(search="Alias")["total"], 0)
+
+    def test_updateNameMappingTarget_updates_selected_row(self):
+        service = NameMappingService(str(self.mapping_file))
+        self.assertTrue(service.saveNameMapping(source_name="Alias", target_name="Person"))
+        entry = service.listNameMappingsPage(search="Alias")["entries"][0]
+
+        self.assertTrue(service.updateNameMappingTarget(entry["id"], "Updated Person"))
+
+        updated = service.listNameMappingsPage(search="Alias")["entries"][0]
+        self.assertEqual(updated["target_name"], "Updated Person")
 
 
 if __name__ == "__main__":

@@ -30,14 +30,14 @@ Confirmed implemented or materially started:
 - `ui/src/services/dsm-api-client.js` owns DSM credential resume context, token/cookie handling, endpoint timeouts, request construction, and response normalization.
 - `ui/src/services/backend-error-formatter.js` owns backend error detail and retryability rendering.
 - `src/parser/metadata_parser.py` delegates schema-specific parsing to ACD, Microsoft, and MWG parser modules.
-- `FileAnalysisService` remains JSON-backed and provides current persisted findings/runtime-state primitives.
+- `FileAnalysisService` is SQLite-backed and provides persisted findings/runtime-state primitives.
 
 Confirmed remaining structural issues:
 
 - `src/imgdata.py` still owns too much workflow orchestration: candidate caches, operation start locks, Photos access, metadata reads, findings handling, and mutation flow coordination.
 - `ui/src/App.vue` still contains root-component coordination, while DSM API client behavior and backend error formatting now have dedicated services.
 - Runtime identity, keyed runtime containers, and the FileAnalysis singleton runtime state are centralized in `RuntimeStateService`.
-- Findings persistence exists as JSON primitives, but no storage boundary exists that can support cheap status reads, page reads, or future SQLite evaluation.
+- Findings persistence uses a SQLite storage boundary with cheap status reads and indexed entry snapshots.
 
 ## Planning Rules
 
@@ -224,7 +224,7 @@ Status: Done.
 
 ### Current state
 
-JSON-backed persisted findings and runtime-state primitives exist in `FileAnalysisService`. Checks and every FaceMatch scan path now resume from persisted findings, deduplicate appended entries by stable identity, rebuild skip lists from persisted entries, debounce running writes, and preserve persisted entries on terminal writes.
+SQLite-backed persisted findings and runtime-state primitives exist in `FileAnalysisService`. Checks and every FaceMatch scan path resume from persisted findings, deduplicate appended entries by stable identity, rebuild skip lists from persisted entries, debounce running writes, and preserve persisted entries on terminal writes.
 
 ### Completed implementation
 
@@ -566,7 +566,7 @@ Status: Open / only JSON primitives exist.
 
 ### Problem
 
-`FileAnalysisService` currently provides JSON-backed primitives, but there is no separate storage boundary for cheap status reads, page reads, or future alternate storage.
+`FileAnalysisService` now provides SQLite-backed primitives with separate status and entry storage.
 
 ### Target module
 
@@ -599,7 +599,7 @@ JSON remains the first backend.
 - Status reads do not materialize full findings lists where avoidable.
 - Mutation responses return current status and current item.
 - Invalid state files fail safely.
-- No SQLite dependency is introduced in this step.
+- SQLite is the active package-local persistence layer.
 
 Speed impact: Medium.
 
@@ -900,14 +900,14 @@ Do not prioritize:
 | 9 | Keep API routes thin after service extraction | Partial | 2 | broader backend cleanup | Low | High |
 | 10 | Extract DSM API client from `App.vue` | Done | 3 | UI cleanup | Low to Medium | High |
 | 11 | Extract backend error formatter from `App.vue` | Done | 3 | UI cleanup | Low | Medium to High |
-| 12 | Add findings storage abstraction | Open | 4 | pagination/SQLite | Medium | High |
+| 12 | Add findings storage abstraction | Implemented | 4 | pagination/SQLite | Medium | High |
 | 13 | Add findings pagination | Open | 4 | SQLite evaluation | High for large libraries | Medium to High |
 | 14 | Keep metadata parser split stable with tests | Done | 5 | parser changes | Low | Medium to High |
 | 15 | Move lifecycle complexity into Python helper | Open | 6 | optional dependency cleanup | Low to Medium | High |
 | 16 | Improve optional dependency status | Open | 6 | optional model work | Low | High |
 | 17 | Improve Photos lookup caching with invalidation proof | Partial | 7 | broader cache/perf work | Medium to High | Medium |
 | 18 | Profile before optimizing matching/listing | Deferred | 7 | matching/listing optimization | Conditional | Medium |
-| 19 | Evaluate SQLite behind abstraction | Deferred | 7 | storage migration | High for large libraries | High |
+| 19 | Evaluate SQLite behind abstraction | Implemented | 7 | storage migration | High for large libraries | High |
 
 ## Current Decision
 

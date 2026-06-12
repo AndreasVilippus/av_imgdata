@@ -359,7 +359,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.service.photos.listFotoTeamPersonKnown = lambda **kwargs: [{"id": 555, "name": "Person Known"}]
         self.service.photos.findKnownPersonByName = lambda **kwargs: {"id": 555, "name": "Person Known"}
         self.service.photos.debugKnownPersonLookup = lambda **kwargs: {}
-        self.service.file_analysis.writeCheckFindings = Mock()
+        self.service.face_match_findings.write = Mock(return_value=True)
 
         result = self.service.searchPhotoFaceInFile(
             user_key="user",
@@ -372,14 +372,12 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["save_only"])
         self.assertEqual(result["findings_count"], 1)
         self.assertEqual(self.service.getFaceMatchingProgress("user")["findings_count"], 1)
-        self.assertGreaterEqual(self.service.file_analysis.writeCheckFindings.call_count, 2)
-        first_finding_type, first_payload = self.service.file_analysis.writeCheckFindings.call_args_list[0].args
-        self.assertEqual(first_finding_type, "face_match")
+        self.assertGreaterEqual(self.service.face_match_findings.write.call_count, 2)
+        first_payload = self.service.face_match_findings.write.call_args_list[0].args[0]
         self.assertEqual(first_payload["status"], "running")
         self.assertEqual(first_payload["finished_at"], "")
         self.assertEqual(first_payload["count"], 1)
-        finding_type, payload = self.service.file_analysis.writeCheckFindings.call_args.args
-        self.assertEqual(finding_type, "face_match")
+        payload = self.service.face_match_findings.write.call_args.args[0]
         self.assertEqual(payload["status"], "finished")
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["entries"][0]["matched_person_id"], 555)
@@ -424,7 +422,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.service.photos.listFotoTeamPersonKnown = lambda **kwargs: [{"id": 555, "name": "Person Known"}]
         self.service.photos.findKnownPersonByName = lambda **kwargs: {"id": 555, "name": "Person Known"}
         self.service.photos.debugKnownPersonLookup = lambda **kwargs: {}
-        self.service.file_analysis.writeCheckFindings = Mock()
+        self.service.face_match_findings.write = Mock(return_value=True)
 
         with patch.object(self.service, "_shouldStopFaceMatching", side_effect=[False, False, False, True]):
             result = self.service.searchPhotoFaceInFile(
@@ -437,14 +435,12 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(result["stopped"])
         self.assertEqual(result["findings_count"], 1)
         self.assertEqual(self.service.getFaceMatchingProgress("user")["findings_count"], 1)
-        self.assertGreaterEqual(self.service.file_analysis.writeCheckFindings.call_count, 2)
-        first_finding_type, first_payload = self.service.file_analysis.writeCheckFindings.call_args_list[0].args
-        self.assertEqual(first_finding_type, "face_match")
+        self.assertGreaterEqual(self.service.face_match_findings.write.call_count, 2)
+        first_payload = self.service.face_match_findings.write.call_args_list[0].args[0]
         self.assertEqual(first_payload["status"], "running")
         self.assertEqual(first_payload["finished_at"], "")
         self.assertEqual(first_payload["count"], 1)
-        finding_type, payload = self.service.file_analysis.writeCheckFindings.call_args.args
-        self.assertEqual(finding_type, "face_match")
+        payload = self.service.face_match_findings.write.call_args.args[0]
         self.assertEqual(payload["status"], "stopped")
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["entries"][0]["matched_person_id"], 555)
@@ -763,7 +759,8 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                  imgdata_api.IMGDATA,
                  "removeFaceMatchFindingMetadataEntry",
                  return_value={"removed": True},
-             ):
+             ), \
+             patch.object(imgdata_api.IMGDATA, "recordFaceMatchTransferProgress", return_value={}):
             payload = asyncio.run(imgdata_api.face_create_metadata_match(None))
 
         self.assertTrue(payload["success"])
@@ -3948,6 +3945,35 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         self.assertTrue(result["ignored"])
         self.assertEqual(result["token"], ignored_token)
+        self.assertTrue(
+            self.service.face_suppressions.is_suppressed(
+                f"checks:name_conflicts:{ignored_token}"
+            )
+        )
+
+    def test_face_match_suppression_prevents_candidate_from_being_saved(self):
+        entry = {
+            "action": "mark_missing_photos_faces",
+            "image_path": "/volume1/photo/tests/test.jpg",
+            "metadata_face": {
+                "name": "Ignored Person",
+                "source_format": "MWG_REGIONS",
+                "x": 0.1,
+                "y": 0.1,
+                "w": 0.2,
+                "h": 0.2,
+            },
+        }
+        self.service.face_suppressions.suppress(
+            "metadata-name:ignored person",
+            "metadata_name",
+        )
+        entries = []
+
+        appended = self.service._appendUniqueFaceMatchFinding(entries, entry)
+
+        self.assertFalse(appended)
+        self.assertEqual(entries, [])
 
     def test_config_service_migrates_legacy_checks_ignore_lists_to_files(self):
         with tempfile.TemporaryDirectory() as tempdir:

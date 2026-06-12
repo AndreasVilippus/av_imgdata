@@ -6,6 +6,21 @@
     "FILE_MATCH_SOURCE_SCOPE": "both",
     "PERSON_SORT_ORDER": "id_desc"
   },
+  "music": {
+    "ENABLED": true,
+    "AUDIO_STATION": {
+      "ALLOW_DATABASE_FALLBACK": false,
+      "DRY_RUN_DEFAULT": true
+    },
+    "FILES": {
+      "SHARED_FOLDER_NAMES": ["music"],
+      "AUDIO_EXTENSIONS": ["mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "aiff"]
+    },
+    "SCAN": {
+      "CHANGED_SINCE_DAYS_DEFAULT": 0,
+      "LIVE_WATCH_ENABLED": false
+    }
+  },
   "pip_packages": {
     "INSIGHTFACE": {
       "ENABLED": false,
@@ -81,9 +96,6 @@
       "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": 0.05,
       "SINGLE_SOURCE_OF_TRUTH": ""
     }
-  },
-  "runtime": {
-    "FINDINGS_STORAGE_FORMAT": "json"
   },
   "debug": {
     "IO_METRICS_ENABLED": false,

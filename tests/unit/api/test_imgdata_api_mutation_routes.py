@@ -239,6 +239,7 @@ def test_face_create_metadata_match_creates_metadata_face_person_and_cleans_find
     monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
     monkeypatch.setattr(imgdata_api.IMGDATA, "resolveOrCreatePhotosPersonForMetadataFace", create_metadata_person)
     monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", remove_metadata_finding)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "recordFaceMatchTransferProgress", Mock(return_value={}))
 
     payload = _run(imgdata_api.face_create_metadata_match(object()))
 
@@ -628,6 +629,7 @@ def test_checks_replace_metadata_face_name_snapshot_removes_nested_metadata_sign
         Mock(side_effect=lambda finding_type, payload: written.setdefault("payload", payload) or True),
     )
     monkeypatch.setattr(imgdata_api.IMGDATA, "getChecksProgress", Mock(return_value={}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.runtime_state, "write", Mock(return_value={}))
     monkeypatch.setattr(imgdata_api.IMGDATA, "_utcNowIso", Mock(return_value="2026-05-15T07:45:00+02:00"))
 
     response = _run(imgdata_api.checks_replace_metadata_face_name(object()))
@@ -775,3 +777,80 @@ def test_checks_assign_face_person_forwards_metadata_override_to_refresh(monkeyp
     assert refresh_kwargs["replacement_face_data"]["name"] == "Person Current"
     assert refresh_kwargs["replacement_face_data"]["person_id"] == 42
     assert "resolved_delta" not in refresh_kwargs
+
+
+def test_database_name_mappings_forwards_pagination_and_search(monkeypatch):
+    async def request_body(_request):
+        return {"search": "alias", "page": 2, "page_size": 10}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    list_page = Mock(return_value={"entries": [{"id": 11}], "page": 2, "page_size": 10, "total": 12})
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "listNameMappingsPage", list_page)
+
+    payload = _run(imgdata_api.database_name_mappings(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["list"] == "name_mappings"
+    assert payload["data"]["total"] == 12
+    list_page.assert_called_once_with(search="alias", page=2, page_size=10)
+    assert len(calls) == 1
+
+
+def test_database_name_mapping_delete_validates_and_deletes(monkeypatch):
+    async def request_body(_request):
+        return {"id": 42}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    delete = Mock(return_value=True)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "deleteNameMapping", delete)
+
+    payload = _run(imgdata_api.database_name_mapping_delete(object()))
+
+    assert payload == {"success": True, "data": {"id": 42, "deleted": True}}
+    delete.assert_called_once_with(42)
+    assert len(calls) == 1
+
+
+def test_database_name_mapping_save_validates_and_saves(monkeypatch):
+    async def request_body(_request):
+        return {"source_name": "Alias", "target_name": "Person"}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    save = Mock(return_value=True)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "saveNameMapping", save)
+
+    payload = _run(imgdata_api.database_name_mapping_save(object()))
+
+    assert payload == {
+        "success": True,
+        "data": {"id": None, "source_name": "Alias", "target_name": "Person", "saved": True},
+    }
+    save.assert_called_once_with(source_name="Alias", target_name="Person")
+    assert len(calls) == 1
+
+
+def test_database_name_mapping_save_updates_existing_mapping_by_id(monkeypatch):
+    async def request_body(_request):
+        return {"id": 17, "source_name": "Alias", "target_name": "Updated Person"}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    update = Mock(return_value=True)
+    save = Mock(return_value=True)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "updateNameMappingTarget", update)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "saveNameMapping", save)
+
+    payload = _run(imgdata_api.database_name_mapping_save(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["id"] == 17
+    update.assert_called_once_with(17, "Updated Person")
+    save.assert_not_called()
+    assert len(calls) == 1

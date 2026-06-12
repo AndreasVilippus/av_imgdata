@@ -224,3 +224,36 @@ def test_runtime_face_match_status_builder_covers_stopping_failed_finished_empty
     assert empty["phase"] == "empty"
     assert _counter_keys(empty) == ["findings"]
     assert empty["counters"][0]["value"] == 0
+
+
+def test_runtime_attach_face_match_rebuilds_findings_counter_from_current_progress():
+    service = _service()
+    stale_status = service._buildFaceMatchStatusPayload(
+        action="search_photo_face_in_file",
+        source_mode="scan",
+        phase="running",
+        save_only=True,
+        progress_kind="persons",
+        current=1,
+        total=100,
+        findings_count=0,
+    )
+
+    payload = service._attachFaceMatchStatusPayload(
+        {
+            "running": True,
+            "finished": False,
+            "action": "search_photo_face_in_file",
+            "source_mode": "scan",
+            "save_only": True,
+            "persons_read": 2,
+            "persons_total": 100,
+            "findings_count": 1,
+            "status": stale_status,
+        }
+    )
+
+    status = _status(payload)
+    assert status["progress"]["current"] == 2
+    assert _counter_keys(status) == ["findings"]
+    assert status["counters"][0]["value"] == 1

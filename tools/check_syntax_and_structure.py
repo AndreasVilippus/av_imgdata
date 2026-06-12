@@ -44,6 +44,9 @@ def check_python_ast() -> int:
 
 def _load_config_service_default() -> dict[str, Any]:
     path = ROOT / "src" / "services" / "config_service.py"
+    src_path = str(ROOT / "src")
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
     spec = importlib.util.spec_from_file_location("av_imgdata_config_service_check", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not load ConfigService from {path}")

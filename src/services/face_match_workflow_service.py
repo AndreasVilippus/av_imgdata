@@ -67,17 +67,25 @@ class FaceMatchWorkflowService:
         progress = self.backend.getFaceMatchingProgress(user_key)
         return bool(progress.get("stop_requested"))
 
-    def get_findings(self) -> Dict[str, Any]:
-        reader = getattr(self.backend.file_analysis, "readCheckFindingsEntries", None)
-        findings = reader("face_match") if callable(reader) else None
-        if not isinstance(findings, dict):
-            findings = self.backend.file_analysis.readCheckFindings("face_match")
+    def _read_findings(self) -> Dict[str, Any]:
+        findings = self.backend.face_match_findings.read()
         return findings if isinstance(findings, dict) else {}
 
-    def get_findings_status(self) -> Dict[str, Any]:
-        reader = getattr(self.backend.file_analysis, "readCheckFindingsStatus", None)
-        findings = reader("face_match") if callable(reader) else self.backend.file_analysis.readCheckFindings("face_match")
+    def _read_findings_status(self) -> Dict[str, Any]:
+        findings = self.backend.face_match_findings.read_status()
         return findings if isinstance(findings, dict) else {}
+
+    def _write_findings_payload(self, payload: Dict[str, Any]) -> bool:
+        return bool(self.backend.face_match_findings.write(payload))
+
+    def _delete_findings(self) -> bool:
+        return bool(self.backend.face_match_findings.delete())
+
+    def get_findings(self) -> Dict[str, Any]:
+        return self._read_findings()
+
+    def get_findings_status(self) -> Dict[str, Any]:
+        return self._read_findings_status()
 
     def resume_saved_entries(
         self,
@@ -116,6 +124,9 @@ class FaceMatchWorkflowService:
     ) -> bool:
         backend = self.backend
         normalized_entry = backend._normalizeFaceMatchEntry(entry)
+        suppression_checker = getattr(type(backend), "_isFaceMatchFindingSuppressed", None)
+        if callable(suppression_checker) and suppression_checker(backend, normalized_entry):
+            return False
         token = backend._faceMatchFindingEntryToken(normalized_entry)
         if token and any(backend._faceMatchFindingEntryToken(existing) == token for existing in entries):
             return False
@@ -166,8 +177,7 @@ class FaceMatchWorkflowService:
         timestamp = self.backend._timestamp_now()
         effective_job_id = str(job_id or timestamp)
         effective_started_at = str(started_at or timestamp)
-        self.backend.file_analysis.writeCheckFindings(
-            "face_match",
+        self._write_findings_payload(
             {
                 "job_id": effective_job_id,
                 "started_at": effective_started_at,
@@ -216,12 +226,11 @@ class FaceMatchWorkflowService:
     ) -> None:
         backend = self.backend
         if not entries:
-            backend.file_analysis.deleteCheckFindings("face_match")
+            self._delete_findings()
             return
 
         timestamp = backend._timestamp_now()
-        backend.file_analysis.writeCheckFindings(
-            "face_match",
+        self._write_findings_payload(
             {
                 "job_id": str(findings.get("job_id") or timestamp),
                 "started_at": str(findings.get("started_at") or timestamp),
@@ -270,6 +279,16 @@ class FaceMatchWorkflowService:
                 "auto": bool(auto),
             }
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        suppression_checker = getattr(type(backend), "_isFaceMatchFindingSuppressed", None)
+        entries = [
+            entry
+            for entry in entries
+            if isinstance(entry, dict)
+            and not (
+                callable(suppression_checker)
+                and suppression_checker(backend, entry)
+            )
+        ]
         resolved_entries = entries
         transferred_count = int(findings.get("transferred_count") or 0)
         if stream_compacted and entries and not refresh and not auto:
@@ -642,7 +661,7 @@ class FaceMatchWorkflowService:
 
         if not remaining_entries:
             write_started = monotonic()
-            deleted = backend.file_analysis.deleteCheckFindings("face_match")
+            deleted = self._delete_findings()
             backend._debugLog(
                 "face_match_findings_remove_phase",
                 phase="delete",
@@ -678,7 +697,7 @@ class FaceMatchWorkflowService:
             ],
         }
         write_started = monotonic()
-        written = backend.file_analysis.writeCheckFindings("face_match", updated_payload)
+        written = self._write_findings_payload(updated_payload)
         backend._debugLog(
             "face_match_findings_remove_phase",
             phase="write",
@@ -767,7 +786,7 @@ class FaceMatchWorkflowService:
 
         if not remaining_entries:
             write_started = monotonic()
-            deleted = backend.file_analysis.deleteCheckFindings("face_match")
+            deleted = self._delete_findings()
             backend._debugLog(
                 "face_match_findings_remove_phase",
                 phase="delete",
@@ -804,7 +823,7 @@ class FaceMatchWorkflowService:
             ],
         }
         write_started = monotonic()
-        written = backend.file_analysis.writeCheckFindings("face_match", updated_payload)
+        written = self._write_findings_payload(updated_payload)
         backend._debugLog(
             "face_match_findings_remove_phase",
             phase="write",

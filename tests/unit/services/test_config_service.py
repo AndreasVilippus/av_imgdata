@@ -45,6 +45,14 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         self.assertIsNotNone(service._merged_config_cache)
         self.assertIsNotNone(service._merged_config_cache_signature)
 
+    def test_music_defaults_are_defensive(self):
+        music = ConfigService.defaultConfig()["music"]
+
+        self.assertFalse(music["AUDIO_STATION"]["ALLOW_DATABASE_FALLBACK"])
+        self.assertTrue(music["AUDIO_STATION"]["DRY_RUN_DEFAULT"])
+        self.assertEqual(music["FILES"]["SHARED_FOLDER_NAMES"], ["music"])
+        self.assertFalse(music["SCAN"]["LIVE_WATCH_ENABLED"])
+
     def test_readMergedConfig_detects_file_change(self):
         """
         Test: Wenn config.json sich ändert,
@@ -71,29 +79,17 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         # Wert sollte sich geändert haben
         self.assertEqual(config2["photos"]["MAX_PHOTOS_PERSONS"], 1000)
 
-    def test_readMergedConfig_detects_ignore_list_change(self):
-        """
-        Test: Wenn eine Ignore-List sich ändert,
-        wird der Cache invalidiert.
-        """
+    def test_ignore_list_is_independent_from_merged_config_cache(self):
         service = ConfigService(str(self.config_file))
-        
-        # Erste Config lesen
-        config1 = service.readMergedConfig()
+
+        service.readMergedConfig()
         signature1 = service._merged_config_cache_signature
-        
-        # Ignore-List ändern
-        ignore_path = self.ignore_list_dir / "checks_ignore_duplicate_faces.txt"
-        with ignore_path.open("w") as f:
-            f.write("test_token\n")
-        
-        time.sleep(0.01)
-        
-        # Zweite Config lesen - Signature sollte sich unterscheiden
-        config2 = service.readMergedConfig()
+        service.writeChecksIgnoreList("duplicate_faces", ["test_token"])
+        service.readMergedConfig()
         signature2 = service._merged_config_cache_signature
-        
-        self.assertNotEqual(signature1, signature2)
+
+        self.assertEqual(signature1, signature2)
+        self.assertEqual(service.readChecksIgnoreList("duplicate_faces"), ["test_token"])
 
     def test_writeConfig_invalidates_cache(self):
         """
@@ -163,6 +159,17 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         # Cache sollte invalidiert sein
         self.assertIsNone(service._merged_config_cache)
         self.assertIsNone(service._merged_config_cache_signature)
+
+    def test_getChecksIgnoreListsStatus_returns_paths_and_counts(self):
+        service = ConfigService(str(self.config_file))
+        service.writeChecksIgnoreList("duplicate_faces", ["token1", "token2"])
+
+        statuses = service.getChecksIgnoreListsStatus()
+
+        self.assertEqual(statuses["duplicate_faces"]["count"], 2)
+        self.assertEqual(statuses["duplicate_faces"]["path"], str(self.config_dir / "imgdata.sqlite3"))
+        self.assertEqual(statuses["duplicate_faces"]["storage"], "sqlite")
+        self.assertEqual(statuses["position_deviations"]["count"], 0)
 
     def test_deepcopy_protects_against_mutation(self):
         """
@@ -240,7 +247,7 @@ class TestConfigServiceDefaults(unittest.TestCase):
         self.assertIn("files", config)
         self.assertIn("metadata", config)
         self.assertIn("analysis", config)
-        self.assertIn("runtime", config)
+        self.assertNotIn("runtime", config)
         self.assertIn("debug", config)
         self.assertIn("review", config)
 
@@ -262,21 +269,21 @@ class TestConfigServiceDefaults(unittest.TestCase):
         # Andere Defaults sollten erhalten sein
         self.assertIn("face_match", config)
 
-    def test_runtime_findings_storage_format_defaults_to_json(self):
+    def test_runtime_findings_storage_format_is_removed(self):
         service = ConfigService(str(self.config_file))
 
         config = service.readMergedConfig()
 
-        self.assertEqual(config["runtime"]["FINDINGS_STORAGE_FORMAT"], "json")
+        self.assertNotIn("runtime", config)
 
-    def test_runtime_findings_storage_format_falls_back_to_json(self):
+    def test_legacy_runtime_findings_storage_format_is_discarded(self):
         service = ConfigService(str(self.config_file))
         with self.config_file.open("w") as f:
             json.dump({"runtime": {"FINDINGS_STORAGE_FORMAT": "sqlite"}}, f)
 
         config = service.readMergedConfig()
 
-        self.assertEqual(config["runtime"]["FINDINGS_STORAGE_FORMAT"], "json")
+        self.assertNotIn("runtime", config)
 
     def test_debug_io_metrics_defaults_to_disabled(self):
         service = ConfigService(str(self.config_file))

@@ -8,6 +8,7 @@ from services.face_match_workflow_service import FaceMatchWorkflowService
 def make_service():
     service = ImgDataService.__new__(ImgDataService)
     service.file_analysis = Mock()
+    service.face_match_findings = Mock()
     service.checks_workflow = ChecksWorkflowService(service, ImgDataOperationError)
     service.face_match_workflow = FaceMatchWorkflowService(service)
     return service
@@ -43,7 +44,7 @@ def test_face_match_resume_uses_persisted_entries_for_face_and_target_skip_lists
         "face": {"face_id": 42},
         "metadata_face": {"x": 0.5, "y": 0.5, "w": 0.2, "h": 0.2},
     }
-    service.file_analysis.readCheckFindings.return_value = {
+    service.face_match_findings.read.return_value = {
         "action": "search_photo_face_in_file",
         "save_only": True,
         "entries": [entry, dict(entry)],
@@ -89,7 +90,7 @@ def test_checks_failed_terminal_write_preserves_persisted_entries():
 def test_face_match_failed_terminal_write_preserves_persisted_entries():
     service = make_service()
     entries = [{"image_path": "/volume1/photo/a.jpg", "face": {"face_id": 42}}]
-    service.file_analysis.readCheckFindings.return_value = {
+    service.face_match_findings.read.return_value = {
         "job_id": "job-a",
         "started_at": "2026-05-31T10:00:00+02:00",
         "shared_folder": "/volume1/photo",
@@ -127,7 +128,7 @@ def test_missing_photos_save_only_shared_folder_failure_preserves_resumed_entrie
     }
     service.core = Mock()
     service.core.getSharedFolder.return_value = ""
-    service.file_analysis.readCheckFindings.return_value = {
+    service.face_match_findings.read.return_value = {
         "action": "mark_missing_photos_faces",
         "save_only": True,
         "entries": [entry],

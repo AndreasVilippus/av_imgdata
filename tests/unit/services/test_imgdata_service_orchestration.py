@@ -216,8 +216,7 @@ def test_remove_face_match_finding_entry_compacts_persisted_payload():
             },
         ],
     }
-    service.file_analysis.writeCheckFindings = lambda finding_type, payload: written.update({
-        "finding_type": finding_type,
+    service.face_match_findings.write = lambda payload: written.update({
         "payload": payload,
     }) or True
 
@@ -225,7 +224,6 @@ def test_remove_face_match_finding_entry_compacts_persisted_payload():
 
     assert result["removed"] is True
     assert result["remaining_count"] == 1
-    assert written["finding_type"] == "face_match"
     entry = written["payload"]["entries"][0]
     assert "lookup_debug" not in entry
     assert "resume_cursor" not in entry

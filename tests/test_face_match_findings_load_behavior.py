@@ -11,6 +11,7 @@ from services.face_match_workflow_service import FaceMatchWorkflowService
 
 def make_service():
     service = ImgDataService.__new__(ImgDataService)
+    service.face_match_findings = Mock()
     service.face_match_workflow = FaceMatchWorkflowService(service)
     service.photos = Mock()
     service.photos.listFotoTeamPersonKnown.return_value = [{"id": 1, "name": "Person A"}]
@@ -153,9 +154,7 @@ def test_face_match_write_findings_compacts_storage_entries():
     service = make_service()
     written = {}
     service._timestamp_now = lambda: "2026-06-05T12:00:00+02:00"
-    service.file_analysis = Mock()
-    service.file_analysis.writeCheckFindings.side_effect = lambda finding_type, payload: written.update({
-        "finding_type": finding_type,
+    service.face_match_findings.write.side_effect = lambda payload: written.update({
         "payload": payload,
     }) or True
 
@@ -177,7 +176,6 @@ def test_face_match_write_findings_compacts_storage_entries():
     )
 
     entry = written["payload"]["entries"][0]
-    assert written["finding_type"] == "face_match"
     assert "lookup_debug" not in entry
     assert "resume_cursor" not in entry
     assert entry["image_path"] == "/volume1/photo/a.jpg"

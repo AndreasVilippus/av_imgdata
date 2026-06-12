@@ -159,6 +159,14 @@ Nachteile:
 
 Nur als Fallback und nur nach gesonderter Analyse.
 
+Verifizierter Stand für `0.8.0`:
+
+- Ein Laufzeittest bestätigt, dass `SYNO.AudioStation.Song.setrating(id, rating)` die Bewertung der aktiven Sitzung schreibt.
+- Die Paketquellen von Audio Station `7.2.0-5516` bestätigen die Bindung an `APIRequest::GetLoginUID()` und enthalten keinen Zielbenutzer-Parameter oder alternativen administrativen Rating-Endpunkt.
+- Das mitgelieferte Datenbankschema bestätigt `rating_track(userid bigint, track integer, star integer)` mit Primärschlüssel `(userid, track)` und Fremdschlüssel auf `track(id)`.
+- Für den erforderlichen Multi-User-Systemdienst ist Option B der vorgesehene Schreibweg.
+- Bis zum Nachweis von Authentifizierung, Transaktionsverhalten, Sperren, Backup/Rollback und Aktualisierung des Audio-Station-Zustands bleibt der Schreibweg deaktiviert; die Implementierung arbeitet als Dry-Run.
+
 Vorteile:
 
 - Unabhängig von fehlenden API-Endpunkten.
@@ -556,3 +564,130 @@ Vor der Implementierung dürfen folgende Punkte nicht angenommen werden:
 - Ob DS Audio geänderte Ratings sofort sieht oder ein Cache-/Index-Refresh nötig ist.
 
 Diese Punkte müssen auf einer DSM-Testinstallation geprüft und anschließend im Konzept oder in einer Implementierungsnotiz ergänzt werden.
+
+## Verifizierte Grundlage aus `dev/pg.php`
+
+Die vorhandene PHP-Funktion belegt für die dort eingesetzte Audio-Station-Version:
+
+- PostgreSQL-Datenbank: `mediaserver`
+- Musiktabelle: `track` mit mindestens `id` und `path`
+- Benutzerbezogene Bewertungstabelle: `rating_track`
+- Bewertungsfelder: `userid`, `track`, `star`
+- Zielskala: ganzzahlige Sterne `1..5`
+- Die Zuordnung erfolgt über den exakten Dateipfad aus `track.path`.
+- Eine Bewertung wird für jeden ausgewählten Benutzer separat geschrieben.
+
+Die in `pg.php` verwendete Windows-/POPM-Abbildung ist:
+
+| POPM-Wert | Zielsterne |
+|---:|---:|
+| `1` | 1 |
+| `64` | 2 |
+| `128` | 3 |
+| `196` | 4 |
+| `255` | 5 |
+
+Der PHP-Prototyp enthält fest codierte Benutzer-IDs und Zugangsdaten. Beides darf nicht in das Paket übernommen werden. Benutzer müssen zur Laufzeit ausgelesen und in der UI ausgewählt werden. Zugangsdaten für einen möglichen Datenbank-Fallback benötigen ein separates Berechtigungs- und Secret-Konzept.
+
+Für den API-Weg genügt zunächst der DSM-Benutzername zur Auswahl und Protokollierung. Für den DB-Fallback ist zwingend die numerische UID erforderlich. `SYNO.Core.User.list` ist als Benutzerquelle vorgesehen; ob die Runtime-Antwort `uid` oder `id` zuverlässig liefert, muss im Browser geprüft und anschließend in `syno_api_doc` dokumentiert werden. Ohne belegte UID darf kein DB-Schreiben angeboten werden.
+
+## Bewertungsformate und Normalisierung
+
+Intern werden alle Quellen auf `rating_stars` in 0,5-Stern-Schritten und `rating_percent` von 0 bis 100 normalisiert. Für Audio Station wird erst beim Schreiben auf die belegte Zielskala abgebildet.
+
+| Datei-/Tagfamilie | Relevante Felder | Quellskala | Normalisierung |
+|---|---|---:|---|
+| MP3 / ID3v2 | `POPM` / Popularimeter | `0..255` | Windows-Werte gemäß `pg.php`; andere Werte stufenweise |
+| FLAC / Ogg / Opus Vorbis Comments | `RATING`, `POPULARITY` | häufig `0..5` oder `0..100` | Werte über 5 als Prozent, sonst Sterne |
+| FLAC / Ogg / Opus FMPS | `FMPS_RATING` | üblicherweise `0..1` | mit 5 multiplizieren |
+| MP4 / M4A | proprietäre Rating-/iTunes-Felder | nicht einheitlich | nur nach erkanntem Feldschema; sonst kein Schreibkandidat |
+| WAV / AIFF | ID3 oder proprietäre Chunks | nicht einheitlich | nur bei eindeutig erkanntem Schema |
+| CSV / JSON | explizites Schema | Sterne oder Prozent | entsprechend deklarierter Quelle |
+
+Mehrere Rating-Felder in derselben Datei erzeugen einen Konflikt, solange keine konfigurierbare Quellenpriorität festgelegt ist. Unbekannte oder widersprüchliche Werte dürfen nicht automatisch geschrieben werden.
+
+## Entscheidung API oder direkter DB-Zugriff
+
+Lokal dokumentiert ist `SYNO.AudioStation.Song.setrating` mit den Parametern `id` und `rating`. Ein Parameter für Zielbenutzer oder Benutzer-ID ist nicht dokumentiert. Damit ist aktuell nur eine Bewertung im Kontext der angemeldeten Sitzung plausibel, nicht das Schreiben für andere Benutzer.
+
+`rating_track(userid, track, star)` aus `pg.php` belegt dagegen explizit benutzerbezogene Speicherung.
+
+Aktuelle Entscheidung:
+
+- Der erforderliche Anwendungsfall ist ein einziger Paketdienst unter einem Systemkonto, der Bewertungen für mehrere ausgewählte DSM-Benutzer schreibt. Ein Betrieb des Dienstes mit eigener Sitzung je Benutzer ist nicht vorgesehen.
+- Der API-Weg ist für diesen Anwendungsfall nur geeignet, wenn ein Request unter einer administrativen beziehungsweise System-Sitzung einen expliziten Zielbenutzer akzeptiert.
+- Die Paketquellen von Audio Station `7.2.0-5516` bestätigen, dass die offizielle UI bei `setrating` ausschließlich `id` und `rating` sendet. `libaudioui.so` verwendet `APIRequest::GetLoginUID()` und führt Rating-Abfragen und -Schreibvorgänge gegen `rating_track.userid` aus.
+- Weder in den API-Deskriptoren noch in der offiziellen UI wurde ein Zielbenutzer-Parameter oder eine alternative administrative Rating-Methode gefunden. Der API-Weg ist damit für den erforderlichen Multi-User-Systemdienst nicht geeignet.
+- Der direkte Zugriff auf `rating_track(userid, track, star)` ist der vorgesehene Schreibweg.
+- Direkter DB-Zugriff bleibt bis zur technischen Prüfung standardmäßig deaktiviert.
+- DB-Schreiben wird erst implementiert, wenn Schema, PostgreSQL-Authentifizierung, Transaktionsverhalten, Sperren, Backup und Verhalten nach Audio-Station-Updates geprüft sind.
+
+### Statischer Nachweis aus den Paketquellen
+
+Die untersuchten Paketdateien liegen unter `syno_api_doc/sources/AudioStation/`. Relevante Befunde:
+
+- `target/webapi/AudioStation.api` führt `setrating` für API-Version 2 und 3 und keine alternative administrative Rating-Methode.
+- Die offizielle UI ruft `setrating` nur mit `api`, `method`, `id` und `rating` auf.
+- `target/lib/libaudioui.so` importiert `APIRequest::GetLoginUID()` und enthält die Rating-Abfragen und -Schreibanweisungen mit `rating_track.userid`.
+- `target/scripts/dbupgrade/mediaserver/mediaserver.pgsql` belegt Tabelle, Primärschlüssel, Indizes und Fremdschlüssel.
+- `target/etc/pgbouncer.ini` verbindet die Datenbank `mediaserver` über den PostgreSQL-Systemsocket als DB-Rolle `AudioStation` und stellt einen paketlokalen Socket unter `/run/AudioStation` bereit.
+- Der paketlokale PGBouncer verwendet `pool_mode=transaction`, `auth_type=any` und einen Socket mit Modus `0700` für `AudioStation:AudioStation`.
+- `pkg-AudioStation-pgbouncer.service` läuft als `root`, erzeugt `/run/AudioStation` und übergibt das Verzeichnis an `AudioStation:AudioStation`.
+- Die Paketressourcen lassen für Audio Station einen PostgreSQL-Benutzer anlegen und gewähren ihm die Gruppe `MediaIndex`.
+- Die mitgelieferten DB-Upgradeskripte verwenden auf DSM `/usr/bin/psql`; dieser Pfad ist damit der erste konkret zu prüfende Clientpfad.
+
+Damit ist ein passwortloser interner DB-Zugang für Audio Station belegt. Nicht belegt ist, dass das separate Paketkonto von AV ImgData den Socket öffnen oder die DB-Rolle `AudioStation` verwenden darf. Vor einer Implementierung sind deshalb auf dem NAS rein lesend zu prüfen:
+
+1. tatsächlicher `psql`-Pfad und Erreichbarkeit des Sockets,
+2. Zugriff als Audio-Station-Paketkonto und als AV-ImgData-Paketkonto,
+3. effektive DB-Rolle und Rechte auf `track` und `rating_track`,
+4. Zuordnung der DSM-Benutzer zu `rating_track.userid`,
+5. Sichtbarkeit einer kontrollierten DB-Änderung in Audio Station sowie notwendige Cache-/Index-Aktualisierung.
+
+Eine dauerhafte Aufnahme des AV-ImgData-Paketkontos in die Gruppe `AudioStation`, die Nutzung der DB-Rolle `AudioStation` oder eine Ausführung als `root` wird nicht vorausgesetzt. Dafür ist zunächst ein minimales Berechtigungsmodell zu entwerfen und zu prüfen.
+
+Ein erster Laufzeittest zeigt, dass der Audio-Station-PGBouncer den PostgreSQL-Startup-Parameter `options` und damit `PGOPTIONS=-c default_transaction_read_only=on` ablehnt. Rein lesende Diagnoseläufe müssen deshalb nach dem Verbindungsaufbau explizit `BEGIN TRANSACTION READ ONLY` ausführen und mit `ROLLBACK` enden. Vor dem Wechsel zum Betriebssystemkonto `AudioStation` ist außerdem in ein für dieses Konto zugängliches Verzeichnis wie `/tmp` zu wechseln.
+
+Ein anschließender rein lesender Laufzeittest über `/run/AudioStation` bestätigt:
+
+- Das Betriebssystemkonto `AudioStation` verbindet sich als DB-Rolle `AudioStation` mit `mediaserver`.
+- `BEGIN TRANSACTION READ ONLY` setzt `transaction_read_only` wirksam auf `on`.
+- Die Rolle darf `track` und `rating_track` lesen.
+- Die Rolle besitzt `INSERT`-, `UPDATE`- und `DELETE`-Rechte auf `rating_track`.
+- Vorhandene Bewertungszeilen wurden für die Benutzer-IDs `1027`, `1036` und `1037` gefunden.
+
+Damit ist der interne Audio-Station-DB-Weg technisch bestätigt. Noch nicht bestätigt ist der Zugriff vom separaten AV-ImgData-Paketkonto auf den geschützten PGBouncer-Socket. Außerdem müssen die gefundenen numerischen IDs eindeutig DSM-Benutzern zugeordnet werden.
+
+Der anschließende Paketgrenzen-Test bestätigt:
+
+- Das Konto `AV_ImgData` besitzt eine eigene UID und gehört nur zu `AV_ImgData` und `synopkgs`.
+- `/run/AudioStation` hatte zur Laufzeit Modus `0755`; der eigentliche Socket `/run/AudioStation/.s.PGSQL.5432` hatte Modus `0700` und gehörte `AudioStation:AudioStation`.
+- Ein Verbindungsversuch als Betriebssystemkonto `AV_ImgData` wurde bereits beim Öffnen des Unix-Sockets mit `Permission denied` abgewiesen.
+
+Der aktuelle AV-ImgData-Dienst kann deshalb nicht direkt auf die Audio-Station-Datenbank zugreifen. Ein DB-Schreibweg benötigt eine ausdrücklich entworfene Berechtigungsbrücke. Das Ändern der Laufzeit-Socketrechte, eine dauerhafte privilegierte Ausführung des gesamten Dienstes oder eingebettete DB-Zugangsdaten sind keine akzeptablen Standardlösungen.
+
+Neue Erkenntnisse werden in `syno_api_doc` als YAML unter `api-spec/` beziehungsweise `runtime.observations.yaml` dokumentiert, anschließend mit `tools/validate_yaml.py` geprüft und die Markdown-Dokumentation generiert.
+
+## Gemeinsame Musikordner und Scan
+
+Der Musikscan arbeitet ausschließlich auf konfigurierten gemeinsamen Musikordnern, initial `music`. Weitere Shared-Folder-Namen können konfiguriert werden. Persönliche Home-Verzeichnisse sind nicht automatisch Teil des Scans.
+
+Der Scan erhält analog zu den Foto-Prüfungen `changed_since_days`:
+
+- `0`: vollständiger Scan
+- `> 0`: nur Dateien, deren `mtime` innerhalb des Zeitfensters liegt
+- spätere Erweiterung: Metadaten- oder Indexänderungszeit berücksichtigen, wenn diese belastbar verfügbar ist
+
+## Optionaler Live-Dienst
+
+Ein optionaler Hintergrunddienst soll auf Änderungen in den konfigurierten gemeinsamen Musikordnern reagieren. Er ist standardmäßig deaktiviert.
+
+Vorgesehene Eigenschaften:
+
+- DSM-Paketdienst, kein Prozess aus der Webanfrage
+- rekursive Beobachtung der gemeinsamen Musikordner
+- Debounce und Zusammenfassung schneller Änderungsfolgen
+- nur unterstützte Audio-Endungen
+- Verarbeitung über dieselbe Scan-/Normalisierungspipeline
+- persistente Warteschlange und Fehlerstatus
+- Fallback auf periodischen Änderungstage-Scan, falls Dateisystem-Watching nicht verfügbar ist

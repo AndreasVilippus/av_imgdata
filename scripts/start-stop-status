@@ -397,6 +397,11 @@ start() {
         return 1
     fi
 
+    if ! PYTHONPATH="${SYNOPKG_PKGDEST}/src" "${PYTHON}" -m av_imgdata.db.bootstrap >> "${LOG_FILE}" 2>&1; then
+        echo "Failed to start ${PACKAGE}. SQLite runtime database initialization failed. See ${LOG_FILE}."
+        return 1
+    fi
+
     install_optional_python_packages
 
     "${UVICORN}" "${APP_MODULE}" \

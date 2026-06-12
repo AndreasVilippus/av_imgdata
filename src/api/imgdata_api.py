@@ -164,6 +164,50 @@ async def ping():
     }
 
 
+@router.post("/music_ratings_capabilities")
+async def music_ratings_capabilities(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+    try:
+        result = await _run_backend_call(
+            lambda: IMGDATA.musicRatingsCapabilities(
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+            )
+        )
+    except Exception as exc:
+        return _operation_exception_response(exc, message="music_ratings_capabilities_failed")
+    return {"success": True, "data": result}
+
+
+@router.post("/music_ratings_preview")
+async def music_ratings_preview(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+    body = await _read_request_body(request)
+    try:
+        changed_since_days = max(0, int(body.get("changed_since_days") or 0))
+        limit = max(1, min(5000, int(body.get("limit") or 500)))
+    except (TypeError, ValueError):
+        return {"success": False, "error": {"code": 400, "message": "invalid_music_ratings_preview_options"}}
+    try:
+        result = await _run_backend_call(
+            lambda: IMGDATA.musicRatingsPreview(
+                user_key=session_ctx["user_key"],
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
+                changed_since_days=changed_since_days,
+                limit=limit,
+            )
+        )
+    except Exception as exc:
+        return _operation_exception_response(exc, message="music_ratings_preview_failed")
+    return {"success": True, "data": result}
+
+
 def _merge_cookie_sources(request_cookies: Dict[str, str], body_cookies: Dict[str, str]) -> Dict[str, str]:
     merged = dict(request_cookies)
     for key, value in body_cookies.items():
@@ -2104,6 +2148,105 @@ async def config_get(request: Request):
             "backend_debug_log_path": backend_debug_log_path(),
             "checks_ignore_lists": IMGDATA.getChecksIgnoreListsStatus(),
         },
+    }
+
+
+@router.post("/database_name_mappings")
+async def database_name_mappings(request: Request):
+    _session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    search = str(body.get("search") or "").strip()
+    try:
+        page = max(1, int(body.get("page") or 1))
+        page_size = max(1, min(100, int(body.get("page_size") or 25)))
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "error": {"code": 400, "message": "invalid_database_list_pagination"},
+        }
+    try:
+        result = await _run_backend_call(
+            lambda: IMGDATA.listNameMappingsPage(search=search, page=page, page_size=page_size)
+        )
+    except Exception as exc:
+        return _operation_exception_response(exc, message="database_name_mappings_load_failed")
+    return {"success": True, "data": {"list": "name_mappings", **result}}
+
+
+@router.post("/database_name_mapping_delete")
+async def database_name_mapping_delete(request: Request):
+    _session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    try:
+        mapping_id = int(body.get("id"))
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "error": {"code": 400, "message": "invalid_name_mapping_id"},
+        }
+    if mapping_id < 1:
+        return {
+            "success": False,
+            "error": {"code": 400, "message": "invalid_name_mapping_id"},
+        }
+    try:
+        deleted = await _run_backend_call(lambda: IMGDATA.deleteNameMapping(mapping_id))
+    except Exception as exc:
+        return _operation_exception_response(exc, message="database_name_mapping_delete_failed")
+    if not deleted:
+        return {
+            "success": False,
+            "error": {"code": 404, "message": "name_mapping_not_found"},
+        }
+    return {"success": True, "data": {"id": mapping_id, "deleted": True}}
+
+
+@router.post("/database_name_mapping_save")
+async def database_name_mapping_save(request: Request):
+    _session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    source_name = str(body.get("source_name") or "").strip()
+    target_name = str(body.get("target_name") or "").strip()
+    if not source_name or not target_name:
+        return {
+            "success": False,
+            "error": {"code": 400, "message": "missing_name_mapping_values"},
+        }
+    try:
+        mapping_id = int(body.get("id") or 0)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "error": {"code": 400, "message": "invalid_name_mapping_id"},
+        }
+    try:
+        if mapping_id > 0:
+            saved = await _run_backend_call(
+                lambda: IMGDATA.updateNameMappingTarget(mapping_id, target_name)
+            )
+        else:
+            saved = await _run_backend_call(
+                lambda: IMGDATA.saveNameMapping(source_name=source_name, target_name=target_name)
+            )
+    except Exception as exc:
+        return _operation_exception_response(exc, message="database_name_mapping_save_failed")
+    if not saved:
+        return {
+            "success": False,
+            "error": {"code": 500, "message": "database_name_mapping_save_failed"},
+        }
+    return {
+        "success": True,
+        "data": {"id": mapping_id or None, "source_name": source_name, "target_name": target_name, "saved": True},
     }
 
 

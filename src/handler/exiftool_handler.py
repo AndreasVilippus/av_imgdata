@@ -261,6 +261,25 @@ class ExifToolHandler:
 
         return {"width": width, "height": height, "unit": "pixel"}
 
+    def readAudioRating(self, audio_path: str) -> Dict[str, Any]:
+        result = self._runExifTool([
+            "-j",
+            "-n",
+            "-Popularimeter",
+            "-Rating",
+            "-RatingPercent",
+            "-FMPSRating",
+            audio_path,
+        ])
+        if result.returncode != 0:
+            return {"success": False, "tags": {}, "error": result.stderr or "exiftool_read_failed"}
+        try:
+            values = json.loads(result.stdout)
+        except (TypeError, ValueError):
+            return {"success": False, "tags": {}, "error": "invalid_exiftool_json"}
+        tags = values[0] if isinstance(values, list) and values and isinstance(values[0], dict) else {}
+        return {"success": True, "tags": tags, "error": ""}
+
     def readImageOrientation(self, image_path: str) -> Optional[int]:
         result = self._runExifTool(["-s3", "-n", "-Orientation", image_path])
         if result.returncode != 0:

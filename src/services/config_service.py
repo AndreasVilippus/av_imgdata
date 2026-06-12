@@ -5,6 +5,10 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from av_imgdata.db.connection import Database
+from av_imgdata.db.migrations import migrate_runtime_persistence
+from av_imgdata.db.repositories.check_suppressions import CheckSuppressionRepository
+
 
 class ConfigService:
     """Runtime package configuration persistence."""
@@ -36,6 +40,9 @@ class ConfigService:
 
         self._merged_config_cache: Optional[Dict[str, Any]] = None
         self._merged_config_cache_signature: Optional[Tuple[Any, ...]] = None
+        self._database = Database(str(self._config_path.parent / "imgdata.sqlite3"))
+        self._check_suppressions = CheckSuppressionRepository(self._database)
+        self._runtime_migration_checked = False
 
     @staticmethod
     def defaultConfig() -> Dict[str, Any]:
@@ -46,6 +53,21 @@ class ConfigService:
             "face_match": {
                 "FILE_MATCH_SOURCE_SCOPE": "both",
                 "PERSON_SORT_ORDER": "id_desc",
+            },
+            "music": {
+                "ENABLED": True,
+                "AUDIO_STATION": {
+                    "ALLOW_DATABASE_FALLBACK": False,
+                    "DRY_RUN_DEFAULT": True,
+                },
+                "FILES": {
+                    "SHARED_FOLDER_NAMES": ["music"],
+                    "AUDIO_EXTENSIONS": ["mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "aiff"],
+                },
+                "SCAN": {
+                    "CHANGED_SINCE_DAYS_DEFAULT": 0,
+                    "LIVE_WATCH_ENABLED": False,
+                },
             },
             "pip_packages": {
                 "INSIGHTFACE": {
@@ -104,9 +126,6 @@ class ConfigService:
                     "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": 0.05,
                     "SINGLE_SOURCE_OF_TRUTH": "",
                 },
-            },
-            "runtime": {
-                "FINDINGS_STORAGE_FORMAT": "json",
             },
             "debug": {
                 "IO_METRICS_ENABLED": False,
@@ -172,23 +191,16 @@ class ConfigService:
     @classmethod
     def normalizeConfig(cls, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         normalized = cls._mergeDefaults(cls.defaultConfig(), config if isinstance(config, dict) else {})
+        normalized.pop("runtime", None)
         cls._normalizeConfigValues(normalized)
         return normalized
 
     def _config_signature(self) -> Tuple[Any, ...]:
-        ignore_signature: List[Tuple[str, Optional[int], Optional[int]]] = []
-        for spec in self.CHECKS_IGNORE_LISTS.values():
-            path = self._checks_ignore_list_path_for_spec(spec)
-            try:
-                stat = path.stat()
-                ignore_signature.append((str(path), stat.st_mtime_ns, stat.st_size))
-            except OSError:
-                ignore_signature.append((str(path), None, None))
         try:
             stat = self._config_path.stat()
-            return (str(self._config_path), stat.st_mtime_ns, stat.st_size, tuple(ignore_signature))
+            return (str(self._config_path), stat.st_mtime_ns, stat.st_size)
         except OSError:
-            return (str(self._config_path), None, None, tuple(ignore_signature))
+            return (str(self._config_path), None, None)
 
     @classmethod
     def _mergeDefaults(cls, defaults: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
@@ -220,9 +232,15 @@ class ConfigService:
             maximum=300,
         )
 
-        runtime = config.get("runtime", {}) if isinstance(config.get("runtime"), dict) else {}
-        storage_format = str(runtime.get("FINDINGS_STORAGE_FORMAT") or "").strip().lower()
-        runtime["FINDINGS_STORAGE_FORMAT"] = storage_format if storage_format in {"json"} else "json"
+        music = config.get("music", {}) if isinstance(config.get("music"), dict) else {}
+        scan = music.get("SCAN", {}) if isinstance(music.get("SCAN"), dict) else {}
+        scan["CHANGED_SINCE_DAYS_DEFAULT"] = cls._clamp_int(
+            scan.get("CHANGED_SINCE_DAYS_DEFAULT"),
+            default=0,
+            minimum=0,
+            maximum=36500,
+        )
+        scan["LIVE_WATCH_ENABLED"] = bool(scan.get("LIVE_WATCH_ENABLED", False))
 
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}
         debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED"))
@@ -301,25 +319,16 @@ class ConfigService:
         spec = self._checks_ignore_list_spec(review_type)
         if not spec:
             return []
-        path = self._checks_ignore_list_path_for_spec(spec)
-        try:
-            with path.open("r", encoding="utf-8") as handle:
-                return self._normalize_ignore_tokens(handle.readlines())
-        except OSError:
-            return []
+        self._ensure_runtime_migrated()
+        return self._check_suppressions.list_tokens(str(review_type or ""))
 
     def writeChecksIgnoreList(self, review_type: Any, tokens: Any) -> bool:
         spec = self._checks_ignore_list_spec(review_type)
         if not spec:
             return False
-        path = self._checks_ignore_list_path_for_spec(spec)
         normalized = self._normalize_ignore_tokens(tokens if isinstance(tokens, list) else [])
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("w", encoding="utf-8") as handle:
-                for token in normalized:
-                    handle.write(f"{token}\n")
-        except OSError:
+        self._ensure_runtime_migrated()
+        if not self._check_suppressions.replace(str(review_type or ""), normalized):
             return False
         self._invalidate_cache()
         return True
@@ -338,6 +347,16 @@ class ConfigService:
 
     def clearChecksIgnoreList(self, review_type: Any) -> bool:
         return self.writeChecksIgnoreList(review_type, [])
+
+    def getChecksIgnoreListsStatus(self) -> Dict[str, Dict[str, Any]]:
+        statuses: Dict[str, Dict[str, Any]] = {}
+        for review_type, spec in self.CHECKS_IGNORE_LISTS.items():
+            statuses[review_type] = {
+                "count": len(self.readChecksIgnoreList(review_type)),
+                "path": str(self._database.path),
+                "storage": "sqlite",
+            }
+        return statuses
 
     @classmethod
     def checksIgnoreEnabledKey(cls, review_type: Any) -> str:
@@ -363,3 +382,9 @@ class ConfigService:
     def _invalidate_cache(self) -> None:
         self._merged_config_cache = None
         self._merged_config_cache_signature = None
+
+    def _ensure_runtime_migrated(self) -> None:
+        if self._runtime_migration_checked:
+            return
+        migrate_runtime_persistence(self._database, self._config_path.parent)
+        self._runtime_migration_checked = True

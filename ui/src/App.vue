@@ -10,6 +10,7 @@
 						<face-match-view v-if="selectedOption === 'face_match'" :vm="this" />
 						<checks-view v-if="selectedOption === 'checks'" :vm="this" />
 						<cleanup-view v-if="selectedOption === 'cleanup'" :vm="this" />
+						<music-ratings-view v-if="selectedOption === 'music_ratings'" :vm="this" />
 						<configuration-view v-if="selectedOption === 'configuration'" />
 						<external-libraries-view
 							v-if="selectedOption === 'external_libraries'"
@@ -26,6 +27,7 @@
 							:vm="this"
 							mode="pip_packages"
 						/>
+						<database-lists-view v-if="selectedOption === 'database_lists'" :vm="this" />
 					</main>
 				</div>
 			</div>
@@ -37,8 +39,10 @@
 import AppSidebarNav from './components/AppSidebarNav.vue';
 import checksMixin from './mixins/checksMixin';
 import cleanupMixin from './mixins/cleanupMixin';
+import databaseListsMixin from './mixins/databaseListsMixin';
 import externalLibrariesMixin from './mixins/externalLibrariesMixin';
 import faceMatchMixin from './mixins/faceMatchMixin';
+import musicRatingsMixin from './mixins/musicRatingsMixin';
 import statusMixin from './mixins/statusMixin';
 import { createBackendErrorFormatter } from './services/backend-error-formatter';
 import { createDsmApiClient } from './services/dsm-api-client';
@@ -46,19 +50,23 @@ import { createRuntimePollingController } from './services/runtime-polling';
 import ChecksView from './views/ChecksView.vue';
 import CleanupView from './views/CleanupView.vue';
 import ConfigurationView from './views/ConfigurationView.vue';
+import DatabaseListsView from './views/DatabaseListsView.vue';
 import ExternalLibrariesView from './views/ExternalLibrariesView.vue';
 import FaceMatchView from './views/FaceMatchView.vue';
+import MusicRatingsView from './views/MusicRatingsView.vue';
 import StatusView from './views/StatusView.vue';
 
 export default {
-	mixins: [statusMixin, checksMixin, cleanupMixin, faceMatchMixin, externalLibrariesMixin],
+	mixins: [statusMixin, checksMixin, cleanupMixin, faceMatchMixin, externalLibrariesMixin, databaseListsMixin, musicRatingsMixin],
 	components: {
 		AppSidebarNav,
 		ChecksView,
 		CleanupView,
 		ConfigurationView,
+		DatabaseListsView,
 		ExternalLibrariesView,
 		FaceMatchView,
+		MusicRatingsView,
 		StatusView,
 	},
 	data() {
@@ -103,8 +111,14 @@ export default {
 			if (selectedOption === 'cleanup') {
 				this.refreshCleanupSessionState();
 			}
+			if (selectedOption === 'music_ratings') {
+				this.loadMusicRatingsCapabilities();
+			}
 			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool' || selectedOption === 'external_libraries_pip_packages') {
 				this.loadExternalLibrariesConfig();
+			}
+			if (selectedOption === 'database_lists') {
+				this.loadDatabaseList();
 			}
 		},
 		readCookie(name) {

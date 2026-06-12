@@ -36,9 +36,12 @@ from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
 from services.face_match_mutation_service import FaceMatchMutationService
+from services.face_match_findings_service import FaceMatchFindingsService
 from services.face_match_workflow_service import FaceMatchWorkflowService
 from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
+from music.service import MusicRatingsService
+from av_imgdata.db.repositories.face_suppressions import FaceSuppressionRepository
 from services.runtime_operation_service import RuntimeOperationService
 from services.runtime_state_service import RuntimeStateService
 from services.status_payload_builder import StatusPayloadBuilder
@@ -149,8 +152,11 @@ class ImgDataService:
         self.files = FileHandler(self.config)
         self.metadata_parser = MetadataParser()
         self.name_mappings = NameMappingService()
+        self.music_ratings = MusicRatingsService(self.session_manager, self.config)
+        self.face_suppressions = FaceSuppressionRepository(self.name_mappings._database)
         self.face_matcher = FaceMatcher()
         self.file_analysis = FileAnalysisService()
+        self.face_match_findings = FaceMatchFindingsService(self.name_mappings._database)
         self._debug_logger: Optional[Callable[..., None]] = None
         self._checks_start_lock = Lock()
         self.write_locks = WriteLockService(self._buildWriteConflictError)
@@ -590,6 +596,36 @@ class ImgDataService:
             folder_name="photo",
         )
         return {"shared_folder": shared_folder or ""}
+
+    def musicRatingsCapabilities(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+    ) -> Dict[str, Any]:
+        return self.music_ratings.capabilities(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+        )
+
+    def musicRatingsPreview(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        changed_since_days: int = 0,
+        limit: int = 500,
+    ) -> Dict[str, Any]:
+        return self.music_ratings.preview(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            changed_since_days=changed_since_days,
+            limit=limit,
+        )
 
     def exiftool_status(self) -> Dict[str, Any]:
         return self.exiftool.getStatus()
@@ -2260,10 +2296,10 @@ class ImgDataService:
         if not isinstance(payload, dict):
             return payload
         existing_status = payload.get("status")
-        if isinstance(existing_status, dict) and existing_status.get("schema_version") == 1:
-            return payload
-        action = str(payload.get("action") or payload.get("operation") or "").strip().lower()
-        source_mode = str(payload.get("source_mode") or payload.get("mode") or "scan").strip().lower() or "scan"
+        existing_action = existing_status.get("action") if isinstance(existing_status, dict) else ""
+        existing_mode = existing_status.get("mode") if isinstance(existing_status, dict) else ""
+        action = str(payload.get("action") or payload.get("operation") or existing_action or "").strip().lower()
+        source_mode = str(payload.get("source_mode") or payload.get("mode") or existing_mode or "scan").strip().lower() or "scan"
         phase = self._deriveStatusPhase(running=payload.get("running"), finished=payload.get("finished"), stop_requested=payload.get("stop_requested"), message_key=str(payload.get("message_key") or payload.get("message") or payload.get("status") or ""), status=str(existing_status or "") if not isinstance(existing_status, dict) else "")
         current = payload.get("entries_current", payload.get("persons_read", payload.get("images_read", payload.get("files_read", 0))))
         total = payload.get("entries_total", payload.get("persons_total", payload.get("images_total", payload.get("files_total", 0))))
@@ -2955,7 +2991,29 @@ class ImgDataService:
         entries: List[Dict[str, Any]],
         entry: Dict[str, Any],
     ) -> bool:
+        if self._isFaceMatchFindingSuppressed(entry):
+            return False
         return self.face_match_workflow.append_unique_finding(entries, entry)
+
+    def _isFaceMatchFindingSuppressed(self, entry: Any) -> bool:
+        if not isinstance(entry, dict):
+            return False
+        repository = getattr(self, "face_suppressions", None)
+        if repository is None:
+            return False
+        token = self._faceMatchFindingEntryToken(entry)
+        if token and repository.is_suppressed(f"face-match:{token}"):
+            return True
+        face = entry.get("face") if isinstance(entry.get("face"), dict) else {}
+        face_id = face.get("face_id")
+        if face_id not in (None, "") and repository.is_suppressed(f"photos-face:{face_id}"):
+            return True
+        metadata_face = entry.get("metadata_face") if isinstance(entry.get("metadata_face"), dict) else {}
+        normalized_name = NameMappingService._normalize_name_value(metadata_face.get("name"))
+        return bool(
+            normalized_name
+            and repository.is_suppressed(f"metadata-name:{normalized_name}")
+        )
 
     def _faceMatchSavedEntryFaceIds(self, entries: List[Dict[str, Any]]) -> List[int]:
         face_ids: List[int] = []
@@ -3151,6 +3209,8 @@ class ImgDataService:
         seen_tokens = set()
         for entry in entries:
             if not isinstance(entry, dict):
+                continue
+            if self._isFaceMatchFindingSuppressed(entry):
                 continue
             image_path = str(entry.get("image_path") or "").strip()
             metadata_face = entry.get("metadata_face")
@@ -4022,7 +4082,14 @@ class ImgDataService:
         ignore_settings = self._configuredChecksIgnoreSettings()
         if not ignore_settings.get(key, True):
             return []
-        return self.config.readChecksIgnoreList(normalized_type)
+        legacy_tokens = self.config.readChecksIgnoreList(normalized_type)
+        prefix = f"checks:{normalized_type}:"
+        sql_tokens = [
+            suppression_key[len(prefix):]
+            for suppression_key in self.face_suppressions.list_keys(prefix)
+            if suppression_key.startswith(prefix)
+        ]
+        return list(dict.fromkeys([*legacy_tokens, *sql_tokens]))
 
     def _excludeIgnoredChecksEntries(
         self,
@@ -4046,15 +4113,25 @@ class ImgDataService:
         if key and not ignore_settings.get(key, True):
             return {"ignored": False, "reason": "ignore_list_disabled"}
         saved_result = self.config.appendChecksIgnoreToken(review_type, token)
+        sql_saved = self.face_suppressions.suppress(
+            f"checks:{review_type}:{token}",
+            "manual",
+            scope="candidate",
+            reason=f"Ignored {review_type} review entry",
+        )
         return {
-            "ignored": bool(saved_result.get("saved")),
+            "ignored": bool(saved_result.get("saved")) and sql_saved,
             "token": str(saved_result.get("token") or token),
             "review_type": review_type,
             "count": int(saved_result.get("count") or 0),
         }
 
     def clearChecksIgnoreList(self, review_type: Any) -> bool:
-        return self.config.clearChecksIgnoreList(review_type)
+        normalized_type = str(review_type or "").strip().lower()
+        cleared = self.config.clearChecksIgnoreList(normalized_type)
+        if cleared:
+            self.face_suppressions.disable_prefix(f"checks:{normalized_type}:")
+        return cleared
 
     def getChecksIgnoreListsStatus(self) -> Dict[str, Dict[str, Any]]:
         statuses = self.config.getChecksIgnoreListsStatus()
@@ -6538,6 +6615,8 @@ class ImgDataService:
                             ),
                         )
                         continue
+                    if self._isFaceMatchFindingSuppressed(result_entry):
+                        continue
                     findings_count += 1
                     return result_entry
 
@@ -7114,6 +7193,8 @@ class ImgDataService:
                             ),
                         )
                         continue
+                    if self._isFaceMatchFindingSuppressed(result_entry):
+                        continue
                     return result_entry
 
             final_message_key = "face_match:result_no_match"
@@ -7588,6 +7669,8 @@ class ImgDataService:
                         ),
                     )
                     continue
+                if self._isFaceMatchFindingSuppressed(result_entry):
+                    continue
                 return result_entry
 
             final_message_key = "face_match:result_no_match"
@@ -8052,6 +8135,8 @@ class ImgDataService:
                             metadata_faces_read=metadata_faces_read,
                         ),
                     )
+                    continue
+                if self._isFaceMatchFindingSuppressed(result_entry):
                     continue
                 findings_count += 1
                 self._setFaceMatchingProgress(
@@ -9693,6 +9778,19 @@ class ImgDataService:
             source_name=source_name,
             target_name=target_name,
         )
+
+    def listNameMappingsPage(self, *, search: str = "", page: int = 1, page_size: int = 25) -> Dict[str, Any]:
+        return self.name_mappings.listNameMappingsPage(
+            search=search,
+            page=page,
+            page_size=page_size,
+        )
+
+    def deleteNameMapping(self, mapping_id: int) -> bool:
+        return self.name_mappings.deleteNameMapping(mapping_id)
+
+    def updateNameMappingTarget(self, mapping_id: int, target_name: str) -> bool:
+        return self.name_mappings.updateNameMappingTarget(mapping_id, target_name)
 
     def getRuntimeConfig(self) -> Dict[str, Any]:
         return self.config.readMergedConfig()

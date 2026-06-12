@@ -97,6 +97,41 @@ result_spk/
 Depending on the toolkit configuration, both a regular package and a
 `_debug.spk` may be generated.
 
+## Runtime Database
+
+All mutable package state is stored in the package-local SQLite database. This
+includes name mappings, suppressions, check findings, face-match findings,
+internal candidate snapshots, runtime progress, and the latest analysis result:
+
+```text
+${SYNOPKG_PKGVAR}/imgdata.sqlite3
+```
+
+Existing `name_mappings.json`, findings JSON files, runtime-state JSON files,
+`file_analysis.json`, and check-ignore text files are imported exactly once
+during the SQLite upgrade migration. Operational reads and writes then use
+SQLite exclusively.
+The legacy source files are retained, while subsequent changes are written only
+to SQLite. Backups should include `imgdata.sqlite3` and, when present,
+`imgdata.sqlite3-wal` and `imgdata.sqlite3-shm`.
+
+The active face-match findings can be queried over DSM SSH with:
+
+```bash
+sudo sqlite3 -header -column /var/packages/AV_ImgData/var/imgdata.sqlite3 \
+  "SELECT position, action, image_path, source_name FROM face_match_finding_entries ORDER BY position;"
+```
+
+Check findings and persisted runtime state can be queried with:
+
+```bash
+sudo sqlite3 -header -column /var/packages/AV_ImgData/var/imgdata.sqlite3 \
+  "SELECT finding_type, entry_count, status FROM persisted_findings ORDER BY finding_type;"
+
+sudo sqlite3 -header -column /var/packages/AV_ImgData/var/imgdata.sqlite3 \
+  "SELECT key, updated_at FROM app_state ORDER BY key;"
+```
+
 ## UI Development
 
 The package UI is located in [`ui/`](./ui) and is based on Vue 2 with Synology
@@ -148,11 +183,14 @@ The currently supported configuration areas include:
 - `metadata.SCHEMAS.MWG_REGIONS`
 - `photos.MAX_PHOTOS_PERSONS`
 
-Name mappings are stored separately in:
+Name mappings are stored in the package-local SQLite database:
 
 ```text
-/var/packages/AV_ImgData/var/name_mappings.json
+/var/packages/AV_ImgData/var/imgdata.sqlite3
 ```
+
+An existing `name_mappings.json` is retained as a migration source and imported
+exactly once.
 
 ## Package Layout
 
