@@ -132,6 +132,11 @@ sudo sqlite3 -header -column /var/packages/AV_ImgData/var/imgdata.sqlite3 \
   "SELECT key, updated_at FROM app_state ORDER BY key;"
 ```
 
+The package does not keep a continuously growing `server.log`. Uvicorn access
+logging and routine shell logging are disabled. Existing legacy `server.log`
+files are removed when the package starts. Optional backend diagnostics remain
+available through the separately bounded `backend-debug.log`.
+
 ## UI Development
 
 The package UI is located in [`ui/`](./ui) and is based on Vue 2 with Synology

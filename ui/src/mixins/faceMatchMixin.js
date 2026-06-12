@@ -39,6 +39,8 @@ export default {
 			faceMatchSkippedFindingKeys: [],
 			selectedFaceMatchingAction: 'search_photo_face_in_file',
 			addIconUrl: '',
+			faceIconUrl: '',
+			deleteIconUrl: '',
 			personDataToLeftIconUrl: '',
 			personDataToRightIconUrl: '',
 			nameMappingConfirm: {
@@ -47,6 +49,16 @@ export default {
 				resolver: null,
 				context: '',
 				skipFuturePrompts: false,
+			},
+			metadataNameConfirm: {
+				visible: false,
+				message: '',
+				resolver: null,
+			},
+			metadataFaceDeleteConfirm: {
+				visible: false,
+				message: '',
+				resolver: null,
 			},
 		};
 	},
@@ -410,6 +422,12 @@ export default {
 			}
 			return this.$avt('face_match:transfer_tooltip_assign', 'Apply name from file');
 		},
+		faceMatchTransferIconUrl() {
+			if (this.faceMatchActionMode === 'write_metadata' || this.faceMatchAddsNewPhotosFaces) {
+				return this.personDataToRightIconUrl;
+			}
+			return this.personDataToLeftIconUrl;
+		},
 		faceMatchActionMode() {
 			if (!this.faceMatchResultSummary.found) {
 				return '';
@@ -427,6 +445,14 @@ export default {
 				this.faceMatchIsFileSourceAction
 				&& this.faceMatchResult
 				&& this.faceMatchResult.add_new_faces_to_photos
+			);
+		},
+		faceMatchCanDeleteMetadataFace() {
+			return !!(
+				this.faceMatchCurrentAction === 'mark_missing_photos_faces'
+				&& this.faceMatchResult
+				&& this.faceMatchResult.metadata_face
+				&& this.faceMatchResult.image_path
 			);
 		},
 		faceMatchShouldShowAddOverlay() {
@@ -533,6 +559,8 @@ export default {
 	},
 	mounted() {
 		this.addIconUrl = this.resolveLocalIconUrl('add_icon.png');
+		this.faceIconUrl = this.resolveLocalIconUrl('face.png');
+		this.deleteIconUrl = this.resolveLocalIconUrl('del_icon.png');
 		this.personDataToLeftIconUrl = this.resolveLocalIconUrl('person_data_to_left.png');
 		this.personDataToRightIconUrl = this.resolveLocalIconUrl('person_data_to_right.png');
 		this.fetchFaceMatchFindingsStatus();
@@ -543,6 +571,8 @@ export default {
 			this.faceMatchSuggestTimer = null;
 		}
 		this.resolveNameMappingConfirm(false);
+		this.resolveMetadataNameConfirm(false);
+		this.resolveMetadataFaceDeleteConfirm(false);
 		this.stopFaceMatchProgressPolling();
 	},
 	methods: {
@@ -1149,6 +1179,9 @@ export default {
 				return null;
 			}
 			if (this.faceMatchIsFileSourceAction) {
+				if (this.faceMatchCurrentAction === 'mark_missing_photos_faces') {
+					return null;
+				}
 				return this.faceMatchResult.metadata_face || null;
 			}
 			if (!this.faceMatchResult.match) {
@@ -1183,8 +1216,16 @@ export default {
 		},
 		handleFaceMatchImagePreviewError(event) {
 			const image = event && event.target;
+			const primaryUrl = this.getCurrentFaceMatchImageUrl();
 			const fallbackUrl = this.getCurrentFaceMatchImageFallbackUrl();
-			if (!image || !fallbackUrl || image.dataset.avFallbackApplied === 'true') {
+			if (!image || !fallbackUrl) {
+				return;
+			}
+			if (image.dataset.avFallbackPrimaryUrl !== primaryUrl) {
+				delete image.dataset.avFallbackApplied;
+				image.dataset.avFallbackPrimaryUrl = primaryUrl;
+			}
+			if (image.dataset.avFallbackApplied === 'true') {
 				return;
 			}
 			image.dataset.avFallbackApplied = 'true';
@@ -1330,6 +1371,56 @@ export default {
 				sourceName,
 			}));
 		},
+		confirmMetadataNameUpdate(targetName) {
+			const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
+			const sourceName = String(metadataFace && metadataFace.name || '').trim();
+			const nextName = String(targetName || '').trim();
+			if (
+				this.faceMatchCurrentAction !== 'mark_missing_photos_faces'
+				|| !sourceName
+				|| !nextName
+				|| this.normalizeFaceMatchName(sourceName) === this.normalizeFaceMatchName(nextName)
+			) {
+				return Promise.resolve(false);
+			}
+			return new Promise((resolve) => {
+				this.metadataNameConfirm.visible = true;
+				this.metadataNameConfirm.message = this.$avt(
+					'face_match:confirm_update_metadata_name',
+					'The face will be transferred to Photos as "{target}". Should the name "{source}" in the file also be changed?',
+					{ source: sourceName, target: nextName }
+				);
+				this.metadataNameConfirm.resolver = resolve;
+			});
+		},
+		resolveMetadataNameConfirm(value) {
+			const resolver = this.metadataNameConfirm.resolver;
+			this.metadataNameConfirm.visible = false;
+			this.metadataNameConfirm.message = '';
+			this.metadataNameConfirm.resolver = null;
+			if (typeof resolver === 'function') {
+				resolver(!!value);
+			}
+		},
+		confirmMetadataFaceDelete() {
+			return new Promise((resolve) => {
+				this.metadataFaceDeleteConfirm.visible = true;
+				this.metadataFaceDeleteConfirm.message = this.$avt(
+					'face_match:confirm_delete_file_face',
+					'Should this face marking be permanently deleted from the file?'
+				);
+				this.metadataFaceDeleteConfirm.resolver = resolve;
+			});
+		},
+		resolveMetadataFaceDeleteConfirm(value) {
+			const resolver = this.metadataFaceDeleteConfirm.resolver;
+			this.metadataFaceDeleteConfirm.visible = false;
+			this.metadataFaceDeleteConfirm.message = '';
+			this.metadataFaceDeleteConfirm.resolver = null;
+			if (typeof resolver === 'function') {
+				resolver(!!value);
+			}
+		},
 		confirmFaceMatchNameMapping(sourceName, targetName, options = {}) {
 			return new Promise((resolve) => {
 				const context = String(options && options.context || 'face_match').trim() || 'face_match';
@@ -1359,6 +1450,44 @@ export default {
 					skipFuturePrompts: skipFuturePrompts && context === 'checks',
 				});
 			}
+		},
+		applySavedFaceMatchNameMapping(data, mappingPreference, targetName, targetPerson = null) {
+			const root = this.getResponseData(data);
+			const sourceName = String(mappingPreference && mappingPreference.sourceName || '').trim();
+			const normalizedSourceName = this.normalizeFaceMatchName(sourceName);
+			const normalizedTargetName = String(targetName || '').trim();
+			if (!root.mapping_saved || !normalizedSourceName || !normalizedTargetName) {
+				return;
+			}
+			const effectiveTargetPerson = targetPerson && targetPerson.id
+				? targetPerson
+				: root.person_id
+					? { id: root.person_id, name: root.person_name || normalizedTargetName }
+					: null;
+			const nameMapping = {
+				source_name: sourceName,
+				target_name: normalizedTargetName,
+			};
+			this.faceMatchFindingEntries = this.faceMatchFindingEntries.map((entry) => {
+				const entrySourceName = String(
+					entry && (
+						entry.source_name
+						|| (entry.metadata_face && entry.metadata_face.name)
+						|| (entry.source_face && entry.source_face.name)
+					) || ''
+				).trim();
+				if (this.normalizeFaceMatchName(entrySourceName) !== normalizedSourceName) {
+					return entry;
+				}
+				return {
+					...entry,
+					name_mapping: nameMapping,
+					...(effectiveTargetPerson ? {
+						matched_person: effectiveTargetPerson,
+						matched_person_id: effectiveTargetPerson.id,
+					} : {}),
+				};
+			});
 		},
 		async advanceFaceMatchFindingsAfterTransfer(data) {
 			const findingsUpdate = this.getResponseDataObject(data, 'findings_update');
@@ -1670,6 +1799,7 @@ export default {
 					return;
 				}
 				const mappingPreference = await this.resolveFaceMatchNameMappingPreference(personName);
+				const updateMetadataName = await this.confirmMetadataNameUpdate(personName);
 
 				try {
 					this.setFaceMatchMutationPending(
@@ -1689,11 +1819,13 @@ export default {
 							person_name: personName,
 							save_mapping: mappingPreference.saveMapping,
 							source_name: mappingPreference.sourceName,
+							...(isMetadataPhotosCreate ? { update_metadata_name: updateMetadataName } : {}),
 						},
 						{ requireResumeMessage: true }
 					);
 					this.output = JSON.stringify(data, null, 2);
 					if (this.faceMatchReviewingStoredFindings) {
+						this.applySavedFaceMatchNameMapping(data, mappingPreference, personName);
 						if (this.faceMatchAutoAssignKnown) {
 							await this.loadStoredFaceMatchFindings();
 						} else {
@@ -1713,7 +1845,8 @@ export default {
 				}
 			},
 			async assignFaceMatchToPerson() {
-				const matchedPersonId = this.faceMatchEffectivePerson && this.faceMatchEffectivePerson.id;
+				const matchedPerson = this.faceMatchEffectivePerson;
+				const matchedPersonId = matchedPerson && matchedPerson.id;
 				const isMetadataPhotosAssign = this.faceMatchAddsNewPhotosFaces;
 				const faceId = this.faceMatchResult && this.faceMatchResult.face && this.faceMatchResult.face.face_id;
 				const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
@@ -1724,6 +1857,7 @@ export default {
 					return;
 				}
 				const mappingPreference = await this.resolveFaceMatchNameMappingPreference(matchedPersonName);
+				const updateMetadataName = await this.confirmMetadataNameUpdate(matchedPersonName);
 
 				try {
 					this.setFaceMatchMutationPending(
@@ -1748,11 +1882,13 @@ export default {
 							person_name: matchedPersonName,
 							save_mapping: mappingPreference.saveMapping,
 							source_name: mappingPreference.sourceName,
+							...(isMetadataPhotosAssign ? { update_metadata_name: updateMetadataName } : {}),
 						},
 						{ requireResumeMessage: true }
 					);
 					this.output = JSON.stringify(data, null, 2);
 					if (this.faceMatchReviewingStoredFindings) {
+						this.applySavedFaceMatchNameMapping(data, mappingPreference, matchedPersonName, matchedPerson);
 						await this.advanceFaceMatchFindingsAfterTransfer(data);
 					} else {
 						this.faceMatchTransferredCount += 1;
@@ -1765,6 +1901,34 @@ export default {
 					}
 				} catch (err) {
 					await this.reconcileStoredFaceMatchFindingsAfterMutationError(err);
+				}
+			},
+			async deleteFaceMatchMetadataFace() {
+				const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
+				const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
+				if (!metadataFace || !imagePath) {
+					return;
+				}
+				if (!await this.confirmMetadataFaceDelete()) {
+					return;
+				}
+				this.faceMatchActionLocked = true;
+				try {
+					const data = await this.callDsmApi(
+						'/webman/3rdparty/AV_ImgData/index.cgi/api/face_delete_metadata_match',
+						{ image_path: imagePath, metadata_face: metadataFace }
+					);
+					this.output = JSON.stringify(data, null, 2);
+					if (this.faceMatchReviewingStoredFindings) {
+						await this.advanceFaceMatchFindingsAfterTransfer(data);
+					} else {
+						this.faceMatchSkippedTargets = this.buildNextSkippedTargets();
+						await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
+					}
+				} catch (err) {
+					await this.reconcileStoredFaceMatchFindingsAfterMutationError(err);
+				} finally {
+					this.faceMatchActionLocked = false;
 				}
 			},
 			async applyFaceMatchToMetadata() {

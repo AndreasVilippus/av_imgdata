@@ -401,6 +401,64 @@ def test_stored_findings_person_creation_auto_assign_reloads_without_refresh_run
     }
 
 
+def test_saved_mapping_is_applied_to_next_loaded_finding_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const targetPerson = { id: 91, name: 'Person Target' };
+            const first = {
+              image_path: '/volume1/photo/first.jpg',
+              source_name: 'Person Legacy',
+              metadata_face: { name: 'Person Legacy' },
+            };
+            const second = {
+              image_path: '/volume1/photo/second.jpg',
+              source_name: 'Person Legacy',
+              metadata_face: { name: 'Person Legacy' },
+              matched_person: null,
+              matched_person_id: null,
+              name_mapping: null,
+            };
+            const unrelated = {
+              image_path: '/volume1/photo/third.jpg',
+              source_name: 'Other Person',
+              metadata_face: { name: 'Other Person' },
+              matched_person: null,
+              name_mapping: null,
+            };
+            const component = createComponent({
+              faceMatchFindingEntries: [first, second, unrelated],
+            });
+
+            component.applySavedFaceMatchNameMapping(
+              { success: true, data: { mapping_saved: true } },
+              { saveMapping: true, sourceName: 'Person Legacy' },
+              'Person Target',
+              targetPerson
+            );
+
+            assert.strictEqual(component.faceMatchFindingEntries[1].name_mapping.source_name, 'Person Legacy');
+            assert.strictEqual(component.faceMatchFindingEntries[1].name_mapping.target_name, 'Person Target');
+            assert.strictEqual(component.faceMatchFindingEntries[1].matched_person.id, 91);
+            assert.strictEqual(component.faceMatchFindingEntries[1].matched_person_id, 91);
+            assert.strictEqual(component.faceMatchFindingEntries[2], unrelated);
+            console.log(JSON.stringify({
+              mapping: component.faceMatchFindingEntries[1].name_mapping,
+              personId: component.faceMatchFindingEntries[1].matched_person_id,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "mapping": {
+            "source_name": "Person Legacy",
+            "target_name": "Person Target",
+        },
+        "personId": 91,
+    }
+
+
 def test_stored_findings_auto_apply_polls_progress_while_request_is_running_runtime():
     result = run_node(
         face_match_runtime_script(
@@ -780,6 +838,73 @@ def test_file_source_face_match_titles_show_source_target_and_image_runtime():
     }
 
 
+def test_missing_photos_face_has_no_marker_on_photos_side_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const metadataFace = { name: 'Old Name', x: 0.5, y: 0.5, w: 0.2, h: 0.2 };
+            const component = createComponent({
+              selectedFaceMatchingAction: 'mark_missing_photos_faces',
+              personDataToLeftIconUrl: 'person_data_to_left.png',
+              personDataToRightIconUrl: 'person_data_to_right.png',
+              faceMatchResult: {
+                action: 'mark_missing_photos_faces',
+                image_path: '/volume1/photo/test.jpg',
+                metadata_face: metadataFace,
+                source_face: metadataFace,
+                add_new_faces_to_photos: true,
+              },
+            });
+
+            assert.deepStrictEqual(component.getLeftFaceMatchFace(), metadataFace);
+            assert.strictEqual(component.getRightFaceMatchFace(), null);
+            assert.strictEqual(component.faceMatchCanDeleteMetadataFace, true);
+            assert.strictEqual(component.faceMatchTransferIconUrl, 'person_data_to_right.png');
+            console.log(JSON.stringify({
+              right: component.getRightFaceMatchFace(),
+              canDelete: component.faceMatchCanDeleteMetadataFace,
+              transferIcon: component.faceMatchTransferIconUrl,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "right": None,
+        "canDelete": True,
+        "transferIcon": "person_data_to_right.png",
+    }
+
+
+def test_different_photos_name_prompts_for_file_name_update_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              selectedFaceMatchingAction: 'mark_missing_photos_faces',
+              faceMatchResult: {
+                action: 'mark_missing_photos_faces',
+                image_path: '/volume1/photo/test.jpg',
+                metadata_face: { name: 'Old Name' },
+                add_new_faces_to_photos: true,
+              },
+            });
+
+            const pending = component.confirmMetadataNameUpdate('New Name');
+            assert.strictEqual(component.metadataNameConfirm.visible, true);
+            assert.match(component.metadataNameConfirm.message, /Old Name/);
+            assert.match(component.metadataNameConfirm.message, /New Name/);
+            component.resolveMetadataNameConfirm(true);
+            const update = await pending;
+            assert.strictEqual(update, true);
+            console.log(JSON.stringify({ update }));
+            """
+        )
+    )
+
+    assert result == {"update": True}
+
+
 def test_use_stored_findings_and_save_only_watchers_are_mutually_exclusive_runtime():
     result = run_node(
         face_match_runtime_script(
@@ -1046,7 +1171,7 @@ def test_thumbnail_error_switches_to_backend_image_fallback_runtime():
                 image_path: '/volume1/photo/Familie/Test Bild.jpg',
                 image: { id: 115579 },
               },
-              getPhotoThumbnailUrl: () => '/synofoto/api/v2/t/Thumbnail/get?id=115579',
+              getPhotoThumbnailUrl: (image) => `/synofoto/api/v2/t/Thumbnail/get?id=${image.id}`,
             });
             const image = { dataset: {}, src: component.getCurrentFaceMatchImageUrl() };
 
@@ -1060,12 +1185,32 @@ def test_thumbnail_error_switches_to_backend_image_fallback_runtime():
             );
             assert.strictEqual(image.src, firstFallback);
             assert.strictEqual(image.dataset.avFallbackApplied, 'true');
+            assert.strictEqual(
+              image.dataset.avFallbackPrimaryUrl,
+              '/synofoto/api/v2/t/Thumbnail/get?id=115579'
+            );
+
+            component.faceMatchResult = {
+              image_path: '/volume1/photo/Familie/Zweites Bild.jpg',
+              image: { id: 115580 },
+            };
+            image.src = component.getCurrentFaceMatchImageUrl();
+            component.handleFaceMatchImagePreviewError({ target: image });
+
+            assert.strictEqual(
+              image.src,
+              '/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=%2Fvolume1%2Fphoto%2FFamilie%2FZweites%20Bild.jpg'
+            );
+            assert.strictEqual(
+              image.dataset.avFallbackPrimaryUrl,
+              '/synofoto/api/v2/t/Thumbnail/get?id=115580'
+            );
             console.log(JSON.stringify({ fallback: image.src }));
             """
         )
     )
 
-    assert result["fallback"].endswith("Test%20Bild.jpg")
+    assert result["fallback"].endswith("Zweites%20Bild.jpg")
 
 
 def test_stale_backend_running_phase_does_not_keep_stop_state_runtime():

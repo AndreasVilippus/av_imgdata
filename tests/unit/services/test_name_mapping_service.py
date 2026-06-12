@@ -307,11 +307,13 @@ class TestNameMappingServiceCache(unittest.TestCase):
         service = NameMappingService(str(self.mapping_file))
         self.assertTrue(service.saveNameMapping(source_name="Alias", target_name="Person"))
         entry = service.listNameMappingsPage(search="Alias")["entries"][0]
+        self.assertEqual(service.findNameMapping("Alias")["target_name"], "Person")
 
         self.assertTrue(service.updateNameMappingTarget(entry["id"], "Updated Person"))
 
         updated = service.listNameMappingsPage(search="Alias")["entries"][0]
         self.assertEqual(updated["target_name"], "Updated Person")
+        self.assertEqual(service.findNameMapping("Alias")["target_name"], "Updated Person")
 
 
 if __name__ == "__main__":

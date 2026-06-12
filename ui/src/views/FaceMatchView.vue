@@ -172,8 +172,8 @@
 					:disabled="vm.faceMatchInteractionDisabled"
 					@click.prevent="vm.handleFaceMatchAction"
 				>
-					<span v-if="(vm.faceMatchActionMode === 'write_metadata' ? vm.personDataToRightIconUrl : vm.personDataToLeftIconUrl)" class="face-match-icon-stack">
-						<img :src="vm.faceMatchActionMode === 'write_metadata' ? vm.personDataToRightIconUrl : vm.personDataToLeftIconUrl" alt="" class="face-match-icon-image" />
+					<span v-if="vm.faceMatchTransferIconUrl" class="face-match-icon-stack">
+						<img :src="vm.faceMatchTransferIconUrl" alt="" class="face-match-icon-image" />
 						<img v-if="vm.faceMatchShouldShowAddOverlay && vm.addIconUrl" :src="vm.addIconUrl" alt="" class="face-match-icon-overlay" />
 					</span>
 					<span v-else class="face-match-icon-fallback">{{ vm.faceMatchTransferTooltip }}</span>
@@ -181,6 +181,20 @@
 				<div class="face-match-col">
 					<h2>{{ vm.faceMatchLeftTitle }}</h2>
 					<div v-if="vm.getCurrentFaceMatchImageUrl()" class="face-match-thumbnail-wrap">
+						<button
+							v-if="vm.faceMatchCanDeleteMetadataFace"
+							type="button"
+							class="face-match-icon-button checks-delete-button checks-delete-button-right"
+							:title="vm.$avt('face_match:button_delete_file_face', 'Delete face from file')"
+							:aria-label="vm.$avt('face_match:button_delete_file_face', 'Delete face from file')"
+							:disabled="vm.faceMatchInteractionDisabled"
+							@click.prevent="vm.deleteFaceMatchMetadataFace"
+						>
+							<span class="face-match-icon-stack">
+								<img :src="vm.faceIconUrl" alt="" class="face-match-icon-image" />
+								<img :src="vm.deleteIconUrl" alt="" class="face-match-icon-overlay" />
+							</span>
+						</button>
 						<template v-if="vm.isFaceOnlyPreview">
 							<div v-if="vm.getFaceMatchCropStyle(vm.getLeftFaceMatchFace())" class="face-match-crop-frame">
 								<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.getLeftFaceMatchFace())" @error="vm.handleFaceMatchImagePreviewError" />
@@ -197,7 +211,7 @@
 				<div class="face-match-col">
 					<h2>{{ vm.faceMatchRightTitle }}</h2>
 					<div v-if="vm.getCurrentFaceMatchImageUrl()" class="face-match-thumbnail-wrap">
-						<template v-if="vm.isFaceOnlyPreview">
+						<template v-if="vm.isFaceOnlyPreview && vm.getRightFaceMatchFace()">
 							<div v-if="vm.getFaceMatchCropStyle(vm.getRightFaceMatchFace())" class="face-match-crop-frame">
 								<img :src="vm.getCurrentFaceMatchImageUrl()" :alt="vm.$avt('face_match:face_preview_alt', 'Face preview')" class="face-match-crop-image" :style="vm.getFaceMatchCropStyle(vm.getRightFaceMatchFace())" @error="vm.handleFaceMatchImagePreviewError" />
 							</div>
@@ -219,6 +233,26 @@
 				<div class="sm-modal-actions">
 					<v-button @click="vm.resolveNameMappingConfirm(false)" style="width: 120px;">{{ vm.$avt('face_match:button_no', 'No') }}</v-button>
 					<v-button @click="vm.resolveNameMappingConfirm(true)" style="width: 120px;">{{ vm.$avt('face_match:button_yes', 'Yes') }}</v-button>
+				</div>
+			</div>
+		</div>
+		<div v-if="vm.metadataNameConfirm.visible" class="sm-modal-backdrop">
+			<div class="sm-modal sm-modal-centered" role="dialog" aria-modal="true" aria-labelledby="metadata-name-confirm-title">
+				<div id="metadata-name-confirm-title" class="sm-modal-title">{{ vm.$avt('face_match:modal_metadata_name_title', 'Change name in file') }}</div>
+				<div class="sm-modal-text">{{ vm.metadataNameConfirm.message }}</div>
+				<div class="sm-modal-actions">
+					<v-button @click="vm.resolveMetadataNameConfirm(false)" style="width: 120px;">{{ vm.$avt('face_match:button_no', 'No') }}</v-button>
+					<v-button @click="vm.resolveMetadataNameConfirm(true)" style="width: 120px;">{{ vm.$avt('face_match:button_yes', 'Yes') }}</v-button>
+				</div>
+			</div>
+		</div>
+		<div v-if="vm.metadataFaceDeleteConfirm.visible" class="sm-modal-backdrop">
+			<div class="sm-modal sm-modal-centered" role="dialog" aria-modal="true" aria-labelledby="metadata-face-delete-confirm-title">
+				<div id="metadata-face-delete-confirm-title" class="sm-modal-title">{{ vm.$avt('face_match:modal_delete_file_face_title', 'Delete face from file') }}</div>
+				<div class="sm-modal-text">{{ vm.metadataFaceDeleteConfirm.message }}</div>
+				<div class="sm-modal-actions">
+					<v-button @click="vm.resolveMetadataFaceDeleteConfirm(false)" style="width: 120px;">{{ vm.$avt('face_match:button_no', 'No') }}</v-button>
+					<v-button @click="vm.resolveMetadataFaceDeleteConfirm(true)" style="width: 120px;">{{ vm.$avt('face_match:button_yes', 'Yes') }}</v-button>
 				</div>
 			</div>
 		</div>

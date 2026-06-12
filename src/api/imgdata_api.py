@@ -1343,6 +1343,7 @@ async def face_assign_metadata_match(request: Request):
     person_id = body.get("person_id")
     person_name = str(body.get("person_name") or "").strip()
     save_mapping = bool(body.get("save_mapping"))
+    update_metadata_name = bool(body.get("update_metadata_name"))
     source_name = body.get("source_name")
     if not image_path or not isinstance(metadata_face, dict) or not person_name:
         return {
@@ -1372,6 +1373,15 @@ async def face_assign_metadata_match(request: Request):
             metadata_face=metadata_face,
             person_id=person_id,
             person_name=person_name,
+        )
+        metadata_update = (
+            IMGDATA.replaceMetadataFaceName(
+                image_path=image_path,
+                face_data=metadata_face,
+                new_name=person_name,
+            )
+            if update_metadata_name and transfer_result.get("face_id") is not None
+            else None
         )
         findings_update = IMGDATA.removeFaceMatchFindingMetadataEntry(
             image_path=image_path,
@@ -1406,6 +1416,7 @@ async def face_assign_metadata_match(request: Request):
             "face_id": int(transfer_result["face_id"]),
             "add_result": transfer_result.get("add_result"),
             "assign_result": transfer_result.get("assign_result"),
+            "metadata_update": metadata_update,
             "findings_update": findings_update,
             "progress_update": progress_update,
             "mapping_saved": mapping_saved if save_mapping else False,
@@ -1424,6 +1435,7 @@ async def face_create_metadata_match(request: Request):
     metadata_face = body.get("metadata_face")
     person_name = str(body.get("person_name") or "").strip()
     save_mapping = bool(body.get("save_mapping"))
+    update_metadata_name = bool(body.get("update_metadata_name"))
     source_name = body.get("source_name")
     if not image_path or not isinstance(metadata_face, dict) or not person_name:
         return {
@@ -1443,6 +1455,15 @@ async def face_create_metadata_match(request: Request):
             metadata_face=metadata_face,
             person_name=person_name,
             create_missing_person=True,
+        )
+        metadata_update = (
+            IMGDATA.replaceMetadataFaceName(
+                image_path=image_path,
+                face_data=metadata_face,
+                new_name=person_name,
+            )
+            if update_metadata_name and transfer_result.get("face_id") is not None
+            else None
         )
         findings_update = IMGDATA.removeFaceMatchFindingMetadataEntry(
             image_path=image_path,
@@ -1478,9 +1499,52 @@ async def face_create_metadata_match(request: Request):
             "add_result": transfer_result.get("add_result"),
             "create_result": transfer_result.get("create_result"),
             "transfer_result": transfer_result,
+            "metadata_update": metadata_update,
             "findings_update": findings_update,
             "progress_update": progress_update,
             "mapping_saved": mapping_saved if save_mapping else False,
+        },
+    }
+
+
+@router.post("/face_delete_metadata_match")
+async def face_delete_metadata_match(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    image_path = str(body.get("image_path") or "").strip()
+    metadata_face = body.get("metadata_face")
+    if not image_path or not isinstance(metadata_face, dict):
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_face_delete_metadata_match_request",
+            },
+        }
+
+    try:
+        result = IMGDATA.deleteMetadataFace(image_path=image_path, face_data=metadata_face)
+        findings_update = (
+            IMGDATA.removeFaceMatchFindingMetadataEntry(
+                image_path=image_path,
+                metadata_face=metadata_face,
+                increment_transferred_count=False,
+            )
+            if result.get("deleted")
+            else None
+        )
+    except Exception as exc:
+        return _operation_exception_response(exc, message="face_delete_metadata_match_failed")
+
+    return {
+        "success": True,
+        "data": {
+            "image_path": image_path,
+            "result": result,
+            "findings_update": findings_update,
         },
     }
 

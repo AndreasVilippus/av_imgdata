@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -73,6 +74,47 @@ def test_database_initialization_and_repositories(tmp_path):
     assert app_state.set("scan:last", {"path": "/photos", "count": 2})
     assert app_state.get("scan:last") == {"path": "/photos", "count": 2}
 
+
+def test_parallel_database_instances_initialize_shared_path_once(monkeypatch, tmp_path):
+    db_path = tmp_path / "imgdata.sqlite3"
+    databases = [Database(str(db_path)) for _ in range(8)]
+    executescript_calls = 0
+    original_connect = Database.connect
+
+    class ConnectionProxy:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._connection.__exit__(*args)
+
+        def execute(self, *args, **kwargs):
+            return self._connection.execute(*args, **kwargs)
+
+        def executescript(self, *args, **kwargs):
+            nonlocal executescript_calls
+            executescript_calls += 1
+            return self._connection.executescript(*args, **kwargs)
+
+    monkeypatch.setattr(
+        Database,
+        "connect",
+        lambda self: ConnectionProxy(original_connect(self)),
+    )
+
+    with ThreadPoolExecutor(max_workers=len(databases)) as pool:
+        list(pool.map(lambda database: database.initialize(), databases))
+
+    assert executescript_calls == 1
+    with sqlite3.connect(str(db_path)) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 1"
+        ).fetchone()[0] == 1
 
 
 def test_name_mapping_repository_lists_filtered_pages_and_deletes_by_id(tmp_path):

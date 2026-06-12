@@ -262,6 +262,64 @@ def test_face_create_metadata_match_creates_metadata_face_person_and_cleans_find
     )
 
 
+def test_face_create_metadata_match_optionally_updates_name_in_file(monkeypatch):
+    metadata_face = {"name": "Old Name", "source_format": "MWG_REGIONS"}
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/test.jpg",
+            "metadata_face": metadata_face,
+            "person_name": "New Name",
+            "update_metadata_name": True,
+        }
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "resolveOrCreatePhotosPersonForMetadataFace", Mock(return_value={
+        "face_id": 7,
+        "target_person": {"id": 8, "name": "New Name"},
+    }))
+    replace = Mock(return_value={"updated": True})
+    monkeypatch.setattr(imgdata_api.IMGDATA, "replaceMetadataFaceName", replace)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", Mock(return_value={"removed": True}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "recordFaceMatchTransferProgress", Mock(return_value={}))
+
+    payload = _run(imgdata_api.face_create_metadata_match(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["metadata_update"] == {"updated": True}
+    replace.assert_called_once_with(
+        image_path="photo/test.jpg",
+        face_data=metadata_face,
+        new_name="New Name",
+    )
+
+
+def test_face_delete_metadata_match_deletes_file_face_and_cleans_finding(monkeypatch):
+    metadata_face = {"name": "Wrong", "source_format": "MWG_REGIONS"}
+
+    async def request_body(_request):
+        return {"image_path": "photo/test.jpg", "metadata_face": metadata_face}
+
+    delete = Mock(return_value={"deleted": True})
+    remove = Mock(return_value={"removed": True, "remaining_count": 2})
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "deleteMetadataFace", delete)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", remove)
+
+    payload = _run(imgdata_api.face_delete_metadata_match(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["result"] == {"deleted": True}
+    delete.assert_called_once_with(image_path="photo/test.jpg", face_data=metadata_face)
+    remove.assert_called_once_with(
+        image_path="photo/test.jpg",
+        metadata_face=metadata_face,
+        increment_transferred_count=False,
+    )
+
+
 def test_face_apply_metadata_match_forwards_oriented_display_face_and_removes_finding(monkeypatch):
     metadata_face = {
         "name": "",

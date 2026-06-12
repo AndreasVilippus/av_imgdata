@@ -18,6 +18,7 @@ from models.metadata_payload import MetadataPayload
 from parser.metadata_parser import MetadataParser
 from services.config_service import ConfigService
 from services.face_coordinate_precision import format_face_coordinate
+from services.name_mapping_service import NameMappingService
 
 
 XMP_MWG_AND_MICROSOFT = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
@@ -3137,6 +3138,21 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             left_face=photos_face,
             right_face=embedded_face,
         )
+
+        self.assertEqual((left_state, right_state), ("suggested", "alert"))
+
+    def test_name_conflict_sees_mapping_saved_after_lookup_cache_was_filled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mappings = NameMappingService(str(Path(temp_dir) / "name_mappings.json"))
+            self.service.name_mappings = mappings
+            self.assertIsNone(mappings.findNameMapping("Person Beta"))
+
+            self.assertTrue(mappings.saveNameMapping(source_name="Person Beta", target_name="Person Alpha"))
+
+            left_state, right_state = self.service._getNameConflictSuggestionStates(
+                "Person Alpha",
+                "Person Beta",
+            )
 
         self.assertEqual((left_state, right_state), ("suggested", "alert"))
 

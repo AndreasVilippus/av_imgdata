@@ -3,7 +3,8 @@
 PACKAGE="AV_ImgData"
 VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/${PACKAGE}/var}"
 PID_FILE="${VAR_DIR}/${PACKAGE}.pid"
-LOG_FILE="${VAR_DIR}/server.log"
+LEGACY_LOG_FILE="${VAR_DIR}/server.log"
+LOG_FILE="/dev/null"
 VENV_DIR="${SYNOPKG_PKGDEST}/var/venv"
 PYTHON="${VENV_DIR}/bin/python"
 PIP="${VENV_DIR}/bin/pip"
@@ -30,7 +31,7 @@ is_running() {
 }
 
 log() {
-    echo "[$(date '+%F %T')] $*" >> "${LOG_FILE}"
+    :
 }
 
 pip_install_requirements() {
@@ -351,7 +352,7 @@ install_optional_python_packages() {
         package_wheel_dir="${DOWNLOADED_WHEEL_DIR}/${package_key}/${wheelhouse_target}"
         log "preparing optional wheelhouse for ${package_key} from ${wheelhouse_manifest_url}"
         if ! prepare_optional_python_wheelhouse "${package_key}" "${wheelhouse_manifest_url}" "${wheelhouse_target}" "${req_name}" "${package_wheel_dir}"; then
-            install_message="wheelhouse download or verification failed; see ${LOG_FILE}"
+            install_message="wheelhouse download or verification failed"
             log "optional wheelhouse preparation failed for ${package_key}; package start continues"
             write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
             continue
@@ -364,15 +365,15 @@ install_optional_python_packages() {
         install_result=$?
         if [ "${install_result}" -ne 0 ]; then
             install_message="$(tail -n 20 "${install_output}" 2>/dev/null | tr '\n' ' ' | cut -c 1-900)"
-            [ -n "${install_message}" ] || install_message="pip install failed; see ${LOG_FILE}"
+            [ -n "${install_message}" ] || install_message="pip install failed"
             log "optional wheelhouse install failed for ${package_key}; package start continues"
             write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
         elif ! finalize_optional_python_package_install "${package_key}"; then
-            install_message="optional package finalization failed; see ${LOG_FILE}"
+            install_message="optional package finalization failed"
             log "optional requirements finalization failed for ${req_name}; package start continues"
             write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
         elif ! validate_optional_python_package_install "${package_key}"; then
-            install_message="optional packages installed but runtime import validation failed; see ${LOG_FILE}"
+            install_message="optional packages installed but runtime import validation failed"
             log "optional requirements runtime validation failed for ${req_name}; package start continues"
             write_optional_pip_status "${package_key}" "${req_name}" "failed" "${install_message}"
         else
@@ -385,6 +386,7 @@ install_optional_python_packages() {
 start() {
     mkdir -p "${VAR_DIR}"
     cd "${SYNOPKG_PKGDEST}" || exit 1
+    rm -f "${LEGACY_LOG_FILE}" "${LEGACY_LOG_FILE}".*
 
     if is_running; then
         echo "${PACKAGE} already running (pid $(cat "${PID_FILE}"))."
@@ -393,12 +395,12 @@ start() {
 
     echo "Starting ${PACKAGE}..."
     if ! ensure_core_python_packages; then
-        echo "Failed to start ${PACKAGE}. Core Python packages are missing. See ${LOG_FILE}."
+        echo "Failed to start ${PACKAGE}. Core Python packages are missing."
         return 1
     fi
 
     if ! PYTHONPATH="${SYNOPKG_PKGDEST}/src" "${PYTHON}" -m av_imgdata.db.bootstrap >> "${LOG_FILE}" 2>&1; then
-        echo "Failed to start ${PACKAGE}. SQLite runtime database initialization failed. See ${LOG_FILE}."
+        echo "Failed to start ${PACKAGE}. SQLite runtime database initialization failed."
         return 1
     fi
 
@@ -409,6 +411,8 @@ start() {
         --port "${PORT}" \
         --proxy-headers \
         --forwarded-allow-ips="*" \
+        --no-access-log \
+        --log-level critical \
         >> "${LOG_FILE}" 2>&1 &
     echo $! > "${PID_FILE}"
     sleep 1
@@ -418,7 +422,7 @@ start() {
         return 0
     fi
 
-    echo "Failed to start ${PACKAGE}. See ${LOG_FILE}."
+    echo "Failed to start ${PACKAGE}."
     return 1
 }
 
