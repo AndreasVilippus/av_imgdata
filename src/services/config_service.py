@@ -49,6 +49,7 @@ class ConfigService:
         return {
             "photos": {
                 "MAX_PHOTOS_PERSONS": 5000,
+                "REINDEX_MISSING_ITEMS": False,
             },
             "face_match": {
                 "FILE_MATCH_SOURCE_SCOPE": "both",
@@ -241,6 +242,9 @@ class ConfigService:
             maximum=36500,
         )
         scan["LIVE_WATCH_ENABLED"] = bool(scan.get("LIVE_WATCH_ENABLED", False))
+
+        photos = config.get("photos", {}) if isinstance(config.get("photos"), dict) else {}
+        photos["REINDEX_MISSING_ITEMS"] = bool(photos.get("REINDEX_MISSING_ITEMS", False))
 
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}
         debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED"))

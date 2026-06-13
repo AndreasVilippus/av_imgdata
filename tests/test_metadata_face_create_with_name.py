@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath("src"))
 
 from api.session_manager import SessionManager
-from imgdata import ImgDataService
+from imgdata import ImgDataOperationError, ImgDataService
 
 
 class MetadataFaceCreateWithNameTests(unittest.TestCase):
@@ -74,6 +76,59 @@ class MetadataFaceCreateWithNameTests(unittest.TestCase):
         self.assertEqual(result["person_id"], 38517)
         self.assertEqual(add_mock.call_args.kwargs["person_name"], "ZZ_ID_0019")
         self.assertIsNone(add_mock.call_args.kwargs["person_id"])
+
+    def test_missing_photos_item_submits_reindex_and_reports_status(self):
+        previous_lookup_cache = self.service.photos_lookup_cache
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = str(Path(temp_dir) / "missing-in-photos.jpg")
+            Path(image_path).touch()
+
+            with patch.object(
+                self.service.config,
+                "readMergedConfig",
+                return_value={"photos": {"REINDEX_MISSING_ITEMS": True}},
+            ), patch.object(
+                self.service.core,
+                "getSharedFolder",
+                return_value="/volume1/photo",
+            ), patch.object(
+                self.service.photos,
+                "findFotoTeamItemByPath",
+                return_value=None,
+            ), patch.object(
+                self.service.photos,
+                "indexFotoTeamPaths",
+                return_value={"accepted": True},
+            ) as index_mock:
+                with self.assertRaises(ImgDataOperationError) as raised:
+                    self.service.addMatchedMetadataFaceToPhotos(
+                        user_key="user",
+                        cookies={},
+                        base_url="https://example.test",
+                        image_path=image_path,
+                        metadata_face=self._metadata_face(),
+                        person_name="ZZ_ID_0019",
+                    )
+
+        self.assertEqual(str(raised.exception), "photos_item_not_found_for_image")
+        self.assertEqual(
+            raised.exception.details["reindex"],
+            {
+                "status": "submitted",
+                "requested": True,
+                "path": image_path,
+                "type": "basic",
+                "result": {"accepted": True},
+            },
+        )
+        index_mock.assert_called_once_with(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            paths=[image_path],
+            index_type="basic",
+        )
+        self.assertIsNot(self.service.photos_lookup_cache, previous_lookup_cache)
 
     def test_create_metadata_face_as_photos_person_uses_add_face_name_flow(self):
         metadata_face = self._metadata_face()

@@ -8930,6 +8930,52 @@ class ImgDataService:
             },
         }
 
+    def _requestMissingPhotosItemReindex(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        image_path: str,
+    ) -> Dict[str, Any]:
+        normalized_path = str(image_path or "").strip()
+        photos_config = self.config.readMergedConfig().get("photos", {})
+        if not isinstance(photos_config, dict) or not bool(photos_config.get("REINDEX_MISSING_ITEMS", False)):
+            return {"status": "disabled", "requested": False, "path": normalized_path}
+        if not normalized_path or not os.path.isfile(normalized_path):
+            return {"status": "skipped", "requested": False, "reason": "file_not_found", "path": normalized_path}
+        try:
+            result = self.photos.indexFotoTeamPaths(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                paths=[normalized_path],
+                index_type="basic",
+            )
+        except Exception as exc:
+            self._debugLog(
+                "photos_missing_item_reindex_failed",
+                image_path=normalized_path,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return {
+                "status": "failed",
+                "requested": True,
+                "path": normalized_path,
+                "type": "basic",
+                "error": str(exc),
+            }
+        self.photos_lookup_cache = PhotosLookupCache()
+        self._debugLog("photos_missing_item_reindex_submitted", image_path=normalized_path, index_type="basic")
+        return {
+            "status": "submitted",
+            "requested": True,
+            "path": normalized_path,
+            "type": "basic",
+            "result": result,
+        }
+
     def addMatchedMetadataFaceToPhotos(
         self,
         *,
@@ -8960,7 +9006,20 @@ class ImgDataService:
             lookup_cache=self.photos_lookup_cache,
         )
         if not isinstance(item, dict) or item.get("id") is None:
-            raise ValueError("photos_item_not_found_for_image")
+            reindex = self._requestMissingPhotosItemReindex(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                image_path=image_path,
+            )
+            raise ImgDataOperationError(
+                "photos_item_not_found_for_image",
+                {
+                    "reason": "photos_item_not_found_for_image",
+                    "image_path": str(image_path or "").strip(),
+                    "reindex": reindex,
+                },
+            )
 
         item_id = int(item.get("id"))
         metadata_face_obj = MetadataFace.from_dict(metadata_face)

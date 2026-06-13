@@ -649,6 +649,37 @@ class PhotosHandler:
                 return dict(matched_item) if isinstance(matched_item, dict) else None
             offset += page_size
 
+    def indexFotoTeamPaths(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        paths: List[str],
+        index_type: str = "basic",
+    ) -> Dict[str, Any]:
+        normalized_paths = [
+            str(path or "").strip()
+            for path in paths
+            if str(path or "").strip()
+        ]
+        if not normalized_paths:
+            return {}
+        payload = self._session_manager.call_api_post(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            api="SYNO.FotoTeam.Index",
+            params={
+                "method": "index_add",
+                "version": "1",
+                "type": str(index_type or "basic").strip() or "basic",
+                "paths": normalized_paths,
+            },
+        )
+        data = payload.get("data", {})
+        return data if isinstance(data, dict) else {}
+
     def assignFaceToPerson(
         self,
         *,

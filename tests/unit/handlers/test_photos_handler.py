@@ -97,6 +97,36 @@ class PhotosHandlerSortTests(unittest.TestCase):
         self.assertEqual(params["face"][0]["face_bounding_box"]["top_left"]["x"], 0.1)
         self.assertEqual(params["face"][0]["face_bounding_box"]["bottom_right"]["y"], 0.4)
 
+    def test_index_foto_team_paths_submits_basic_index_request_without_status_poll(self):
+        session_manager = DummySessionManager(
+            post_payloads=[{"success": True, "data": {"accepted": True}}]
+        )
+        handler = PhotosHandler(
+            session_manager=session_manager,
+            config_service=DummyConfigService("id_desc"),
+        )
+
+        result = handler.indexFotoTeamPaths(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            paths=["/volume1/photo/missing.jpg"],
+        )
+
+        self.assertEqual(result, {"accepted": True})
+        self.assertEqual(len(session_manager.post_calls), 1)
+        self.assertEqual(session_manager.get_calls, [])
+        self.assertEqual(session_manager.post_calls[0]["api"], "SYNO.FotoTeam.Index")
+        self.assertEqual(
+            session_manager.post_calls[0]["params"],
+            {
+                "method": "index_add",
+                "version": "1",
+                "type": "basic",
+                "paths": ["/volume1/photo/missing.jpg"],
+            },
+        )
+
     def test_add_face_to_item_includes_person_id_when_provided(self):
         session_manager = DummySessionManager(post_payloads=[{"success": True, "data": {"list": [{"face_id": 99, "face_id_temp": "42-0"}]}}])
         handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))

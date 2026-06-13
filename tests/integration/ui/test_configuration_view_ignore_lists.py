@@ -10,3 +10,10 @@ def test_configuration_view_renders_ignore_list_status_values_outside_translatio
     assert "{{ getChecksIgnoreListStatus(ignoreList.reviewType).path || '-' }}" in view
     assert "config:label_check_ignore_list_count', 'Entries: {count}'" not in view
     assert "config:label_check_ignore_list_path', 'File: {path}'" not in view
+
+
+def test_configuration_view_contains_missing_photos_item_reindex_runtime_setting():
+    view = Path("ui/src/views/ConfigurationView.vue").read_text(encoding="utf-8")
+
+    assert 'v-model="configModel.photos.REINDEX_MISSING_ITEMS"' in view
+    assert "REINDEX_MISSING_ITEMS: false" in view

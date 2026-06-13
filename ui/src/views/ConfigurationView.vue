@@ -67,6 +67,11 @@
 						/>
 					</label>
 
+					<label class="config-checkbox">
+						<input v-model="configModel.photos.REINDEX_MISSING_ITEMS" type="checkbox" :disabled="saving" />
+						<span>{{ $avt('config:label_reindex_missing_photos_items', 'Reindex images not found in Photos') }}</span>
+					</label>
+
 					<label class="config-field">
 						<span class="config-field-label">{{ $avt('config:label_name_conflict_overlap_threshold', 'Name conflict face overlap threshold') }}</span>
 						<input
@@ -404,6 +409,7 @@ export default {
 				},
 				photos: {
 					MAX_PHOTOS_PERSONS: 5000,
+					REINDEX_MISSING_ITEMS: false,
 				},
 				face_match: {
 					FILE_MATCH_SOURCE_SCOPE: 'both',
@@ -636,6 +642,7 @@ export default {
 				photos: {
 					...photos,
 					MAX_PHOTOS_PERSONS: Math.max(1, Number(photos.MAX_PHOTOS_PERSONS) || defaults.photos.MAX_PHOTOS_PERSONS),
+					REINDEX_MISSING_ITEMS: Boolean(photos.REINDEX_MISSING_ITEMS ?? defaults.photos.REINDEX_MISSING_ITEMS),
 				},
 				face_match: {
 					...faceMatch,

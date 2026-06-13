@@ -53,6 +53,11 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         self.assertEqual(music["FILES"]["SHARED_FOLDER_NAMES"], ["music"])
         self.assertFalse(music["SCAN"]["LIVE_WATCH_ENABLED"])
 
+    def test_missing_photos_item_reindex_is_disabled_by_default(self):
+        photos = ConfigService.defaultConfig()["photos"]
+
+        self.assertFalse(photos["REINDEX_MISSING_ITEMS"])
+
     def test_readMergedConfig_detects_file_change(self):
         """
         Test: Wenn config.json sich ändert,

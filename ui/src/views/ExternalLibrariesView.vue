@@ -383,7 +383,7 @@
 							:disabled="vm.externalLibrariesSaving"
 							@change="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'ENABLED', $event.target.checked)"
 						/>
-						<span>{{ vm.$avt('config:label_enable_insightface_package', 'Install InsightFace package on package start') }}</span>
+						<span>{{ vm.$avt('config:label_enable_insightface_package', 'Enable InsightFace component') }}</span>
 					</label>
 
 					<label class="config-checkbox">
