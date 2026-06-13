@@ -8,40 +8,43 @@
 
 Im Paket **AV_ImgData** soll eine Gesichtswiedererkennung implementiert werden, die zunächst ausschließlich auf den bereits in **Synology Photos** vorhandenen Personen und Gesichtern basiert.
 
-Ziel ist nicht, sofort neue Personen automatisch zu erzeugen oder externe Metadaten als Trainingsquelle zu verwenden. Die erste Ausbaustufe soll:
+Die erste Ausbaustufe soll:
 
 1. vorhandene Photos-Personen und deren zugeordnete Gesichter auslesen,
 2. für diese Gesichter InsightFace-Embeddings berechnen,
 3. pro Photos-Person ein internes Wiedererkennungsprofil aufbauen,
-4. unbekannte oder fehlende Gesichter gegen diese Profile vergleichen,
-5. Vorschläge zur Personenzuordnung erzeugen,
-6. die Vorschläge in der UI prüfbar machen,
-7. erst nach Freigabe nach Photos oder in Paketdaten schreiben.
+4. mögliche Ausreißer in den Referenzgesichtern finden,
+5. unbekannte oder fehlende Gesichter gegen diese Profile vergleichen,
+6. Vorschläge zur Personenzuordnung erzeugen,
+7. die Vorschläge in der UI prüfbar machen,
+8. erst nach Freigabe nach Photos oder in Paketdaten schreiben.
 
-Die Funktion ergänzt das Konzept zur Gesichtsrahmen-Standardisierung, ist aber fachlich getrennt: Dort werden Rahmenpositionen standardisiert, hier werden erkannte Gesichter Personen zugeordnet.
+Die Funktion ergänzt das Konzept zur Gesichtsrahmen-Standardisierung. Dort werden Rahmenpositionen standardisiert; hier werden erkannte Gesichter Personen zugeordnet.
 
 ---
 
-## Abgrenzung der ersten Version
+## Abgrenzung
 
-Enthalten:
+### In der ersten Version enthalten
 
 ```text
 - Quelle: Synology Photos Personen
 - Quelle: Synology Photos vorhandene Face-IDs und Bounding Boxes
 - InsightFace-Erkennung und Embedding-Berechnung
 - Personenprofile aus bekannten Photos-Gesichtern
+- Prüfung möglicher Referenz-Ausreißer mit Fundliste
 - Vergleich unbekannter Gesichter gegen bekannte Personenprofile
 - Vorschau und manuelle Freigabe
 - Cache für Embeddings und Vergleichsergebnisse
 ```
 
-Nicht enthalten:
+### In der ersten Version nicht enthalten
 
 ```text
 - Training aus ACDSee-XMP oder Picasa-XMP
 - automatische Erstellung neuer Photos-Personen
 - vollautomatisches Schreiben ohne Vorschau
+- automatische Änderung bestehender Photos-Zuordnungen
 - externe Bildquellen außerhalb der Photos-Bibliothek
 - Nutzung von Alters-/Geschlechtsmerkmalen als Entscheidungsgrundlage
 ```
@@ -52,7 +55,7 @@ XMP- und Metadatenformate können später als zusätzliche Referenzquellen genut
 
 ## Technische Grundlage
 
-InsightFace liefert nach der Gesichtserkennung pro erkanntem Gesicht eine Bounding Box, Landmarks und bei geladenem Recognition-Modul ein Embedding. Der Vergleich zwischen zwei Embeddings erfolgt über eine Ähnlichkeitsfunktion, praktisch Cosine Similarity.
+InsightFace liefert nach der Gesichtserkennung pro erkanntem Gesicht eine Bounding Box, Landmarks und bei geladenem Recognition-Modul ein Embedding. Der Vergleich zwischen zwei Embeddings erfolgt üblicherweise über Cosine Similarity.
 
 Rollenverteilung:
 
@@ -71,6 +74,7 @@ InsightFace:
 AV_ImgData:
 - verbindet Photos-Face-ID mit InsightFace-Embedding
 - bildet Personenprofile
+- findet mögliche Referenz-Ausreißer
 - erzeugt Zuordnungsvorschläge
 - verwaltet Cache, Vorschau, Freigabe und Protokoll
 ```
@@ -86,6 +90,7 @@ Bereinigung
 ├── Gesichtsrahmen standardisieren
 └── Gesichtswiedererkennung aufbauen
     ├── Referenzprofile
+    ├── Referenz-Ausreißer prüfen
     ├── Unbekannte Gesichter prüfen
     ├── Vorschläge
     ├── Freigabe
@@ -101,6 +106,7 @@ src/
 │   ├── photos_person_repository.py
 │   ├── face_embedding_service.py
 │   ├── person_profile_builder.py
+│   ├── reference_outlier_service.py
 │   ├── face_recognition_matcher.py
 │   ├── recognition_job_service.py
 │   ├── recognition_preview.py
@@ -175,6 +181,8 @@ Unbekanntes Face 9001
 └── Vorschlag: Bea, falls Schwellwert erfüllt und Abstand zum zweitbesten Treffer groß genug ist
 ```
 
+Vor der Nutzung als Referenz muss geprüft werden, ob die bekannten Photos-Gesichter einer Person überhaupt konsistent sind. Genau dafür wird die Ausreißerprüfung als eigener Prüfpunkt eingeführt.
+
 ---
 
 ## Interne Datenmodelle
@@ -197,6 +205,8 @@ class KnownFaceReference:
     source: str = "photos"
     quality_score: float | None
     embedding_id: int | None
+    outlier_state: str | None     # normal, suspected, confirmed, excluded, needs_review
+    outlier_reason: str | None
 
 class FaceEmbedding:
     embedding_id: int
@@ -307,6 +317,34 @@ CREATE TABLE person_recognition_profile_face (
 );
 ```
 
+### Referenz-Ausreißer
+
+```sql
+CREATE TABLE recognition_reference_outlier (
+    id INTEGER PRIMARY KEY,
+    profile_id INTEGER,
+    person_id INTEGER NOT NULL,
+    person_name TEXT NOT NULL,
+    face_id INTEGER NOT NULL,
+    image_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    embedding_id INTEGER NOT NULL,
+    average_similarity REAL,
+    similarity_to_centroid REAL,
+    nearest_other_person_id INTEGER,
+    nearest_other_person_name TEXT,
+    nearest_other_person_score REAL,
+    outlier_score REAL NOT NULL,
+    reason TEXT NOT NULL,
+    review_state TEXT NOT NULL,
+    action TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    reviewed_at TEXT
+);
+```
+
+Ein Eintrag in dieser Tabelle bedeutet nicht automatisch, dass Synology Photos falsch ist. Er bedeutet nur, dass das Referenzgesicht für den Profilaufbau auffällig ist und in einer Fundliste geprüft werden sollte.
+
 ### Wiedererkennungsvorschläge
 
 ```sql
@@ -338,14 +376,6 @@ CREATE TABLE recognition_suggestion (
 
 ```python
 persons = photos_repo.list_persons(show_hidden=False)
-```
-
-Optionen:
-
-```text
-[ ] Versteckte Personen einschließen
-[ ] Personen ohne Namen einschließen
-[ ] Personen mit weniger als n Gesichtern einschließen
 ```
 
 Empfohlener Default:
@@ -382,18 +412,20 @@ embedding = insightface.embed_face(
 )
 ```
 
-Bei bekannten Photos-Gesichtern sollte vorrangig der vorhandene Photos-Rahmen als Zuschnitt oder Matching-Anker genutzt werden. Wenn InsightFace auf dem Bild mehrere Gesichter erkennt, muss das InsightFace-Gesicht gewählt werden, dessen Bounding Box am besten zum Photos-Rahmen passt.
+Bei bekannten Photos-Gesichtern sollte der vorhandene Photos-Rahmen als Zuschnitt oder Matching-Anker genutzt werden. Wenn InsightFace auf dem Bild mehrere Gesichter erkennt, muss das InsightFace-Gesicht gewählt werden, dessen Bounding Box am besten zum Photos-Rahmen passt.
 
-### Schritt 4: Ausreißer entfernen
+### Schritt 4: Ausreißer prüfen
 
-Nicht jedes einer Person zugeordnete Photos-Gesicht ist zwingend korrekt. Deshalb sollten Referenzprofile robuste Ausreißerbehandlung erhalten.
+Nicht jedes einer Person zugeordnete Photos-Gesicht ist zwingend korrekt. Deshalb läuft eine Ausreißerprüfung als eigener Prüfpunkt mit Fundliste.
 
 ```text
 1. Embeddings je Person berechnen.
 2. Paarweise Similarity innerhalb der Person berechnen.
 3. Durchschnittliche Similarity je Face bestimmen.
-4. Gesichter mit stark unterdurchschnittlicher Similarity als Ausreißer markieren.
-5. Ausreißer nicht in das Profil aufnehmen, aber in der UI anzeigen.
+4. Similarity zum Personen-Centroid bestimmen.
+5. Nächstähnliche andere Person bestimmen.
+6. Auffällige Gesichter in die Fundliste schreiben.
+7. Je nach Review-Status in das Profil aufnehmen oder ausschließen.
 ```
 
 ### Schritt 5: Profil bilden
@@ -418,21 +450,202 @@ medoid = embedding mit höchster mittlerer Similarity zu allen anderen Embedding
 
 ---
 
-## Multi-Cluster pro Person
+## Prüfung möglicher Referenz-Ausreißer
 
-Für Phase 1 reicht ein einzelner Centroid. Für Phase 2 sollte optional ein Multi-Cluster-Profil vorgesehen werden, weil Personen je nach Alter, Blickwinkel, Licht, Brille oder Bart deutlich unterschiedlich aussehen können.
+Die Ausreißerprüfung ist ein eigener Prüfpunkt im Bereich **Bereinigung**. Sie dient dazu, mögliche falsche Zuordnungen innerhalb der bereits vorhandenen Synology-Photos-Personen zu finden.
+
+Typischer Fall:
 
 ```text
-Person Bea
-├── Cluster 1: frontal, hell
-├── Cluster 2: seitlich
-└── Cluster 3: ältere Bilder
+Photos-Person „Bea“ hat 80 Gesichter.
+79 Gesichter sind untereinander ähnlich.
+1 Gesicht passt deutlich schlechter zu Bea und ähnelt stärker einer anderen Person.
+→ Fundlisteneintrag „möglicher Referenz-Ausreißer“.
 ```
 
-Vergleich:
+Typische Fundgründe:
+
+```text
+- geringe durchschnittliche Similarity zu anderen Gesichtern derselben Person
+- geringe Similarity zum Personen-Centroid
+- höhere Similarity zu einer anderen Photos-Person
+- starker Abstand zum Medoid der eigenen Person
+- sehr schlechte Bild-/Face-Qualität
+- sehr kleine oder unvollständige Bounding Box
+```
+
+### UI-Fundliste
+
+```text
+Bereinigung → Gesichtswiedererkennung aufbauen → Referenz-Ausreißer prüfen
+
+Filter:
+[ ] Nur starke Ausreißer
+[ ] Nur mögliche Verwechslungen mit anderer Person
+[ ] Nur schlechte Qualität
+[ ] Nur kleine Gesichter
+[ ] Bereits geprüfte ausblenden
+
+Tabelle:
+Person | Bild | Face-ID | Grund | Score eigene Person | nächstähnliche Person | Aktion
+```
+
+Mögliche Aktionen pro Fund:
+
+```text
+[ ] Als korrekt bestätigen
+[ ] Nur aus Wiedererkennungsprofil ausschließen
+[ ] Später prüfen
+[ ] In Photos prüfen/öffnen
+[ ] Als mögliche Fehlzuordnung markieren
+```
+
+Wichtig: Die erste Implementierung soll Ausreißer **nicht automatisch aus Synology Photos entfernen** und auch keine Photos-Zuordnung automatisch ändern. Ein Ausschluss betrifft zunächst nur das interne Wiedererkennungsprofil.
+
+### Statusmodell
+
+```text
+suspected       # automatisch als auffällig erkannt
+confirmed       # Benutzer bestätigt: gehört korrekt zu dieser Person
+excluded        # Benutzer schließt Face aus dem Profil aus
+needs_review    # unklar, später prüfen
+ignored         # bewusst ignoriert
+```
+
+### Entscheidungslogik
+
+Ein Referenzgesicht wird als möglicher Ausreißer vorgeschlagen, wenn mindestens eine der folgenden Bedingungen erfüllt ist:
+
+```text
+- average_similarity_to_same_person < outlier_similarity_threshold
+- similarity_to_centroid < centroid_threshold
+- nearest_other_person_score > similarity_to_own_person + conflict_margin
+- quality_score < min_reference_quality
+```
+
+Startwerte, konfigurierbar:
+
+| Parameter | Startwert | Bedeutung |
+|---|---:|---|
+| `outlier_similarity_threshold` | `0.35` | unterhalb davon auffällig innerhalb derselben Person |
+| `centroid_threshold` | `0.40` | unterhalb davon schwacher Bezug zum Personenprofil |
+| `conflict_margin` | `0.05` | andere Person ist merklich ähnlicher |
+| `min_reference_quality` | optional | nur nutzen, wenn Quality-Score belastbar ist |
+
+Die Werte sind Startwerte und müssen anhand der eigenen Photos-Bibliothek kalibriert werden.
+
+### Nutzung beim Profilaufbau
+
+Beim Profilaufbau wird unterschieden:
+
+```text
+normal / confirmed: darf in das Profil einfließen
+suspected: standardmäßig aus Profil ausschließen, aber in Fundliste anzeigen
+excluded: nicht in das Profil aufnehmen
+needs_review: je nach Einstellung ausschließen oder mit geringerem Gewicht verwenden
+```
+
+Empfohlener Default:
+
+```text
+Mögliche Ausreißer aus dem Profil ausschließen.
+Fundliste erzeugen.
+Keine Änderung in Synology Photos.
+```
+
+### API-Entwurf
+
+```http
+POST /api/recognition/outliers/analyze
+```
+
+```json
+{
+  "source": "photos_person_faces",
+  "min_faces_per_person": 3,
+  "outlier_similarity_threshold": 0.35,
+  "centroid_threshold": 0.40,
+  "conflict_margin": 0.05,
+  "include_hidden_persons": false,
+  "include_unnamed_persons": false
+}
+```
+
+```http
+GET /api/recognition/outliers?job_id=...
+```
+
+```json
+{
+  "items": [
+    {
+      "outlier_id": 1001,
+      "person_id": 19431,
+      "person_name": "Bea",
+      "face_id": 66485,
+      "image_id": 76935,
+      "file_path": "/volume1/photo/Benno/2025/example.jpg",
+      "average_similarity": 0.28,
+      "similarity_to_centroid": 0.31,
+      "nearest_other_person_id": 19432,
+      "nearest_other_person_name": "Asta",
+      "nearest_other_person_score": 0.49,
+      "reason": "nearest_other_person_higher",
+      "review_state": "suspected",
+      "action": "exclude_from_profile"
+    }
+  ]
+}
+```
+
+```http
+POST /api/recognition/outliers/review
+```
+
+```json
+{
+  "outlier_id": 1001,
+  "review_state": "excluded",
+  "action": "exclude_from_profile"
+}
+```
+
+### Pseudocode
 
 ```python
-score = max(cosine_similarity(candidate, cluster_centroid) for cluster in person.clusters)
+def analyze_reference_outliers(person_profiles):
+    outliers = []
+
+    for profile in person_profiles:
+        embeddings = profile.reference_embeddings
+        if len(embeddings) < 3:
+            continue
+
+        for embedding in embeddings:
+            same_person_score = average_similarity(
+                embedding,
+                embeddings,
+                exclude_self=True,
+            )
+            centroid_score = cosine_similarity(
+                embedding,
+                profile.centroid_embedding,
+            )
+            nearest_other = matcher.find_nearest_other_person(
+                embedding,
+                profile.person_id,
+            )
+
+            reason = decide_outlier_reason(
+                same_person_score=same_person_score,
+                centroid_score=centroid_score,
+                nearest_other=nearest_other,
+            )
+
+            if reason:
+                outliers.append(create_outlier_item(embedding, profile, reason))
+
+    return outlier_repository.create_job(outliers)
 ```
 
 ---
@@ -492,7 +705,7 @@ Startwerte, die in der UI konfigurierbar sein müssen:
 | unklar | `best_score >= 0.45` aber `margin < 0.04` |
 | ablehnen | `best_score < 0.45` |
 
-Die Werte sind bewusst konservativ und müssen mit den eigenen Photos-Daten kalibriert werden.
+Die Werte sind konservative Startwerte und müssen mit den eigenen Photos-Daten kalibriert werden.
 
 ---
 
@@ -521,15 +734,7 @@ Ausreißer: 3
 Profilqualität: gut
 ```
 
-Ausreißer dürfen nicht gelöscht werden. Sie werden nur für das Wiedererkennungsprofil ausgeschlossen.
-
-### Manuelles Ausschließen
-
-```text
-[ ] Dieses Referenzgesicht für Wiedererkennung verwenden
-```
-
-Das ist wichtig, wenn Photos einer Person versehentlich ein falsches Gesicht zugeordnet hat.
+Ausreißer dürfen nicht gelöscht werden. Sie werden nur für das Wiedererkennungsprofil ausgeschlossen oder zur Prüfung markiert.
 
 ---
 
@@ -610,6 +815,27 @@ Aktion:
 [Cache verwerfen]
 ```
 
+### Referenz-Ausreißer prüfen
+
+```text
+Bereinigung → Gesichtswiedererkennung aufbauen → Referenz-Ausreißer prüfen
+
+Prüfung:
+[x] mögliche falsche Photos-Zuordnungen suchen
+[x] schlechte Referenzgesichter markieren
+[x] Ausreißer beim Profilaufbau ausschließen
+
+Schwellwerte:
+Min. Similarity zur eigenen Person: [0.35]
+Min. Similarity zum Centroid: [0.40]
+Konfliktabstand zu anderer Person: [0.05]
+
+Aktionen:
+[Fundliste erzeugen]
+[Markierte aus Profil ausschließen]
+[Als geprüft markieren]
+```
+
 ### Unbekannte Gesichter prüfen
 
 ```text
@@ -658,6 +884,7 @@ locked         # darf nicht automatisch geschrieben werden
 
 ```text
 - Vorschläge anzeigen
+- Fundlisten anzeigen
 - manuell auswählen
 - optional später nach Photos schreiben
 ```
@@ -676,19 +903,7 @@ Nicht erlaubt in Phase 2:
 - neue Person automatisch anlegen
 - vorhandene Person automatisch zusammenführen
 - manuell gesetzte Zuordnung überschreiben
-```
-
-### Phase 3: halbautomatische Massenübernahme
-
-Nur mit starken Grenzen:
-
-```text
-- nur sichere Vorschläge
-- Mindestscore erfüllt
-- ausreichender Abstand zum zweitbesten Treffer
-- keine Konflikte
-- Protokoll aktiviert
-- Rückgängig möglich
+- Referenz-Ausreißer automatisch aus Photos entfernen
 ```
 
 ---
@@ -819,7 +1034,8 @@ def build_person_profiles(config):
             )
             embeddings.append(embedding)
 
-        valid_embeddings, outliers = remove_outliers(embeddings, config)
+        outliers = reference_outlier_service.analyze(person, embeddings)
+        valid_embeddings = reference_outlier_service.filter_for_profile(embeddings, outliers)
 
         if len(valid_embeddings) < config.min_faces_per_person:
             profile_quality = "disabled"
@@ -887,6 +1103,7 @@ def apply_recognition_suggestions(job_id, selected_suggestion_ids):
 - Keine vorhandene manuelle Zuordnung überschreiben.
 - Unklare Vorschläge bleiben unselected oder needs_review.
 - Bei ähnlichem Score zu mehreren Personen wird der Vorschlag als ambiguous markiert.
+- Referenz-Ausreißer werden nicht automatisch in Photos geändert.
 - Alle Schreibvorgänge werden protokolliert.
 ```
 
@@ -921,6 +1138,7 @@ Besonders wichtig ist die Wiederverwendung des Matchings zwischen Photos-Rahmen 
 - Embeddings cachen
 - Profile nur neu berechnen, wenn Referenzfaces geändert wurden
 - Unknown-Faces paginiert analysieren
+- Ausreißerprüfung pro Person bündeln
 - Job-System mit Fortschritt verwenden
 - NAS-Hardware schonen
 ```
@@ -941,7 +1159,7 @@ Niedrige Priorität verwenden: [x]
 ### Vollständiger Neuaufbau
 
 ```text
-Alle Photos-Personen → alle Referenzgesichter → alle Embeddings prüfen → Profile neu bilden
+Alle Photos-Personen → alle Referenzgesichter → alle Embeddings prüfen → Ausreißer prüfen → Profile neu bilden
 ```
 
 ### Inkrementeller Neuaufbau
@@ -953,6 +1171,7 @@ Nur Personen neu berechnen, bei denen:
 - Person umbenannt wurde
 - Face-Rahmen geändert wurde
 - Modell/Parameter geändert wurden
+- Ausreißer-Review geändert wurde
 ```
 
 ### Cache behalten oder verwerfen
@@ -960,6 +1179,7 @@ Nur Personen neu berechnen, bei denen:
 ```text
 [ ] Embedding-Cache behalten
 [ ] Personenprofile neu berechnen
+[ ] Ausreißerprüfung neu berechnen
 [ ] Embedding-Cache vollständig verwerfen
 ```
 
@@ -977,6 +1197,16 @@ Nur Personen neu berechnen, bei denen:
 - Centroid je Person berechnen
 - Profilqualität anzeigen
 - keine Schreiboperation
+```
+
+### Phase 1b: Referenz-Ausreißer prüfen
+
+```text
+- paarweise Similarity je Person berechnen
+- mögliche falsche Photos-Zuordnungen erkennen
+- Fundliste erzeugen
+- Ausreißer nicht automatisch in Photos ändern
+- Ausschluss einzelner Referenzfaces nur für internes Profil erlauben
 ```
 
 ### Phase 2: Vorschläge für unbekannte Photos-Gesichter
@@ -1001,7 +1231,7 @@ Nur Personen neu berechnen, bei denen:
 ### Phase 4: Verbesserung der Profilqualität
 
 ```text
-- Outlier-UI
+- Outlier-UI erweitern
 - manuelles Ausschließen einzelner Referenzfaces
 - Multi-Cluster pro Person
 - Kalibrierung der Schwellwerte
@@ -1025,10 +1255,12 @@ Die erste Version sollte streng konservativ sein:
 ```text
 Photos-Personen sind die einzige Referenzquelle.
 InsightFace erzeugt Embeddings für bekannte Photos-Gesichter.
+Mögliche Ausreißer werden als eigene Fundliste angezeigt.
+Ausreißer werden nur intern aus Profilen ausgeschlossen, nicht automatisch in Photos geändert.
 Daraus werden Personenprofile gebildet.
 Unbekannte Photos-Gesichter werden gegen diese Profile verglichen.
 Das Paket erzeugt nur Vorschläge.
 Geschrieben wird erst nach expliziter Auswahl.
 ```
 
-Damit entsteht eine kontrollierbare Wiedererkennung, ohne externe Metadaten oder automatische Personenanlage einzubeziehen.
+Damit entsteht eine kontrollierbare Wiedererkennung, ohne externe Metadaten, automatische Personenanlage oder automatische Korrekturen an Synology Photos einzubeziehen.
