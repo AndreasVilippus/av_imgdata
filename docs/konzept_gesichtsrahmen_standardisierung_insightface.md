@@ -300,6 +300,146 @@ InsightFace ist die geometrische Referenz. Bestehende Namen und Personen-Zuordnu
 
 ---
 
+## InsightFace-Erkennungsparameter
+
+InsightFace soll nicht nur als feste Erkennung mit einem hart codierten Standard laufen. Die Erkennungsparameter müssen in der Bereinigung einstellbar sein, weil sie direkten Einfluss darauf haben, ob kleine oder randnahe Gesichter gefunden werden.
+
+Der relevante Parameter ist insbesondere `det_size` aus `FaceAnalysis.prepare(...)`. Im InsightFace-Code wird `prepare(ctx_id, det_thresh=0.5, det_size=None)` verwendet. Wenn `det_size` automatisch bzw. leer ist, werden im aktuellen Code Default-Detektionsgrößen von `(128, 128)` und `(640, 640)` gesetzt. `det_thresh` steht dort standardmäßig auf `0.5`.
+
+### UI-Option: Detektionsgröße
+
+```text
+InsightFace-Erkennung
+Detektionsgröße:
+(x) Standard / automatisch
+( ) 640 × 640 – normal
+( ) 1280 × 1280 – kleine Gesichter suchen
+( ) Benutzerdefiniert: [____] × [____]
+
+Schwellwert det_thresh: [0.50]
+Max. Gesichter pro Bild: [0 = unbegrenzt]
+```
+
+Empfohlene Profile:
+
+| Profil | `det_size` | Zweck | Hinweis |
+|---|---:|---|---|
+| Automatisch | `None` | InsightFace-Default | nutzt interne Defaults |
+| Standard | `(640, 640)` | normale Erkennung | guter Default für Bereinigung |
+| Kleine Gesichter | `(1280, 1280)` | Gruppenbilder, kleine Gesichter, Hintergrundpersonen | deutlich langsamer |
+| Schnelltest | `(320, 320)` | schnelle Vorprüfung | kann kleine Gesichter übersehen |
+| Benutzerdefiniert | frei | Tests/Expertenmodus | Werte validieren |
+
+`(640, 640)` sollte als normaler Default für gezielte Paketläufe angeboten werden. `(1280, 1280)` sollte als auswählbares Profil vorhanden sein, wenn kleine Gesichter gesucht werden sollen. Für NAS-Hardware muss die UI deutlich machen, dass größere Detektionsgrößen mehr RAM und CPU-Zeit benötigen.
+
+### Mindestgesichtsgröße
+
+Zusätzlich zur Detektionsgröße soll das Paket eine eigene Mindestgesichtsgröße filtern können. Diese Mindestgröße ist kein Ersatz für `det_size`, sondern ein Nachfilter auf erkannte Bounding Boxes.
+
+```text
+Mindestgesichtsgröße:
+[ ] keine Mindestgröße
+[x] Mindestbreite relativ zum Bild: [1.5] %
+[x] Mindesthöhe relativ zum Bild:  [1.5] %
+[ ] Mindestfläche relativ zum Bild: [0.03] %
+```
+
+Interne Konfiguration:
+
+```json
+{
+  "insightface": {
+    "det_size": [640, 640],
+    "det_thresh": 0.5,
+    "max_num": 0,
+    "min_face_width_ratio": 0.015,
+    "min_face_height_ratio": 0.015,
+    "min_face_area_ratio": null
+  }
+}
+```
+
+Für die Suche nach kleinen oder fehlenden Gesichtern sollte das Profil `small_faces` verwendet werden können:
+
+```json
+{
+  "insightface_profile": "small_faces",
+  "det_size": [1280, 1280],
+  "det_thresh": 0.5,
+  "min_face_width_ratio": 0.005,
+  "min_face_height_ratio": 0.005
+}
+```
+
+### Bedeutung für die Suche nach fehlenden Gesichtern
+
+Die Detektionsgröße muss nicht nur bei der Standardisierung vorhandener Rahmen, sondern auch bei der Suche nach fehlenden Gesichtern verfügbar sein.
+
+Beispielmodus:
+
+```text
+Bereinigung → Fehlende Gesichter suchen
+
+Quelle:
+[x] Synology Photos vorhandene Gesichter
+[x] XMP vorhandene Gesichter
+[x] InsightFace neu erkennen
+
+InsightFace-Profil:
+( ) Standard 640 × 640
+(x) Kleine Gesichter 1280 × 1280
+( ) Benutzerdefiniert
+
+Ergebnis:
+[ ] Nur Gesichter zeigen, die in Photos fehlen
+[ ] Nur Gesichter zeigen, die in XMP fehlen
+[ ] Alle InsightFace-Gesichter ohne Match anzeigen
+```
+
+Ein gefundenes InsightFace-Gesicht gilt als „fehlend“, wenn es keinen ausreichend guten Match gegen bestehende Photos- oder XMP-Rahmen hat.
+
+Vorschlagslogik:
+
+```text
+InsightFace-Gesicht erkannt
+→ gegen Photos-Rahmen matchen
+→ gegen XMP-Rahmen matchen
+→ wenn kein Match >= Mindest-Score:
+   Vorschlag „fehlendes Gesicht“ erzeugen
+```
+
+Dabei gelten dieselben Sicherheitsregeln wie bei der Standardisierung:
+
+```text
+- keine automatische Schreiboperation ohne Vorschau
+- Einzel- und Mehrfachauswahl vor dem Schreiben
+- Mindest-Score und Konfliktprüfung
+- Zielauswahl Photos/XMP
+- Backup und Änderungsprotokoll
+```
+
+### Cache-Auswirkung
+
+`det_size`, `det_thresh`, `max_num` und Mindestgrößenfilter müssen Teil des Cache-Keys sein. Eine Erkennung mit `(640, 640)` darf nicht als Ergebnis für `(1280, 1280)` wiederverwendet werden.
+
+Cache-Key:
+
+```text
+file_path
+file_mtime
+file_size
+model_name
+model_version
+det_size
+det_thresh
+max_num
+min_face_width_ratio
+min_face_height_ratio
+min_face_area_ratio
+```
+
+---
+
 ## Optionen für Position und Größe der Rahmen
 
 Es sollen mehrere Strategien verfügbar sein, da unterschiedliche Systeme unterschiedlich große oder unterschiedlich zentrierte Rahmen bevorzugen.
@@ -587,14 +727,21 @@ candidates = repository.find_images(
 ### Schritt 3: InsightFace-Erkennung
 
 ```python
-detections = insightface.detect_faces(file_path)
+detections = insightface.detect_faces(
+    file_path,
+    det_size=config.insightface.det_size,
+    det_thresh=config.insightface.det_thresh,
+    max_num=config.insightface.max_num,
+    min_face_width_ratio=config.insightface.min_face_width_ratio,
+    min_face_height_ratio=config.insightface.min_face_height_ratio,
+)
 ```
 
 Optimierung:
 
 ```text
 - nicht erneut erkennen, wenn Datei unverändert und Ergebnis im Cache liegt
-- Cache-Key aus Dateipfad, Größe, mtime, Modellversion
+- Cache-Key aus Dateipfad, Größe, mtime, Modellversion und InsightFace-Erkennungsparametern
 - Batch-Verarbeitung
 - Job-System, damit die UI nicht blockiert
 ```
@@ -704,6 +851,14 @@ Payload:
   "include_unknown_origin": false,
   "replace_selection_mode": "safe_matches",
   "frame_profile": "photos_compatible",
+  "insightface_profile": "standard",
+  "insightface": {
+    "det_size": [640, 640],
+    "det_thresh": 0.5,
+    "max_num": 0,
+    "min_face_width_ratio": 0.015,
+    "min_face_height_ratio": 0.015
+  },
   "mode": "preview"
 }
 ```
@@ -811,6 +966,14 @@ Rahmenstrategie
 ( ) bestehende Rahmen nur korrigieren
 ( ) Benutzerdefiniert
 
+InsightFace-Erkennung
+(x) Standard / automatisch
+( ) 640 × 640 – normal
+( ) 1280 × 1280 – kleine Gesichter suchen
+( ) Benutzerdefiniert
+Schwellwert det_thresh: [0.50]
+Mindestgesichtsgröße: [1.5] % Breite/Höhe
+
 Automatik
 [x] Nur sichere Treffer automatisch auswählen
 Mindest-Score: [0.80]
@@ -904,9 +1067,15 @@ CREATE TABLE insightface_detection_cache (
     file_size INTEGER NOT NULL,
     model_name TEXT NOT NULL,
     model_version TEXT NOT NULL,
+    det_size TEXT NOT NULL,
+    det_thresh REAL NOT NULL,
+    max_num INTEGER NOT NULL,
+    min_face_width_ratio REAL,
+    min_face_height_ratio REAL,
+    min_face_area_ratio REAL,
     detections_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    UNIQUE(file_path, file_mtime, file_size, model_name, model_version)
+    UNIQUE(file_path, file_mtime, file_size, model_name, model_version, det_size, det_thresh, max_num, min_face_width_ratio, min_face_height_ratio, min_face_area_ratio)
 );
 ```
 
@@ -978,6 +1147,8 @@ Quellen: Photos + XMP + InsightFace
 Ziel: keine Änderung
 Zeitraum: letzte 30 Tage
 Rahmenprofil: Photos-kompatibel
+InsightFace-Profil: Standard / 640 × 640
+Mindestgesichtsgröße: 1.5 % Breite/Höhe
 Mindest-Score: 0.80
 Automatisch ändern: nein
 Automatisch vorauswählen: nur sichere Matches
@@ -1181,6 +1352,7 @@ Gegenmaßnahmen:
 - Normalisierung aller Rahmen auf x/y/w/h
 - Matching per IoU + Mittelpunktabstand
 - Anzeige der Abweichungen
+- InsightFace-Erkennungsprofil `standard` / `small_faces`
 - Einzel- und Mehrfachauswahl in der Vorschau
 ```
 
@@ -1211,6 +1383,7 @@ Gegenmaßnahmen:
 - eingebettetes XMP
 - Profile pro Zielsystem
 - Batch-Jobs mit Fortschritt
+- Suche nach fehlenden Gesichtern mit wählbarer `det_size`
 ```
 
 ---
