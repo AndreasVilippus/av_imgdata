@@ -1,6 +1,7 @@
 {
   "photos": {
-    "MAX_PHOTOS_PERSONS": 5000
+    "MAX_PHOTOS_PERSONS": 5000,
+    "REINDEX_MISSING_ITEMS": false
   },
   "face_match": {
     "FILE_MATCH_SOURCE_SCOPE": "both",
