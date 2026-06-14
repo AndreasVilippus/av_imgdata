@@ -12,7 +12,29 @@ export default {
 			cleanupProgress: {},
 			cleanupProgressTimer: null,
 			cleanupProgressRequestId: 0,
+			faceFrameOptions: {
+				include_metadata: true,
+				include_photos: true,
+				profile: 'normal',
+				changed_since_days: 0,
+				det_size: [640, 640],
+				det_thresh: 0.5,
+				max_num: 0,
+				min_width_ratio: 0,
+				min_height_ratio: 0,
+				min_area_ratio: 0,
+			},
+			faceFrameFindings: [],
+			faceFrameFindingsLoading: false,
 		};
+	},
+	watch: {
+		selectedCleanupAction(value) {
+			this.refreshCleanupSessionState();
+			if (value === 'standardize_face_frames') {
+				this.fetchFaceFrameFindings();
+			}
+		},
 	},
 	computed: {
 		cleanupPrimaryButtonLabel() {
@@ -31,6 +53,19 @@ export default {
 		this.stopCleanupProgressPolling();
 	},
 	methods: {
+		updateFaceFrameOption(key, value) {
+			this.faceFrameOptions = {
+				...this.faceFrameOptions,
+				[key]: value,
+			};
+		},
+		updateFaceFrameDetSize(index, value) {
+			const detSize = Array.isArray(this.faceFrameOptions.det_size)
+				? [...this.faceFrameOptions.det_size]
+				: [640, 640];
+			detSize[index] = value;
+			this.updateFaceFrameOption('det_size', detSize);
+		},
 		getCleanupStatusCounterLabel(counter) {
 			if (!counter || typeof counter !== 'object') {
 				return '';
@@ -171,6 +206,9 @@ export default {
 				if (!progress.running) {
 					this.cleanupLoading = false;
 					this.stopCleanupProgressPolling();
+					if (this.selectedCleanupAction === 'standardize_face_frames') {
+						this.fetchFaceFrameFindings();
+					}
 				}
 				return progress;
 			} catch (err) {
@@ -222,6 +260,7 @@ export default {
 				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_start', {
 					action: this.selectedCleanupAction,
 					targets: this.selectedCleanupTargets,
+					options: this.selectedCleanupAction === 'standardize_face_frames' ? this.faceFrameOptions : {},
 				});
 				const progress = this.getResponseData(data);
 				this.applyCleanupProgress(progress);
@@ -239,6 +278,18 @@ export default {
 					message: `Error: ${err.message}`,
 				};
 				this.cleanupStatusMessage = `Error: ${err.message}`;
+			}
+		},
+		async fetchFaceFrameFindings() {
+			this.faceFrameFindingsLoading = true;
+			try {
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_face_frames_findings', {}, { resume: false, requireSynoToken: false });
+				const payload = this.getResponseData(data);
+				this.faceFrameFindings = payload && Array.isArray(payload.entries) ? payload.entries : [];
+			} catch (err) {
+				this.faceFrameFindings = [];
+			} finally {
+				this.faceFrameFindingsLoading = false;
 			}
 		},
 		async stopCleanupRun() {

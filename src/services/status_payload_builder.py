@@ -3,7 +3,13 @@ from typing import Any, Dict, List, Optional
 
 
 class StatusPayloadBuilder:
-    CHECK_TYPES = {"dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts"}
+    CHECK_TYPES = {
+        "dimension_issues",
+        "duplicate_faces",
+        "position_deviations",
+        "name_conflicts",
+        "face_frame_standardization",
+    }
 
     @classmethod
     def normalize_checks_type(cls, check_type: Any) -> str:

@@ -63,11 +63,30 @@ class OpenCvHaarFaceDetector:
 
 
 class InsightFaceDetector:
-    def __init__(self, model_name: str = "", model_root: Optional[Path] = None, ctx_id: int = -1, det_size: Tuple[int, int] = (640, 640)):
+    def __init__(
+        self,
+        model_name: str = "",
+        model_root: Optional[Path] = None,
+        ctx_id: int = -1,
+        det_size: Tuple[int, int] = (640, 640),
+        det_thresh: float = 0.5,
+        max_num: int = 0,
+        min_width_ratio: float = 0.0,
+        min_height_ratio: float = 0.0,
+        min_area_ratio: float = 0.0,
+        min_face_width_ratio: Optional[float] = None,
+        min_face_height_ratio: Optional[float] = None,
+        min_face_area_ratio: Optional[float] = None,
+    ):
         self.model_name = str(model_name or "").strip()
         self.model_root = Path(model_root) if model_root else None
         self.ctx_id = ctx_id
         self.det_size = det_size
+        self.det_thresh = max(0.0, min(1.0, float(det_thresh)))
+        self.max_num = max(0, int(max_num))
+        self.min_width_ratio = max(0.0, float(min_face_width_ratio if min_face_width_ratio is not None else min_width_ratio))
+        self.min_height_ratio = max(0.0, float(min_face_height_ratio if min_face_height_ratio is not None else min_height_ratio))
+        self.min_area_ratio = max(0.0, float(min_face_area_ratio if min_face_area_ratio is not None else min_area_ratio))
         self._app = None
 
     @staticmethod
@@ -150,14 +169,27 @@ class InsightFaceDetector:
         except Exception as exc:
             raise FaceDetectorUnavailable(self._format_app_init_error(exc)) from exc
         try:
-            app.prepare(ctx_id=self.ctx_id, det_size=self.det_size)
+            app.prepare(ctx_id=self.ctx_id, det_size=self.det_size, det_thresh=self.det_thresh)
         except TypeError as exc:
-            if "det_size" not in str(exc):
+            if "det_thresh" in str(exc):
+                try:
+                    app.prepare(ctx_id=self.ctx_id, det_size=self.det_size)
+                except TypeError as det_size_exc:
+                    if "det_size" not in str(det_size_exc):
+                        raise FaceDetectorUnavailable(self._format_app_prepare_error(det_size_exc)) from det_size_exc
+                    try:
+                        app.prepare(ctx_id=self.ctx_id)
+                    except Exception as fallback_exc:
+                        raise FaceDetectorUnavailable(self._format_app_prepare_error(fallback_exc)) from fallback_exc
+                except Exception as fallback_exc:
+                    raise FaceDetectorUnavailable(self._format_app_prepare_error(fallback_exc)) from fallback_exc
+            elif "det_size" in str(exc):
+                try:
+                    app.prepare(ctx_id=self.ctx_id)
+                except Exception as fallback_exc:
+                    raise FaceDetectorUnavailable(self._format_app_prepare_error(fallback_exc)) from fallback_exc
+            else:
                 raise FaceDetectorUnavailable(self._format_app_prepare_error(exc)) from exc
-            try:
-                app.prepare(ctx_id=self.ctx_id)
-            except Exception as fallback_exc:
-                raise FaceDetectorUnavailable(self._format_app_prepare_error(fallback_exc)) from fallback_exc
         except Exception as exc:
             raise FaceDetectorUnavailable(self._format_app_prepare_error(exc)) from exc
         self._app = app
@@ -190,7 +222,13 @@ class InsightFaceDetector:
         height, width = image.shape[:2]
         app = self._load_app()
         faces = []
-        for detected in app.get(image):
+        try:
+            detected_faces = app.get(image, max_num=self.max_num)
+        except TypeError as exc:
+            if "max_num" not in str(exc):
+                raise
+            detected_faces = app.get(image)
+        for detected in detected_faces:
             bbox = getattr(detected, "bbox", None)
             if bbox is None or len(bbox) < 4:
                 continue
@@ -201,6 +239,12 @@ class InsightFaceDetector:
             if x2 <= x1 or y2 <= y1:
                 continue
             score = getattr(detected, "det_score", None)
+            if score is not None and float(score) < self.det_thresh:
+                continue
+            if ((x2 - x1) / width) < self.min_width_ratio or ((y2 - y1) / height) < self.min_height_ratio:
+                continue
+            if (((x2 - x1) * (y2 - y1)) / (width * height)) < self.min_area_ratio:
+                continue
             face = {
                 "x": int(round(x1)),
                 "y": int(round(y1)),

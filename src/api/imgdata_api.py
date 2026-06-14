@@ -1868,6 +1868,7 @@ async def cleanup_start(request: Request):
     body = await _read_request_body(request)
     action = body.get("action", "normalize_names")
     targets = body.get("targets", [])
+    options = body.get("options", {})
 
     try:
         result = await _run_backend_call(
@@ -1877,6 +1878,7 @@ async def cleanup_start(request: Request):
                 base_url=session_ctx["base_url"],
                 action=str(action or "normalize_names"),
                 targets=targets if isinstance(targets, list) else [],
+                options=options if isinstance(options, dict) else {},
             ),
         )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
@@ -1886,6 +1888,17 @@ async def cleanup_start(request: Request):
         return JSONResponse(_operation_exception_response(exc, message="cleanup_start_failed"))
 
     return JSONResponse({"success": True, "data": result})
+
+
+@router.post("/cleanup_face_frames_findings")
+async def cleanup_face_frames_findings(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+    return JSONResponse({
+        "success": True,
+        "data": IMGDATA.face_frame_standardization.findings(),
+    })
 
 
 @router.post("/cleanup_progress")

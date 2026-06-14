@@ -8,9 +8,10 @@
 			<div class="checks-actions-row checks-actions-row-selects">
 				<select v-model="vm.selectedCleanupAction" class="face-match-select" :disabled="vm.cleanupLoading">
 					<option value="normalize_names">{{ vm.$avt('cleanup:action_normalize_names', 'Adjust names by reference list') }}</option>
+					<option value="standardize_face_frames">{{ vm.$avt('cleanup:action_standardize_face_frames', 'Standardize face frames') }}</option>
 				</select>
 			</div>
-			<div class="checks-actions-row checks-actions-row-switches">
+			<div v-if="vm.selectedCleanupAction === 'normalize_names'" class="checks-actions-row checks-actions-row-switches">
 				<label v-for="target in ['ACD', 'MICROSOFT', 'MWG_REGIONS']" :key="`cleanup-target-${target}`" class="face-match-switch">
 					<input v-model="vm.cleanupTargets[target]" type="checkbox" :disabled="vm.cleanupLoading" />
 					<span class="face-match-switch-slider"></span>
@@ -25,6 +26,7 @@
 				</div>
 			</div>
 		</div>
+		<FaceFrameStandardizationOptions v-if="vm.selectedCleanupAction === 'standardize_face_frames'" :vm="vm" />
 		<div class="face-match-status-card face-match-status-card-action">
 			<div class="face-match-status-head">
 				<div class="sm-section-title">{{ vm.$avt('cleanup:status_title', 'Status') }}</div>
@@ -61,16 +63,21 @@
 				<span v-if="vm.cleanupProgress.warning">{{ vm.$avt(vm.cleanupProgress.warning, 'Warning') }}</span>
 			</div>
 		</div>
+		<FaceFrameFindingsTable v-if="vm.selectedCleanupAction === 'standardize_face_frames'" :vm="vm" />
 	</section>
 </template>
 
 <script>
 import ProgressOverviewCard from '../components/ProgressOverviewCard.vue';
+import FaceFrameStandardizationOptions from '../components/cleanup/FaceFrameStandardizationOptions.vue';
+import FaceFrameFindingsTable from '../components/cleanup/FaceFrameFindingsTable.vue';
 
 export default {
 	name: 'CleanupView',
 	components: {
 		ProgressOverviewCard,
+		FaceFrameStandardizationOptions,
+		FaceFrameFindingsTable,
 	},
 	props: {
 		vm: {

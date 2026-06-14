@@ -69,7 +69,7 @@ class FaceDetectorTests(unittest.TestCase):
         self.assertEqual(calls[1][0], "init")
         self.assertEqual(calls[1][1]["name"], "buffalo_l")
         self.assertIn("root", calls[1][1])
-        self.assertEqual(calls[2], ("prepare", {"ctx_id": -1, "det_size": (640, 640)}))
+        self.assertEqual(calls[2], ("prepare", {"ctx_id": -1, "det_size": (640, 640), "det_thresh": 0.5}))
 
     def test_insightface_detector_uses_package_default_when_model_name_is_empty(self):
         calls = []
@@ -123,8 +123,35 @@ class FaceDetectorTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["name"], "buffalo_l")
         self.assertEqual(calls[0][1]["allowed_modules"], ["detection"])
         self.assertIn("root", calls[0][1])
-        self.assertEqual(calls[1], ("prepare", {"ctx_id": -1, "det_size": (640, 640)}))
+        self.assertEqual(calls[1], ("prepare", {"ctx_id": -1, "det_size": (640, 640), "det_thresh": 0.5}))
         self.assertEqual(calls[2], ("prepare", {"ctx_id": -1}))
+
+    def test_insightface_detector_retries_prepare_without_unsupported_det_thresh(self):
+        calls = []
+
+        class FaceAnalysisWithoutThreshold:
+            def __init__(self, **kwargs):
+                pass
+
+            def prepare(self, **kwargs):
+                calls.append(kwargs)
+                if "det_thresh" in kwargs:
+                    raise TypeError("prepare() got an unexpected keyword argument 'det_thresh'")
+
+        insightface_module = types.ModuleType("insightface")
+        insightface_app_module = types.ModuleType("insightface.app")
+        insightface_app_module.FaceAnalysis = FaceAnalysisWithoutThreshold
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.dict(sys.modules, {
+            "insightface": insightface_module,
+            "insightface.app": insightface_app_module,
+        }):
+            InsightFaceDetector(model_name="buffalo_l", model_root=Path(tmpdir), det_thresh=0.7)._load_app()
+
+        self.assertEqual(calls, [
+            {"ctx_id": -1, "det_size": (640, 640), "det_thresh": 0.7},
+            {"ctx_id": -1, "det_size": (640, 640)},
+        ])
 
     def test_insightface_detector_reports_empty_prepare_assertion_with_context(self):
         class BrokenFaceAnalysis:
@@ -183,6 +210,42 @@ class FaceDetectorTests(unittest.TestCase):
                 detector._validate_model_files()
 
         self.assertIn("no ONNX files found", str(ctx.exception))
+
+    def test_insightface_detector_filters_score_and_minimum_size(self):
+        class Image:
+            shape = (100, 200, 3)
+
+        class Detected:
+            def __init__(self, bbox, score):
+                self.bbox = bbox
+                self.det_score = score
+
+        class App:
+            def get(self, image, max_num=0):
+                self.max_num = max_num
+                return [
+                    Detected([20, 10, 80, 60], 0.9),
+                    Detected([1, 1, 5, 5], 0.95),
+                    Detected([100, 20, 180, 80], 0.2),
+                ]
+
+        cv2_module = types.ModuleType("cv2")
+        cv2_module.imread = lambda path: Image()
+        detector = InsightFaceDetector(
+            det_thresh=0.5,
+            max_num=7,
+            min_width_ratio=0.1,
+            min_height_ratio=0.1,
+            min_area_ratio=0.01,
+        )
+        detector._app = App()
+
+        with patch.dict(sys.modules, {"cv2": cv2_module}):
+            faces = detector.detect(Path("/tmp/test.jpg"))
+
+        self.assertEqual(len(faces), 1)
+        self.assertEqual(detector._app.max_num, 7)
+        self.assertEqual(faces[0]["score"], 0.9)
 
 
 if __name__ == "__main__":

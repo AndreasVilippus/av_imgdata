@@ -1,10 +1,15 @@
 from pytest import approx
 
 from services.bbox_normalizer import (
+    clamp_bbox,
     denormalize_xmp_face,
+    from_xywh,
     normalize_xmp_face,
+    scale_bbox_about_center,
+    to_xywh,
     to_display_face,
 )
+from models.bbox import BoundingBox
 
 
 def _face(*, x=0.25, y=0.35, w=0.2, h=0.1, orientation=1, source_format="MICROSOFT"):
@@ -101,3 +106,11 @@ def test_normalize_xmp_face_expected_coordinates_for_all_orientations():
             normalized["w"],
             normalized["h"],
         ) == approx(expected)
+
+
+def test_xywh_roundtrip_and_scaled_box_are_clamped():
+    box = from_xywh({"x": 0.5, "y": 0.5, "w": 0.4, "h": 0.2})
+
+    assert to_xywh(box) == approx({"x": 0.5, "y": 0.5, "w": 0.4, "h": 0.2})
+    assert scale_bbox_about_center(box, scale_x=4, scale_y=8) == BoundingBox(0.0, 0.0, 1.0, 1.0)
+    assert clamp_bbox(BoundingBox(-1, 0.2, 2, 0.8)) == BoundingBox(0.0, 0.2, 1.0, 0.8)

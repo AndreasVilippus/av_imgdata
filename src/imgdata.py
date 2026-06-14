@@ -33,6 +33,7 @@ from services.config_service import ConfigService
 from services.checks_workflow_service import ChecksWorkflowService
 from services.exiftool_service import ExifToolService
 from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
+from services.face_frame_standardization_service import FaceFrameStandardizationService
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
 from services.face_match_mutation_service import FaceMatchMutationService
@@ -174,6 +175,7 @@ class ImgDataService:
         )
         self.checks_workflow = ChecksWorkflowService(self, ImgDataOperationError)
         self.face_match_workflow = FaceMatchWorkflowService(self)
+        self.face_frame_standardization = FaceFrameStandardizationService(self)
     @staticmethod
     def _buildWriteConflictError(
         lock_key: str,
@@ -2043,7 +2045,13 @@ class ImgDataService:
     @staticmethod
     def _normalizeChecksType(check_type: Any) -> str:
         normalized = str(check_type or "dimension_issues").strip().lower()
-        if normalized not in {"dimension_issues", "duplicate_faces", "position_deviations", "name_conflicts"}:
+        if normalized not in {
+            "dimension_issues",
+            "duplicate_faces",
+            "position_deviations",
+            "name_conflicts",
+            "face_frame_standardization",
+        }:
             return "dimension_issues"
         return normalized
 
@@ -2427,7 +2435,7 @@ class ImgDataService:
     @staticmethod
     def _normalizeCleanupAction(action: Any) -> str:
         normalized = str(action or "normalize_names").strip().lower()
-        return normalized if normalized in {"normalize_names"} else "normalize_names"
+        return normalized if normalized in {"normalize_names", "standardize_face_frames"} else "normalize_names"
 
     @staticmethod
     def _normalizeCleanupTargets(targets: Any) -> List[str]:
@@ -9535,6 +9543,7 @@ class ImgDataService:
         base_url: str,
         action: str,
         targets: List[str],
+        options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         normalized_action = self._normalizeCleanupAction(action)
         normalized_targets = self._normalizeCleanupTargets(targets)
@@ -9547,6 +9556,13 @@ class ImgDataService:
             return self._buildStartBlockedByRunningOperationPayload(
                 running_operation,
                 requested_operation="cleanup",
+            )
+        if normalized_action == FaceFrameStandardizationService.ACTION:
+            return self.face_frame_standardization.start(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                options=options,
             )
 
         self._setCleanupProgressMessage(

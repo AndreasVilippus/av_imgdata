@@ -27,6 +27,70 @@ def from_photos(face_dict) -> BoundingBox:
     )
 
 
+def from_xywh(face_dict) -> BoundingBox:
+    center_x = float(face_dict["x"])
+    center_y = float(face_dict["y"])
+    width = float(face_dict["w"])
+    height = float(face_dict["h"])
+    return BoundingBox(
+        x1=center_x - (width / 2),
+        y1=center_y - (height / 2),
+        x2=center_x + (width / 2),
+        y2=center_y + (height / 2),
+    )
+
+
+def to_xywh(box: BoundingBox) -> dict:
+    center_x, center_y = box.center()
+    return {
+        "x": center_x,
+        "y": center_y,
+        "w": box.width(),
+        "h": box.height(),
+    }
+
+
+def to_bbox_dict(box: BoundingBox) -> dict:
+    return {
+        "x1": box.x1,
+        "y1": box.y1,
+        "x2": box.x2,
+        "y2": box.y2,
+    }
+
+
+def clamp_bbox(box: BoundingBox) -> BoundingBox:
+    return BoundingBox(
+        x1=max(0.0, min(1.0, box.x1)),
+        y1=max(0.0, min(1.0, box.y1)),
+        x2=max(0.0, min(1.0, box.x2)),
+        y2=max(0.0, min(1.0, box.y2)),
+    )
+
+
+def scale_bbox_about_center(
+    box: BoundingBox,
+    *,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    shift_x: float = 0.0,
+    shift_y: float = 0.0,
+) -> BoundingBox:
+    width = box.width()
+    height = box.height()
+    center_x, center_y = box.center()
+    center_x += float(shift_x) * width
+    center_y += float(shift_y) * height
+    target_width = width * max(0.0, float(scale_x))
+    target_height = height * max(0.0, float(scale_y))
+    return clamp_bbox(BoundingBox(
+        x1=center_x - (target_width / 2),
+        y1=center_y - (target_height / 2),
+        x2=center_x + (target_width / 2),
+        y2=center_y + (target_height / 2),
+    ))
+
+
 def normalize_xmp_face(face_dict) -> dict:
     face_dict = _as_face_dict(face_dict)
     center_x = face_dict["x"]
