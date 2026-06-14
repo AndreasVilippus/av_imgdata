@@ -10,23 +10,10 @@
 						<face-match-view v-if="selectedOption === 'face_match'" :vm="this" />
 						<checks-view v-if="selectedOption === 'checks'" :vm="this" />
 						<cleanup-view v-if="selectedOption === 'cleanup'" :vm="this" />
-						<music-ratings-view v-if="selectedOption === 'music_ratings'" :vm="this" />
 						<configuration-view v-if="selectedOption === 'configuration'" />
-						<external-libraries-view
-							v-if="selectedOption === 'external_libraries'"
-							:vm="this"
-							mode="info"
-						/>
-						<external-libraries-view
-							v-if="selectedOption === 'external_libraries_exiftool'"
-							:vm="this"
-							mode="config"
-						/>
-						<external-libraries-view
-							v-if="selectedOption === 'external_libraries_pip_packages'"
-							:vm="this"
-							mode="pip_packages"
-						/>
+						<external-libraries-view v-if="selectedOption === 'external_libraries'" :vm="this" mode="info" />
+						<external-libraries-view v-if="selectedOption === 'external_libraries_exiftool'" :vm="this" mode="config" />
+						<external-libraries-view v-if="selectedOption === 'external_libraries_pip_packages'" :vm="this" mode="pip_packages" />
 						<database-lists-view v-if="selectedOption === 'database_lists'" :vm="this" />
 					</main>
 				</div>
@@ -42,7 +29,6 @@ import cleanupMixin from './mixins/cleanupMixin';
 import databaseListsMixin from './mixins/databaseListsMixin';
 import externalLibrariesMixin from './mixins/externalLibrariesMixin';
 import faceMatchMixin from './mixins/faceMatchMixin';
-import musicRatingsMixin from './mixins/musicRatingsMixin';
 import statusMixin from './mixins/statusMixin';
 import { createBackendErrorFormatter } from './services/backend-error-formatter';
 import { createDsmApiClient } from './services/dsm-api-client';
@@ -53,11 +39,10 @@ import ConfigurationView from './views/ConfigurationView.vue';
 import DatabaseListsView from './views/DatabaseListsView.vue';
 import ExternalLibrariesView from './views/ExternalLibrariesView.vue';
 import FaceMatchView from './views/FaceMatchView.vue';
-import MusicRatingsView from './views/MusicRatingsView.vue';
 import StatusView from './views/StatusView.vue';
 
 export default {
-	mixins: [statusMixin, checksMixin, cleanupMixin, faceMatchMixin, externalLibrariesMixin, databaseListsMixin, musicRatingsMixin],
+	mixins: [statusMixin, checksMixin, cleanupMixin, faceMatchMixin, externalLibrariesMixin, databaseListsMixin],
 	components: {
 		AppSidebarNav,
 		ChecksView,
@@ -66,7 +51,6 @@ export default {
 		DatabaseListsView,
 		ExternalLibrariesView,
 		FaceMatchView,
-		MusicRatingsView,
 		StatusView,
 	},
 	data() {
@@ -83,15 +67,12 @@ export default {
 		this.dsmApiClient = createDsmApiClient(this);
 		this.runtimePolling = createRuntimePollingController(this);
 	},
-		methods: {
+	methods: {
 		close() {
 			this.$refs.appWindow.close();
 		},
 		resolveLocalIconUrl(filename) {
-			if (!filename) {
-				return '';
-			}
-			return `/webman/3rdparty/AV_ImgData/images/${filename}`;
+			return filename ? '/webman/3rdparty/AV_ImgData/images/' + filename : '';
 		},
 		selectContent(option) {
 			this.selectedOption = option;
@@ -110,9 +91,6 @@ export default {
 			}
 			if (selectedOption === 'cleanup') {
 				this.refreshCleanupSessionState();
-			}
-			if (selectedOption === 'music_ratings') {
-				this.loadMusicRatingsCapabilities();
 			}
 			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool' || selectedOption === 'external_libraries_pip_packages') {
 				this.loadExternalLibrariesConfig();
@@ -167,31 +145,13 @@ export default {
 			const entries = Object.entries(counterMap)
 				.filter(([, value]) => Number(value) > 0)
 				.sort((left, right) => String(left[0]).localeCompare(String(right[0])));
-			if (!entries.length) {
-				return '-';
-			}
-			return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
+			return entries.length ? entries.map(([key, value]) => `${key}: ${value}`).join(', ') : '-';
 		},
 		getSynoToken() {
 			return this.dsmApiClient.getSynoToken();
 		},
-		getPhotoThumbnailUrl(image) {
-			const itemId = image && image.id;
-			const thumbnail = (image && image.additional && image.additional.thumbnail)
-				|| (image && image.thumbnail);
-			const cacheKey = thumbnail && thumbnail.cache_key;
-			const synoToken = this.getSynoToken();
-			if (!itemId || !cacheKey || !synoToken) {
-				return '';
-			}
-
-			const params = new URLSearchParams();
-			params.set('id', String(itemId));
-			params.set('cache_key', `"${cacheKey}"`);
-			params.set('type', '"unit"');
-			params.set('size', '"sm"');
-			params.set('SynoToken', synoToken);
-			return `/synofoto/api/v2/t/Thumbnail/get?${params.toString()}`;
+		getPhotoThumbnailUrl() {
+			return '';
 		},
 	},
 };
