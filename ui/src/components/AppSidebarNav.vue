@@ -34,16 +34,6 @@
 			{{ $avt('nav:cleanup', 'Cleanup') }}
 		</button>
 		<div class="sm-nav-separator"></div>
-		<div class="sm-nav-group">{{ $avt('nav:group_music', 'Music') }}</div>
-		<button
-			class="sm-nav-item"
-			:class="{ active: selectedOption === 'music_ratings' }"
-			@click="$emit('select', 'music_ratings')"
-		>
-			<ModulesIcon class="sm-nav-icon" />
-			{{ $avt('nav:music_ratings', 'Ratings') }}
-		</button>
-		<div class="sm-nav-separator"></div>
 		<div class="sm-nav-group">{{ $avt('nav:group_settings', 'Settings / extensions') }}</div>
 		<button
 			class="sm-nav-item"
