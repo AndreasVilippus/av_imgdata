@@ -164,50 +164,6 @@ async def ping():
     }
 
 
-@router.post("/music_ratings_capabilities")
-async def music_ratings_capabilities(request: Request):
-    session_ctx, error_response = await _prepare_session_request(request)
-    if error_response:
-        return error_response
-    try:
-        result = await _run_backend_call(
-            lambda: IMGDATA.musicRatingsCapabilities(
-                user_key=session_ctx["user_key"],
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
-            )
-        )
-    except Exception as exc:
-        return _operation_exception_response(exc, message="music_ratings_capabilities_failed")
-    return {"success": True, "data": result}
-
-
-@router.post("/music_ratings_preview")
-async def music_ratings_preview(request: Request):
-    session_ctx, error_response = await _prepare_session_request(request)
-    if error_response:
-        return error_response
-    body = await _read_request_body(request)
-    try:
-        changed_since_days = max(0, int(body.get("changed_since_days") or 0))
-        limit = max(1, min(5000, int(body.get("limit") or 500)))
-    except (TypeError, ValueError):
-        return {"success": False, "error": {"code": 400, "message": "invalid_music_ratings_preview_options"}}
-    try:
-        result = await _run_backend_call(
-            lambda: IMGDATA.musicRatingsPreview(
-                user_key=session_ctx["user_key"],
-                cookies=session_ctx["cookies"],
-                base_url=session_ctx["base_url"],
-                changed_since_days=changed_since_days,
-                limit=limit,
-            )
-        )
-    except Exception as exc:
-        return _operation_exception_response(exc, message="music_ratings_preview_failed")
-    return {"success": True, "data": result}
-
-
 def _merge_cookie_sources(request_cookies: Dict[str, str], body_cookies: Dict[str, str]) -> Dict[str, str]:
     merged = dict(request_cookies)
     for key, value in body_cookies.items():

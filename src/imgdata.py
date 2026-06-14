@@ -41,7 +41,6 @@ from services.face_match_findings_service import FaceMatchFindingsService
 from services.face_match_workflow_service import FaceMatchWorkflowService
 from services.file_analysis_service import FileAnalysisService
 from services.name_mapping_service import NameMappingService
-from music.service import MusicRatingsService
 from av_imgdata.db.repositories.face_suppressions import FaceSuppressionRepository
 from services.runtime_operation_service import RuntimeOperationService
 from services.runtime_state_service import RuntimeStateService
@@ -153,7 +152,6 @@ class ImgDataService:
         self.files = FileHandler(self.config)
         self.metadata_parser = MetadataParser()
         self.name_mappings = NameMappingService()
-        self.music_ratings = MusicRatingsService(self.session_manager, self.config)
         self.face_suppressions = FaceSuppressionRepository(self.name_mappings._database)
         self.face_matcher = FaceMatcher()
         self.file_analysis = FileAnalysisService()
@@ -598,36 +596,6 @@ class ImgDataService:
             folder_name="photo",
         )
         return {"shared_folder": shared_folder or ""}
-
-    def musicRatingsCapabilities(
-        self,
-        *,
-        user_key: str,
-        cookies: Dict[str, str],
-        base_url: str,
-    ) -> Dict[str, Any]:
-        return self.music_ratings.capabilities(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-        )
-
-    def musicRatingsPreview(
-        self,
-        *,
-        user_key: str,
-        cookies: Dict[str, str],
-        base_url: str,
-        changed_since_days: int = 0,
-        limit: int = 500,
-    ) -> Dict[str, Any]:
-        return self.music_ratings.preview(
-            user_key=user_key,
-            cookies=cookies,
-            base_url=base_url,
-            changed_since_days=changed_since_days,
-            limit=limit,
-        )
 
     def exiftool_status(self) -> Dict[str, Any]:
         return self.exiftool.getStatus()
