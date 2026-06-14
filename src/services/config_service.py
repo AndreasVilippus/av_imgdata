@@ -55,21 +55,6 @@ class ConfigService:
                 "FILE_MATCH_SOURCE_SCOPE": "both",
                 "PERSON_SORT_ORDER": "id_desc",
             },
-            "music": {
-                "ENABLED": True,
-                "AUDIO_STATION": {
-                    "ALLOW_DATABASE_FALLBACK": False,
-                    "DRY_RUN_DEFAULT": True,
-                },
-                "FILES": {
-                    "SHARED_FOLDER_NAMES": ["music"],
-                    "AUDIO_EXTENSIONS": ["mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "aiff"],
-                },
-                "SCAN": {
-                    "CHANGED_SINCE_DAYS_DEFAULT": 0,
-                    "LIVE_WATCH_ENABLED": False,
-                },
-            },
             "pip_packages": {
                 "INSIGHTFACE": {
                     "ENABLED": False,
@@ -232,16 +217,6 @@ class ConfigService:
             minimum=1,
             maximum=300,
         )
-
-        music = config.get("music", {}) if isinstance(config.get("music"), dict) else {}
-        scan = music.get("SCAN", {}) if isinstance(music.get("SCAN"), dict) else {}
-        scan["CHANGED_SINCE_DAYS_DEFAULT"] = cls._clamp_int(
-            scan.get("CHANGED_SINCE_DAYS_DEFAULT"),
-            default=0,
-            minimum=0,
-            maximum=36500,
-        )
-        scan["LIVE_WATCH_ENABLED"] = bool(scan.get("LIVE_WATCH_ENABLED", False))
 
         photos = config.get("photos", {}) if isinstance(config.get("photos"), dict) else {}
         photos["REINDEX_MISSING_ITEMS"] = bool(photos.get("REINDEX_MISSING_ITEMS", False))
