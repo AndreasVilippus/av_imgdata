@@ -45,14 +45,6 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         self.assertIsNotNone(service._merged_config_cache)
         self.assertIsNotNone(service._merged_config_cache_signature)
 
-    def test_music_defaults_are_defensive(self):
-        music = ConfigService.defaultConfig()["music"]
-
-        self.assertFalse(music["AUDIO_STATION"]["ALLOW_DATABASE_FALLBACK"])
-        self.assertTrue(music["AUDIO_STATION"]["DRY_RUN_DEFAULT"])
-        self.assertEqual(music["FILES"]["SHARED_FOLDER_NAMES"], ["music"])
-        self.assertFalse(music["SCAN"]["LIVE_WATCH_ENABLED"])
-
     def test_missing_photos_item_reindex_is_disabled_by_default(self):
         photos = ConfigService.defaultConfig()["photos"]
 

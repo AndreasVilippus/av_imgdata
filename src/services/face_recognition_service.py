@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+import math
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from threading import Thread
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
+
+from services.bbox_normalizer import from_photos, to_bbox_dict
+from services.face_embedder import InsightFaceEmbedder
+
+
+class FaceRecognitionService:
+    ACTION_BUILD = "recognition_build_profiles"
+    ACTION_OUTLIERS = "recognition_check_reference_outliers"
+    ACTION_SUGGEST = "recognition_analyze_unknown_faces"
+    ACTIONS = {ACTION_BUILD, ACTION_OUTLIERS, ACTION_SUGGEST}
+    FINDING_PROFILES = "recognition_profiles"
+    FINDING_QUALITY = "recognition_profile_quality"
+    FINDING_OUTLIERS = "recognition_reference_outliers"
+    FINDING_SUGGESTIONS = "recognition_suggestions"
+    PROFILE_STATE_TYPE = "recognition_profiles"
+
+    def __init__(self, backend: Any):
+        self.backend = backend
+        self._embedder: Optional[InsightFaceEmbedder] = None
+        self._embedder_key = None
+        self._image_embedding_cache: Dict[str, List[Dict[str, Any]]] = {}
+
+    @staticmethod
+    def normalize_options(options: Any) -> Dict[str, Any]:
+        source = dict(options) if isinstance(options, dict) else {}
+        operation_mode = str(source.get("operation_mode") or "immediate").strip().lower()
+        if operation_mode not in {"immediate", "save_only", "findings"}:
+            operation_mode = "immediate"
+        selection_mode = str(source.get("selection_mode") or "review_all").strip().lower()
+        if selection_mode not in {"review_all", "safe_only", "exclude_confirmed"}:
+            selection_mode = "review_all"
+        det_size = source.get("det_size") if isinstance(source.get("det_size"), list) else [640, 640]
+        return {
+            "operation_mode": operation_mode,
+            "selection_mode": selection_mode,
+            "include_hidden_persons": bool(source.get("include_hidden_persons")),
+            "min_faces_per_person": max(2, int(source.get("min_faces_per_person") or 3)),
+            "exclude_outliers": bool(source.get("exclude_outliers", True)),
+            "rebuild_all": bool(source.get("rebuild_all")),
+            "changed_since_days": max(0, int(source.get("changed_since_days") or 0)),
+            "safe_score": max(0.0, min(1.0, float(source.get("safe_score", 0.55)))),
+            "review_score": max(0.0, min(1.0, float(source.get("review_score", 0.45)))),
+            "min_margin": max(0.0, min(1.0, float(source.get("min_margin", 0.08)))),
+            "outlier_similarity_threshold": max(0.0, min(1.0, float(source.get("outlier_similarity_threshold", 0.35)))),
+            "min_face_iou": max(0.0, min(1.0, float(source.get("min_face_iou", 0.35)))),
+            "det_size": [max(64, int(det_size[0])), max(64, int(det_size[1]))],
+            "det_thresh": max(0.0, min(1.0, float(source.get("det_thresh", 0.5)))),
+            "max_num": max(0, int(source.get("max_num") or 0)),
+            "min_width_ratio": max(0.0, float(source.get("min_width_ratio", 0.015))),
+            "min_height_ratio": max(0.0, float(source.get("min_height_ratio", 0.015))),
+        }
+
+    def start(self, *, user_key: str, cookies: Dict[str, str], base_url: str, action: str, options: Any) -> Dict[str, Any]:
+        normalized_action = str(action or "").strip().lower()
+        normalized = self.normalize_options(options)
+        if normalized_action not in self.ACTIONS:
+            raise ValueError("unsupported_recognition_action")
+        if normalized["operation_mode"] == "findings" and normalized_action != self.ACTION_BUILD:
+            return self.sync_review_progress(user_key=user_key, action=normalized_action)
+        operation_id = f"cleanup-{normalized_action}-{uuid4().hex}"
+        self._set_progress(
+            user_key, normalized_action, normalized,
+            running=True, finished=False, operation_id=operation_id,
+            phase="preparing", message_key="cleanup:recognition_preparing",
+            message="Preparing face recognition.",
+        )
+        worker = Thread(
+            target=self._run,
+            kwargs={"user_key": user_key, "cookies": dict(cookies), "base_url": base_url, "action": normalized_action, "options": normalized},
+            daemon=True,
+        )
+        self.backend.runtime_state.values("cleanup_threads")[self.backend._cleanupStateKey(user_key, normalized_action)] = worker
+        worker.start()
+        return self.backend.getCleanupProgress(user_key, normalized_action)
+
+    def _run(self, *, user_key: str, cookies: Dict[str, str], base_url: str, action: str, options: Dict[str, Any]) -> None:
+        try:
+            if action == self.ACTION_BUILD:
+                self._build_profiles(user_key=user_key, cookies=cookies, base_url=base_url, options=options)
+            elif action == self.ACTION_OUTLIERS:
+                self._build_outliers(user_key=user_key, options=options)
+            else:
+                self._build_suggestions(user_key=user_key, cookies=cookies, base_url=base_url, options=options)
+        except Exception as exc:
+            self._set_progress(
+                user_key, action, options, running=False, finished=True, phase="failed",
+                message_key="cleanup:recognition_failed", message=f"Face recognition failed: {type(exc).__name__}: {exc}",
+                errors_count=1,
+            )
+
+    def _prepared_embedder(self, options: Dict[str, Any]) -> InsightFaceEmbedder:
+        key = (
+            self.backend._configuredInsightFaceModelName(),
+            str(self.backend._configuredInsightFaceModelRoot()),
+            tuple(options["det_size"]), options["det_thresh"], options["max_num"],
+            options["min_width_ratio"], options["min_height_ratio"],
+        )
+        if self._embedder is not None and self._embedder_key == key:
+            return self._embedder
+        embedder = InsightFaceEmbedder(
+            model_name=key[0], model_root=self.backend._configuredInsightFaceModelRoot(),
+            det_size=key[2], det_thresh=key[3], max_num=key[4],
+            min_width_ratio=key[5], min_height_ratio=key[6],
+        )
+        embedder.prepare()
+        self._embedder = embedder
+        self._embedder_key = key
+        return embedder
+
+    def _model_key(self, options: Dict[str, Any]) -> str:
+        return f"{self.backend._configuredInsightFaceModelName()}:{options['det_size'][0]}x{options['det_size'][1]}:det{options['det_thresh']}"
+
+    def _profile_state_key(self, options: Dict[str, Any]) -> str:
+        return self._model_key(options).replace(":", "_").replace(".", "_")
+
+    def profiles(self, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        normalized = self.normalize_options(options)
+        return self.backend.file_analysis.readRuntimeState(self.PROFILE_STATE_TYPE, self._profile_state_key(normalized))
+
+    def findings(self, action: str) -> Dict[str, Any]:
+        finding_type = self._finding_type(action)
+        return self.backend.file_analysis.readCheckFindings(finding_type)
+
+    def _finding_type(self, action: str) -> str:
+        return self.FINDING_OUTLIERS if action == self.ACTION_OUTLIERS else self.FINDING_SUGGESTIONS
+
+    def _item_path(self, *, user_key: str, cookies: Dict[str, str], base_url: str, shared_folder: str, item: Dict[str, Any], folder_cache: Dict[int, str]) -> str:
+        try:
+            folder_id = int(item.get("folder_id"))
+        except (TypeError, ValueError):
+            return ""
+        filename = str(item.get("filename") or "").strip()
+        if not filename:
+            return ""
+        if folder_id not in folder_cache:
+            payload = self.backend.photos.getFotoTeamFolder(user_key=user_key, cookies=cookies, base_url=base_url, id_folder=folder_id)
+            folder = payload.get("folder") if isinstance(payload.get("folder"), dict) else {}
+            folder_cache[folder_id] = str(folder.get("name") or "")
+        folder_name = folder_cache.get(folder_id, "")
+        return self.backend._buildPhotoImagePath(shared_folder, folder_name, filename) if folder_name else ""
+
+    def _person_references(self, *, user_key: str, cookies: Dict[str, str], base_url: str, shared_folder: str, person: Dict[str, Any], embedder: InsightFaceEmbedder, options: Dict[str, Any], folder_cache: Dict[int, str]) -> List[Dict[str, Any]]:
+        try:
+            person_id = int(person.get("id"))
+        except (TypeError, ValueError):
+            return []
+        references: List[Dict[str, Any]] = []
+        for item in self.backend._listAllPhotoItemsForPerson(user_key=user_key, cookies=cookies, base_url=base_url, person_id=person_id):
+            try:
+                item_id = int(item.get("id"))
+            except (TypeError, ValueError):
+                continue
+            image_path = self._item_path(user_key=user_key, cookies=cookies, base_url=base_url, shared_folder=shared_folder, item=item, folder_cache=folder_cache)
+            if not image_path or not Path(image_path).is_file():
+                continue
+            if options["changed_since_days"] > 0:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=options["changed_since_days"])
+                if datetime.fromtimestamp(Path(image_path).stat().st_mtime, timezone.utc) < cutoff:
+                    continue
+            if image_path not in self._image_embedding_cache:
+                self._image_embedding_cache[image_path] = embedder.detect_and_embed(Path(image_path))
+            image_embeddings = self._image_embedding_cache[image_path]
+            for face in self.backend.photos.list_faceFotoTeamItems(user_key=user_key, cookies=cookies, base_url=base_url, id_item=item_id):
+                try:
+                    face_person_id = int(face.get("person_id"))
+                    face_id = int(face.get("face_id"))
+                    bbox = to_bbox_dict(from_photos(face))
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if face_person_id != person_id:
+                    continue
+                if not image_embeddings:
+                    continue
+                matched = max(image_embeddings, key=lambda candidate: embedder._iou(bbox, candidate["bbox"]))
+                match_iou = embedder._iou(bbox, matched["bbox"])
+                if match_iou < options["min_face_iou"]:
+                    continue
+                references.append({
+                    "face_id": face_id, "image_id": item_id, "image_path": image_path,
+                    "bbox": bbox, "embedding": matched["embedding"], "iou": match_iou,
+                })
+        return references
+
+    @staticmethod
+    def _normalize_vector(values: List[float]) -> List[float]:
+        magnitude = math.sqrt(sum(float(value) * float(value) for value in values))
+        return [float(value) / magnitude for value in values] if magnitude > 0 else []
+
+    @classmethod
+    def _centroid(cls, embeddings: List[List[float]]) -> List[float]:
+        if not embeddings:
+            return []
+        size = len(embeddings[0])
+        return cls._normalize_vector([sum(vector[index] for vector in embeddings) / len(embeddings) for index in range(size)])
+
+    @staticmethod
+    def _similarity(left: List[float], right: List[float]) -> float:
+        return sum(float(a) * float(b) for a, b in zip(left, right))
+
+    @classmethod
+    def _medoid_index(cls, embeddings: List[List[float]]) -> int:
+        if len(embeddings) <= 1:
+            return 0
+        normalized = [cls._normalize_vector(vector) for vector in embeddings]
+        scores = [sum(cls._similarity(current, other) for other in normalized) / len(normalized) for current in normalized]
+        return max(range(len(scores)), key=lambda index: scores[index])
+
+    def _build_profiles(self, *, user_key: str, cookies: Dict[str, str], base_url: str, options: Dict[str, Any]) -> None:
+        self._image_embedding_cache = {}
+        embedder = self._prepared_embedder(options)
+        shared_folder = self.backend.core.getSharedFolder(user_key=user_key, cookies=cookies, base_url=base_url, folder_name="photo")
+        if not shared_folder:
+            raise RuntimeError("shared_folder_not_found")
+        persons = self.backend.photos.listFotoTeamPersonKnown(
+            user_key=user_key, cookies=cookies, base_url=base_url, show_more=True,
+            show_hidden=options["include_hidden_persons"], additional=["thumbnail"],
+        )
+        profiles: List[Dict[str, Any]] = []
+        quality: List[Dict[str, Any]] = []
+        outlier_findings = self.backend.file_analysis.readCheckFindings(self.FINDING_OUTLIERS)
+        excluded_face_ids = set()
+        if options["exclude_outliers"]:
+            for entry in outlier_findings.get("entries", []):
+                if not isinstance(entry, dict) or str(entry.get("review_state") or "") != "excluded":
+                    continue
+                try:
+                    excluded_face_ids.add(int(entry.get("face_id")))
+                except (TypeError, ValueError):
+                    continue
+        folder_cache: Dict[int, str] = {}
+        reference_options = {**options, "changed_since_days": 0}
+        for index, person in enumerate(persons):
+            if self.backend._shouldStopCleanup(user_key, self.ACTION_BUILD):
+                break
+            references = self._person_references(
+                user_key=user_key, cookies=cookies, base_url=base_url, shared_folder=shared_folder,
+                person=person, embedder=embedder, options=reference_options, folder_cache=folder_cache,
+            )
+            references = [reference for reference in references if int(reference.get("face_id") or 0) not in excluded_face_ids]
+            embeddings = [entry["embedding"] for entry in references]
+            person_id = int(person.get("id"))
+            person_name = str(person.get("name") or "")
+            if len(references) < options["min_faces_per_person"]:
+                quality.append({"person_id": person_id, "person_name": person_name, "reference_count": len(references), "quality": "insufficient_references"})
+            if references:
+                centroid = self._centroid(embeddings)
+                medoid = references[self._medoid_index(embeddings)]
+                intra_similarity = sum(self._similarity(embedding, centroid) for embedding in embeddings) / len(embeddings)
+                profiles.append({
+                    "person_id": person_id, "person_name": person_name, "profile_key": self._model_key(options),
+                    "reference_count": len(references), "used_count": len(references), "quality": "good" if len(references) >= options["min_faces_per_person"] else "limited",
+                    "intra_person_similarity": intra_similarity,
+                    "centroid_embedding": centroid, "medoid": {key: medoid[key] for key in ("face_id", "image_id", "image_path", "bbox")},
+                    "references": references,
+                })
+            self._set_progress(
+                user_key, self.ACTION_BUILD, options, running=True, finished=False, phase="building_profiles",
+                message_key="cleanup:recognition_building_profiles", message="Building recognition profiles.",
+                persons_scanned=index + 1, persons_total=len(persons), profiles_built=len(profiles), findings_count=len(quality),
+            )
+        payload = {"model_key": self._model_key(options), "generated_at": datetime.now(timezone.utc).isoformat(), "profiles": profiles}
+        self.backend.file_analysis.writeRuntimeState(self.PROFILE_STATE_TYPE, self._profile_state_key(options), payload)
+        self.backend.file_analysis.writeCheckFindings(self.FINDING_PROFILES, {"finding_type": self.FINDING_PROFILES, "entries": [{key: value for key, value in profile.items() if key not in {"centroid_embedding", "references"}} for profile in profiles]})
+        self.backend.file_analysis.writeCheckFindings(self.FINDING_QUALITY, {"finding_type": self.FINDING_QUALITY, "entries": quality})
+        self._set_progress(
+            user_key, self.ACTION_BUILD, options, running=False, finished=True, phase="finished",
+            message_key="cleanup:recognition_profiles_finished", message="Recognition profiles built.",
+            persons_scanned=len(persons), persons_total=len(persons), profiles_built=len(profiles), findings_count=len(quality),
+        )
+
+    def _build_outliers(self, *, user_key: str, options: Dict[str, Any]) -> None:
+        profiles = self.profiles(options).get("profiles", [])
+        previous = self.findings(self.ACTION_OUTLIERS)
+        previous_entries = previous.get("entries") if isinstance(previous.get("entries"), list) else []
+        entries: List[Dict[str, Any]] = list(previous_entries) if options["operation_mode"] == "immediate" else []
+        resolved_face_ids = set()
+        for entry in previous_entries:
+            if entry.get("face_id") is None or str(entry.get("selection_state") or "") == "review":
+                continue
+            try:
+                resolved_face_ids.add(int(entry.get("face_id")))
+            except (TypeError, ValueError):
+                continue
+        for profile in profiles if isinstance(profiles, list) else []:
+            centroid = profile.get("centroid_embedding") or []
+            medoid = profile.get("medoid") if isinstance(profile.get("medoid"), dict) else {}
+            for reference in profile.get("references", []):
+                if int(reference.get("face_id") or 0) in resolved_face_ids:
+                    continue
+                similarity = self._similarity(reference.get("embedding") or [], centroid)
+                if similarity >= options["outlier_similarity_threshold"]:
+                    continue
+                other_scores = sorted(
+                    [
+                        (self._similarity(reference.get("embedding") or [], other.get("centroid_embedding") or []), other)
+                        for other in profiles
+                        if other.get("person_id") != profile.get("person_id")
+                    ],
+                    key=lambda item: item[0],
+                    reverse=True,
+                )
+                nearest_other_score, nearest_other = other_scores[0] if other_scores else (0.0, {})
+                entries.append({
+                    "outlier_id": f"out-{reference.get('face_id')}", "image_path": reference.get("image_path"),
+                    "person_id": profile.get("person_id"), "person_name": profile.get("person_name"),
+                    "face_id": reference.get("face_id"), "image_id": reference.get("image_id"), "bbox": reference.get("bbox"),
+                    "profile_image_path": medoid.get("image_path"), "profile_bbox": medoid.get("bbox"),
+                    "similarity_to_centroid": similarity,
+                    "review_state": "excluded" if options["selection_mode"] == "exclude_confirmed" else "suspected",
+                    "average_similarity": similarity,
+                    "nearest_other_person_id": nearest_other.get("person_id"),
+                    "nearest_other_person_name": nearest_other.get("person_name"),
+                    "nearest_other_person_score": nearest_other_score,
+                    "outlier_score": max(0.0, 1.0 - similarity),
+                    "reason": "nearest_other_person_higher" if nearest_other_score > similarity else "low_centroid_similarity",
+                    "selection_state": "selected" if options["selection_mode"] == "exclude_confirmed" else "review",
+                    "write_state": "internal_only",
+                })
+                if options["operation_mode"] == "immediate" and entries[-1]["selection_state"] == "review":
+                    self._write_findings(self.FINDING_OUTLIERS, self.ACTION_OUTLIERS, options, entries)
+                    self._finish_review_scan(user_key, self.ACTION_OUTLIERS, options, entries)
+                    return
+        self._write_findings(self.FINDING_OUTLIERS, self.ACTION_OUTLIERS, options, entries)
+        if options["selection_mode"] == "exclude_confirmed":
+            self._apply_exclusions_to_profiles(options, [entry.get("face_id") for entry in entries])
+        self._finish_review_scan(user_key, self.ACTION_OUTLIERS, options, entries)
+
+    def _build_suggestions(self, *, user_key: str, cookies: Dict[str, str], base_url: str, options: Dict[str, Any]) -> None:
+        self._image_embedding_cache = {}
+        profiles = [
+            profile for profile in self.profiles(options).get("profiles", [])
+            if int(profile.get("used_count") or 0) >= options["min_faces_per_person"]
+        ]
+        if not profiles:
+            raise RuntimeError("recognition_profiles_missing")
+        embedder = self._prepared_embedder(options)
+        shared_folder = self.backend.core.getSharedFolder(user_key=user_key, cookies=cookies, base_url=base_url, folder_name="photo")
+        if not shared_folder:
+            raise RuntimeError("shared_folder_not_found")
+        unknown = self.backend.photos.listFotoTeamPersonUnknown(user_key=user_key, cookies=cookies, base_url=base_url, show_more=True, show_hidden=options["include_hidden_persons"])
+        folder_cache: Dict[int, str] = {}
+        previous = self.findings(self.ACTION_SUGGEST)
+        previous_entries = previous.get("entries") if isinstance(previous.get("entries"), list) else []
+        entries: List[Dict[str, Any]] = list(previous_entries) if options["operation_mode"] == "immediate" else []
+        resolved_face_ids = set()
+        for entry in previous_entries:
+            if entry.get("unknown_face_id") is None or str(entry.get("selection_state") or "") == "review":
+                continue
+            try:
+                resolved_face_ids.add(int(entry.get("unknown_face_id")))
+            except (TypeError, ValueError):
+                continue
+        for person in unknown:
+            references = self._person_references(user_key=user_key, cookies=cookies, base_url=base_url, shared_folder=shared_folder, person=person, embedder=embedder, options=options, folder_cache=folder_cache)
+            for reference in references:
+                if int(reference.get("face_id") or 0) in resolved_face_ids:
+                    continue
+                scored = sorted(
+                    [(self._similarity(reference["embedding"], profile.get("centroid_embedding") or []), profile) for profile in profiles],
+                    key=lambda item: item[0], reverse=True,
+                )
+                if not scored:
+                    continue
+                best_score, best = scored[0]
+                second_score, second = scored[1] if len(scored) > 1 else (0.0, {})
+                margin = best_score - second_score
+                decision = "reject"
+                if best_score >= options["safe_score"] and margin >= options["min_margin"]:
+                    decision = "accept"
+                elif best_score >= options["review_score"]:
+                    decision = "review" if margin >= options["min_margin"] else "ambiguous"
+                entries.append({
+                    "suggestion_id": f"rec-{reference.get('face_id')}", "image_path": reference.get("image_path"),
+                    "image_id": reference.get("image_id"), "unknown_face_id": reference.get("face_id"), "bbox": reference.get("bbox"),
+                    "best_person_id": best.get("person_id"), "best_person_name": best.get("person_name"), "best_score": best_score,
+                    "profile_image_path": (best.get("medoid") or {}).get("image_path"), "profile_bbox": (best.get("medoid") or {}).get("bbox"),
+                    "second_person_id": second.get("person_id"), "second_person_name": second.get("person_name"), "second_score": second_score,
+                    "score_margin": margin, "decision": decision,
+                    "selection_state": "selected" if options["selection_mode"] == "safe_only" and decision == "accept" else "review",
+                    "write_state": "pending", "profile_key": self._model_key(options),
+                })
+                if options["operation_mode"] == "immediate" and entries[-1]["selection_state"] == "review":
+                    self._write_findings(self.FINDING_SUGGESTIONS, self.ACTION_SUGGEST, options, entries)
+                    self._finish_review_scan(user_key, self.ACTION_SUGGEST, options, entries)
+                    return
+        self._write_findings(self.FINDING_SUGGESTIONS, self.ACTION_SUGGEST, options, entries)
+        self._finish_review_scan(user_key, self.ACTION_SUGGEST, options, entries)
+
+    def _write_findings(self, finding_type: str, action: str, options: Dict[str, Any], entries: List[Dict[str, Any]]) -> None:
+        self.backend.file_analysis.writeCheckFindings(finding_type, {
+            "finding_type": finding_type, "action": action, "mode": options["operation_mode"],
+            "generated_at": datetime.now(timezone.utc).isoformat(), "options": options, "entries": entries,
+        })
+
+    @staticmethod
+    def _open_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [entry for entry in entries if str(entry.get("selection_state") or "review") == "review" and str(entry.get("write_state") or "pending") in {"pending", "internal_only"}]
+
+    def _finish_review_scan(self, user_key: str, action: str, options: Dict[str, Any], entries: List[Dict[str, Any]]) -> None:
+        open_entries = self._open_entries(entries)
+        review_required = options["operation_mode"] == "immediate" and bool(open_entries)
+        self._set_progress(
+            user_key, action, options, running=False, finished=True, phase="review_required" if review_required else "finished",
+            message_key="cleanup:recognition_review_required" if review_required else "cleanup:recognition_scan_finished",
+            message="Manual review required for the next recognition finding." if review_required else "Recognition scan finished.",
+            findings_count=len(entries),
+        )
+
+    def update_review(self, *, action: str, item_id: str, decision: str) -> Dict[str, Any]:
+        finding_type = self._finding_type(action)
+        payload = self.backend.file_analysis.readCheckFindings(finding_type)
+        entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+        updated = False
+        for entry in entries:
+            current_id = entry.get("outlier_id") if action == self.ACTION_OUTLIERS else entry.get("suggestion_id")
+            if str(current_id or "") != str(item_id or ""):
+                continue
+            if action == self.ACTION_OUTLIERS:
+                entry["review_state"] = "ignored" if decision == "skipped" else decision
+                entry["selection_state"] = "selected" if decision == "excluded" else "skipped"
+            else:
+                entry["selection_state"] = "selected" if decision == "selected" else "skipped"
+                if decision == "skipped":
+                    entry["write_state"] = "skipped"
+            updated = True
+            break
+        payload["entries"] = entries
+        self.backend.file_analysis.writeCheckFindings(finding_type, payload)
+        if action == self.ACTION_OUTLIERS and decision == "excluded":
+            selected = next((entry for entry in entries if str(entry.get("outlier_id") or "") == str(item_id or "")), {})
+            options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+            self._apply_exclusions_to_profiles(self.normalize_options(options), [selected.get("face_id")])
+        return {"updated": updated, "findings": payload}
+
+    def _apply_exclusions_to_profiles(self, options: Dict[str, Any], face_ids: List[Any]) -> None:
+        excluded = set()
+        for face_id in face_ids:
+            try:
+                excluded.add(int(face_id))
+            except (TypeError, ValueError):
+                continue
+        if not excluded:
+            return
+        state_key = self._profile_state_key(options)
+        payload = self.backend.file_analysis.readRuntimeState(self.PROFILE_STATE_TYPE, state_key)
+        profiles = payload.get("profiles") if isinstance(payload.get("profiles"), list) else []
+        changed = False
+        for profile in profiles:
+            references = profile.get("references") if isinstance(profile.get("references"), list) else []
+            remaining = []
+            for reference in references:
+                try:
+                    face_id = int(reference.get("face_id") or 0)
+                except (TypeError, ValueError):
+                    face_id = 0
+                if face_id not in excluded:
+                    remaining.append(reference)
+            if len(remaining) == len(references):
+                continue
+            changed = True
+            profile["references"] = remaining
+            profile["used_count"] = len(remaining)
+            profile["quality"] = "good" if len(remaining) >= options["min_faces_per_person"] else "limited"
+            embeddings = [reference.get("embedding") or [] for reference in remaining]
+            profile["centroid_embedding"] = self._centroid(embeddings)
+            if remaining:
+                medoid = remaining[self._medoid_index(embeddings)]
+                profile["medoid"] = {key: medoid[key] for key in ("face_id", "image_id", "image_path", "bbox")}
+            else:
+                profile["medoid"] = {}
+        if changed:
+            payload["profiles"] = profiles
+            payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self.backend.file_analysis.writeRuntimeState(self.PROFILE_STATE_TYPE, state_key, payload)
+            self.backend.file_analysis.writeCheckFindings(self.FINDING_PROFILES, {
+                "finding_type": self.FINDING_PROFILES,
+                "entries": [
+                    {key: value for key, value in profile.items() if key not in {"centroid_embedding", "references"}}
+                    for profile in profiles
+                ],
+            })
+
+    def sync_review_progress(self, *, user_key: str, action: str) -> Dict[str, Any]:
+        payload = self.findings(action)
+        entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+        open_entries = self._open_entries(entries)
+        current = open_entries[0] if open_entries else {}
+        options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+        self._set_progress(
+            user_key, action, options, running=False, finished=True, phase="review_required" if open_entries else "finished",
+            message_key="cleanup:recognition_review_required" if open_entries else "cleanup:recognition_scan_finished",
+            message="Manual review required for the next recognition finding." if open_entries else "Recognition scan finished.",
+            current_path=str(current.get("image_path") or ""), findings_count=len(entries),
+            entries_current=len(entries) - len(open_entries), entries_total=len(entries),
+        )
+        return self.backend.getCleanupProgress(user_key, action)
+
+    def apply_suggestions(self, *, user_key: str, cookies: Dict[str, str], base_url: str, selected_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        requested = {str(value) for value in selected_ids or []}
+        payload = self.findings(self.ACTION_SUGGEST)
+        entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+        written = skipped = errors = 0
+        for entry in entries:
+            suggestion_id = str(entry.get("suggestion_id") or "")
+            selected = suggestion_id in requested if requested else entry.get("selection_state") == "selected"
+            if not selected or entry.get("write_state") == "written":
+                continue
+            try:
+                self.backend.assignMatchedFaceToKnownPerson(
+                    user_key=user_key, cookies=cookies, base_url=base_url,
+                    face_id=int(entry["unknown_face_id"]), person_id=int(entry["best_person_id"]),
+                    person_name=str(entry["best_person_name"]), item_id=int(entry["image_id"]), image_path=str(entry["image_path"]),
+                )
+                entry["write_state"] = "written"
+                written += 1
+            except Exception as exc:
+                entry["write_state"] = "failed"
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+                errors += 1
+        self.backend.file_analysis.writeCheckFindings(self.FINDING_SUGGESTIONS, payload)
+        return {"written_count": written, "skipped_count": skipped, "errors_count": errors, "findings": payload}
+
+    def _set_progress(self, user_key: str, action: str, options: Dict[str, Any], **updates: Any) -> None:
+        persons_current = int(updates.get("persons_scanned") or updates.get("entries_current") or 0)
+        persons_total = int(updates.get("persons_total") or updates.get("entries_total") or 0)
+        kind = "entries" if updates.get("entries_total") is not None else "persons"
+        status = self.backend._buildStatusPayload(
+            operation="cleanup", action=action, mode=str(options.get("operation_mode") or "scan"),
+            phase=str(updates.get("phase") or ""), progress=self.backend._buildStatusProgress(kind=kind, current=persons_current, total=persons_total),
+            counters=[
+                self.backend._buildStatusCounter("profiles", value=int(updates.get("profiles_built") or 0), label_key="cleanup:label_profiles", fallback_label="Profiles", show_when_zero=True),
+                self.backend._buildStatusCounter("findings", value=int(updates.get("findings_count") or 0), label_key="cleanup:label_findings", fallback_label="Findings", show_when_zero=True),
+                self.backend._buildStatusCounter("errors", value=int(updates.get("errors_count") or 0), label_key="cleanup:label_errors", fallback_label="Errors"),
+            ],
+        )
+        self.backend._setCleanupProgress(user_key, action=action, options=options, status=status, **updates)

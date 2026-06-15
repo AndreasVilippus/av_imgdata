@@ -1,6 +1,5 @@
 <template>
 	<aside class="sm-nav">
-		<div class="sm-nav-group">{{ $avt('nav:group_photos', 'Photos') }}</div>
 		<button
 			class="sm-nav-item"
 			:class="{ active: selectedOption === 'status' }"
@@ -34,7 +33,6 @@
 			{{ $avt('nav:cleanup', 'Cleanup') }}
 		</button>
 		<div class="sm-nav-separator"></div>
-		<div class="sm-nav-group">{{ $avt('nav:group_settings', 'Settings / extensions') }}</div>
 		<button
 			class="sm-nav-item"
 			:class="{ active: selectedOption === 'configuration' }"

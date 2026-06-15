@@ -195,6 +195,10 @@ class InsightFaceDetector:
         self._app = app
         return app
 
+    def prepare(self) -> None:
+        self._validate_model_files()
+        self._load_app()
+
     def _model_location_hint(self) -> str:
         model_name = self.model_name or "insightface_default"
         return f"model_name={model_name}, model_root={self._resolved_model_root()}, model_store={self.model_store_dir(self._resolved_model_root())}"

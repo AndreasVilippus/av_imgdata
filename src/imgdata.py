@@ -34,6 +34,7 @@ from services.checks_workflow_service import ChecksWorkflowService
 from services.exiftool_service import ExifToolService
 from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
 from services.face_frame_standardization_service import FaceFrameStandardizationService
+from services.face_recognition_service import FaceRecognitionService
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
 from services.face_match_mutation_service import FaceMatchMutationService
@@ -174,6 +175,7 @@ class ImgDataService:
         self.checks_workflow = ChecksWorkflowService(self, ImgDataOperationError)
         self.face_match_workflow = FaceMatchWorkflowService(self)
         self.face_frame_standardization = FaceFrameStandardizationService(self)
+        self.face_recognition = FaceRecognitionService(self)
     @staticmethod
     def _buildWriteConflictError(
         lock_key: str,
@@ -2401,9 +2403,20 @@ class ImgDataService:
         return bool(progress.get("stop_requested"))
 
     @staticmethod
-    def _normalizeCleanupAction(action: Any) -> str:
+    def _cleanupActionOptions() -> set:
+        return {
+            "normalize_names",
+            "standardize_face_frames",
+            "recognition_build_profiles",
+            "recognition_check_reference_outliers",
+            "recognition_analyze_unknown_faces",
+        }
+
+    @classmethod
+    def _normalizeCleanupAction(cls, action: Any) -> str:
         normalized = str(action or "normalize_names").strip().lower()
-        return normalized if normalized in {"normalize_names", "standardize_face_frames"} else "normalize_names"
+        allowed = cls._cleanupActionOptions()
+        return normalized if normalized in allowed else "normalize_names"
 
     @staticmethod
     def _normalizeCleanupTargets(targets: Any) -> List[str]:
@@ -2471,10 +2484,10 @@ class ImgDataService:
     def getCleanupProgress(self, user_key: str, action: str = "normalize_names") -> Dict[str, Any]:
         normalized_action = self._normalizeCleanupAction(action)
         state_key = self._cleanupStateKey(user_key, normalized_action)
-        current = self.runtime_state.read_persisted("cleanup_progress", state_key)
+        with self.runtime_state.lock("cleanup_progress"):
+            current = self.runtime_state.memory("cleanup_progress").get(state_key, {})
         if not isinstance(current, dict) or not current:
-            with self.runtime_state.lock("cleanup_progress"):
-                current = self.runtime_state.memory("cleanup_progress").get(state_key, {})
+            current = self.runtime_state.read_persisted("cleanup_progress", state_key)
         return self._normalizeCleanupProgress(user_key, normalized_action, dict(current) if isinstance(current, dict) else {})
 
     def requestStopCleanup(self, user_key: str, action: str = "normalize_names") -> Dict[str, Any]:
@@ -9519,6 +9532,15 @@ class ImgDataService:
         state_key = self._cleanupStateKey(user_key, normalized_action)
         if current.get("running"):
             return current
+        for candidate_action in self._cleanupActionOptions():
+            if candidate_action == normalized_action:
+                continue
+            candidate_progress = self.getCleanupProgress(user_key, candidate_action)
+            if self._isBlockingRunningProgress(candidate_progress):
+                return self._buildStartBlockedByRunningOperationPayload(
+                    candidate_progress,
+                    requested_operation="cleanup",
+                )
         running_operation = self._runningOperationProgress(user_key, exclude_operation="cleanup")
         if running_operation:
             return self._buildStartBlockedByRunningOperationPayload(
@@ -9530,6 +9552,14 @@ class ImgDataService:
                 user_key=user_key,
                 cookies=cookies,
                 base_url=base_url,
+                options=options,
+            )
+        if normalized_action in FaceRecognitionService.ACTIONS:
+            return self.face_recognition.start(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                action=normalized_action,
                 options=options,
             )
 

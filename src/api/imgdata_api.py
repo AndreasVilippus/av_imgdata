@@ -1857,6 +1857,96 @@ async def cleanup_face_frames_findings(request: Request):
     })
 
 
+@router.post("/cleanup_face_frames_select")
+async def cleanup_face_frames_select(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+    body = await _read_request_body(request)
+    item_id = str(body.get("item_id") or "").strip()
+    if not item_id:
+        return JSONResponse({"success": False, "error": {"code": 400, "message": "missing_item_id"}})
+    try:
+        result = IMGDATA.face_frame_standardization.update_selection(
+            item_id=item_id,
+            selected=bool(body.get("selected")),
+        )
+        IMGDATA.face_frame_standardization.sync_review_progress(user_key=session_ctx["user_key"])
+    except Exception as exc:
+        return JSONResponse(_operation_exception_response(exc, message="cleanup_face_frames_select_failed"))
+    return JSONResponse({"success": True, "data": result})
+
+
+@router.post("/cleanup_face_frames_apply")
+async def cleanup_face_frames_apply(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+    body = await _read_request_body(request)
+    selected_item_ids = body.get("selected_item_ids")
+    try:
+        result = await _run_backend_call(
+            lambda: IMGDATA.face_frame_standardization.apply_selected(
+                selected_item_ids=selected_item_ids if isinstance(selected_item_ids, list) else None,
+            )
+        )
+        await _run_backend_call(
+            lambda: IMGDATA.face_frame_standardization.sync_review_progress(user_key=session_ctx["user_key"])
+        )
+    except Exception as exc:
+        return JSONResponse(_operation_exception_response(exc, message="cleanup_face_frames_apply_failed"))
+    return JSONResponse({"success": True, "data": result})
+
+
+@router.post("/recognition_findings")
+async def recognition_findings(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+    body = await _read_request_body(request)
+    action = str(body.get("action") or "").strip()
+    return JSONResponse({"success": True, "data": IMGDATA.face_recognition.findings(action)})
+
+
+@router.post("/recognition_review")
+async def recognition_review(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+    body = await _read_request_body(request)
+    action = str(body.get("action") or "").strip()
+    item_id = str(body.get("item_id") or "").strip()
+    decision = str(body.get("decision") or "").strip()
+    if not item_id or not decision:
+        return JSONResponse({"success": False, "error": {"code": 400, "message": "invalid_recognition_review_request"}})
+    result = IMGDATA.face_recognition.update_review(action=action, item_id=item_id, decision=decision)
+    IMGDATA.face_recognition.sync_review_progress(user_key=session_ctx["user_key"], action=action)
+    return JSONResponse({"success": True, "data": result})
+
+
+@router.post("/recognition_suggestions_apply")
+async def recognition_suggestions_apply(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return JSONResponse(error_response)
+    body = await _read_request_body(request)
+    selected_ids = body.get("selected_suggestion_ids")
+    try:
+        result = await _run_backend_call(lambda: IMGDATA.face_recognition.apply_suggestions(
+            user_key=session_ctx["user_key"],
+            cookies=session_ctx["cookies"],
+            base_url=session_ctx["base_url"],
+            selected_ids=selected_ids if isinstance(selected_ids, list) else None,
+        ))
+        await _run_backend_call(lambda: IMGDATA.face_recognition.sync_review_progress(
+            user_key=session_ctx["user_key"],
+            action="recognition_analyze_unknown_faces",
+        ))
+    except Exception as exc:
+        return JSONResponse(_operation_exception_response(exc, message="recognition_suggestions_apply_failed"))
+    return JSONResponse({"success": True, "data": result})
+
+
 @router.post("/cleanup_progress")
 async def cleanup_progress(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)

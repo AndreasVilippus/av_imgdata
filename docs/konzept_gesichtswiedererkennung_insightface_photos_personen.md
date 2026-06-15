@@ -244,6 +244,153 @@ recognitionOptions: {
 }
 ```
 
+### Verbindlicher UI-Vertrag
+
+Die Oberfläche verwendet die bereits eingeführten Standards aus `ChecksView`,
+`FaceMatchView` und der Gesichtsrahmen-Standardisierung. Es werden keine eigenen
+abweichenden Formular-, Status- oder Vorschaukonzepte eingeführt.
+
+Bezeichnung:
+
+```text
+In der UI wird "Wiedererkennungsprofile aufbauen" statt "Gesichtslernen"
+verwendet. InsightFace wird nicht trainiert; aus vorhandenen Embeddings werden
+interne Personenprofile gebildet.
+```
+
+Cleanup-Actions und Reihenfolge:
+
+```text
+recognition_build_profiles
+recognition_check_reference_outliers
+recognition_analyze_unknown_faces
+```
+
+`recognition_rebuild_profiles` ist kein eigener dauerhaft sichtbarer Menüpunkt.
+Ein erneuter vollständiger Aufbau wird über `recognition_build_profiles` und
+die Option `rebuild_all` gestartet.
+
+#### Betriebsarten
+
+Die prüfenden Actions `recognition_check_reference_outliers` und
+`recognition_analyze_unknown_faces` verwenden dieselben drei Betriebsarten wie
+die Gesichtsrahmen-Standardisierung:
+
+```text
+immediate  = Scan starten und beim ersten manuell zu prüfenden Fund anhalten
+save_only  = Scan vollständig ausführen und Funde nur persistent speichern
+findings   = bestehende persistente Fundliste abarbeiten
+```
+
+Der Profilaufbau verwendet keine manuelle Einzelprüfung während des Laufs. Er
+schreibt ausschließlich interne Profile und Qualitäts-Findings. Für ihn gelten:
+
+```text
+incremental = vorhandene passende Profile und Embeddings wiederverwenden
+rebuild_all = Profile für alle ausgewählten Personen neu aufbauen
+```
+
+#### Entscheidung und automatische Verarbeitung
+
+Für Wiedererkennungsvorschläge:
+
+```text
+review_all = jeder Vorschlag muss manuell entschieden werden
+safe_only  = decision=accept wird ausgewählt; review/ambiguous/reject bleibt offen
+```
+
+Eine automatische Auswahl ist noch keine Photos-Schreiboperation. Eine
+Zuweisung nach Photos erfolgt nur über Apply und nur auf Basis eines
+persistierten Vorschlags.
+
+Für Referenz-Ausreißer:
+
+```text
+review_all        = jeder Ausreißer muss manuell entschieden werden
+exclude_confirmed = eindeutig bestätigte Ausreißer intern automatisch ausschließen
+```
+
+Ausreißer-Aktionen ändern Synology Photos niemals.
+
+#### Layout
+
+Der erste Panel enthält immer:
+
+```text
+- Bereichstitel und Beschreibung
+- Action-Selector
+- action-spezifische Optionen
+- Start/Stop-Schaltfläche
+- Schema-v1-Status mit Fortschritt, Zählern und aktuellem Kontext
+```
+
+Eine manuelle Prüfung wird als zweites, gleichrangiges
+`panel face-match-split-panel` unterhalb des Action-Panels dargestellt. Es wird
+keine vollständige Ergebnistabelle während der Prüfung angezeigt.
+
+Referenz-Ausreißer:
+
+```text
+links:  verdächtiges Referenzgesicht mit Photos-Rahmen
+rechts: Medoid beziehungsweise repräsentatives Gesicht des Personenprofils
+Mitte:  Ausschließen-Icon
+Zusatzaktionen: als Referenz bestätigen, später prüfen, ignorieren
+```
+
+Wiedererkennungsvorschlag:
+
+```text
+links:  unbekanntes Photos-Gesicht
+rechts: vorgeschlagene bestehende Person mit repräsentativem Profilbild
+Mitte:  face_to_left.png für die Zuweisung zur vorgeschlagenen Person
+Zusatzaktionen: weiteren Kandidaten wählen, überspringen
+```
+
+Die Vorschau zeigt standardmäßig den Gesichtsausschnitt. Ein Umschalter kann
+analog zum Gesichtsabgleich auf das vollständige Bild wechseln.
+
+#### Zustände und Listenfortschritt
+
+Persistierte Findings behalten während einer Prüfung eine feste Gesamtzahl.
+Entscheidungen erhöhen `status.progress.current`; sie verringern nicht
+`status.progress.total`.
+
+```text
+selection_state: review | selected | skipped
+review_state:    suspected | confirmed | excluded | needs_review | ignored
+write_state:     pending | written | skipped | stale | failed | internal_only
+decision:        accept | review | ambiguous | reject
+```
+
+`stale` bedeutet, dass sich das Photos-Gesicht seit der Analyse geändert hat.
+Die UI zeigt den Fund als nicht anwendbar und verlangt einen neuen Scan.
+
+#### Optionen und Formularstandard
+
+Alle Auswahlfelder verwenden `sm-form-select`. Alle Zahlenfelder verwenden
+`sm-form-input sm-form-number-input` und besitzen sichtbare Titel, Grenzen,
+Schrittweite und bei erklärungsbedürftigen Werten einen `sm-form-hint`.
+Schwellwerte werden im Abschnitt "Erweiterte Bewertung" zusammengefasst.
+
+Große Profil- und Fundlisten werden nicht vollständig im Action-Panel
+gerendert. Spätere Übersichtslisten müssen serverseitige Paginierung sowie
+Suche/Filter nach Person, Zustand und Entscheidung unterstützen.
+
+#### Fehler- und Verfügbarkeitszustände
+
+Vor dem Start wird geprüft:
+
+```text
+- InsightFace-Paket installiert
+- aktives Modell enthält Detection und Recognition
+- gemeinsamer Photos-Ordner erreichbar
+- Photos-Personen und zugehörige Faces lesbar
+```
+
+Fehlende Voraussetzungen werden als expliziter Status angezeigt. Eine
+Wiedererkennungsaction darf niemals auf eine andere Cleanup-Action
+zurückfallen.
+
 ---
 
 ## InsightFace-Erweiterung
@@ -904,6 +1051,29 @@ ui/src/mixins/cleanupMixin.js
 ---
 
 ## Implementierungsphasen
+
+### Umsetzungsstand
+
+Die Phasen 1 bis 3 sind im ersten funktionsfähigen Umfang umgesetzt:
+
+```text
+- InsightFaceEmbedder lädt Detection und Recognition
+- Photos-Personen, Items, Gesichter, Bounding-Boxes und Bildpfade werden gelesen
+- InsightFace wird pro Bild nur einmal ausgeführt und das passende Gesicht per IoU gewählt
+- Centroid und Medoid werden je Person gebildet
+- Profile und Embeddings werden über app_state persistiert
+- Profilqualität, Referenz-Ausreißer und Wiedererkennungsvorschläge werden als Findings persistiert
+- immediate, save_only und findings folgen dem bestehenden Prüfprinzip
+- Referenz-Ausreißer können intern bestätigt, ausgeschlossen, zurückgestellt oder ignoriert werden
+- unbekannte Gesichter werden gegen ausreichend große Profile verglichen
+- Apply verwendet ausschließlich persistierte ausgewählte Vorschläge
+- Apply verwendet die bestehende validierte Photos-Zuordnung mit Write-Lock und Vor-/Nachprüfung
+```
+
+Phase 4 mit relationalen Spezialtabellen bleibt eine optionale spätere
+Optimierung. Die aktuelle Persistence über `app_state` und
+`persisted_findings` entspricht der für den ersten Umfang festgelegten
+Strategie.
 
 ### Phase 1: Embedding-Grundlage
 

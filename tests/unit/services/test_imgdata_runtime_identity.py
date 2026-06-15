@@ -64,6 +64,30 @@ def test_cleanup_progress_has_normalized_runtime_identity():
     )
 
 
+def test_cleanup_progress_prefers_current_memory_state_over_stale_persistence():
+    service = make_service()
+    state_key = service._cleanupStateKey("user", "standardize_face_frames")
+    service.runtime_state.memory("cleanup_progress")[state_key] = {
+        "action": "standardize_face_frames",
+        "running": False,
+        "finished": True,
+        "current_path": "/photo/current.jpg",
+        "revision": 3,
+    }
+    service.file_analysis.readRuntimeState = lambda *_args: {
+        "action": "standardize_face_frames",
+        "running": True,
+        "finished": False,
+        "current_path": "/photo/stale.jpg",
+        "revision": 1,
+    }
+
+    progress = service.getCleanupProgress("user", "standardize_face_frames")
+
+    assert progress["current_path"] == "/photo/current.jpg"
+    assert progress["revision"] == 3
+
+
 def test_file_analysis_progress_has_normalized_runtime_identity():
     service = make_service()
     service._setFileAnalysisProgress(
