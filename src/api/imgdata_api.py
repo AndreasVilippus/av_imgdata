@@ -839,6 +839,7 @@ async def face_matching_action(request: Request):
     action = body.get("action", "")
     auto = bool(body.get("auto"))
     save_only = bool(body.get("save_only"))
+    recognize_persons = bool(body.get("recognize_persons"))
     resume_from_progress = bool(body.get("resume_from_progress"))
     refresh = bool(body.get("refresh"))
     default_limit = _configured_max_photos_persons()
@@ -889,6 +890,7 @@ async def face_matching_action(request: Request):
             action=action,
             auto=auto,
             save_only=save_only,
+            recognize_persons=recognize_persons,
             resume_from_progress=resume_from_progress,
             refresh=refresh,
             limit=limit,
@@ -1851,9 +1853,13 @@ async def cleanup_face_frames_findings(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return JSONResponse(error_response)
+    body = await _read_request_body(request)
     return JSONResponse({
         "success": True,
-        "data": IMGDATA.face_frame_standardization.findings(),
+        "data": IMGDATA.face_frame_standardization.findings(
+            user_key=session_ctx["user_key"],
+            operation_mode=str(body.get("operation_mode") or ""),
+        ),
     })
 
 
@@ -1870,8 +1876,13 @@ async def cleanup_face_frames_select(request: Request):
         result = IMGDATA.face_frame_standardization.update_selection(
             item_id=item_id,
             selected=bool(body.get("selected")),
+            user_key=session_ctx["user_key"],
+            operation_mode=str(body.get("operation_mode") or "findings"),
         )
-        IMGDATA.face_frame_standardization.sync_review_progress(user_key=session_ctx["user_key"])
+        IMGDATA.face_frame_standardization.sync_review_progress(
+            user_key=session_ctx["user_key"],
+            operation_mode=str(body.get("operation_mode") or "findings"),
+        )
     except Exception as exc:
         return JSONResponse(_operation_exception_response(exc, message="cleanup_face_frames_select_failed"))
     return JSONResponse({"success": True, "data": result})
@@ -1888,10 +1899,15 @@ async def cleanup_face_frames_apply(request: Request):
         result = await _run_backend_call(
             lambda: IMGDATA.face_frame_standardization.apply_selected(
                 selected_item_ids=selected_item_ids if isinstance(selected_item_ids, list) else None,
+                user_key=session_ctx["user_key"],
+                operation_mode=str(body.get("operation_mode") or "findings"),
             )
         )
         await _run_backend_call(
-            lambda: IMGDATA.face_frame_standardization.sync_review_progress(user_key=session_ctx["user_key"])
+            lambda: IMGDATA.face_frame_standardization.sync_review_progress(
+                user_key=session_ctx["user_key"],
+                operation_mode=str(body.get("operation_mode") or "findings"),
+            )
         )
     except Exception as exc:
         return JSONResponse(_operation_exception_response(exc, message="cleanup_face_frames_apply_failed"))
@@ -1905,7 +1921,11 @@ async def recognition_findings(request: Request):
         return JSONResponse(error_response)
     body = await _read_request_body(request)
     action = str(body.get("action") or "").strip()
-    return JSONResponse({"success": True, "data": IMGDATA.face_recognition.findings(action)})
+    return JSONResponse({"success": True, "data": IMGDATA.face_recognition.findings(
+        action,
+        user_key=session_ctx["user_key"],
+        operation_mode=str(body.get("operation_mode") or ""),
+    )})
 
 
 @router.post("/recognition_review")
@@ -1919,8 +1939,19 @@ async def recognition_review(request: Request):
     decision = str(body.get("decision") or "").strip()
     if not item_id or not decision:
         return JSONResponse({"success": False, "error": {"code": 400, "message": "invalid_recognition_review_request"}})
-    result = IMGDATA.face_recognition.update_review(action=action, item_id=item_id, decision=decision)
-    IMGDATA.face_recognition.sync_review_progress(user_key=session_ctx["user_key"], action=action)
+    operation_mode = str(body.get("operation_mode") or "findings")
+    result = IMGDATA.face_recognition.update_review(
+        action=action,
+        item_id=item_id,
+        decision=decision,
+        user_key=session_ctx["user_key"],
+        operation_mode=operation_mode,
+    )
+    IMGDATA.face_recognition.sync_review_progress(
+        user_key=session_ctx["user_key"],
+        action=action,
+        operation_mode=operation_mode,
+    )
     return JSONResponse({"success": True, "data": result})
 
 
@@ -1937,10 +1968,12 @@ async def recognition_suggestions_apply(request: Request):
             cookies=session_ctx["cookies"],
             base_url=session_ctx["base_url"],
             selected_ids=selected_ids if isinstance(selected_ids, list) else None,
+            operation_mode=str(body.get("operation_mode") or "findings"),
         ))
         await _run_backend_call(lambda: IMGDATA.face_recognition.sync_review_progress(
             user_key=session_ctx["user_key"],
             action="recognition_analyze_unknown_faces",
+            operation_mode=str(body.get("operation_mode") or "findings"),
         ))
     except Exception as exc:
         return JSONResponse(_operation_exception_response(exc, message="recognition_suggestions_apply_failed"))

@@ -49,6 +49,8 @@ Supported long-running operations:
 
 `operation`, `mode`, `action`, and `operation_id` form the process identity. A `scan` state and a `findings` state must not overwrite each other without an explicit transition.
 
+InsightFace processes follow the same rule: `immediate` uses only the active run state, `save_only` writes a persistent findings list, and `findings` processes only an explicitly selected persistent findings list.
+
 ## Phases
 
 | Phase | Meaning |

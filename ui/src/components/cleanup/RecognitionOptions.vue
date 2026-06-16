@@ -94,15 +94,15 @@ export default {
 	name: 'RecognitionOptions',
 	props: { vm: { type: Object, required: true } },
 	computed: {
-		isProfileBuild() {
-			return this.vm.selectedCleanupAction === 'recognition_build_profiles';
-		},
-		isOutlierScan() {
-			return this.vm.selectedCleanupAction === 'recognition_check_reference_outliers';
-		},
-		isSuggestionScan() {
-			return this.vm.selectedCleanupAction === 'recognition_analyze_unknown_faces';
-		},
+			isProfileBuild() {
+				return this.vm.selectedRecognitionAction === 'recognition_build_profiles';
+			},
+			isOutlierScan() {
+				return this.vm.selectedRecognitionAction === 'recognition_check_reference_outliers';
+			},
+			isSuggestionScan() {
+				return this.vm.selectedRecognitionAction === 'recognition_analyze_unknown_faces';
+			},
 		automaticDecisionLabel() {
 			return this.isSuggestionScan
 				? this.vm.$avt('cleanup:recognition_selection_safe', 'Select safe suggestions automatically')

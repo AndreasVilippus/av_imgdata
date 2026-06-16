@@ -519,7 +519,7 @@ Profile:
 | fast_test | 320 × 320 | schnelle Vorprüfung |
 | custom | frei | Expertenmodus |
 
-Die Suche nach fehlenden Gesichtern via bestehender Face-Matching-Action `search_missing_faces_insightface` soll dieselben Parameter erhalten. Der bestehende API-Pfad `/api/face_matching_action` kennt diese Action bereits; die Payload muss um `insightface`-Optionen ergänzt werden.
+Die Suche nach fehlenden Gesichtern via bestehender Face-Matching-Action `search_missing_faces_insightface` soll dieselben Parameter erhalten. Der bestehende API-Pfad `/api/face_matching_action` kennt diese Action bereits; die Payload muss um `insightface`-Optionen ergänzt werden. Optional kann die Action mit `recognize_persons=true` neu erkannte fehlende Gesichter gegen vorhandene Wiedererkennungsprofile prüfen und als Photos-Person im Gesichtsabgleich vorschlagen. Unbekannte vorhandene Photos-Gesichter ohne Namen bleiben fachlich getrennt und laufen ueber `recognition_analyze_unknown_faces`.
 
 ---
 
@@ -628,6 +628,29 @@ Runtime-State-Key:
 runtime:cleanup_progress:<user_key>:standardize_face_frames
 ```
 
+Neustart und Fortsetzen:
+
+```text
+Ein expliziter Start eines Scans in `immediate` oder `save_only` beginnt mit
+leerem Worker-Zustand bei Datei 0. Eine alte persistente Teilliste wird dabei
+nicht als aktuelle Arbeitsliste übernommen.
+
+`immediate` verwendet für die manuelle Vorschau nur den aktiven Laufzustand.
+Dieser Zustand ist keine persistente Fundliste. Eine persistente Fundliste wird
+nur bei `operation_mode = save_only` geschrieben und nur bei
+`operation_mode = findings` abgearbeitet.
+
+Fortsetzen ist nur in zwei Fällen zulässig:
+
+1. `operation_mode = findings` arbeitet die bestehende persistente Fundliste ab.
+2. Die UI startet nach einer manuellen Einzelentscheidung intern den nächsten
+   Scanabschnitt mit `resume_existing = true`; dabei wird nur der aktive
+   Laufzustand fortgesetzt, nicht eine persistente Fundliste.
+
+`resume_existing` ist eine interne Startoption und wird nicht als normale
+Benutzereinstellung gespeichert.
+```
+
 Progress-Payload:
 
 ```json
@@ -718,7 +741,7 @@ src/av_imgdata/db/migrations.py                         # erst bei Spezialtabell
 ### Phase 3: Fehlende Gesichter mit InsightFace
 
 ```text
-- bestehende face_matching_action search_missing_faces_insightface um det_size/det_thresh/min-size erweitern
+- bestehende face_matching_action search_missing_faces_insightface um det_size/det_thresh/min-size und optionale Personenerkennung erweitern
 - Finding-Typ missing_faces_insightface nutzen
 - gleiche Vorschau-/Auswahlregeln anwenden
 ```

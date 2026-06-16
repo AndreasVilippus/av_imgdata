@@ -10,6 +10,7 @@ UI_ALLOWED_MISSING_THIS_METHODS = {
     "callFileAnalysisApi",
     "confirmFaceMatchNameMapping",
     "fetchExiftoolStatus",
+    "fetchRecognitionFindings",
     "fetchPipPackagesStatus",
     "getErrorMessage",
     "getFaceMatchFormatLabel",
@@ -21,7 +22,9 @@ UI_ALLOWED_MISSING_THIS_METHODS = {
     "normalizeConfig",
     "normalizeFaceMatchName",
     "resolveLocalIconUrl",
+    "startCleanupRun",
     "startNamedPolling",
+    "stopCleanupRun",
     "stopNamedPolling",
 }
 

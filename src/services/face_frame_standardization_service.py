@@ -2,7 +2,7 @@
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Thread
+from threading import RLock, Thread
 from typing import Any, Dict, List
 
 from handler.photos_handler import PhotosLookupCache
@@ -24,6 +24,8 @@ class FaceFrameStandardizationService:
         self.backend = backend
         self._detector = None
         self._detector_key = None
+        self._active_findings: Dict[str, Dict[str, Any]] = {}
+        self._active_findings_lock = RLock()
 
     @staticmethod
     def normalize_options(options: Any) -> Dict[str, Any]:
@@ -85,6 +87,7 @@ class FaceFrameStandardizationService:
             "min_width_ratio": max(0.0, float(insightface.get("min_face_width_ratio", insightface.get("min_width_ratio", 0.0)) or 0.0)),
             "min_height_ratio": max(0.0, float(insightface.get("min_face_height_ratio", insightface.get("min_height_ratio", 0.0)) or 0.0)),
             "min_area_ratio": max(0.0, float(insightface.get("min_face_area_ratio", insightface.get("min_area_ratio", 0.0)) or 0.0)),
+            "resume_existing": bool(source.get("resume_existing", False)),
         }
 
     def start(
@@ -97,7 +100,7 @@ class FaceFrameStandardizationService:
     ) -> Dict[str, Any]:
         normalized = self.normalize_options(options)
         if normalized["operation_mode"] == "findings":
-            findings = self.findings()
+            findings = self.findings(operation_mode="findings")
             entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
             self._set_progress(
                 user_key,
@@ -111,6 +114,8 @@ class FaceFrameStandardizationService:
                 options=normalized,
             )
             return self.backend.getCleanupProgress(user_key, self.ACTION)
+        if not normalized.get("resume_existing"):
+            self._clear_active_findings(user_key)
         operation_id = f"cleanup-{self.ACTION}-{hashlib.sha256(str(datetime.now(timezone.utc)).encode()).hexdigest()[:16]}"
         self._set_progress(
             user_key,
@@ -137,15 +142,52 @@ class FaceFrameStandardizationService:
         worker.start()
         return self.backend.getCleanupProgress(user_key, self.ACTION)
 
-    def findings(self) -> Dict[str, Any]:
+    def _active_key(self, user_key: str) -> str:
+        return str(user_key or "").strip() or "default"
+
+    def _read_active_findings(self, user_key: str) -> Dict[str, Any]:
+        with self._active_findings_lock:
+            current = self._active_findings.get(self._active_key(user_key), {})
+            return dict(current) if isinstance(current, dict) else {}
+
+    def _write_active_findings(self, user_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        current = dict(payload) if isinstance(payload, dict) else {}
+        with self._active_findings_lock:
+            self._active_findings[self._active_key(user_key)] = current
+        return dict(current)
+
+    def _clear_active_findings(self, user_key: str) -> None:
+        with self._active_findings_lock:
+            self._active_findings.pop(self._active_key(user_key), None)
+
+    def findings(self, *, user_key: str = "", operation_mode: str = "") -> Dict[str, Any]:
+        mode = str(operation_mode or "").strip().lower()
+        if mode == "immediate":
+            return self._read_active_findings(user_key)
         reader = getattr(self.backend.file_analysis, "readCheckFindings", None)
         findings = reader(self.FINDING_TYPE) if callable(reader) else {}
-        return findings if isinstance(findings, dict) else {}
+        if mode in {"findings", "save_only"}:
+            return findings if isinstance(findings, dict) else {}
+        active = self._read_active_findings(user_key)
+        return active or (findings if isinstance(findings, dict) else {})
 
-    def update_selection(self, *, item_id: str, selected: bool) -> Dict[str, Any]:
+    def _read_working_findings(self, *, user_key: str, operation_mode: str) -> Dict[str, Any]:
+        if str(operation_mode or "").strip().lower() == "immediate":
+            return self._read_active_findings(user_key)
+        return self.findings(operation_mode="findings")
+
+    def _write_working_findings(self, *, user_key: str, operation_mode: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if str(operation_mode or "").strip().lower() == "immediate":
+            return self._write_active_findings(user_key, payload)
+        self.backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+        return payload
+
+    def update_selection(self, *, item_id: str, selected: bool, user_key: str = "", operation_mode: str = "findings") -> Dict[str, Any]:
         normalized_id = str(item_id or "").strip()
-        with self.backend.file_analysis.lockCheckFindings(self.FINDING_TYPE):
-            payload = self.findings()
+        mode = str(operation_mode or "findings").strip().lower()
+        lock = self._active_findings_lock if mode == "immediate" else self.backend.file_analysis.lockCheckFindings(self.FINDING_TYPE)
+        with lock:
+            payload = self._read_working_findings(user_key=user_key, operation_mode=mode)
             entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
             updated = False
             for entry in entries:
@@ -158,7 +200,7 @@ class FaceFrameStandardizationService:
                 break
             if updated:
                 payload["entries"] = entries
-                self.backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+                self._write_working_findings(user_key=user_key, operation_mode=mode, payload=payload)
         return {"updated": updated, "item_id": normalized_id, "selected": bool(selected)}
 
     @staticmethod
@@ -169,8 +211,28 @@ class FaceFrameStandardizationService:
             and str(entry.get("selection_state") or "review").strip().lower() == "review"
         ]
 
-    def sync_review_progress(self, *, user_key: str) -> Dict[str, Any]:
-        findings = self.findings()
+    @staticmethod
+    def _resume_comparable_options(options: Dict[str, Any]) -> Dict[str, Any]:
+        comparable = dict(options) if isinstance(options, dict) else {}
+        comparable.pop("resume_existing", None)
+        return comparable
+
+    @staticmethod
+    def _prepare_automatic_selections(entries: List[Dict[str, Any]]) -> None:
+        writable_formats = {"ACD", "MICROSOFT", "MWG_REGIONS"}
+        for entry in entries:
+            if str(entry.get("write_state") or "pending").strip().lower() != "pending":
+                continue
+            source_frame = entry.get("source_frame") if isinstance(entry.get("source_frame"), dict) else {}
+            match = entry.get("match") if isinstance(entry.get("match"), dict) else {}
+            is_safe_writable = (
+                str(match.get("decision") or "").strip().lower() == "safe"
+                and str(source_frame.get("source_format") or "").strip().upper() in writable_formats
+            )
+            entry["selection_state"] = "selected" if is_safe_writable else "review"
+
+    def sync_review_progress(self, *, user_key: str, operation_mode: str = "immediate") -> Dict[str, Any]:
+        findings = self._read_working_findings(user_key=user_key, operation_mode=operation_mode)
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
         open_entries = self._open_entries(entries)
         current_entry = open_entries[0] if open_entries else {}
@@ -216,14 +278,16 @@ class FaceFrameStandardizationService:
             status=status,
         )
 
-    def apply_selected(self, *, selected_item_ids: Any = None) -> Dict[str, Any]:
+    def apply_selected(self, *, selected_item_ids: Any = None, user_key: str = "", operation_mode: str = "findings") -> Dict[str, Any]:
         requested_ids = {
             str(item or "").strip()
             for item in list(selected_item_ids or [])
             if str(item or "").strip()
         }
-        with self.backend.file_analysis.lockCheckFindings(self.FINDING_TYPE):
-            payload = self.findings()
+        mode = str(operation_mode or "findings").strip().lower()
+        lock = self._active_findings_lock if mode == "immediate" else self.backend.file_analysis.lockCheckFindings(self.FINDING_TYPE)
+        with lock:
+            payload = self._read_working_findings(user_key=user_key, operation_mode=mode)
             entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
             written_count = 0
             skipped_count = 0
@@ -283,7 +347,7 @@ class FaceFrameStandardizationService:
             payload["written_count"] = written_count
             payload["skipped_count"] = skipped_count
             payload["errors_count"] = errors_count
-            self.backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+            self._write_working_findings(user_key=user_key, operation_mode=mode, payload=payload)
         return {
             "written_count": written_count,
             "skipped_count": skipped_count,
@@ -380,14 +444,22 @@ class FaceFrameStandardizationService:
 
     def _run(self, *, user_key: str, cookies: Dict[str, str], base_url: str, options: Dict[str, Any]) -> None:
         backend = self.backend
-        previous = self.findings()
-        previous_entries = previous.get("entries") if isinstance(previous.get("entries"), list) else []
+        storage_mode = str(options.get("operation_mode") or "immediate").strip().lower()
+        persist_findings = storage_mode == "save_only"
+        active_findings = storage_mode == "immediate"
+        previous = self._read_active_findings(user_key) if active_findings and bool(options.get("resume_existing", False)) else (
+            self.findings(operation_mode="save_only") if persist_findings else {}
+        )
+        resume_existing = bool(options.get("resume_existing", False))
+        previous_entries = previous.get("entries") if (resume_existing or persist_findings) and isinstance(previous.get("entries"), list) else []
         resolved_ids = {
             str(entry.get("item_id") or "")
             for entry in previous_entries
             if str(entry.get("write_state") or "").strip().lower() in {"written", "skipped"}
         }
         entries: List[Dict[str, Any]] = [] if options["operation_mode"] == "save_only" else list(previous_entries)
+        if options["selection_mode"] == "safe_matches":
+            self._prepare_automatic_selections(entries)
         errors: List[Dict[str, str]] = []
         files_scanned = 0
         try:
@@ -416,9 +488,10 @@ class FaceFrameStandardizationService:
             total_files = len(paths)
             previous_options = previous.get("options") if isinstance(previous.get("options"), dict) else {}
             can_resume = (
-                options["operation_mode"] == "immediate"
+                resume_existing
+                and options["operation_mode"] == "immediate"
                 and str(previous.get("status") or "").strip().lower() == "review_required"
-                and previous_options == options
+                and self._resume_comparable_options(previous_options) == self._resume_comparable_options(options)
             )
             start_index = max(0, int(previous.get("scan_next_path_index") or 0)) if can_resume else 0
             start_index = min(start_index, total_files)
@@ -532,10 +605,13 @@ class FaceFrameStandardizationService:
                     "scan_next_path_index": index + 1,
                     "total_files": total_files,
                 }
-                backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+                if persist_findings:
+                    backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+                elif active_findings:
+                    self._write_active_findings(user_key, payload)
                 apply_result = {"written_count": 0, "errors_count": 0}
-                if options["selection_mode"] == "safe_matches":
-                    apply_result = self.apply_selected()
+                if active_findings and options["selection_mode"] == "safe_matches":
+                    apply_result = self.apply_selected(user_key=user_key, operation_mode="immediate")
                     payload = apply_result.get("findings") if isinstance(apply_result.get("findings"), dict) else payload
                     entries = payload.get("entries") if isinstance(payload.get("entries"), list) else entries
                 open_entries = self._open_entries(entries)
@@ -569,16 +645,22 @@ class FaceFrameStandardizationService:
                 "scan_next_path_index": files_scanned,
                 "total_files": total_files,
             }
-            backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+            if persist_findings:
+                backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+            elif active_findings:
+                self._write_active_findings(user_key, payload)
             apply_result = {"written_count": 0, "skipped_count": 0, "errors_count": 0}
-            if not stopped and options["selection_mode"] == "safe_matches":
-                apply_result = self.apply_selected()
+            if active_findings and not stopped and options["selection_mode"] == "safe_matches":
+                apply_result = self.apply_selected(user_key=user_key, operation_mode="immediate")
                 payload = apply_result.get("findings") if isinstance(apply_result.get("findings"), dict) else payload
                 entries = payload.get("entries") if isinstance(payload.get("entries"), list) else entries
             open_entries = self._open_entries(entries)
             review_required = options["operation_mode"] == "immediate" and bool(open_entries)
             payload["status"] = "review_required" if review_required else ("stopped" if stopped else "finished")
-            backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+            if persist_findings:
+                backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+            elif active_findings:
+                self._write_active_findings(user_key, payload)
             self._set_progress(
                 user_key,
                 running=False,
@@ -597,14 +679,18 @@ class FaceFrameStandardizationService:
             )
         except Exception as exc:
             errors.append({"image_path": "", "error": f"{type(exc).__name__}: {exc}"})
-            backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, {
+            payload = {
                 "finding_type": self.FINDING_TYPE,
                 "mode": "preview",
                 "target": "preview",
                 "options": options,
                 "entries": entries,
                 "errors": errors,
-            })
+            }
+            if persist_findings:
+                backend.file_analysis.writeCheckFindings(self.FINDING_TYPE, payload)
+            elif active_findings:
+                self._write_active_findings(user_key, payload)
             self._set_progress(
                 user_key,
                 running=False,

@@ -9,11 +9,10 @@
 				<div class="checks-actions-row checks-actions-row-selects">
 					<select v-model="vm.selectedCleanupAction" class="face-match-select" :disabled="vm.cleanupLoading">
 						<option value="normalize_names">{{ vm.$avt('cleanup:action_normalize_names', 'Adjust names by reference list') }}</option>
-						<option value="standardize_face_frames">{{ vm.$avt('cleanup:action_standardize_face_frames', 'Standardize face frames') }}</option>
-						<option value="recognition_build_profiles">{{ vm.$avt('cleanup:action_recognition_build_profiles', 'Build recognition profiles') }}</option>
-						<option value="recognition_check_reference_outliers">{{ vm.$avt('cleanup:action_recognition_check_outliers', 'Review recognition reference faces') }}</option>
-						<option value="recognition_analyze_unknown_faces">{{ vm.$avt('cleanup:action_recognition_unknown_faces', 'Find persons for unknown faces') }}</option>
-					</select>
+							<option value="standardize_face_frames">{{ vm.$avt('cleanup:action_standardize_face_frames', 'Standardize face frames') }}</option>
+							<option value="recognition_build_profiles">{{ vm.$avt('cleanup:action_recognition_build_profiles', 'Build recognition profiles') }}</option>
+							<option value="recognition_check_reference_outliers">{{ vm.$avt('cleanup:action_recognition_check_outliers', 'Review recognition reference faces') }}</option>
+						</select>
 				</div>
 				<div v-if="vm.selectedCleanupAction === 'normalize_names'" class="checks-actions-row checks-actions-row-switches">
 					<label v-for="target in ['ACD', 'MICROSOFT', 'MWG_REGIONS']" :key="`cleanup-target-${target}`" class="face-match-switch">
@@ -38,7 +37,6 @@
 					</div>
 				</div>
 			</div>
-			<FaceFrameStandardizationOptions v-if="vm.selectedCleanupAction === 'standardize_face_frames'" :vm="vm" />
 			<RecognitionOptions v-if="vm.isRecognitionCleanupAction" :vm="vm" />
 			<div class="face-match-status-card face-match-status-card-action">
 				<div class="face-match-status-head">
@@ -77,6 +75,31 @@
 				</div>
 			</div>
 		</section>
+		<div v-if="vm.faceFrameOptionsDialogVisible" class="sm-modal-backdrop">
+			<div class="sm-modal sm-settings-modal" role="dialog" aria-modal="true" aria-labelledby="face-frame-options-dialog-title">
+				<div class="sm-settings-modal-head">
+					<div id="face-frame-options-dialog-title" class="sm-modal-title">{{ vm.$avt('cleanup:face_frames_settings_title', 'Settings') }}</div>
+					<button
+						type="button"
+						class="sm-settings-modal-close"
+						:aria-label="vm.$avt('cleanup:button_cancel', 'Cancel')"
+						@click="vm.closeFaceFrameOptionsDialog"
+					>
+						&times;
+					</button>
+				</div>
+				<div class="sm-settings-modal-tabs">
+					<div class="sm-settings-modal-tab active">{{ vm.$avt('cleanup:action_standardize_face_frames', 'Standardize face frames') }}</div>
+				</div>
+				<div class="sm-settings-modal-body">
+					<FaceFrameStandardizationOptions :vm="vm" :modal="true" />
+				</div>
+				<div class="sm-settings-modal-actions">
+					<v-button @click="vm.closeFaceFrameOptionsDialog" style="width: 150px;">{{ vm.$avt('cleanup:button_cancel', 'Cancel') }}</v-button>
+					<v-button @click="vm.confirmFaceFrameOptionsDialog" :disabled="!vm.cleanupCanStart" style="width: 150px;">{{ vm.$avt('cleanup:button_ok', 'OK') }}</v-button>
+				</div>
+			</div>
+		</div>
 		<FaceFrameFindingsTable v-if="vm.selectedCleanupAction === 'standardize_face_frames'" :vm="vm" />
 		<RecognitionFindingsReview v-if="vm.isRecognitionReviewAction" :vm="vm" />
 	</div>

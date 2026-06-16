@@ -3,22 +3,32 @@ from pathlib import Path
 
 def test_cleanup_exposes_recognition_actions_and_standard_options():
     view = Path("ui/src/views/CleanupView.vue").read_text(encoding="utf-8")
+    face_match_view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
     options = Path("ui/src/components/cleanup/RecognitionOptions.vue").read_text(encoding="utf-8")
     mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
+    face_match_mixin = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
 
     for action in (
         "recognition_build_profiles",
         "recognition_check_reference_outliers",
-        "recognition_analyze_unknown_faces",
     ):
         assert f'value="{action}"' in view
         assert f"'{action}'" in mixin
+    assert 'value="recognition_analyze_unknown_faces"' not in view
+    assert 'value="search_missing_faces_insightface"' in face_match_view
+    assert 'value="recognition_analyze_unknown_faces"' in face_match_view
+    assert "faceMatchRecognizeMissingInsightFacePersons" in face_match_view
+    assert "faceMatchRecognitionActionSelected" in face_match_view
+    assert "getCleanupStatusProgress()" in face_match_view
+    assert "getCleanupStatusCounters()" in face_match_view
+    assert "recognize_persons:" in face_match_mixin
     for mode in ("immediate", "save_only", "findings"):
         assert f'value="{mode}"' in options
     assert "sm-form-select" in options
     assert "sm-form-input sm-form-number-input" in options
     assert "recognitionOptions" in mixin
-    assert "isRecognitionCleanupAction ? this.recognitionOptions" in mixin
+    assert "...this.recognitionOptions" in mixin
+    assert "resume_existing: !!options.resumeExisting" in mixin
 
 
 def test_recognition_actions_do_not_fall_back_to_name_cleanup():

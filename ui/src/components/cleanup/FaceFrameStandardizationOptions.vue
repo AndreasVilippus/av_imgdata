@@ -1,5 +1,5 @@
 <template>
-	<section class="config-card cleanup-options-card">
+	<section :class="['config-card', 'cleanup-options-card', { 'cleanup-options-card-modal': modal }]">
 		<div class="sm-section-title">{{ vm.$avt('cleanup:face_frames_options', 'Preview options') }}</div>
 		<div class="config-card-desc">
 			{{ vm.$avt('cleanup:face_frames_preview_only', 'The scan only creates a preview. Selected metadata frames can then be applied; Photos frames remain locked.') }}
@@ -129,7 +129,10 @@
 <script>
 export default {
 	name: 'FaceFrameStandardizationOptions',
-	props: { vm: { type: Object, required: true } },
+	props: {
+		vm: { type: Object, required: true },
+		modal: { type: Boolean, default: false },
+	},
 	computed: {
 		sourceOptions() {
 			return [

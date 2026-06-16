@@ -52,6 +52,39 @@ def test_review_updates_only_persisted_recognition_finding():
     assert entry["selection_state"] == "selected"
 
 
+def test_immediate_recognition_findings_do_not_use_persisted_list():
+    service, findings = _service()
+    findings.values[service.FINDING_SUGGESTIONS] = {
+        "entries": [{"suggestion_id": "old", "selection_state": "review"}],
+    }
+
+    assert service.findings(
+        service.ACTION_SUGGEST,
+        user_key="user",
+        operation_mode="immediate",
+    ) == {}
+
+    service._write_findings(
+        service.FINDING_SUGGESTIONS,
+        service.ACTION_SUGGEST,
+        service.normalize_options({"operation_mode": "immediate"}),
+        [{"suggestion_id": "active", "selection_state": "review"}],
+        user_key="user",
+    )
+
+    assert findings.values[service.FINDING_SUGGESTIONS]["entries"][0]["suggestion_id"] == "old"
+    assert service.findings(
+        service.ACTION_SUGGEST,
+        user_key="user",
+        operation_mode="immediate",
+    )["entries"][0]["suggestion_id"] == "active"
+    assert service.findings(
+        service.ACTION_SUGGEST,
+        user_key="user",
+        operation_mode="findings",
+    )["entries"][0]["suggestion_id"] == "old"
+
+
 def test_apply_uses_persisted_selected_suggestion_and_existing_assign_orchestration():
     service, findings = _service()
     calls = []
@@ -100,3 +133,64 @@ def test_excluding_outlier_updates_persisted_profile_immediately():
     profile = findings.values[(service.PROFILE_STATE_TYPE, state_key)]["profiles"][0]
     assert [entry["face_id"] for entry in profile["references"]] == [2]
     assert profile["used_count"] == 1
+
+
+def test_unreadable_image_uses_embedded_preview_instead_of_failing_run(tmp_path):
+    service, _findings = _service()
+    image_path = tmp_path / "image.heic"
+    image_path.write_bytes(b"heic")
+    logs = []
+    service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: b"jpeg")
+    service.backend._debugLog = lambda event, **fields: logs.append((event, fields))
+    service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [{"id": 10, "folder_id": 20, "filename": "image.heic"}]
+    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda **_kwargs: [])
+    service._item_path = lambda **_kwargs: str(image_path)
+    embedder = SimpleNamespace(
+        detect_and_embed=lambda _path: (_ for _ in ()).throw(ValueError("image could not be read")),
+        detect_and_embed_bytes=lambda _bytes: [],
+    )
+
+    references = service._person_references(
+        user_key="u", cookies={}, base_url="https://dsm", shared_folder=str(tmp_path),
+        person={"id": 1}, embedder=embedder, options=service.normalize_options({}), folder_cache={},
+    )
+
+    assert references == []
+    assert logs[0][0] == "recognition_image_preview_fallback"
+
+
+def test_person_reference_scan_reports_image_counter_progress_without_current_file(tmp_path):
+    service, _findings = _service()
+    image_path = tmp_path / "image.jpg"
+    image_path.write_bytes(b"jpeg")
+    progress_updates = []
+    service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: None)
+    service.backend._debugLog = lambda *_args, **_kwargs: None
+    service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [{"id": 10, "folder_id": 20, "filename": "image.jpg"}]
+    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda **_kwargs: [])
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+    service._item_path = lambda **_kwargs: str(image_path)
+    embedder = SimpleNamespace(detect_and_embed=lambda _path: [])
+
+    references = service._person_references(
+        user_key="u", cookies={}, base_url="https://dsm", shared_folder=str(tmp_path),
+        person={"id": 1, "name": "Ada"}, embedder=embedder, options=service.normalize_options({}), folder_cache={},
+        progress_context={
+            "action": service.ACTION_BUILD,
+            "phase": "reading_reference_images",
+            "persons_scanned": 0,
+            "persons_total": 1,
+        },
+    )
+
+    assert references == []
+    assert progress_updates
+    _user_key, update = progress_updates[0]
+    assert update["images_scanned"] == 1
+    assert update["images_total"] == 1
+    assert "current_path" not in update
+    assert "current_name" not in update
+    assert update["status"]["progress"]["kind"] == "images"

@@ -42,6 +42,22 @@ class InsightFaceEmbedder(InsightFaceDetector):
         image = cv2.imread(str(image_path))
         if image is None:
             raise ValueError(f"image could not be read: {image_path}")
+        return self._detect_and_embed_image(image)
+
+    def detect_and_embed_bytes(self, image_bytes: bytes) -> List[Dict[str, Any]]:
+        try:
+            import cv2
+            import numpy
+        except ImportError as exc:
+            raise FaceDetectorUnavailable(f"opencv-python-headless/cv2 and numpy are required: {exc}") from exc
+        if not image_bytes:
+            raise ValueError("image preview is empty")
+        image = cv2.imdecode(numpy.frombuffer(image_bytes, dtype=numpy.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("image preview could not be decoded")
+        return self._detect_and_embed_image(image)
+
+    def _detect_and_embed_image(self, image: Any) -> List[Dict[str, Any]]:
         height, width = image.shape[:2]
         try:
             faces = self._load_app().get(image, max_num=self.max_num)

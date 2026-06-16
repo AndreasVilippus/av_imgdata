@@ -8,10 +8,12 @@ export default {
 				MWG_REGIONS: true,
 			},
 			cleanupLoading: false,
-			cleanupStatusMessage: '',
-			cleanupProgress: {},
-			cleanupProgressTimer: null,
-			cleanupProgressRequestId: 0,
+				cleanupStatusMessage: '',
+				cleanupProgress: {},
+				cleanupProgressTimer: null,
+				cleanupProgressRequestId: 0,
+				cleanupRuntimeAction: '',
+			faceFrameOptionsDialogVisible: false,
 			faceFrameOptions: {
 				operation_mode: 'immediate',
 				selection_mode: 'review_all',
@@ -60,6 +62,9 @@ export default {
 			recognitionDecisionLoading: false,
 		};
 	},
+	created() {
+		this.loadStoredFaceFrameStartOptions();
+	},
 	watch: {
 		selectedCleanupAction(value) {
 			this.refreshCleanupSessionState();
@@ -72,7 +77,7 @@ export default {
 		},
 	},
 	computed: {
-		cleanupPrimaryButtonLabel() {
+			cleanupPrimaryButtonLabel() {
 			if (this.cleanupLoading) {
 				return this.$avt('cleanup:button_stop', 'Stop');
 			}
@@ -83,23 +88,34 @@ export default {
 				return this.$avt('cleanup:face_frames_operation_findings', 'Process saved findings list');
 			}
 			return this.$avt('cleanup:button_start', 'Start');
-		},
-		isRecognitionCleanupAction() {
-			return [
-				'recognition_build_profiles',
-				'recognition_check_reference_outliers',
-				'recognition_analyze_unknown_faces',
-			].includes(this.selectedCleanupAction);
-		},
-		isRecognitionReviewAction() {
-			return [
-				'recognition_check_reference_outliers',
-				'recognition_analyze_unknown_faces',
-			].includes(this.selectedCleanupAction);
-		},
-		isRecognitionOutlierAction() {
-			return this.selectedCleanupAction === 'recognition_check_reference_outliers';
-		},
+			},
+			activeCleanupAction() {
+				return String(this.cleanupRuntimeAction || this.selectedCleanupAction || 'normalize_names');
+			},
+			faceMatchRecognitionActionSelected() {
+				return this.selectedFaceMatchingAction === 'recognition_analyze_unknown_faces';
+			},
+			selectedRecognitionAction() {
+				return this.faceMatchRecognitionActionSelected
+					? 'recognition_analyze_unknown_faces'
+					: this.activeCleanupAction;
+			},
+			isRecognitionCleanupAction() {
+				return [
+					'recognition_build_profiles',
+					'recognition_check_reference_outliers',
+					'recognition_analyze_unknown_faces',
+				].includes(this.selectedRecognitionAction);
+			},
+			isRecognitionReviewAction() {
+				return [
+					'recognition_check_reference_outliers',
+					'recognition_analyze_unknown_faces',
+				].includes(this.selectedRecognitionAction);
+			},
+			isRecognitionOutlierAction() {
+				return this.selectedRecognitionAction === 'recognition_check_reference_outliers';
+			},
 		recognitionManualReviewEnabled() {
 			return this.isRecognitionReviewAction && this.recognitionOptions.operation_mode !== 'save_only';
 		},
@@ -168,6 +184,58 @@ export default {
 				: [640, 640];
 			detSize[index] = value;
 			this.updateFaceFrameOption('det_size', detSize);
+		},
+		cloneFaceFrameOptions(options = this.faceFrameOptions) {
+			return JSON.parse(JSON.stringify(options || {}));
+		},
+		getFaceFrameStartOptionsStorageKey() {
+			return 'av_imgdata.cleanup.standardize_face_frames.options';
+		},
+		loadStoredFaceFrameStartOptions() {
+			if (typeof window === 'undefined' || !window.localStorage) {
+				return;
+			}
+			try {
+				const stored = JSON.parse(window.localStorage.getItem(this.getFaceFrameStartOptionsStorageKey()) || '{}');
+				if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
+					return;
+				}
+				this.faceFrameOptions = {
+					...this.faceFrameOptions,
+					...stored,
+					sources: {
+						...(this.faceFrameOptions.sources || {}),
+						...(stored.sources && typeof stored.sources === 'object' ? stored.sources : {}),
+					},
+					det_size: Array.isArray(stored.det_size) ? [...stored.det_size] : this.faceFrameOptions.det_size,
+				};
+			} catch (err) {
+				// Ignore broken local storage state and keep the packaged defaults.
+			}
+		},
+		persistFaceFrameStartOptions() {
+			if (typeof window === 'undefined' || !window.localStorage) {
+				return;
+			}
+			try {
+				window.localStorage.setItem(
+					this.getFaceFrameStartOptionsStorageKey(),
+					JSON.stringify(this.cloneFaceFrameOptions())
+				);
+			} catch (err) {
+				// Starting the scan must not depend on browser storage availability.
+			}
+		},
+		openFaceFrameOptionsDialog() {
+			this.faceFrameOptionsDialogVisible = true;
+		},
+		closeFaceFrameOptionsDialog() {
+			this.faceFrameOptionsDialogVisible = false;
+		},
+		async confirmFaceFrameOptionsDialog() {
+			this.persistFaceFrameStartOptions();
+			this.faceFrameOptionsDialogVisible = false;
+			await this.startCleanupRun({ skipFaceFrameOptionsDialog: true });
 		},
 		getCleanupStatusCounterLabel(counter) {
 			if (!counter || typeof counter !== 'object') {
@@ -292,124 +360,168 @@ export default {
 			}
 			return true;
 		},
-		async fetchCleanupProgress() {
-			const requestId = this.cleanupProgressRequestId + 1;
-			this.cleanupProgressRequestId = requestId;
-			try {
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
-					action: this.selectedCleanupAction,
-				}, { resume: false, requireSynoToken: false });
-				if (this.cleanupProgressRequestId !== requestId) {
+			async fetchCleanupProgress() {
+				const requestId = this.cleanupProgressRequestId + 1;
+				this.cleanupProgressRequestId = requestId;
+				const action = String(this.cleanupRuntimeAction || this.selectedCleanupAction || 'normalize_names');
+				try {
+					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
+						action,
+					}, { resume: false, requireSynoToken: false });
+					if (this.cleanupProgressRequestId !== requestId) {
+						return {};
+					}
+					const progress = this.getResponseData(data);
+					if (progress && Object.keys(progress).length) {
+						this.applyCleanupProgress(progress);
+					}
+					if (!progress.running) {
+						const finishedAction = action;
+						this.cleanupLoading = false;
+						this.stopCleanupProgressPolling();
+						if (this.selectedCleanupAction === 'standardize_face_frames') {
+							this.fetchFaceFrameFindings();
+						}
+						if ([
+							'recognition_check_reference_outliers',
+							'recognition_analyze_unknown_faces',
+						].includes(finishedAction)) {
+							this.fetchRecognitionFindings();
+						}
+						this.cleanupRuntimeAction = '';
+					}
+					return progress;
+				} catch (err) {
+					if (this.cleanupProgressRequestId === requestId) {
+						this.cleanupStatusMessage = `Error: ${err.message}`;
+						this.cleanupProgress = {
+							...(this.cleanupProgress || {}),
+							message: `Error: ${err.message}`,
+						};
+					}
 					return {};
 				}
-				const progress = this.getResponseData(data);
-				if (progress && Object.keys(progress).length) {
+			},
+			startCleanupProgressPolling() {
+				this.startNamedPolling('cleanupProgressTimer', () => {
+					this.fetchCleanupProgress();
+				}, 1000, { skipIfPending: true });
+			},
+			stopCleanupProgressPolling() {
+				this.stopNamedPolling('cleanupProgressTimer');
+			},
+			async refreshCleanupSessionState() {
+				const progress = await this.fetchCleanupProgress();
+				if (progress && progress.running) {
+					this.cleanupLoading = true;
+					this.cleanupRuntimeAction = String(progress.action || this.cleanupRuntimeAction || this.selectedCleanupAction || '');
+					this.startCleanupProgressPolling();
+					return;
+				}
+				this.cleanupLoading = false;
+			},
+			async handleCleanupAction() {
+				if (this.cleanupLoading) {
+					await this.stopCleanupRun();
+					return;
+				}
+				if (this.selectedCleanupAction === 'standardize_face_frames') {
+					this.openFaceFrameOptionsDialog();
+					return;
+				}
+				await this.startCleanupRun();
+			},
+			async startCleanupRun() {
+				const options = arguments[0] && typeof arguments[0] === 'object' ? arguments[0] : {};
+				const cleanupAction = String(options.actionOverride || this.selectedCleanupAction || 'normalize_names');
+				const isRecognitionAction = [
+					'recognition_build_profiles',
+					'recognition_check_reference_outliers',
+					'recognition_analyze_unknown_faces',
+				].includes(cleanupAction);
+				const isRecognitionReviewAction = [
+					'recognition_check_reference_outliers',
+					'recognition_analyze_unknown_faces',
+				].includes(cleanupAction);
+				if (
+					cleanupAction === 'standardize_face_frames'
+					&& !options.skipFaceFrameOptionsDialog
+				) {
+					this.openFaceFrameOptionsDialog();
+					return;
+				}
+				if (isRecognitionReviewAction && this.recognitionOptions.operation_mode === 'findings') {
+					await this.fetchRecognitionFindings();
+					this.cleanupStatusMessage = this.recognitionReviewFindings.length
+						? this.$avt('cleanup:recognition_review_required', 'Manual review required for the next recognition finding.')
+						: this.$avt('cleanup:recognition_no_review_findings', 'No recognition findings require manual review.');
+					return;
+				}
+				if (
+					cleanupAction === 'standardize_face_frames'
+					&& this.faceFrameOptions.operation_mode === 'findings'
+				) {
+					this.persistFaceFrameStartOptions();
+					await this.fetchFaceFrameFindings();
+					this.cleanupStatusMessage = this.faceFrameReviewFindings.length
+						? this.$avt('cleanup:face_frames_review_required', 'Manual review required for the next face-frame finding.')
+						: this.$avt('cleanup:face_frames_findings_empty', 'No saved face-frame findings.');
+					return;
+				}
+				this.stopCleanupProgressPolling();
+				this.cleanupProgressRequestId += 1;
+				this.cleanupLoading = true;
+				this.cleanupRuntimeAction = cleanupAction;
+				this.cleanupProgress = {
+					running: true,
+					action: cleanupAction,
+					message: this.$avt('cleanup:status_preparing', 'Cleanup starts. Preparing run...'),
+				};
+				this.cleanupStatusMessage = this.$avt('cleanup:status_preparing', 'Cleanup starts. Preparing run...');
+				try {
+					const cleanupOptions = cleanupAction === 'standardize_face_frames'
+						? {
+							...this.faceFrameOptions,
+							resume_existing: !!options.resumeExisting,
+						}
+						: (isRecognitionAction ? {
+							...this.recognitionOptions,
+							resume_existing: !!options.resumeExisting,
+						} : {});
+					if (cleanupAction === 'standardize_face_frames') {
+						this.persistFaceFrameStartOptions();
+					}
+					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_start', {
+						action: cleanupAction,
+						targets: this.selectedCleanupTargets,
+						options: cleanupOptions,
+					});
+					const progress = this.getResponseData(data);
 					this.applyCleanupProgress(progress);
-				}
-				if (!progress.running) {
+					if (progress.running) {
+						this.startCleanupProgressPolling();
+					} else {
+						this.cleanupLoading = false;
+						this.cleanupRuntimeAction = '';
+					}
+				} catch (err) {
 					this.cleanupLoading = false;
-					this.stopCleanupProgressPolling();
-					if (this.selectedCleanupAction === 'standardize_face_frames') {
-						this.fetchFaceFrameFindings();
-					}
-					if (this.isRecognitionReviewAction) {
-						this.fetchRecognitionFindings();
-					}
-				}
-				return progress;
-			} catch (err) {
-				if (this.cleanupProgressRequestId === requestId) {
-					this.cleanupStatusMessage = `Error: ${err.message}`;
+					this.cleanupRuntimeAction = '';
 					this.cleanupProgress = {
 						...(this.cleanupProgress || {}),
+						running: false,
+						status: 'failed',
 						message: `Error: ${err.message}`,
 					};
+					this.cleanupStatusMessage = `Error: ${err.message}`;
 				}
-				return {};
-			}
-		},
-		startCleanupProgressPolling() {
-			this.startNamedPolling('cleanupProgressTimer', () => {
-				this.fetchCleanupProgress();
-			}, 1000, { skipIfPending: true });
-		},
-		stopCleanupProgressPolling() {
-			this.stopNamedPolling('cleanupProgressTimer');
-		},
-		async refreshCleanupSessionState() {
-			const progress = await this.fetchCleanupProgress();
-			if (progress && progress.running) {
-				this.cleanupLoading = true;
-				this.startCleanupProgressPolling();
-				return;
-			}
-			this.cleanupLoading = false;
-		},
-		async handleCleanupAction() {
-			if (this.cleanupLoading) {
-				await this.stopCleanupRun();
-				return;
-			}
-			await this.startCleanupRun();
-		},
-		async startCleanupRun() {
-			if (this.isRecognitionReviewAction && this.recognitionOptions.operation_mode === 'findings') {
-				await this.fetchRecognitionFindings();
-				this.cleanupStatusMessage = this.recognitionReviewFindings.length
-					? this.$avt('cleanup:recognition_review_required', 'Manual review required for the next recognition finding.')
-					: this.$avt('cleanup:recognition_no_review_findings', 'No recognition findings require manual review.');
-				return;
-			}
-			if (
-				this.selectedCleanupAction === 'standardize_face_frames'
-				&& this.faceFrameOptions.operation_mode === 'findings'
-			) {
-				await this.fetchFaceFrameFindings();
-				this.cleanupStatusMessage = this.faceFrameReviewFindings.length
-					? this.$avt('cleanup:face_frames_review_required', 'Manual review required for the next face-frame finding.')
-					: this.$avt('cleanup:face_frames_findings_empty', 'No saved face-frame findings.');
-				return;
-			}
-			this.stopCleanupProgressPolling();
-			this.cleanupProgressRequestId += 1;
-			this.cleanupLoading = true;
-			this.cleanupProgress = {
-				running: true,
-				action: this.selectedCleanupAction,
-				message: this.$avt('cleanup:status_preparing', 'Cleanup starts. Preparing run...'),
-			};
-			this.cleanupStatusMessage = this.$avt('cleanup:status_preparing', 'Cleanup starts. Preparing run...');
-			try {
-				const cleanupOptions = this.selectedCleanupAction === 'standardize_face_frames'
-					? this.faceFrameOptions
-					: (this.isRecognitionCleanupAction ? this.recognitionOptions : {});
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_start', {
-					action: this.selectedCleanupAction,
-					targets: this.selectedCleanupTargets,
-					options: cleanupOptions,
-				});
-				const progress = this.getResponseData(data);
-				this.applyCleanupProgress(progress);
-				if (progress.running) {
-					this.startCleanupProgressPolling();
-				} else {
-					this.cleanupLoading = false;
-				}
-			} catch (err) {
-				this.cleanupLoading = false;
-				this.cleanupProgress = {
-					...(this.cleanupProgress || {}),
-					running: false,
-					status: 'failed',
-					message: `Error: ${err.message}`,
-				};
-				this.cleanupStatusMessage = `Error: ${err.message}`;
-			}
-		},
+			},
 		async fetchFaceFrameFindings() {
 			this.faceFrameFindingsLoading = true;
 			try {
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_face_frames_findings', {}, { resume: false, requireSynoToken: false });
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_face_frames_findings', {
+					operation_mode: this.faceFrameOptions.operation_mode,
+				}, { resume: false, requireSynoToken: false });
 				const payload = this.getResponseData(data);
 				this.faceFrameFindings = payload && Array.isArray(payload.entries) ? payload.entries : [];
 				this.faceFrameCurrentIndex = Math.min(this.faceFrameCurrentIndex, Math.max(0, this.faceFrameReviewFindings.length - 1));
@@ -420,15 +532,16 @@ export default {
 				this.faceFrameFindingsLoading = false;
 			}
 		},
-		async fetchRecognitionFindings() {
-			this.recognitionFindingsLoading = true;
-			try {
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/recognition_findings', {
-					action: this.selectedCleanupAction,
-				}, { resume: false, requireSynoToken: false });
-				const payload = this.getResponseData(data);
-				this.recognitionFindings = payload && Array.isArray(payload.entries) ? payload.entries : [];
-				this.recognitionCurrentIndex = Math.min(this.recognitionCurrentIndex, Math.max(0, this.recognitionReviewFindings.length - 1));
+			async fetchRecognitionFindings() {
+				this.recognitionFindingsLoading = true;
+				try {
+					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/recognition_findings', {
+						action: this.selectedRecognitionAction,
+						operation_mode: this.recognitionOptions.operation_mode,
+					}, { resume: false, requireSynoToken: false });
+					const payload = this.getResponseData(data);
+					this.recognitionFindings = payload && Array.isArray(payload.entries) ? payload.entries : [];
+					this.recognitionCurrentIndex = Math.min(this.recognitionCurrentIndex, Math.max(0, this.recognitionReviewFindings.length - 1));
 			} catch (err) {
 				this.recognitionFindings = [];
 			} finally {
@@ -455,24 +568,29 @@ export default {
 			if (!finding || this.recognitionDecisionLoading) {
 				return;
 			}
-			this.recognitionDecisionLoading = true;
-			try {
-				const itemId = this.isRecognitionOutlierAction ? finding.outlier_id : finding.suggestion_id;
-				await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/recognition_review', {
-					action: this.selectedCleanupAction,
-					item_id: itemId,
-					decision,
-				});
+				this.recognitionDecisionLoading = true;
+				try {
+					const itemId = this.isRecognitionOutlierAction ? finding.outlier_id : finding.suggestion_id;
+					await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/recognition_review', {
+						action: this.selectedRecognitionAction,
+						item_id: itemId,
+						decision,
+						operation_mode: this.recognitionOptions.operation_mode,
+					});
 				if (options.apply) {
 					await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/recognition_suggestions_apply', {
 						selected_suggestion_ids: [itemId],
+						operation_mode: this.recognitionOptions.operation_mode,
 					});
 				}
-				await this.fetchRecognitionFindings();
-				this.recognitionCurrentIndex = 0;
-				if (this.recognitionOptions.operation_mode === 'immediate' && !this.recognitionReviewFindings.length) {
-					await this.startCleanupRun();
-				}
+					await this.fetchRecognitionFindings();
+					this.recognitionCurrentIndex = 0;
+					if (this.recognitionOptions.operation_mode === 'immediate' && !this.recognitionReviewFindings.length) {
+						await this.startCleanupRun({
+							actionOverride: this.selectedRecognitionAction,
+							resumeExisting: true,
+						});
+					}
 			} catch (err) {
 				this.cleanupStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
@@ -547,17 +665,19 @@ export default {
 				await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_face_frames_select', {
 					item_id: finding.item_id,
 					selected: !!selected,
+					operation_mode: this.faceFrameOptions.operation_mode,
 				});
 				if (selected) {
 					await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_face_frames_apply', {
 						selected_item_ids: [finding.item_id],
+						operation_mode: this.faceFrameOptions.operation_mode,
 					});
 				}
 				await this.fetchFaceFrameFindings();
 				if (this.faceFrameReviewFindings.length) {
 					this.faceFrameCurrentIndex = 0;
 				} else if (this.faceFrameOptions.operation_mode === 'immediate') {
-					await this.startCleanupRun();
+					await this.startCleanupRun({ skipFaceFrameOptionsDialog: true, resumeExisting: true });
 				}
 			} catch (err) {
 				this.cleanupStatusMessage = `Error: ${this.getErrorMessage(err)}`;
@@ -576,6 +696,7 @@ export default {
 					.map((finding) => finding.item_id);
 				const response = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_face_frames_apply', {
 					selected_item_ids: selectedItemIds,
+					operation_mode: this.faceFrameOptions.operation_mode,
 				});
 				const result = this.getResponseData(response);
 				const findings = result.findings && Array.isArray(result.findings.entries) ? result.findings.entries : [];
@@ -591,17 +712,19 @@ export default {
 				this.faceFrameApplyLoading = false;
 			}
 		},
-		async stopCleanupRun() {
-			try {
-				await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_stop', {
-					action: this.selectedCleanupAction,
-				}, { resume: false, requireSynoToken: false });
-			} catch (err) {
-				// Best effort.
-			}
-			this.cleanupStatusMessage = this.$avt('cleanup:progress_stopping', 'Cleanup is stopping...');
-			await this.fetchCleanupProgress();
-		},
+			async stopCleanupRun(options = {}) {
+				const action = String(options.actionOverride || this.cleanupRuntimeAction || this.selectedCleanupAction || 'normalize_names');
+				this.cleanupRuntimeAction = action;
+				try {
+					await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_stop', {
+						action,
+					}, { resume: false, requireSynoToken: false });
+				} catch (err) {
+					// Best effort.
+				}
+				this.cleanupStatusMessage = this.$avt('cleanup:progress_stopping', 'Cleanup is stopping...');
+				await this.fetchCleanupProgress();
+			},
 		getCleanupTargetLabel(target) {
 			const key = String(target || '').trim().toUpperCase();
 			if (key === 'ACD') {

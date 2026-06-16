@@ -33,6 +33,7 @@ from services.config_service import ConfigService
 from services.checks_workflow_service import ChecksWorkflowService
 from services.exiftool_service import ExifToolService
 from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
+from services.face_embedder import InsightFaceEmbedder
 from services.face_frame_standardization_service import FaceFrameStandardizationService
 from services.face_recognition_service import FaceRecognitionService
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
@@ -1711,6 +1712,7 @@ class ImgDataService:
         transferred_count: int,
         auto: bool,
         save_only: bool,
+        recognize_persons: bool = False,
         action: str = "search_photo_face_in_file",
         findings_count: int = 0,
         path_index: int = 0,
@@ -1726,6 +1728,7 @@ class ImgDataService:
             "transferred_count": int(transferred_count),
             "auto": bool(auto),
             "save_only": bool(save_only),
+            "recognize_persons": bool(recognize_persons),
             "action": str(action or "search_photo_face_in_file"),
             "findings_count": max(0, int(findings_count)),
             "path_index": max(0, int(path_index)),
@@ -3295,9 +3298,14 @@ class ImgDataService:
             image_path = str(resolved.get("image_path") or "").strip()
             metadata_face = resolved.get("metadata_face")
             if action == "search_missing_faces_insightface":
-                resolved["source_name"] = str(resolved.get("source_name") or "").strip()
-                resolved["matched_person"] = None
-                resolved["matched_person_id"] = None
+                matched_person = resolved.get("matched_person") if isinstance(resolved.get("matched_person"), dict) else None
+                resolved["source_name"] = str(
+                    resolved.get("source_name")
+                    or (matched_person.get("name") if isinstance(matched_person, dict) else "")
+                    or ""
+                ).strip()
+                resolved["matched_person"] = matched_person
+                resolved["matched_person_id"] = matched_person.get("id") if isinstance(matched_person, dict) else None
                 resolved["name_mapping"] = None
                 resolved["lookup_debug"] = {}
                 return resolved
@@ -6031,6 +6039,7 @@ class ImgDataService:
         auto: bool = False,
         save_only: bool = False,
         resume_from_progress: bool = False,
+        recognize_persons: bool = False,
     ) -> Dict[str, Any]:
         return self.face_match_workflow.start_discovery(
             user_key=user_key,
@@ -6044,6 +6053,7 @@ class ImgDataService:
             auto=auto,
             save_only=save_only,
             resume_from_progress=resume_from_progress,
+            recognize_persons=recognize_persons,
         )
 
     def searchPhotoFaceInFile(
@@ -7734,6 +7744,7 @@ class ImgDataService:
         skip_targets: Optional[List[str]] = None,
         auto: bool = False,
         save_only: bool = False,
+        recognize_persons: bool = False,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
@@ -7792,6 +7803,7 @@ class ImgDataService:
                 auto=auto,
                 save_only=save_only,
                 action=action,
+                recognize_persons=bool(recognize_persons),
                 findings_count=findings_count,
                 path_index=path_index,
                 images_read=images_read,
@@ -7847,10 +7859,25 @@ class ImgDataService:
                 }
             photos_lookup_cache = PhotosLookupCache()
 
-            detector = InsightFaceDetector(
-                model_name=self._configuredInsightFaceModelName(),
-                model_root=self._configuredInsightFaceModelRoot(),
+            detector = (
+                InsightFaceEmbedder(
+                    model_name=self._configuredInsightFaceModelName(),
+                    model_root=self._configuredInsightFaceModelRoot(),
+                )
+                if recognize_persons else
+                InsightFaceDetector(
+                    model_name=self._configuredInsightFaceModelName(),
+                    model_root=self._configuredInsightFaceModelRoot(),
+                )
             )
+            recognition_profiles = []
+            if recognize_persons:
+                profiles_payload = self.face_recognition.profiles({})
+                profile_entries = profiles_payload.get("profiles") if isinstance(profiles_payload, dict) else []
+                recognition_profiles = [
+                    profile for profile in (profile_entries if isinstance(profile_entries, list) else [])
+                    if profile.get("centroid_embedding")
+                ]
             self._setFaceMatchingProgressMessage(
                 user_key,
                 "face_match:progress_listing_files",
@@ -7869,6 +7896,7 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action=action,
+                    recognize_persons=bool(recognize_persons),
                     findings_count=findings_count,
                     path_index=path_index,
                     images_read=images_read,
@@ -7902,6 +7930,7 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action=action,
+                    recognize_persons=bool(recognize_persons),
                     findings_count=findings_count,
                     path_index=path_index,
                     images_read=images_read,
@@ -7943,6 +7972,7 @@ class ImgDataService:
                             auto=auto,
                             save_only=save_only,
                             action=action,
+                            recognize_persons=bool(recognize_persons),
                             findings_count=findings_count,
                         ),
                     }
@@ -7963,17 +7993,22 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         action=action,
+                        recognize_persons=bool(recognize_persons),
                         findings_count=findings_count,
                     ),
                 )
 
-                detected_faces = [
-                    face for face in (
-                        self._insightFaceDetectionToMetadataFace(detection)
-                        for detection in detector.detect(Path(image_path))
-                    )
+                raw_detections = (
+                    detector.detect_and_embed(Path(image_path))
+                    if recognize_persons
+                    else detector.detect(Path(image_path))
+                )
+                detected_pairs = [
+                    (face, detection) for detection in raw_detections
+                    for face in [self._insightFaceDetectionToMetadataFace(detection)]
                     if face is not None
                 ]
+                detected_faces = [face for face, _detection in detected_pairs]
                 metadata_faces_read += len(detected_faces)
                 self._setFaceMatchingProgressMessage(
                     user_key,
@@ -7990,6 +8025,7 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         action=action,
+                        recognize_persons=bool(recognize_persons),
                         findings_count=findings_count,
                     ),
                 )
@@ -8035,6 +8071,41 @@ class ImgDataService:
                 )
                 if target_face is None:
                     continue
+                target_detection = next(
+                    (
+                        detection for face, detection in detected_pairs
+                        if self._faceMatchTargetToken(image_path=image_path, face=face)
+                        == self._faceMatchTargetToken(image_path=image_path, face=target_face)
+                    ),
+                    {},
+                )
+                matched_person = None
+                recognition_score = None
+                if recognize_persons and recognition_profiles and isinstance(target_detection, dict) and target_detection.get("embedding"):
+                    scored_profiles = sorted(
+                        [
+                            (
+                                self.face_recognition._similarity(
+                                    target_detection.get("embedding") or [],
+                                    profile.get("centroid_embedding") or [],
+                                ),
+                                profile,
+                            )
+                            for profile in recognition_profiles
+                        ],
+                        key=lambda item: item[0],
+                        reverse=True,
+                    )
+                    if scored_profiles:
+                        recognition_score, best_profile = scored_profiles[0]
+                        recognition_options = self.face_recognition.normalize_options({})
+                        if recognition_score >= recognition_options["review_score"]:
+                            matched_person = {
+                                "id": best_profile.get("person_id"),
+                                "name": best_profile.get("person_name"),
+                                "thumbnail": (best_profile.get("medoid") or {}).get("thumbnail"),
+                            }
+                            target_face.name = str(best_profile.get("person_name") or "")
 
                 target_faces_read += 1
                 target_token = self._faceMatchTargetToken(image_path=image_path, face=target_face)
@@ -8048,7 +8119,7 @@ class ImgDataService:
                     "image": item if isinstance(item, dict) else None,
                     "face": to_display_face(target_face),
                     "source_face": to_display_face(target_face),
-                    "source_name": "",
+                    "source_name": str(target_face.name or ""),
                     "source_type": "insightface_detection",
                     "metadata_face": to_display_face(target_face),
                     "image_path": image_path,
@@ -8061,8 +8132,10 @@ class ImgDataService:
                         "photos_faces_count": len(photo_faces),
                         "metadata_faces_by_format": faces_by_format,
                     },
-                    "matched_person": None,
-                    "matched_person_id": None,
+                    "matched_person": matched_person,
+                    "matched_person_id": matched_person.get("id") if isinstance(matched_person, dict) else None,
+                    "recognition_score": recognition_score,
+                    "recognition_enabled": bool(recognize_persons),
                     "name_mapping": None,
                     "lookup_debug": {},
                     "add_new_faces_to_photos": True,
@@ -8076,6 +8149,7 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         action=action,
+                        recognize_persons=bool(recognize_persons),
                         findings_count=findings_count + 1,
                         path_index=images_read,
                         images_read=images_read,
@@ -8116,6 +8190,7 @@ class ImgDataService:
                             auto=auto,
                             save_only=save_only,
                             action=action,
+                            recognize_persons=bool(recognize_persons),
                             findings_count=findings_count,
                             path_index=images_read,
                             images_read=images_read,
@@ -8167,6 +8242,7 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action=action,
+                    recognize_persons=bool(recognize_persons),
                     findings_count=findings_count,
                 ),
             }
@@ -8211,6 +8287,7 @@ class ImgDataService:
                     auto=auto,
                     save_only=save_only,
                     action=action,
+                    recognize_persons=bool(recognize_persons),
                     findings_count=findings_count,
                 ),
             )

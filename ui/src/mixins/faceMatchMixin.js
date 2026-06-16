@@ -12,11 +12,12 @@ export default {
 			faceMatchActionLocked: false,
 			faceMatchSkippedFaceIds: [],
 			faceMatchSkippedTargets: [],
-			faceMatchPreviewMode: 'photo',
-			faceMatchAutoAssignKnown: false,
-			faceMatchSaveOnly: false,
-			faceMatchUseStoredFindings: false,
-			faceMatchTransferredCount: 0,
+				faceMatchPreviewMode: 'photo',
+				faceMatchAutoAssignKnown: false,
+				faceMatchSaveOnly: false,
+				faceMatchUseStoredFindings: false,
+				faceMatchRecognizeMissingInsightFacePersons: false,
+				faceMatchTransferredCount: 0,
 			faceMatchProgressBase: {
 				persons_read: 0,
 				images_read: 0,
@@ -347,10 +348,19 @@ export default {
 				&& !this.faceMatchAuthRequired
 			);
 		},
-		faceMatchPrimaryButtonLabel() {
-			if (this.faceMatchHasActiveProgressState) {
-				return this.$avt('face_match:button_stop', 'Stop');
-			}
+			faceMatchPrimaryButtonLabel() {
+				if (this.faceMatchRecognitionActionSelected) {
+					if (this.cleanupLoading) {
+						return this.$avt('cleanup:button_stop', 'Stop');
+					}
+					if (this.recognitionOptions.operation_mode === 'findings') {
+						return this.$avt('cleanup:face_frames_operation_findings', 'Process saved findings list');
+					}
+					return this.$avt('face_match:button_start', 'Start');
+				}
+				if (this.faceMatchHasActiveProgressState) {
+					return this.$avt('face_match:button_stop', 'Stop');
+				}
 			if (this.faceMatchAuthRequired) {
 				return this.$avt('face_match:button_resume_login', 'Resume after login');
 			}
@@ -525,13 +535,17 @@ export default {
 		},
 	},
 	watch: {
-		selectedFaceMatchingAction(nextAction) {
-			if (!['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(nextAction)) {
-				this.faceMatchSaveOnly = false;
-			}
-			if (!this.faceMatchFindingsStatusMatchesAction(nextAction)) {
-				this.faceMatchUseStoredFindings = false;
-				this.resetFaceMatchFindingsReview();
+			selectedFaceMatchingAction(nextAction) {
+				if (!['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(nextAction)) {
+					this.faceMatchSaveOnly = false;
+				}
+				if (nextAction === 'recognition_analyze_unknown_faces') {
+					this.cleanupRuntimeAction = 'recognition_analyze_unknown_faces';
+					this.fetchRecognitionFindings();
+				}
+				if (!this.faceMatchFindingsStatusMatchesAction(nextAction)) {
+					this.faceMatchUseStoredFindings = false;
+					this.resetFaceMatchFindingsReview();
 			}
 			if (nextAction === 'load_photo_face_match_findings') {
 				this.faceMatchUseStoredFindings = true;
@@ -1733,10 +1747,19 @@ export default {
 			}
 			await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
 		},
-		async handlePrimaryFaceMatchButton() {
-			if (this.faceMatchHasActiveProgressState) {
-				await this.stopFaceMatchingAction();
-				return;
+			async handlePrimaryFaceMatchButton() {
+				if (this.faceMatchRecognitionActionSelected) {
+					this.cleanupRuntimeAction = 'recognition_analyze_unknown_faces';
+					if (this.cleanupLoading) {
+						await this.stopCleanupRun({ actionOverride: 'recognition_analyze_unknown_faces' });
+						return;
+					}
+					await this.startCleanupRun({ actionOverride: 'recognition_analyze_unknown_faces' });
+					return;
+				}
+				if (this.faceMatchHasActiveProgressState) {
+					await this.stopFaceMatchingAction();
+					return;
 			}
 			if (this.faceMatchUseStoredFindings) {
 				this.faceMatchLoading = true;
@@ -2069,8 +2092,10 @@ export default {
 				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
 					action: this.selectedFaceMatchingAction,
 					auto: this.faceMatchAutoAssignKnown,
-					save_only: this.faceMatchUseStoredFindings ? false : this.faceMatchSaveOnly,
-					resume_from_progress: resumeFromProgress,
+						save_only: this.faceMatchUseStoredFindings ? false : this.faceMatchSaveOnly,
+						recognize_persons: this.selectedFaceMatchingAction === 'search_missing_faces_insightface'
+							&& this.faceMatchRecognizeMissingInsightFacePersons,
+						resume_from_progress: resumeFromProgress,
 					skip_face_ids: this.faceMatchSkippedFaceIds,
 					skip_targets: this.faceMatchSkippedTargets,
 				}, { requireResumeMessage: true });

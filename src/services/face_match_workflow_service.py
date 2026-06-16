@@ -855,6 +855,7 @@ class FaceMatchWorkflowService:
         auto: bool = False,
         save_only: bool = False,
         resume_from_progress: bool = False,
+        recognize_persons: bool = False,
     ) -> Dict[str, Any]:
         backend = self.backend
         current = backend.getFaceMatchingProgress(user_key)
@@ -922,6 +923,7 @@ class FaceMatchWorkflowService:
         if resume_cursor:
             auto = bool(resume_cursor.get("auto", auto))
             save_only = bool(resume_cursor.get("save_only", save_only))
+            recognize_persons = bool(resume_cursor.get("recognize_persons", recognize_persons))
             normalized_action = str(resume_cursor.get("action") or normalized_action).strip().lower() or normalized_action
         continue_existing_operation = bool(resume_cursor or combined_skip_face_ids or combined_skip_targets)
         resume_path_index = int(resume_cursor.get("path_index") or 0) if resume_cursor else 0
@@ -946,6 +948,7 @@ class FaceMatchWorkflowService:
             skip_face_ids_count=len(combined_skip_face_ids),
             skip_targets_count=len(combined_skip_targets),
             resume_path_index=resume_path_index,
+            recognize_persons=bool(recognize_persons),
         )
 
         backend._setFaceMatchingProgressMessage(
@@ -962,6 +965,7 @@ class FaceMatchWorkflowService:
             error="",
             auto=auto,
             save_only=save_only,
+            recognize_persons=bool(recognize_persons),
             persons_read=int(resume_cursor.get("persons_read") or 0) if resume_cursor else 0,
             images_read=int(resume_cursor.get("images_read") or 0) if resume_cursor else resume_path_index,
             faces_read=int(resume_cursor.get("faces_read") or 0) if resume_cursor else 0,
@@ -978,6 +982,7 @@ class FaceMatchWorkflowService:
                 transferred_count=int(resume_cursor.get("transferred_count") or 0) if resume_cursor else 0,
                 auto=auto,
                 save_only=save_only,
+                recognize_persons=bool(recognize_persons),
                 action=normalized_action,
                 findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
                 path_index=resume_path_index,
@@ -1001,6 +1006,7 @@ class FaceMatchWorkflowService:
                 "skip_targets": combined_skip_targets,
                 "auto": auto,
                 "save_only": save_only,
+                "recognize_persons": bool(recognize_persons),
                 "resume_cursor": resume_cursor if resume_cursor else None,
             },
             daemon=True,
@@ -1022,6 +1028,7 @@ class FaceMatchWorkflowService:
         skip_targets: Optional[List[str]],
         auto: bool,
         save_only: bool,
+        recognize_persons: bool = False,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> None:
         backend = self.backend
@@ -1031,6 +1038,7 @@ class FaceMatchWorkflowService:
             action=action,
             auto=auto,
             save_only=save_only,
+            recognize_persons=bool(recognize_persons),
             limit=limit,
             offset=offset,
             skip_face_ids_count=len(skip_face_ids or []),
@@ -1047,6 +1055,7 @@ class FaceMatchWorkflowService:
                     skip_targets=skip_targets,
                     auto=auto,
                     save_only=save_only,
+                    recognize_persons=recognize_persons,
                     resume_cursor=resume_cursor,
                 )
             elif action == "mark_missing_photos_faces":

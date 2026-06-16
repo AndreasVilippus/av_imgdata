@@ -50,3 +50,20 @@ def test_embed_matched_face_requires_minimum_iou():
 
     assert matched and matched["iou"] >= 0.5
     assert missed is None
+
+
+def test_embedder_decodes_preview_bytes():
+    embedder = InsightFaceEmbedder(model_name="test")
+    image = type("Image", (), {"shape": (100, 200, 3)})()
+    cv2 = type("Cv2", (), {
+        "IMREAD_COLOR": 1,
+        "imdecode": staticmethod(lambda _data, _mode: image),
+    })
+    numpy = type("Numpy", (), {
+        "uint8": object(),
+        "frombuffer": staticmethod(lambda data, dtype: data),
+    })
+    with patch.dict("sys.modules", {"cv2": cv2, "numpy": numpy}), patch.object(embedder, "_detect_and_embed_image", return_value=[{"embedding": [1.0]}]):
+        result = embedder.detect_and_embed_bytes(b"jpeg")
+
+    assert result == [{"embedding": [1.0]}]

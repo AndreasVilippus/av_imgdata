@@ -110,6 +110,53 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
         self.assertEqual(progress["transferred_count"], 10)
         self.assertEqual(progress["resume_cursor"]["transferred_count"], 10)
 
+    def test_insightface_missing_face_can_suggest_person_from_recognition_profile(self):
+        class FakeEmbedder:
+            @classmethod
+            def available_models(cls, model_root=None):
+                return {"root": str(model_root or ""), "model_store": "", "models": []}
+
+            def __init__(self, **kwargs):
+                pass
+
+            def detect_and_embed(self, image_path):
+                return [{
+                    "bbox": {"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.5},
+                    "center": {"x": 0.2, "y": 0.35},
+                    "embedding": [1.0, 0.0],
+                }]
+
+        self.service.pipPackagesStatus = lambda: {"packages": {"INSIGHTFACE": {"installed": True}}}
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.files.listImageFiles = lambda base_path: ["/volume1/photo/tests/image.jpg"]
+        self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 123, "name": "image.jpg"}
+        self.service.photos.list_faceFotoTeamItems = lambda **kwargs: []
+        self.service.face_recognition.profiles = lambda _options=None: {
+            "profiles": [{
+                "person_id": 42,
+                "person_name": "Alice",
+                "centroid_embedding": [1.0, 0.0],
+                "medoid": {"thumbnail": {"cache_key": "thumb", "unit_id": 123}},
+            }]
+        }
+
+        with patch.object(imgdata_module, "InsightFaceEmbedder", FakeEmbedder):
+            result = self.service.searchMissingPhotosFacesWithInsightFace(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                recognize_persons=True,
+            )
+
+        self.assertTrue(result["searched"])
+        self.assertTrue(result["recognition_enabled"])
+        self.assertEqual(result["matched_person"]["id"], 42)
+        self.assertEqual(result["matched_person"]["name"], "Alice")
+        self.assertEqual(result["matched_person_id"], 42)
+        self.assertEqual(result["source_name"], "Alice")
+        self.assertEqual(result["metadata_face"]["name"], "Alice")
+        self.assertTrue(result["resume_cursor"]["recognize_persons"])
+
     def test_insightface_next_reuses_cached_file_list_and_resume_path_index(self):
         class FakeDetector:
             @classmethod

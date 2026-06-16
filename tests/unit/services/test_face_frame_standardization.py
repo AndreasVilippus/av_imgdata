@@ -119,12 +119,11 @@ def test_explicitly_disabling_all_sources_keeps_all_sources_disabled():
     assert options["include_photos"] is False
 
 
-def test_preview_run_persists_required_finding_fields():
-    written = {}
+def test_preview_run_keeps_required_finding_fields_in_active_run_state():
     backend = SimpleNamespace(
         core=SimpleNamespace(getSharedFolder=Mock(return_value="/photo")),
         checks_workflow=SimpleNamespace(get_candidate_paths=Mock(return_value=["/photo/test.jpg"])),
-        file_analysis=SimpleNamespace(writeCheckFindings=Mock(side_effect=lambda finding_type, payload: written.update(type=finding_type, payload=payload))),
+        file_analysis=SimpleNamespace(writeCheckFindings=Mock()),
         _configuredInsightFaceModelName=Mock(return_value="buffalo_l"),
         _configuredInsightFaceModelRoot=Mock(return_value="/models"),
         _readImageMetadata=Mock(return_value=SimpleNamespace(faces=[
@@ -157,8 +156,9 @@ def test_preview_run_persists_required_finding_fields():
             options=service.normalize_options({"profile": "normal", "include_photos": False, "selection_mode": "review_all"}),
         )
 
-    assert written["type"] == "face_frame_standardization"
-    finding = written["payload"]["entries"][0]
+    backend.file_analysis.writeCheckFindings.assert_not_called()
+    active = service.findings(user_key="user", operation_mode="immediate")
+    finding = active["entries"][0]
     assert set(("item_id", "image_path", "source_frame", "target_frame", "match", "selection_state", "write_state", "target")) <= set(finding)
     assert finding["target"] == "preview"
     assert finding["write_state"] == "pending"
@@ -168,8 +168,54 @@ def test_preview_run_persists_required_finding_fields():
     assert any(update.get("status") == {"schema_version": 1} and update.get("message_key") == "cleanup:face_frames_review_required" for update in progress_updates)
 
 
+def test_save_only_run_writes_persisted_findings_list():
+    stored = {}
+    backend = SimpleNamespace(
+        core=SimpleNamespace(getSharedFolder=Mock(return_value="/photo")),
+        checks_workflow=SimpleNamespace(get_candidate_paths=Mock(return_value=["/photo/test.jpg"])),
+        file_analysis=SimpleNamespace(
+            writeCheckFindings=Mock(side_effect=lambda finding_type, payload: stored.__setitem__(finding_type, payload) or True),
+        ),
+        _configuredInsightFaceModelName=Mock(return_value="buffalo_l"),
+        _configuredInsightFaceModelRoot=Mock(return_value="/models"),
+        _readImageMetadata=Mock(return_value=SimpleNamespace(faces=[
+            MetadataFace.from_center_box(
+                name="Person",
+                x=0.5,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="MWG_REGIONS",
+            ),
+        ])),
+        _loadPhotoFacesForImage=Mock(return_value=[]),
+        _shouldStopCleanup=Mock(return_value=False),
+        _setCleanupProgress=Mock(),
+        _buildStatusPayload=Mock(return_value={"schema_version": 1}),
+        _buildStatusProgress=Mock(return_value={}),
+        _buildStatusCounter=Mock(return_value={}),
+    )
+    detector = Mock()
+    detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
+
+    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
+        FaceFrameStandardizationService(backend)._run(
+            user_key="user",
+            cookies={},
+            base_url="http://example.test",
+            options=FaceFrameStandardizationService.normalize_options({
+                "operation_mode": "save_only",
+                "profile": "normal",
+                "include_photos": False,
+            }),
+        )
+
+    assert stored["face_frame_standardization"]["mode"] == "save_only"
+    assert stored["face_frame_standardization"]["entries"][0]["write_state"] == "pending"
+
+
 def test_review_all_mode_does_not_preselect_safe_findings():
-    written = {}
     metadata_faces = [
         MetadataFace.from_center_box(
             name="Person",
@@ -193,7 +239,7 @@ def test_review_all_mode_does_not_preselect_safe_findings():
     backend = SimpleNamespace(
         core=SimpleNamespace(getSharedFolder=Mock(return_value="/photo")),
         checks_workflow=SimpleNamespace(get_candidate_paths=Mock(return_value=["/photo/test.jpg"])),
-        file_analysis=SimpleNamespace(writeCheckFindings=Mock(side_effect=lambda finding_type, payload: written.update(payload=payload))),
+        file_analysis=SimpleNamespace(writeCheckFindings=Mock()),
         _configuredInsightFaceModelName=Mock(return_value="buffalo_l"),
         _configuredInsightFaceModelRoot=Mock(return_value="/models"),
         _readImageMetadata=Mock(return_value=SimpleNamespace(faces=metadata_faces)),
@@ -207,8 +253,9 @@ def test_review_all_mode_does_not_preselect_safe_findings():
     detector = Mock()
     detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
 
+    service = FaceFrameStandardizationService(backend)
     with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        FaceFrameStandardizationService(backend)._run(
+        service._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
@@ -218,9 +265,10 @@ def test_review_all_mode_does_not_preselect_safe_findings():
             }),
         )
 
-    assert len(written["payload"]["entries"]) == 1
-    assert written["payload"]["entries"][0]["source_frame"]["source_format"] == "ACD"
-    assert written["payload"]["entries"][0]["selection_state"] == "review"
+    active = service.findings(user_key="user", operation_mode="immediate")
+    assert len(active["entries"]) == 1
+    assert active["entries"][0]["source_frame"]["source_format"] == "ACD"
+    assert active["entries"][0]["selection_state"] == "review"
 
 
 def test_immediate_mode_resumes_after_previous_review_path():
@@ -228,6 +276,7 @@ def test_immediate_mode_resumes_after_previous_review_path():
         "sources": ["acd"],
         "operation_mode": "immediate",
         "selection_mode": "review_all",
+        "resume_existing": True,
     })
     previous = {
         "status": "review_required",
@@ -235,11 +284,73 @@ def test_immediate_mode_resumes_after_previous_review_path():
         "scan_next_path_index": 1,
         "entries": [],
     }
+    stored = {"face_frame_standardization": {}}
+    backend = SimpleNamespace(
+        core=SimpleNamespace(getSharedFolder=Mock(return_value="/photo")),
+        checks_workflow=SimpleNamespace(get_candidate_paths=Mock(return_value=["/photo/first.jpg", "/photo/second.jpg"])),
+        file_analysis=SimpleNamespace(
+            lockCheckFindings=Mock(side_effect=lambda finding_type: __import__("contextlib").nullcontext()),
+            readCheckFindings=Mock(side_effect=lambda finding_type: stored.get(finding_type, {})),
+            writeCheckFindings=Mock(side_effect=lambda finding_type, payload: stored.__setitem__(finding_type, payload) or True),
+        ),
+        _configuredInsightFaceModelName=Mock(return_value="buffalo_l"),
+        _configuredInsightFaceModelRoot=Mock(return_value="/models"),
+        _readImageMetadata=Mock(return_value=SimpleNamespace(faces=[])),
+        _loadPhotoFacesForImage=Mock(return_value=[]),
+        _shouldStopCleanup=Mock(return_value=False),
+        _setCleanupProgress=Mock(),
+        _buildStatusPayload=Mock(return_value={"schema_version": 1}),
+        _buildStatusProgress=Mock(return_value={}),
+        _buildStatusCounter=Mock(return_value={}),
+    )
+    detector = Mock()
+    detector.detect.return_value = []
+
+    service = FaceFrameStandardizationService(backend)
+    service._write_active_findings("user", previous)
+    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
+        service._run(
+            user_key="user",
+            cookies={},
+            base_url="http://example.test",
+            options=options,
+        )
+
+    backend._readImageMetadata.assert_called_once_with("/photo/second.jpg", include_unnamed_acd=True)
+    detector.detect.assert_called_once()
+    assert service.findings(user_key="user", operation_mode="immediate")["scan_next_path_index"] == 2
+
+
+def test_immediate_mode_explicit_start_ignores_previous_partial_findings():
+    options = FaceFrameStandardizationService.normalize_options({
+        "sources": ["acd"],
+        "operation_mode": "immediate",
+        "selection_mode": "safe_matches",
+    })
+    previous_options = FaceFrameStandardizationService.normalize_options({
+        "sources": ["acd"],
+        "operation_mode": "immediate",
+        "selection_mode": "safe_matches",
+    })
+    previous = {
+        "status": "review_required",
+        "options": previous_options,
+        "scan_next_path_index": 1,
+        "entries": [
+            {
+                "item_id": "old",
+                "image_path": "/photo/old.jpg",
+                "selection_state": "review",
+                "write_state": "pending",
+            },
+        ],
+    }
     stored = {"face_frame_standardization": previous}
     backend = SimpleNamespace(
         core=SimpleNamespace(getSharedFolder=Mock(return_value="/photo")),
         checks_workflow=SimpleNamespace(get_candidate_paths=Mock(return_value=["/photo/first.jpg", "/photo/second.jpg"])),
         file_analysis=SimpleNamespace(
+            lockCheckFindings=Mock(side_effect=lambda finding_type: __import__("contextlib").nullcontext()),
             readCheckFindings=Mock(side_effect=lambda finding_type: stored.get(finding_type, {})),
             writeCheckFindings=Mock(side_effect=lambda finding_type, payload: stored.__setitem__(finding_type, payload) or True),
         ),
@@ -257,16 +368,19 @@ def test_immediate_mode_resumes_after_previous_review_path():
     detector.detect.return_value = []
 
     with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        FaceFrameStandardizationService(backend)._run(
+        service = FaceFrameStandardizationService(backend)
+        service._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
             options=options,
         )
 
-    backend._readImageMetadata.assert_called_once_with("/photo/second.jpg", include_unnamed_acd=True)
-    detector.detect.assert_called_once()
-    assert stored["face_frame_standardization"]["scan_next_path_index"] == 2
+    backend._readImageMetadata.assert_any_call("/photo/first.jpg", include_unnamed_acd=True)
+    assert stored["face_frame_standardization"] == previous
+    backend.file_analysis.writeCheckFindings.assert_not_called()
+    assert service.findings(user_key="user", operation_mode="immediate")["scan_next_path_index"] == 2
+    assert service.findings(user_key="user", operation_mode="immediate")["entries"] == []
 
 
 def test_update_selection_persists_manual_decision():
@@ -300,7 +414,7 @@ def test_sync_review_progress_uses_current_open_finding_and_list_progress():
         _setCleanupProgress=Mock(side_effect=lambda user_key, **kwargs: kwargs),
     )
 
-    progress = FaceFrameStandardizationService(backend).sync_review_progress(user_key="user")
+    progress = FaceFrameStandardizationService(backend).sync_review_progress(user_key="user", operation_mode="findings")
 
     assert progress["current_path"] == "/photo/current.jpg"
     assert progress["findings_count"] == 1
@@ -395,8 +509,9 @@ def test_safe_mode_automatically_applies_safe_metadata_findings():
     detector = Mock()
     detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
 
+    service = FaceFrameStandardizationService(backend)
     with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        FaceFrameStandardizationService(backend)._run(
+        service._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
@@ -406,7 +521,81 @@ def test_safe_mode_automatically_applies_safe_metadata_findings():
             }),
         )
 
-    entry = stored["face_frame_standardization"]["entries"][0]
+    file_analysis.writeCheckFindings.assert_not_called()
+    entry = service.findings(user_key="user", operation_mode="immediate")["entries"][0]
     assert entry["selection_state"] == "selected"
     assert entry["write_state"] == "written"
+    backend.replaceMetadataFacePosition.assert_called_once()
+
+
+def test_safe_mode_recalculates_open_selections_from_previous_manual_run():
+    options = FaceFrameStandardizationService.normalize_options({
+        "sources": ["acd"],
+        "selection_mode": "safe_matches",
+        "resume_existing": True,
+    })
+    previous = {
+        "options": FaceFrameStandardizationService.normalize_options({
+            "sources": ["acd"],
+            "selection_mode": "review_all",
+        }),
+        "entries": [
+            {
+                "item_id": "safe",
+                "image_path": "/photo/safe.jpg",
+                "source_frame": {"source_format": "ACD", "name": "Safe"},
+                "target_frame": {"bbox": {"x1": 0.3, "y1": 0.3, "x2": 0.7, "y2": 0.7}},
+                "match": {"decision": "safe"},
+                "selection_state": "review",
+                "write_state": "pending",
+                "warnings": [],
+            },
+            {
+                "item_id": "review",
+                "image_path": "/photo/review.jpg",
+                "source_frame": {"source_format": "ACD", "name": "Review"},
+                "target_frame": {"bbox": {"x1": 0.3, "y1": 0.3, "x2": 0.7, "y2": 0.7}},
+                "match": {"decision": "review"},
+                "selection_state": "selected",
+                "write_state": "pending",
+                "warnings": [],
+            },
+        ],
+    }
+    stored = {"face_frame_standardization": {}}
+    backend = SimpleNamespace(
+        core=SimpleNamespace(getSharedFolder=Mock(return_value="/photo")),
+        checks_workflow=SimpleNamespace(get_candidate_paths=Mock(return_value=[])),
+        file_analysis=SimpleNamespace(
+            lockCheckFindings=Mock(side_effect=lambda finding_type: __import__("contextlib").nullcontext()),
+            readCheckFindings=Mock(side_effect=lambda finding_type: stored.get(finding_type, {})),
+            writeCheckFindings=Mock(side_effect=lambda finding_type, payload: stored.__setitem__(finding_type, payload) or True),
+        ),
+        _configuredInsightFaceModelName=Mock(return_value="buffalo_l"),
+        _configuredInsightFaceModelRoot=Mock(return_value="/models"),
+        _shouldStopCleanup=Mock(return_value=False),
+        _setCleanupProgress=Mock(),
+        _buildStatusPayload=Mock(return_value={"schema_version": 1}),
+        _buildStatusProgress=Mock(return_value={}),
+        _buildStatusCounter=Mock(return_value={}),
+        replaceMetadataFacePosition=Mock(return_value={"updated": True}),
+    )
+
+    service = FaceFrameStandardizationService(backend)
+    service._write_active_findings("user", previous)
+    with patch("services.face_frame_standardization_service.InsightFaceDetector"):
+        service._run(
+            user_key="user",
+            cookies={},
+            base_url="http://example.test",
+            options=options,
+        )
+
+    entries = service.findings(user_key="user", operation_mode="immediate")["entries"]
+    safe = next(entry for entry in entries if entry["item_id"] == "safe")
+    review = next(entry for entry in entries if entry["item_id"] == "review")
+    assert safe["selection_state"] == "selected"
+    assert safe["write_state"] == "written"
+    assert review["selection_state"] == "review"
+    assert review["write_state"] == "pending"
     backend.replaceMetadataFacePosition.assert_called_once()

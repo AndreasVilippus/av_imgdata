@@ -102,16 +102,23 @@ Außerdem existieren:
 /api/face_assign_match
 ```
 
-Für die Gesichtswiedererkennung gibt es zwei mögliche Einbindungswege:
+Für die Gesichtswiedererkennung gibt es zwei Einbindungsbereiche:
 
-1. als neuer Bereich im Cleanup-Menü, weil es eine Bereinigungs-/Prüffunktion ist,
-2. als Erweiterung des bestehenden Face-Matching-Workflows, weil bereits unbekannte und fehlende Gesichter behandelt werden.
+1. Profilaufbau und Referenz-Ausreißerprüfung bleiben im Cleanup-Menü, weil sie vorbereitende Bereinigungs-/Prüffunktionen sind.
+2. Vorschläge für unbekannte Gesichter gehören in den bestehenden Face-Matching-Workflow, weil dort bereits die Entscheidung, Fundlisten-Verarbeitung und Photos-Zuordnung stattfinden.
+
+Dabei bleiben zwei Fälle getrennt:
+
+```text
+search_missing_faces_insightface  = zusätzliche, in Photos noch fehlende Gesichter im Bild finden
+recognition_analyze_unknown_faces = vorhandene Photos-Gesichter ohne Namen einer Person zuordnen
+```
 
 Empfehlung:
 
 ```text
-Phase 1: über Cleanup-Actions starten, weil Profilaufbau und Ausreißerprüfung Bereinigung sind.
-Phase 2: Wiedererkennungsvorschläge zusätzlich im Face-Match-Bereich anzeigen/anwenden.
+Phase 1: Profilaufbau und Ausreißerprüfung über Cleanup-Actions starten.
+Phase 2: Wiedererkennungsvorschläge im Face-Match-Bereich anzeigen/anwenden.
 ```
 
 ### Bestehende Findings und Runtime-State
@@ -206,7 +213,6 @@ Polling
 ```text
 recognition_build_profiles
 recognition_check_reference_outliers
-recognition_analyze_unknown_faces
 recognition_rebuild_profiles
 ```
 
@@ -263,7 +269,6 @@ Cleanup-Actions und Reihenfolge:
 ```text
 recognition_build_profiles
 recognition_check_reference_outliers
-recognition_analyze_unknown_faces
 ```
 
 `recognition_rebuild_profiles` ist kein eigener dauerhaft sichtbarer Menüpunkt.
@@ -272,15 +277,20 @@ die Option `rebuild_all` gestartet.
 
 #### Betriebsarten
 
-Die prüfenden Actions `recognition_check_reference_outliers` und
-`recognition_analyze_unknown_faces` verwenden dieselben drei Betriebsarten wie
-die Gesichtsrahmen-Standardisierung:
+Die prüfende Action `recognition_check_reference_outliers` verwendet dieselben
+drei Betriebsarten wie die Gesichtsrahmen-Standardisierung:
 
 ```text
 immediate  = Scan starten und beim ersten manuell zu prüfenden Fund anhalten
 save_only  = Scan vollständig ausführen und Funde nur persistent speichern
 findings   = bestehende persistente Fundliste abarbeiten
 ```
+
+`immediate` verwendet nur den aktiven Laufzustand des aktuellen Reviews. Es
+liest keine alte persistente Fundliste als Arbeitsliste und schreibt auch keine
+persistente Fundliste. Ein internes Fortsetzen nach einer manuellen Entscheidung
+ist nur mit `resume_existing = true` zulässig und bezieht sich ausschließlich
+auf diesen aktiven Laufzustand.
 
 Der Profilaufbau verwendet keine manuelle Einzelprüfung während des Laufs. Er
 schreibt ausschließlich interne Profile und Qualitäts-Findings. Für ihn gelten:
@@ -807,20 +817,26 @@ Payload für Ausreißerprüfung:
 }
 ```
 
-Payload für unbekannte Gesichter:
+Payload für unbekannte Gesichter im Gesichtsabgleich:
 
 ```json
 {
   "action": "recognition_analyze_unknown_faces",
   "options": {
+    "operation_mode": "immediate",
+    "selection_mode": "review_all",
     "changed_since_days": 30,
     "safe_score": 0.55,
     "review_score": 0.45,
-    "min_margin": 0.08,
-    "selection_mode": "safe_only"
+    "min_margin": 0.08
   }
 }
 ```
+
+Die bestehende Action `search_missing_faces_insightface` bleibt separat fuer
+fehlende zusaetzliche Gesichter im Bild. Sie kann optional `recognize_persons`
+nutzen, um ein neu erkanntes fehlendes Gesicht direkt gegen vorhandene
+Wiedererkennungsprofile zu pruefen.
 
 ### Eigene Apply-Endpunkte
 

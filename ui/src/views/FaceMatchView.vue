@@ -7,12 +7,13 @@
 			</div>
 			<div class="face-match-top-layout panel-content-start">
 				<div class="face-match-action-controls">
-					<select v-model="vm.selectedFaceMatchingAction" class="face-match-select" :disabled="vm.faceMatchLoading">
-						<option value="search_photo_face_in_file">{{ vm.$avt('face_match:action_search_photo_face_in_file', 'search unknown Photos face in file') }}</option>
-						<option value="search_file_face_in_sources">{{ vm.$avt('face_match:action_search_file_face_in_sources', 'search face from file') }}</option>
-						<option value="mark_missing_photos_faces">{{ vm.$avt('face_match:action_mark_missing_photos_faces', 'mark missing faces in Photos') }}</option>
-						<option value="search_missing_faces_insightface" :disabled="!vm.hasInsightFaceForFaceMatch">{{ vm.$avt('face_match:action_search_missing_faces_insightface', 'search missing faces with InsightFace') }}</option>
-					</select>
+						<select v-model="vm.selectedFaceMatchingAction" class="face-match-select" :disabled="vm.faceMatchLoading">
+							<option value="search_photo_face_in_file">{{ vm.$avt('face_match:action_search_photo_face_in_file', 'search unknown Photos face in file') }}</option>
+							<option value="search_file_face_in_sources">{{ vm.$avt('face_match:action_search_file_face_in_sources', 'search face from file') }}</option>
+							<option value="mark_missing_photos_faces">{{ vm.$avt('face_match:action_mark_missing_photos_faces', 'mark missing faces in Photos') }}</option>
+							<option value="search_missing_faces_insightface" :disabled="!vm.hasInsightFaceForFaceMatch">{{ vm.$avt('face_match:action_search_missing_faces_insightface', 'search missing faces with InsightFace') }}</option>
+							<option value="recognition_analyze_unknown_faces" :disabled="!vm.hasInsightFaceForFaceMatch">{{ vm.$avt('face_match:action_recognition_unknown_faces', 'recognize unknown faces with InsightFace') }}</option>
+						</select>
 					<div v-if="!vm.hasInsightFaceForFaceMatch" class="config-card-desc">
 						{{ vm.$avt('face_match:hint_insightface_unavailable', 'InsightFace search becomes available after the optional InsightFace package is installed.') }}
 					</div>
@@ -39,18 +40,27 @@
 						<span class="face-match-switch-slider"></span>
 						<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_auto_assign', 'Assign all known') }}</span>
 					</label>
-					<label
-						v-if="vm.faceMatchSupportsSaveOnly"
-						class="face-match-switch"
-						:title="vm.$avt('face_match:hint_save_only', 'Known persons are still assigned depending on the setting; otherwise matches are only listed for later.')"
+						<label
+							v-if="vm.faceMatchSupportsSaveOnly"
+							class="face-match-switch"
+							:title="vm.$avt('face_match:hint_save_only', 'Known persons are still assigned depending on the setting; otherwise matches are only listed for later.')"
 					>
 						<input v-model="vm.faceMatchSaveOnly" type="checkbox" :disabled="vm.faceMatchLoading || vm.faceMatchUseStoredFindings" />
-						<span class="face-match-switch-slider"></span>
-						<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_save_only', 'Save matches only') }}</span>
-					</label>
-					<label
-						class="face-match-switch"
-						:title="vm.$avt('face_match:hint_use_findings', 'Load saved matches instead of starting a new search.')"
+							<span class="face-match-switch-slider"></span>
+							<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_save_only', 'Save matches only') }}</span>
+						</label>
+						<label
+							v-if="vm.selectedFaceMatchingAction === 'search_missing_faces_insightface'"
+							class="face-match-switch"
+							:title="vm.$avt('face_match:hint_recognize_missing_faces', 'Detected missing faces are compared with existing InsightFace recognition profiles and suggested for a Photos person when matched.')"
+						>
+							<input v-model="vm.faceMatchRecognizeMissingInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasInsightFaceForFaceMatch" />
+							<span class="face-match-switch-slider"></span>
+							<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_recognize_missing_faces', 'Person recognition with InsightFace') }}</span>
+						</label>
+						<label
+							class="face-match-switch"
+							:title="vm.$avt('face_match:hint_use_findings', 'Load saved matches instead of starting a new search.')"
 					>
 						<input v-model="vm.faceMatchUseStoredFindings" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasFaceMatchStoredFindings" />
 						<span class="face-match-switch-slider"></span>
@@ -61,12 +71,27 @@
 					<div class="face-match-status-card face-match-status-card-action">
 						<div class="face-match-status-head">
 							<div class="sm-section-title">{{ vm.$avt('face_match:card_action', 'Action') }}</div>
-							<div v-if="vm.faceMatchLoading" class="face-match-status-running">
-								<span class="sm-loader"></span>
-								{{ vm.$avt('face_match:card_running', 'Running') }}
+								<div v-if="vm.faceMatchLoading || (vm.faceMatchRecognitionActionSelected && vm.cleanupLoading)" class="face-match-status-running">
+									<span class="sm-loader"></span>
+									{{ vm.$avt('face_match:card_running', 'Running') }}
+								</div>
 							</div>
-						</div>
-						<div v-if="!vm.faceMatchShowStoredFindingsProgress && !vm.faceMatchShowPersonsProgress && !vm.faceMatchShowFileProgress" class="face-match-status-message">{{ vm.faceMatchStatusMessage }}</div>
+							<div v-if="vm.faceMatchRecognitionActionSelected" class="face-match-status-message">{{ vm.getCleanupStatusHeadline() }}</div>
+							<div v-else-if="!vm.faceMatchShowStoredFindingsProgress && !vm.faceMatchShowPersonsProgress && !vm.faceMatchShowFileProgress" class="face-match-status-message">{{ vm.faceMatchStatusMessage }}</div>
+							<div v-if="vm.faceMatchRecognitionActionSelected && Number(vm.getCleanupStatusProgress().total) > 0" class="sm-status-progress">
+								<ProgressOverviewCard
+									:title="vm.getCleanupStatusProgressTitle()"
+									:count="Number(vm.getCleanupStatusProgress().total) || 0"
+									:current="Number(vm.getCleanupStatusProgress().current) || 0"
+									:total="Number(vm.getCleanupStatusProgress().total) || 0"
+									:primary-label="vm.getCleanupStatusProgressPrimaryLabel()"
+									:secondary-label="vm.getCleanupStatusProgressSecondaryLabel()"
+									:status-text="vm.getCleanupStatusHeadline()"
+								/>
+							</div>
+							<div v-if="vm.faceMatchRecognitionActionSelected && vm.getCleanupStatusCounters().length" class="face-match-status-stats">
+								<span v-for="counter in vm.getCleanupStatusCounters()" :key="`face-match-recognition-counter-${counter.key}`">{{ vm.formatCleanupStatusCounter(counter) }}</span>
+							</div>
 						<div v-if="vm.faceMatchShowStoredFindingsProgress" class="sm-status-progress">
 							<ProgressOverviewCard
 								:title="vm.$avt('face_match:label_list_entries', 'List entries')"
@@ -152,8 +177,10 @@
 					</div>
 				</div>
 			</div>
-		</section>
-		<section class="panel face-match-split-panel">
+			</section>
+			<RecognitionOptions v-if="vm.faceMatchRecognitionActionSelected" :vm="vm" />
+			<RecognitionFindingsReview v-if="vm.faceMatchRecognitionActionSelected" :vm="vm" />
+			<section v-if="!vm.faceMatchRecognitionActionSelected" class="panel face-match-split-panel">
 			<div class="face-match-image-context">
 				<div class="sm-section-title sm-section-title-block">{{ vm.faceMatchImageContextTitle }}</div>
 				<div v-if="vm.faceMatchImageContextPath" class="face-match-image-path" :title="vm.faceMatchImageContextPath">{{ vm.faceMatchImageContextPath }}</div>
@@ -261,11 +288,15 @@
 
 <script>
 import ProgressOverviewCard from '../components/ProgressOverviewCard.vue';
+import RecognitionOptions from '../components/cleanup/RecognitionOptions.vue';
+import RecognitionFindingsReview from '../components/cleanup/RecognitionFindingsReview.vue';
 
 export default {
 	name: 'FaceMatchView',
 	components: {
 		ProgressOverviewCard,
+		RecognitionOptions,
+		RecognitionFindingsReview,
 	},
 	props: {
 		vm: {

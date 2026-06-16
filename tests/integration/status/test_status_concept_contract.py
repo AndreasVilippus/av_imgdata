@@ -13,6 +13,10 @@ def test_status_concept_defines_state_ownership_and_mode_identity():
     assert "`scan` und `findings` dürfen nicht gegenseitig als Fortsetzung interpretiert werden" in concept
     assert "Backend-Progress darf nicht unbesehen in die UI geschrieben werden" in concept
     assert "Progress zunächst lesen können, ohne ihn sofort anzuwenden" in concept
+    assert "InsightFace-Prozesse folgen demselben Prinzip" in concept
+    assert "`immediate` verwendet nur den aktiven Laufzustand" in concept
+    assert "`save_only` schreibt eine persistente Fundliste" in concept
+    assert "`findings` arbeitet ausschließlich eine explizit ausgewählte persistente Fundliste ab" in concept
 
 
 def test_status_concept_scopes_stop_requested_to_operation_and_mode():

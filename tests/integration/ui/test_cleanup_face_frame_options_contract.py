@@ -15,6 +15,27 @@ def test_face_frame_options_use_individual_sources_and_labeled_standard_fields()
     assert 'placeholder="det_' not in source
 
 
+def test_face_frame_options_open_in_start_dialog_and_are_saved_on_start():
+    cleanup_view = Path("ui/src/views/CleanupView.vue").read_text(encoding="utf-8")
+    mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
+    styles = Path("ui/src/styles/app.css").read_text(encoding="utf-8")
+
+    assert 'v-if="vm.faceFrameOptionsDialogVisible"' in cleanup_view
+    assert 'sm-settings-modal' in cleanup_view
+    assert '<FaceFrameStandardizationOptions v-if=' not in cleanup_view
+    assert '<FaceFrameStandardizationOptions :vm="vm" :modal="true"' in cleanup_view
+    assert "openFaceFrameOptionsDialog()" in mixin
+    assert "persistFaceFrameStartOptions()" in mixin
+    assert "window.localStorage.setItem" in mixin
+    assert "loadStoredFaceFrameStartOptions()" in mixin
+    assert "av_imgdata.cleanup.standardize_face_frames.options" in mixin
+    assert "resume_existing: !!options.resumeExisting" in mixin
+    assert "resumeExisting: true" in mixin
+    assert "operation_mode: this.faceFrameOptions.operation_mode" in mixin
+    assert "operation_mode: this.recognitionOptions.operation_mode" in mixin
+    assert ".sm-settings-modal" in styles
+
+
 def test_general_labeled_form_field_standard_is_defined():
     styles = Path("ui/src/styles/app.css").read_text(encoding="utf-8")
 
