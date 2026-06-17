@@ -107,6 +107,19 @@
 	color: var(--sm-text-muted);
 }
 
+.sm-overview-person-details {
+	margin-top: 8px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	font-size: var(--sm-font-xs);
+	color: var(--sm-text);
+}
+
+.sm-overview-person-detail-muted {
+	color: var(--sm-text-muted);
+}
+
 .sm-nav-item.active {
 	background: var(--sm-blue-soft);
 	color: var(--sm-blue) !important;
@@ -1127,7 +1140,6 @@
 	border-radius: var(--sm-radius-1);
 	padding: 10px 14px;
 	min-height: 64px;
-	max-width: 500px;
 	width: 100%;
 	box-sizing: border-box;
 	overflow: hidden;

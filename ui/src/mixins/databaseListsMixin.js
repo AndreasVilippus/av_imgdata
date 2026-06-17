@@ -10,14 +10,53 @@ export default {
 			databaseListTotal: 0,
 			databaseListLoading: false,
 			databaseListDeletingId: null,
+			databaseListClearing: false,
 			databaseListSaving: false,
 			databaseListMessage: '',
+			databaseChecksIgnoreListsStatus: {},
 			databaseListEditorId: null,
 			databaseListEditorSourceName: '',
 			databaseListEditorTargetName: '',
 		};
 	},
 	computed: {
+		databaseListIsNameMappings() {
+			return this.databaseListType === 'name_mappings';
+		},
+		databaseListIsIgnoreList() {
+			return String(this.databaseListType || '').startsWith('ignore_');
+		},
+		databaseIgnoreReviewType() {
+			const type = String(this.databaseListType || '');
+			if (type === 'ignore_duplicate_faces') {
+				return 'duplicate_faces';
+			}
+			if (type === 'ignore_position_deviations') {
+				return 'position_deviations';
+			}
+			if (type === 'ignore_name_conflicts') {
+				return 'name_conflicts';
+			}
+			return '';
+		},
+		currentDatabaseListLabel() {
+			const labels = {
+				name_mappings: this.$avt('database_lists:name_mappings', 'Name mappings'),
+				ignore_duplicate_faces: this.$avt('database_lists:ignore_duplicate_faces', 'Ignore list for duplicate face markings'),
+				ignore_position_deviations: this.$avt('database_lists:ignore_position_deviations', 'Ignore list for deviating face positions'),
+				ignore_name_conflicts: this.$avt('database_lists:ignore_name_conflicts', 'Ignore list for name conflicts'),
+			};
+			return labels[this.databaseListType] || this.databaseListType;
+		},
+		currentDatabaseIgnoreListStatus() {
+			const reviewType = this.databaseIgnoreReviewType;
+			const status = this.databaseChecksIgnoreListsStatus && typeof this.databaseChecksIgnoreListsStatus === 'object'
+				? this.databaseChecksIgnoreListsStatus[reviewType]
+				: null;
+			return status && typeof status === 'object'
+				? status
+				: { count: 0, path: '', storage: '', enabled: true };
+		},
 		databaseListTotalPages() {
 			return Math.max(1, Math.ceil(this.databaseListTotal / this.databaseListPageSize));
 		},
@@ -28,6 +67,14 @@ export default {
 			return Math.min(this.databaseListTotal, this.databaseListPage * this.databaseListPageSize);
 		},
 	},
+	watch: {
+		databaseListType() {
+			this.databaseListSearch = '';
+			this.databaseListAppliedSearch = '';
+			this.cancelDatabaseNameMappingEdit();
+			this.loadDatabaseList({ resetPage: true });
+		},
+	},
 	methods: {
 		async loadDatabaseList({ resetPage = false } = {}) {
 			if (resetPage) {
@@ -36,6 +83,13 @@ export default {
 			this.databaseListLoading = true;
 			this.databaseListMessage = '';
 			try {
+				if (this.databaseListIsIgnoreList) {
+					await this.loadDatabaseIgnoreListStatus();
+					this.databaseListEntries = [];
+					this.databaseListTotal = 0;
+					this.databaseListPage = 1;
+					return;
+				}
 				const response = await this.callFileAnalysisApi(
 					'/webman/3rdparty/AV_ImgData/index.cgi/api/database_name_mappings',
 					{
@@ -58,6 +112,27 @@ export default {
 			} finally {
 				this.databaseListLoading = false;
 			}
+		},
+		normalizeDatabaseIgnoreListsStatus(value) {
+			const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+			const normalized = {};
+			for (const reviewType of ['duplicate_faces', 'position_deviations', 'name_conflicts']) {
+				const entry = source[reviewType] && typeof source[reviewType] === 'object' && !Array.isArray(source[reviewType])
+					? source[reviewType]
+					: {};
+				normalized[reviewType] = {
+					count: Math.max(0, Number(entry.count) || 0),
+					path: String(entry.path || ''),
+					storage: String(entry.storage || ''),
+					enabled: Boolean(entry.enabled ?? true),
+				};
+			}
+			return normalized;
+		},
+		async loadDatabaseIgnoreListStatus() {
+			const response = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/database_checks_ignore_lists', {});
+			const data = this.getResponseData(response);
+			this.databaseChecksIgnoreListsStatus = this.normalizeDatabaseIgnoreListsStatus(data.checks_ignore_lists);
 		},
 		applyDatabaseListSearch() {
 			this.databaseListAppliedSearch = String(this.databaseListSearch || '').trim();
@@ -147,6 +222,40 @@ export default {
 				this.databaseListMessage = `Error: ${err.message}`;
 			} finally {
 				this.databaseListDeletingId = null;
+			}
+		},
+		async clearCurrentDatabaseList() {
+			if (this.databaseListClearing) {
+				return;
+			}
+			const confirmation = this.$avt(
+				'database_lists:confirm_clear_list',
+				'Clear "{list}" completely?',
+				{ list: this.currentDatabaseListLabel }
+			);
+			if (!window.confirm(confirmation)) {
+				return;
+			}
+			this.databaseListClearing = true;
+			this.databaseListMessage = '';
+			try {
+				if (this.databaseListIsIgnoreList) {
+					const response = await this.callFileAnalysisApi(
+						'/webman/3rdparty/AV_ImgData/index.cgi/api/checks_ignore_list_clear',
+						{ review_type: this.databaseIgnoreReviewType }
+					);
+					const data = this.getResponseData(response);
+					this.databaseChecksIgnoreListsStatus = this.normalizeDatabaseIgnoreListsStatus(data.checks_ignore_lists);
+				} else {
+					await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/database_name_mappings_clear', {});
+				}
+				this.cancelDatabaseNameMappingEdit();
+				this.databaseListMessage = this.$avt('database_lists:message_cleared', 'List cleared.');
+				await this.loadDatabaseList({ resetPage: true });
+			} catch (err) {
+				this.databaseListMessage = `Error: ${err.message}`;
+			} finally {
+				this.databaseListClearing = false;
 			}
 		},
 	},

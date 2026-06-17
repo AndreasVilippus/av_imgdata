@@ -14,6 +14,14 @@ def test_database_lists_ui_has_navigation_search_pagination_edit_and_delete():
     assert "saveDatabaseNameMapping" in view
     assert "startDatabaseNameMappingEdit(entry)" in view
     assert "deleteDatabaseNameMapping(entry)" in view
+    assert "clearCurrentDatabaseList" in view
+    assert "ignore_duplicate_faces" in view
+    assert "ignore_position_deviations" in view
+    assert "ignore_name_conflicts" in view
+    assert "updated_at" not in view
     assert "/api/database_name_mappings" in mixin
     assert "/api/database_name_mapping_save" in mixin
     assert "/api/database_name_mapping_delete" in mixin
+    assert "/api/database_name_mappings_clear" in mixin
+    assert "/api/database_checks_ignore_lists" in mixin
+    assert "/api/checks_ignore_list_clear" in mixin

@@ -9939,6 +9939,9 @@ class ImgDataService:
     def deleteNameMapping(self, mapping_id: int) -> bool:
         return self.name_mappings.deleteNameMapping(mapping_id)
 
+    def clearNameMappings(self) -> int:
+        return self.name_mappings.clearNameMappings()
+
     def updateNameMappingTarget(self, mapping_id: int, target_name: str) -> bool:
         return self.name_mappings.updateNameMappingTarget(mapping_id, target_name)
 
@@ -10198,10 +10201,35 @@ class ImgDataService:
             if key == "INSIGHTFACE":
                 model_root = self._configuredInsightFaceModelRoot()
                 model_status = InsightFaceDetector.available_models(model_root)
+                active_model_name = self._configuredInsightFaceModelName(model_status)
+                installed_model_count = len([
+                    model for model in model_status.get("models", [])
+                    if isinstance(model, dict) and model.get("installed")
+                ])
                 result[key]["model_root_configured"] = str(configured.get("MODEL_ROOT") or "").strip()
                 result[key]["model_name_configured"] = str(configured.get("MODEL_NAME") or "").strip()
                 result[key]["model_status"] = model_status
-                result[key]["active_model_name"] = self._configuredInsightFaceModelName(model_status)
+                result[key]["active_model_name"] = active_model_name
+                result[key]["status_blocks"] = [
+                    {
+                        "key": "active_model",
+                        "label_key": "status:pip_active_model",
+                        "fallback_label": "Active model",
+                        "value": active_model_name or "",
+                    },
+                    {
+                        "key": "installed_models",
+                        "label_key": "status:pip_installed_models",
+                        "fallback_label": "Installed models",
+                        "value": installed_model_count,
+                    },
+                    {
+                        "key": "model_store",
+                        "label_key": "status:pip_model_store",
+                        "fallback_label": "Model store",
+                        "value": str(model_status.get("model_store") or ""),
+                    },
+                ]
         return {
             "packages": result,
             "status_file": str(status_file),

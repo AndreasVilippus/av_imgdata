@@ -93,6 +93,18 @@ class NameMappingService:
             self._invalidate_cache()
         return deleted
 
+    def clearNameMappings(self) -> int:
+        if not self._ensure_migrated():
+            return 0
+        try:
+            deleted = self._repository.clear_mappings()
+        except DatabaseError as exc:
+            self._last_read_error = str(exc)
+            raise
+        if deleted:
+            self._invalidate_cache()
+        return deleted
+
     def updateNameMappingTarget(self, mapping_id: int, target_name: str) -> bool:
         if not self._ensure_migrated():
             return False

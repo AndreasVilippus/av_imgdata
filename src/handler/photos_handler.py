@@ -100,11 +100,28 @@ class PhotosHandler:
         cookies: Dict[str, str],
         base_url: str,
     ) -> Dict[str, int]:
-        persons = self.listFotoTeamPerson(user_key=user_key, cookies=cookies, base_url=base_url)
+        visible_persons = self.listFotoTeamPerson(user_key=user_key, cookies=cookies, base_url=base_url)
+        persons = self.listFotoTeamPerson(user_key=user_key, cookies=cookies, base_url=base_url, show_hidden=True)
         total = len(persons)
         unknown = len([p for p in persons if p.get("name") == ""])
         known = total - unknown
-        return {"total": total, "known": known, "unknown": unknown}
+        visible_total = len(visible_persons)
+        visible_unknown = len([p for p in visible_persons if p.get("name") == ""])
+        visible_known = visible_total - visible_unknown
+        hidden_total = max(total - visible_total, 0)
+        hidden_known = max(known - visible_known, 0)
+        hidden_unknown = max(unknown - visible_unknown, 0)
+        return {
+            "total": total,
+            "known": known,
+            "unknown": unknown,
+            "visible_total": visible_total,
+            "visible_known": visible_known,
+            "visible_unknown": visible_unknown,
+            "hidden_total": hidden_total,
+            "hidden_known": hidden_known,
+            "hidden_unknown": hidden_unknown,
+        }
 
     def listFotoTeamPerson(
         self,

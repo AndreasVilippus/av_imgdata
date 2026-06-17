@@ -219,32 +219,15 @@
 							class="config-field"
 						>
 							<label class="config-checkbox">
-								<input
-									v-model="configModel.review.CHECKS_IGNORE_LISTS[ignoreList.enabledKey]"
-									type="checkbox"
-									:disabled="saving || clearingIgnoreListType === ignoreList.reviewType"
-								/>
-								<span>{{ ignoreList.label }}</span>
-							</label>
-							<div class="config-card-desc">
-								{{ $avt('config:label_check_ignore_list_count', 'Entries') }}:
-								{{ getChecksIgnoreListStatus(ignoreList.reviewType).count }}
-							</div>
-							<div class="config-card-desc">
-								{{ $avt('config:label_check_ignore_list_path', 'File') }}:
-								{{ getChecksIgnoreListStatus(ignoreList.reviewType).path || '-' }}
-							</div>
-							<div class="config-inline-actions">
-								<v-button
-									@click="clearChecksIgnoreList(ignoreList.reviewType)"
-									:disabled="saving || clearingIgnoreListType === ignoreList.reviewType"
-									style="width: 160px;"
-								>
-									{{ $avt('config:button_clear_list', 'Clear list') }}
-								</v-button>
+									<input
+										v-model="configModel.review.CHECKS_IGNORE_LISTS[ignoreList.enabledKey]"
+										type="checkbox"
+										:disabled="saving"
+									/>
+									<span>{{ ignoreList.label }}</span>
+								</label>
 							</div>
 						</div>
-					</div>
 
 					<label
 						class="config-field"
@@ -292,7 +275,6 @@ export default {
 		return {
 			loading: false,
 			saving: false,
-			clearingIgnoreListType: '',
 			message: '',
 			configPath: '',
 			backendDebugLogPath: '',
@@ -473,19 +455,6 @@ export default {
 		},
 		getChecksIgnoreListStatus(reviewType) {
 			return this.checksIgnoreListsStatus[reviewType] || { count: 0, path: '', enabled: true };
-		},
-		async clearChecksIgnoreList(reviewType) {
-			this.clearingIgnoreListType = reviewType;
-			this.message = '';
-			try {
-				const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_ignore_list_clear', { review_type: reviewType });
-				this.checksIgnoreListsStatus = this.normalizeChecksIgnoreListsStatus(data && data.data && data.data.checks_ignore_lists);
-				this.message = this.$avt('config:message_ignore_list_cleared', 'Ignore list cleared.');
-			} catch (err) {
-				this.message = `Error: ${err.message}`;
-			} finally {
-				this.clearingIgnoreListType = '';
-			}
 		},
 		clampNumber(value, min, max, fallback) {
 			const numeric = Number(value);

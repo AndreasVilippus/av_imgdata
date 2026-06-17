@@ -23,7 +23,46 @@
 								:primary-text="`${vm.persons.known} ${vm.$avt('status:known_suffix', 'Persons')}`"
 								:secondary-text="`${vm.persons.unknown} ${vm.$avt('status:unknown_suffix', 'unknown persons')}`"
 							/>
-							<div class="sm-overview-person-mappings" :title="vm.$avt('status:name_mappings_hint', 'Names that are replaced by others')">{{ vm.$avt('status:name_mappings', 'Name mappings') }}: {{ vm.persons.mappings }}</div>
+							<div class="sm-overview-person-details">
+								<div>
+									<strong>{{ vm.$avt('status:visible_persons', 'Visible persons') }}:</strong>
+									{{ vm.persons.visibleTotal }}
+									<span class="sm-overview-person-detail-muted">({{ vm.persons.visibleKnown }} {{ vm.$avt('status:known_short', 'known') }}, {{ vm.persons.visibleUnknown }} {{ vm.$avt('status:unknown_short', 'unknown') }})</span>
+								</div>
+								<div>
+									<strong>{{ vm.$avt('status:hidden_persons', 'Hidden persons') }}:</strong>
+									{{ vm.persons.hiddenTotal }}
+									<span class="sm-overview-person-detail-muted">({{ vm.persons.hiddenKnown }} {{ vm.$avt('status:known_short', 'known') }}, {{ vm.persons.hiddenUnknown }} {{ vm.$avt('status:unknown_short', 'unknown') }})</span>
+								</div>
+								<div :title="vm.$avt('status:name_mappings_hint', 'Names that are replaced by others')">
+									<strong>{{ vm.$avt('status:name_mappings', 'Name mappings') }}:</strong>
+									{{ vm.persons.mappings }}
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<section class="panel">
+			<div class="sm-section-title sm-section-title-block">{{ vm.$avt('status:system_title', 'System') }}</div>
+			<div v-if="vm.statusLoading" class="sm-overview-person-loading">
+				<span class="sm-loader"></span>
+				{{ vm.$avt('status:loading', 'Loading data...') }}
+			</div>
+			<div v-else class="sm-system-grid">
+				<div class="sm-status-card">
+					<div class="sm-status-head">
+						<div class="sm-section-title">{{ vm.$avt('status:settings_components', 'Settings and components') }}</div>
+					</div>
+					<div class="sm-kv-list sm-kv-list-compact">
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('status:shared_folder', 'Photos shared folder') }}</div>
+							<div class="sm-kv-value">{{ vm.system.sharedFolder || vm.$avt('status:not_available', 'Not available') }}</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('status:perl_component_version', 'Perl version') }}</div>
+							<div class="sm-kv-value">{{ vm.getPerlStatusValue() }}</div>
 						</div>
 					</div>
 				</div>
@@ -92,24 +131,63 @@
 			</div>
 		</section>
 		<section class="panel">
-			<div class="sm-section-title sm-section-title-block">{{ vm.$avt('status:system_title', 'System') }}</div>
-			<div v-if="vm.statusLoading" class="sm-overview-person-loading">
+			<div class="sm-section-title sm-section-title-block">{{ vm.$avt('status:pip_packages_title', 'pip packages') }}</div>
+			<div v-if="vm.statusPipPackagesLoading" class="sm-overview-person-loading">
 				<span class="sm-loader"></span>
 				{{ vm.$avt('status:loading', 'Loading data...') }}
 			</div>
+			<div v-else-if="vm.statusPipPackagesStatus && vm.statusPipPackagesStatus.error" class="sm-files-warning">
+				{{ vm.statusPipPackagesStatus.error }}
+			</div>
 			<div v-else class="sm-system-grid">
-				<div class="sm-status-card">
+				<div
+					v-for="packageStatus in vm.getStatusPipPackageEntries()"
+					:key="`pip-package-${packageStatus.key}`"
+					class="sm-status-card"
+				>
 					<div class="sm-status-head">
-						<div class="sm-section-title">{{ vm.$avt('status:settings_components', 'Settings and components') }}</div>
+						<div class="sm-section-title">{{ packageStatus.label || packageStatus.key }}</div>
 					</div>
 					<div class="sm-kv-list sm-kv-list-compact">
 						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:shared_folder', 'Photos shared folder') }}</div>
-							<div class="sm-kv-value">{{ vm.system.sharedFolder || vm.$avt('status:not_available', 'Not available') }}</div>
+							<div class="sm-kv-key">{{ vm.$avt('status:enabled', 'Enabled') }}</div>
+							<div class="sm-kv-value">{{ packageStatus.enabled ? vm.$avt('status:yes', 'Yes') : vm.$avt('status:no', 'No') }}</div>
 						</div>
 						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:perl_component_version', 'Perl version') }}</div>
-							<div class="sm-kv-value">{{ vm.getPerlStatusValue() }}</div>
+							<div class="sm-kv-key">{{ vm.$avt('status:installed', 'Installed') }}</div>
+							<div class="sm-kv-value">{{ packageStatus.installed ? vm.$avt('status:yes', 'Yes') : vm.$avt('status:no', 'No') }}</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('status:pip_install_status', 'Last installation') }}</div>
+							<div class="sm-kv-value">{{ vm.getStatusPipPackageInstallStatusLabel(packageStatus) }}</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('status:pip_modules', 'Modules') }}</div>
+							<div class="sm-kv-value">{{ vm.getStatusPipPackageModulesText(packageStatus) }}</div>
+						</div>
+						<div
+							v-for="statusBlock in vm.getStatusPipPackageStatusBlocks(packageStatus)"
+							:key="`pip-package-${packageStatus.key}-status-${statusBlock.key}`"
+							class="sm-kv-row"
+						>
+							<div class="sm-kv-key">{{ vm.getStatusPipPackageStatusBlockLabel(statusBlock) }}</div>
+							<div class="sm-kv-value">{{ vm.getStatusPipPackageStatusBlockValue(statusBlock) }}</div>
+						</div>
+						<div v-if="packageStatus.model_status && !vm.getStatusPipPackageStatusBlocks(packageStatus).length" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('status:pip_models', 'Models') }}</div>
+							<div class="sm-kv-value">{{ vm.getStatusPipPackageModelsText(packageStatus) }}</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('status:pip_conflicts', 'Conflicts') }}</div>
+							<div class="sm-kv-value">{{ vm.getStatusPipPackageConflictsText(packageStatus) }}</div>
+						</div>
+					</div>
+				</div>
+				<div v-if="!vm.getStatusPipPackageEntries().length" class="sm-status-card">
+					<div class="sm-kv-list sm-kv-list-compact">
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('status:pip_packages_title', 'pip packages') }}</div>
+							<div class="sm-kv-value">{{ vm.$avt('status:not_available', 'Not available') }}</div>
 						</div>
 					</div>
 				</div>

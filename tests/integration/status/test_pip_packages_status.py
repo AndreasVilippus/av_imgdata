@@ -91,6 +91,11 @@ class PipPackagesStatusTests(unittest.TestCase):
             self.assertEqual(status["modules"][2]["package"], "opencv-python-headless")
             self.assertFalse(status["modules"][2]["installed"])
             self.assertEqual(status["conflicts"], [])
+            self.assertIn("status_blocks", status)
+            block_keys = [block["key"] for block in status["status_blocks"]]
+            self.assertIn("active_model", block_keys)
+            self.assertIn("installed_models", block_keys)
+            self.assertIn("model_store", block_keys)
 
     def test_pip_packages_status_requires_successful_module_import(self):
         with tempfile.TemporaryDirectory() as tmpdir:

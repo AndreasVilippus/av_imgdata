@@ -48,3 +48,15 @@ def test_file_analysis_ui_has_schema_status_helpers_before_rendering_progress():
 
     assert "vm.getFileAnalysisStatusProgress()" in view
     assert "vm.getFileAnalysisStatusCounters()" in view
+
+
+def test_status_view_places_system_before_files_and_pip_packages_below_files():
+    view = Path("ui/src/views/StatusView.vue").read_text(encoding="utf-8")
+
+    system_pos = view.index("status:system_title")
+    files_pos = view.index("status:files_title")
+    pip_pos = view.index("status:pip_packages_title")
+
+    assert system_pos < files_pos < pip_pos
+    assert "vm.getStatusPipPackageStatusBlocks(packageStatus)" in view
+    assert "vm.getStatusPipPackageStatusBlockLabel(statusBlock)" in view

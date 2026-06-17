@@ -71,6 +71,25 @@ class PhotosHandlerSortTests(unittest.TestCase):
         sorted_persons = handler.sortPersonsForFaceMatch(self.persons)
         self.assertEqual([person["id"] for person in sorted_persons], [7, 2, 15])
 
+    def test_person_status_counts_hidden_persons_separately(self):
+        session_manager = DummySessionManager(get_payloads=[
+            {"success": True, "data": {"list": [{"id": 1, "name": "Visible"}, {"id": 2, "name": ""}]}},
+            {"success": True, "data": {"list": [{"id": 1, "name": "Visible"}, {"id": 2, "name": ""}, {"id": 3, "name": "Hidden"}, {"id": 4, "name": ""}]}},
+        ])
+        handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))
+
+        status = handler.person_status(user_key="user", cookies={}, base_url="https://example.test")
+
+        self.assertEqual(status["total"], 4)
+        self.assertEqual(status["known"], 2)
+        self.assertEqual(status["unknown"], 2)
+        self.assertEqual(status["visible_total"], 2)
+        self.assertEqual(status["hidden_total"], 2)
+        self.assertEqual(status["hidden_known"], 1)
+        self.assertEqual(status["hidden_unknown"], 1)
+        self.assertEqual(session_manager.get_calls[0]["params"]["show_hidden"], "false")
+        self.assertEqual(session_manager.get_calls[1]["params"]["show_hidden"], "true")
+
     def test_add_face_to_item_posts_expected_payload(self):
         session_manager = DummySessionManager(post_payloads=[{"success": True, "data": {"list": [{"face_id": 99, "face_id_temp": "42-0"}]}}])
         handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))

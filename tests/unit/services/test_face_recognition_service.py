@@ -143,7 +143,11 @@ def test_unreadable_image_uses_embedded_preview_instead_of_failing_run(tmp_path)
     service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: b"jpeg")
     service.backend._debugLog = lambda event, **fields: logs.append((event, fields))
     service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [{"id": 10, "folder_id": 20, "filename": "image.heic"}]
-    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda **_kwargs: [])
+    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda **_kwargs: [{
+        "person_id": 1,
+        "face_id": 99,
+        "bbox": {"top_left": {"x": 0.1, "y": 0.1}, "bottom_right": {"x": 0.2, "y": 0.2}},
+    }])
     service._item_path = lambda **_kwargs: str(image_path)
     embedder = SimpleNamespace(
         detect_and_embed=lambda _path: (_ for _ in ()).throw(ValueError("image could not be read")),
@@ -167,13 +171,20 @@ def test_person_reference_scan_reports_image_counter_progress_without_current_fi
     service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: None)
     service.backend._debugLog = lambda *_args, **_kwargs: None
     service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [{"id": 10, "folder_id": 20, "filename": "image.jpg"}]
-    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda **_kwargs: [])
+    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda **_kwargs: [{
+        "person_id": 1,
+        "face_id": 99,
+        "bbox": {"top_left": {"x": 0.1, "y": 0.1}, "bottom_right": {"x": 0.2, "y": 0.2}},
+    }])
     service.backend._buildStatusProgress = lambda **kwargs: kwargs
     service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
     service.backend._buildStatusPayload = lambda **kwargs: kwargs
     service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
     service._item_path = lambda **_kwargs: str(image_path)
-    embedder = SimpleNamespace(detect_and_embed=lambda _path: [])
+    embedder = SimpleNamespace(
+        detect_and_embed=lambda _path: [{"bbox": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "embedding": [1.0, 0.0]}],
+        _iou=lambda _left, _right: 1.0,
+    )
 
     references = service._person_references(
         user_key="u", cookies={}, base_url="https://dsm", shared_folder=str(tmp_path),
@@ -186,11 +197,38 @@ def test_person_reference_scan_reports_image_counter_progress_without_current_fi
         },
     )
 
-    assert references == []
+    assert len(references) == 1
     assert progress_updates
-    _user_key, update = progress_updates[0]
+    _user_key, update = progress_updates[-1]
     assert update["images_scanned"] == 1
     assert update["images_total"] == 1
+    assert update["faces_scanned"] == 1
     assert "current_path" not in update
     assert "current_name" not in update
     assert update["status"]["progress"]["kind"] == "images"
+    counter_values = {counter["key"]: counter["value"] for counter in update["status"]["counters"]}
+    assert counter_values["images"] == 1
+    assert counter_values["faces"] == 1
+
+
+def test_unknown_face_recognition_without_profiles_reports_actionable_status():
+    service, _findings = _service()
+    progress_updates = []
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+
+    service._build_suggestions(
+        user_key="u",
+        cookies={},
+        base_url="https://dsm",
+        options=service.normalize_options({"operation_mode": "immediate"}),
+    )
+
+    assert progress_updates
+    _user_key, update = progress_updates[-1]
+    assert update["running"] is False
+    assert update["finished"] is True
+    assert update["phase"] == "needs_profiles"
+    assert update["message_key"] == "cleanup:recognition_profiles_missing"

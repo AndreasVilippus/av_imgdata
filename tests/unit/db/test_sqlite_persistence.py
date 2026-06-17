@@ -133,6 +133,8 @@ def test_name_mapping_repository_lists_filtered_pages_and_deletes_by_id(tmp_path
     assert repository.delete_mapping(filtered["entries"][0]["id"])
     assert repository.list_page(search="Alias Beta")["total"] == 0
     assert not repository.delete_mapping(filtered["entries"][0]["id"])
+    assert repository.clear_mappings() == 2
+    assert repository.list_page()["total"] == 0
 
 
 def test_legacy_name_mapping_migration_is_idempotent_and_preserves_source(tmp_path):

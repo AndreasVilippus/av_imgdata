@@ -6,10 +6,18 @@ export default {
 			fileAnalysisProgress: {},
 			fileAnalysisProgressTimer: null,
 			fileAnalysisProgressRequestId: 0,
+			statusPipPackagesStatus: {},
+			statusPipPackagesLoading: false,
 			persons: {
 				total: 0,
 				known: 0,
 				unknown: 0,
+				visibleTotal: 0,
+				visibleKnown: 0,
+				visibleUnknown: 0,
+				hiddenTotal: 0,
+				hiddenKnown: 0,
+				hiddenUnknown: 0,
 				mappings: 0,
 			},
 			system: {
@@ -38,23 +46,12 @@ export default {
 		this.getStatus({ auto: true });
 		this.fetchFileAnalysisProgress();
 		this.fetchExiftoolStatus();
-		window.addEventListener('focus', this.handleStatusVisibilityRefresh);
-		document.addEventListener('visibilitychange', this.handleStatusVisibilityRefresh);
+		this.fetchStatusPipPackagesStatus();
 	},
 	beforeDestroy() {
 		this.stopFileAnalysisProgressPolling();
-		window.removeEventListener('focus', this.handleStatusVisibilityRefresh);
-		document.removeEventListener('visibilitychange', this.handleStatusVisibilityRefresh);
 	},
-		methods: {
-		handleStatusVisibilityRefresh() {
-			if (document.visibilityState && document.visibilityState !== 'visible') {
-				return;
-			}
-			this.getStatus({ auto: true });
-			this.refreshFileAnalysisSessionState();
-			this.fetchExiftoolStatus();
-		},
+	methods: {
 		async refreshFileAnalysisSessionState() {
 			await this.fetchFileAnalysisProgress();
 			const progress = this.fileAnalysisProgress && typeof this.fileAnalysisProgress === 'object'
@@ -105,6 +102,97 @@ export default {
 				};
 				this.output = `Error: ${err.message}`;
 			}
+		},
+		async fetchStatusPipPackagesStatus() {
+			this.statusPipPackagesLoading = true;
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status', {}, { resume: false, requireSynoToken: false });
+				this.statusPipPackagesStatus = this.getResponseData(data);
+			} catch (err) {
+				this.statusPipPackagesStatus = {
+					error: err && err.message ? err.message : String(err || ''),
+				};
+			} finally {
+				this.statusPipPackagesLoading = false;
+			}
+		},
+		getStatusPipPackageEntries() {
+			const root = this.statusPipPackagesStatus && typeof this.statusPipPackagesStatus === 'object'
+				? this.statusPipPackagesStatus
+				: {};
+			const packages = root.packages && typeof root.packages === 'object' ? root.packages : {};
+			return Object.entries(packages)
+				.map(([key, value]) => ({
+					key,
+					...(value && typeof value === 'object' ? value : {}),
+				}))
+				.sort((left, right) => String(left.label || left.key).localeCompare(String(right.label || right.key)));
+		},
+		getStatusPipPackageInstallStatusLabel(packageStatus) {
+			const installStatus = packageStatus && typeof packageStatus === 'object' ? packageStatus.install_status : {};
+			const status = String(installStatus && installStatus.status || '').trim().toLowerCase();
+			if (!status) {
+				return this.$avt('status:not_available', 'Not available');
+			}
+			if (status === 'success') {
+				return this.$avt('config:pip_install_status_success', 'Last installation completed.');
+			}
+			if (status === 'failed') {
+				return this.$avt('config:pip_install_status_failed', 'Last installation failed.');
+			}
+			return status;
+		},
+		getStatusPipPackageModulesText(packageStatus) {
+			const modules = packageStatus && Array.isArray(packageStatus.modules) ? packageStatus.modules : [];
+			const parts = modules.map((moduleStatus) => {
+				const packageName = String(moduleStatus && moduleStatus.package || moduleStatus && moduleStatus.module || '').trim();
+				if (!packageName) {
+					return '';
+				}
+				let label = this.$avt('status:not_installed', 'Not installed');
+				if (moduleStatus && moduleStatus.installed) {
+					label = String(moduleStatus.version || this.$avt('status:installed', 'Installed'));
+				} else {
+					const importError = String(moduleStatus && moduleStatus.import_error || '').trim();
+					if (importError) {
+						label = `${label}: ${importError}`;
+					}
+				}
+				return `${packageName}: ${label}`;
+			}).filter(Boolean);
+			return parts.length ? parts.join(', ') : this.$avt('status:not_available', 'Not available');
+		},
+		getStatusPipPackageStatusBlocks(packageStatus) {
+			return packageStatus && Array.isArray(packageStatus.status_blocks)
+				? packageStatus.status_blocks.filter((block) => block && typeof block === 'object')
+				: [];
+		},
+		getStatusPipPackageStatusBlockLabel(block) {
+			const labelKey = String(block && block.label_key || '').trim();
+			const fallback = String(block && (block.fallback_label || block.key) || '').trim();
+			return labelKey ? this.$avt(labelKey, fallback) : fallback;
+		},
+		getStatusPipPackageStatusBlockValue(block) {
+			const value = block && Object.prototype.hasOwnProperty.call(block, 'value') ? block.value : '';
+			const text = String(value ?? '').trim();
+			return text || this.$avt('status:not_available', 'Not available');
+		},
+		getStatusPipPackageModelsText(packageStatus) {
+			const modelStatus = packageStatus && packageStatus.model_status && typeof packageStatus.model_status === 'object'
+				? packageStatus.model_status
+				: {};
+			const activeName = String(packageStatus && packageStatus.active_model_name || '').trim();
+			const models = Array.isArray(modelStatus.models) ? modelStatus.models : [];
+			const installedCount = models.filter((model) => model && model.installed).length;
+			if (activeName || installedCount) {
+				return `${activeName || this.$avt('status:not_available', 'Not available')} (${installedCount})`;
+			}
+			return this.$avt('status:not_available', 'Not available');
+		},
+		getStatusPipPackageConflictsText(packageStatus) {
+			const conflicts = packageStatus && Array.isArray(packageStatus.conflicts) ? packageStatus.conflicts : [];
+			const parts = conflicts.map((item) => `${String(item.package || '').trim()} ${String(item.version || '').trim()}`.trim()).filter(Boolean);
+			return parts.length ? parts.join(', ') : this.$avt('status:no', 'No');
 		},
 		getPerlStatusValue() {
 			const perlInfo = this.exiftoolStatus && typeof this.exiftoolStatus === 'object'
@@ -330,6 +418,12 @@ export default {
 				total: Math.max(total, 0),
 				known: Math.max(known, 0),
 				unknown: Math.max(unknown, 0),
+				visibleTotal: Math.max(Number(personsSource.visible_total) || 0, 0),
+				visibleKnown: Math.max(Number(personsSource.visible_known) || 0, 0),
+				visibleUnknown: Math.max(Number(personsSource.visible_unknown) || 0, 0),
+				hiddenTotal: Math.max(Number(personsSource.hidden_total) || 0, 0),
+				hiddenKnown: Math.max(Number(personsSource.hidden_known) || 0, 0),
+				hiddenUnknown: Math.max(Number(personsSource.hidden_unknown) || 0, 0),
 				mappings: Math.max(Number(personsSource.mappings) || 0, 0),
 			};
 		},

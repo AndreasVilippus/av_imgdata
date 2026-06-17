@@ -2363,6 +2363,19 @@ async def database_name_mapping_delete(request: Request):
     return {"success": True, "data": {"id": mapping_id, "deleted": True}}
 
 
+@router.post("/database_name_mappings_clear")
+async def database_name_mappings_clear(request: Request):
+    _session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    try:
+        deleted = await _run_backend_call(lambda: IMGDATA.clearNameMappings())
+    except Exception as exc:
+        return _operation_exception_response(exc, message="database_name_mappings_clear_failed")
+    return {"success": True, "data": {"list": "name_mappings", "cleared": True, "deleted": int(deleted or 0)}}
+
+
 @router.post("/database_name_mapping_save")
 async def database_name_mapping_save(request: Request):
     _session_ctx, error_response = await _prepare_session_request(request)
@@ -2404,6 +2417,19 @@ async def database_name_mapping_save(request: Request):
         "success": True,
         "data": {"id": mapping_id or None, "source_name": source_name, "target_name": target_name, "saved": True},
     }
+
+
+@router.post("/database_checks_ignore_lists")
+async def database_checks_ignore_lists(request: Request):
+    _session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    try:
+        statuses = await _run_backend_call(lambda: IMGDATA.getChecksIgnoreListsStatus())
+    except Exception as exc:
+        return _operation_exception_response(exc, message="database_checks_ignore_lists_load_failed")
+    return {"success": True, "data": {"checks_ignore_lists": statuses}}
 
 
 @router.post("/config_save")

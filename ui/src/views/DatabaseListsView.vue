@@ -10,9 +10,12 @@
 				<span class="config-field-label">{{ vm.$avt('database_lists:list', 'List') }}</span>
 				<select v-model="vm.databaseListType" class="config-select" :disabled="vm.databaseListLoading">
 					<option value="name_mappings">{{ vm.$avt('database_lists:name_mappings', 'Name mappings') }}</option>
+					<option value="ignore_duplicate_faces">{{ vm.$avt('database_lists:ignore_duplicate_faces', 'Ignore list for duplicate face markings') }}</option>
+					<option value="ignore_position_deviations">{{ vm.$avt('database_lists:ignore_position_deviations', 'Ignore list for deviating face positions') }}</option>
+					<option value="ignore_name_conflicts">{{ vm.$avt('database_lists:ignore_name_conflicts', 'Ignore list for name conflicts') }}</option>
 				</select>
 			</label>
-			<label class="config-field database-list-search">
+			<label v-if="vm.databaseListIsNameMappings" class="config-field database-list-search">
 				<span class="config-field-label">{{ vm.$avt('database_lists:search', 'Search / filter') }}</span>
 				<input
 					v-model="vm.databaseListSearch"
@@ -33,11 +36,27 @@
 				<v-button @click="vm.loadDatabaseList" :disabled="vm.databaseListLoading">
 					{{ vm.$avt('config:button_reload', 'Reload') }}
 				</v-button>
+				<v-button
+					@click="vm.clearCurrentDatabaseList"
+					:disabled="vm.databaseListLoading || vm.databaseListClearing || (vm.databaseListIsNameMappings && !vm.databaseListTotal) || (vm.databaseListIsIgnoreList && !vm.currentDatabaseIgnoreListStatus.count)"
+				>
+					{{ vm.databaseListClearing ? vm.$avt('database_lists:clearing', 'Clearing...') : vm.$avt('database_lists:clear_list', 'Clear list') }}
+				</v-button>
 			</div>
 		</div>
 
 		<div v-if="vm.databaseListMessage" class="config-message">{{ vm.databaseListMessage }}</div>
-		<div class="config-card database-list-editor">
+		<div v-if="vm.databaseListIsIgnoreList" class="config-card database-list-editor">
+			<div class="config-card-title">{{ vm.currentDatabaseListLabel }}</div>
+			<div class="config-card-desc">
+				{{ vm.$avt('database_lists:ignore_list_no_preview', 'The content is not listed here. Use this view to clear the selected ignore list.') }}
+			</div>
+			<div class="face-match-status-stats">
+				<span>{{ vm.$avt('database_lists:entries', 'Entries') }}: {{ vm.currentDatabaseIgnoreListStatus.count }}</span>
+				<span>{{ vm.$avt('database_lists:storage', 'Storage') }}: {{ vm.currentDatabaseIgnoreListStatus.storage || '-' }}</span>
+			</div>
+		</div>
+		<div v-if="vm.databaseListIsNameMappings" class="config-card database-list-editor">
 			<div class="config-card-title">
 				{{ vm.databaseListEditorId ? vm.$avt('database_lists:edit_title', 'Edit name mapping') : vm.$avt('database_lists:add_title', 'Add name mapping') }}
 			</div>
@@ -66,7 +85,7 @@
 			{{ vm.$avt('database_lists:loading', 'Loading list...') }}
 		</div>
 
-		<div v-else class="database-list-table-wrap">
+		<div v-else-if="vm.databaseListIsNameMappings" class="database-list-table-wrap">
 			<table class="database-list-table">
 				<thead>
 					<tr>
@@ -74,7 +93,6 @@
 						<th>{{ vm.$avt('database_lists:target_name', 'Target name') }}</th>
 						<th>{{ vm.$avt('database_lists:source_kind', 'Source type') }}</th>
 						<th>{{ vm.$avt('database_lists:mapping_kind', 'Mapping type') }}</th>
-						<th>{{ vm.$avt('database_lists:updated_at', 'Updated') }}</th>
 						<th class="database-list-actions-column">{{ vm.$avt('database_lists:actions', 'Actions') }}</th>
 					</tr>
 				</thead>
@@ -84,7 +102,6 @@
 						<td>{{ entry.target_name }}</td>
 						<td>{{ entry.source_kind }}</td>
 						<td>{{ entry.mapping_kind }}</td>
-						<td>{{ entry.updated_at }}</td>
 						<td class="database-list-actions-column">
 							<v-button @click="vm.startDatabaseNameMappingEdit(entry)" :disabled="vm.databaseListSaving || !!vm.databaseListDeletingId">
 								{{ vm.$avt('database_lists:edit', 'Edit') }}
@@ -95,13 +112,13 @@
 						</td>
 					</tr>
 					<tr v-if="!vm.databaseListEntries.length">
-						<td colspan="6" class="database-list-empty">{{ vm.$avt('database_lists:empty', 'No entries found.') }}</td>
+						<td colspan="5" class="database-list-empty">{{ vm.$avt('database_lists:empty', 'No entries found.') }}</td>
 					</tr>
 				</tbody>
 			</table>
 		</div>
 
-		<div class="database-list-pagination">
+		<div v-if="vm.databaseListIsNameMappings" class="database-list-pagination">
 			<div>
 				{{ vm.$avt('database_lists:range', '{first}-{last} of {total}', {
 					first: vm.databaseListFirstEntry,

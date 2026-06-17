@@ -86,6 +86,11 @@ class NameMappingRepository:
             )
         return cursor.rowcount > 0
 
+    def clear_mappings(self) -> int:
+        with self.database.transaction() as connection:
+            cursor = connection.execute("DELETE FROM name_mappings")
+        return max(0, int(cursor.rowcount or 0))
+
     def update_mapping_target(self, mapping_id: int, target_name: str) -> bool:
         target_value = str(target_name or "").strip()
         normalized_target = normalize_name(target_value)

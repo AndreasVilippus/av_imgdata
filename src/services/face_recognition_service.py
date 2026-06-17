@@ -183,6 +183,7 @@ class FaceRecognitionService:
         except (TypeError, ValueError):
             return []
         references: List[Dict[str, Any]] = []
+        faces_scanned = 0
         items = self.backend._listAllPhotoItemsForPerson(user_key=user_key, cookies=cookies, base_url=base_url, person_id=person_id)
         if not isinstance(items, list):
             items = list(items)
@@ -204,6 +205,7 @@ class FaceRecognitionService:
                     progress_kind="images", images_scanned=item_index + 1, images_total=len(items),
                     persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
                     profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
+                    faces_scanned=faces_scanned,
                     references_count=len(references),
                 )
             if options["changed_since_days"] > 0:
@@ -258,7 +260,23 @@ class FaceRecognitionService:
                             preview_error="embedded_jpeg_preview_missing",
                         )
             image_embeddings = self._image_embedding_cache[image_path]
-            for face in self.backend.photos.list_faceFotoTeamItems(user_key=user_key, cookies=cookies, base_url=base_url, id_item=item_id):
+            image_faces = self.backend.photos.list_faceFotoTeamItems(user_key=user_key, cookies=cookies, base_url=base_url, id_item=item_id)
+            if not isinstance(image_faces, list):
+                image_faces = list(image_faces)
+            for face in image_faces:
+                faces_scanned += 1
+                if context:
+                    self._set_progress(
+                        user_key, str(context.get("action") or self.ACTION_BUILD), options,
+                        running=True, finished=False, phase=str(context.get("phase") or "reading_reference_images"),
+                        message_key=str(context.get("message_key") or "cleanup:recognition_reading_reference_images"),
+                        message=str(context.get("message") or "Reading recognition reference images."),
+                        progress_kind="images", images_scanned=item_index + 1, images_total=len(items),
+                        persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
+                        profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
+                        faces_scanned=faces_scanned,
+                        references_count=len(references),
+                    )
                 try:
                     face_person_id = int(face.get("person_id"))
                     face_id = int(face.get("face_id"))
@@ -455,7 +473,13 @@ class FaceRecognitionService:
             if int(profile.get("used_count") or 0) >= options["min_faces_per_person"]
         ]
         if not profiles:
-            raise RuntimeError("recognition_profiles_missing")
+            self._set_progress(
+                user_key, self.ACTION_SUGGEST, options, running=False, finished=True, phase="needs_profiles",
+                message_key="cleanup:recognition_profiles_missing",
+                message="Recognition profiles are missing. Build recognition profiles before analyzing unknown faces.",
+                profiles_built=0, findings_count=0,
+            )
+            return
         embedder = self._prepared_embedder(options)
         shared_folder = self.backend.core.getSharedFolder(user_key=user_key, cookies=cookies, base_url=base_url, folder_name="photo")
         if not shared_folder:
@@ -688,21 +712,21 @@ class FaceRecognitionService:
         if kind == "images":
             current = int(updates.get("images_scanned") or 0)
             total = int(updates.get("images_total") or 0)
-            title_key, fallback_title = "cleanup:label_images", "Images"
-            primary_key, primary_label = "cleanup:label_scanned", "scanned"
-            secondary_key, secondary_label = "cleanup:label_files_remaining", "remaining"
+            title_key, fallback_title = "cleanup:label_images", "Bilder"
+            primary_key, primary_label = "cleanup:label_scanned", "geprüft"
+            secondary_key, secondary_label = "cleanup:label_files_remaining", "verbleibend"
         elif kind == "entries":
             current = int(updates.get("entries_current") or 0)
             total = int(updates.get("entries_total") or 0)
-            title_key, fallback_title = "cleanup:label_entries", "Entries"
-            primary_key, primary_label = "cleanup:label_scanned", "scanned"
-            secondary_key, secondary_label = "cleanup:label_entries_remaining", "remaining"
+            title_key, fallback_title = "cleanup:label_entries", "Einträge"
+            primary_key, primary_label = "cleanup:label_scanned", "geprüft"
+            secondary_key, secondary_label = "cleanup:label_entries_remaining", "verbleibend"
         else:
             current = int(updates.get("persons_scanned") or 0)
             total = int(updates.get("persons_total") or 0)
-            title_key, fallback_title = "cleanup:label_persons", "Persons"
-            primary_key, primary_label = "cleanup:label_scanned", "scanned"
-            secondary_key, secondary_label = "cleanup:label_persons_remaining", "remaining"
+            title_key, fallback_title = "cleanup:label_persons", "Personen"
+            primary_key, primary_label = "cleanup:label_scanned", "geprüft"
+            secondary_key, secondary_label = "cleanup:label_persons_remaining", "verbleibend"
         status = self.backend._buildStatusPayload(
             operation="cleanup", action=action, mode=str(options.get("operation_mode") or "scan"),
             phase=str(updates.get("phase") or ""),
@@ -715,6 +739,8 @@ class FaceRecognitionService:
             counters=[
                 self.backend._buildStatusCounter("profiles", value=int(updates.get("profiles_built") or 0), label_key="cleanup:label_profiles", fallback_label="Profiles", show_when_zero=True),
                 self.backend._buildStatusCounter("findings", value=int(updates.get("findings_count") or 0), label_key="cleanup:label_findings", fallback_label="Findings", show_when_zero=True),
+                self.backend._buildStatusCounter("images", value=int(updates.get("images_scanned") or 0), label_key="cleanup:label_images_processed", fallback_label="Images", show_when_zero=False),
+                self.backend._buildStatusCounter("faces", value=int(updates.get("faces_scanned") or 0), label_key="cleanup:label_faces_processed", fallback_label="Faces", show_when_zero=False),
                 self.backend._buildStatusCounter("references", value=int(updates.get("references_count") or 0), label_key="cleanup:label_references", fallback_label="References"),
                 self.backend._buildStatusCounter("errors", value=int(updates.get("errors_count") or 0), label_key="cleanup:label_errors", fallback_label="Errors"),
             ],
