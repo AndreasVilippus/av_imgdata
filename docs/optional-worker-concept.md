@@ -2,11 +2,43 @@
 
 ## Purpose
 
-This document describes an optional external worker subproject for `av_imgdata`.
+This document describes an optional external worker concept for `av_imgdata` while keeping the DSM package restricted to runtimes that are either part of DSM, available through official Synology packages, or shipped explicitly as package-owned native components.
 
-The primary goal is to improve performance and keep the DSM package responsive by moving long-running or CPU/RAM-heavy processing out of the DSM package when a suitable external system is available.
+The worker is optional. The DSM package must continue to work without a registered worker by using the local processing path through the same processor contract.
 
-The worker is optional. The DSM package must continue to work without a registered worker by using the existing local processing path through the same processor contract.
+## Runtime Scope
+
+### Allowed on DSM
+
+The DSM package may rely on these runtime categories:
+
+```text
+- POSIX shell for DSM package lifecycle scripts
+- existing backend runtime only if declared as an official Synology package dependency or packaged with the SPK
+- browser JavaScript for the Web UI
+- native C/C++ components shipped as package binaries for the target Synology architecture
+- other native Linux executables shipped with the package for the target Synology architecture
+- external tools only when explicit, configurable, status-visible, and license-aware
+```
+
+C/C++ components are acceptable for NAS packages when they are shipped as compiled package artifacts. The package must not require a C/C++ compiler or development toolchain to be present on the NAS.
+
+### Not assumed on DSM
+
+The DSM package must not assume these are installed on the NAS:
+
+```text
+- Go runtime
+- Rust toolchain or Rust compiler
+- C/C++ compiler or build toolchain
+- modern Java runtime unless declared as official package dependency
+- .NET runtime
+- Ruby runtime
+- user-managed Python venv
+- user-installed Node.js runtime for backend execution
+```
+
+These technologies may still be used outside the NAS to build worker binaries, processor binaries, or packaged native artifacts. They must not become manual NAS prerequisites.
 
 ## Architecture Summary
 
@@ -15,7 +47,7 @@ DSM package = controller, DSM authority, job owner, status owner
 Web UI      = browser client for display, configuration, progress, logs
 Worker      = optional external execution host
 ProcessorContract = language-neutral contract between DSM, worker, and processors
-ProcessorCore     = reusable processing implementation behind that contract
+ProcessorCore     = reusable processing implementation or executable behind that contract
 ```
 
 The worker is not a second backend. It is only an execution target for jobs created and owned by DSM.
@@ -40,7 +72,6 @@ av_imgdata/
   worker/                      # optional external worker subproject
     cmd/
       av-imgdata-worker/
-        main.go | main.rs | main.cpp
     internal/
       api/
       capabilities/
@@ -68,34 +99,14 @@ av_imgdata/
       worker-capabilities.schema.json
       worker-registration.schema.json
     examples/
-      file-analysis.input.json
-      file-analysis.result.json
-      metadata-scan.input.json
-      metadata-scan.result.json
     fixtures/
-      images/
-      sidecars/
-      expected-results/
     openapi/
       worker-api.openapi.yaml
     README.md
 
-  processors/                   # reusable ProcessorCore implementations
-    python/
-      av_imgdata_processor/
-        cli.py
-        contract.py
-        dispatcher.py
-        file_analysis.py
-        metadata_scan.py
-        preview_generation.py
-        result_normalizer.py
-        errors.py
-      tests/
-      pyproject.toml
-      README.md
-    rust/                       # optional later for measured hot paths
-    cpp/                        # optional later for measured/native hot paths
+  processors/                   # reusable ProcessorCore implementations or executables
+    python/                     # only with official dependency or packaged executable
+    native/                     # shipped C/C++ or other native binaries per Synology architecture
     README.md
 
   package/                      # DSM packaging
@@ -103,39 +114,19 @@ av_imgdata/
     scripts/
     conf/
     ui/
+    bin/                        # packaged native binaries, including C/C++ processors
 
   tests/
     unit/
     integration/
     contract/
-      test_processor_contract_local.py
-      test_worker_api_contract.py
-      test_local_vs_worker_result_equivalence.py
-      test_processor_result_validation.py
 
   tools/
-    validate_processor_contract.py
-    generate_worker_contracts.py
-    check_syntax_and_structure.py
-
   docs/
-    architecture-and-development-guidelines.md
-    optimization-modernization.md
-    optional-worker-concept.md
-
-  .github/
-    workflows/
-      backend-tests.yml
-      ui-tests.yml
-      worker-tests.yml
-      processor-tests.yml
-      contract-tests.yml
-      package-build.yml
+  .github/workflows/
 ```
 
-## Repository Ownership Rules
-
-### `src/` remains DSM backend
+## DSM Package Ownership
 
 The existing backend remains responsible for:
 
@@ -174,9 +165,9 @@ src/processors/local_processor_adapter.py
 src/processors/processor_contract_loader.py
 ```
 
-### `worker/` is an external execution host
+## Worker Ownership
 
-The worker owns:
+The external worker owns:
 
 ```text
 - DSM worker API client
@@ -187,7 +178,7 @@ The worker owns:
 - API result upload
 - local temp workspace
 - process execution wrapper
-- optional native processing modules
+- optional external processing modules
 - local worker logs
 - service/daemon mode
 - CLI commands
@@ -205,7 +196,7 @@ The worker must not own:
 - worker token creation or revocation
 ```
 
-### `processor_contract/` is the anti-duplication boundary
+## ProcessorContract
 
 `processor_contract/` is language-neutral. It defines the shared schema and examples for all execution targets.
 
@@ -223,22 +214,22 @@ The contract is the source of truth for:
 - deterministic fixtures and expected results
 ```
 
-Python, Go, Rust, C, or C++ implementations must conform to the contract. No implementation-specific model should become the contract authority.
+No implementation-specific model may become the contract authority.
 
-### `processors/` contains reusable processing implementations
+## ProcessorCore
 
-`processors/` contains code that can be called by local DSM execution and by the worker.
+`processors/` contains reusable processing implementations or executables.
 
-Recommended first approach:
+DSM-safe approaches:
 
 ```text
-- extract existing Python-heavy domain processing into processors/python/
-- expose a processor CLI with JSON input/output
-- let DSM LocalProcessorAdapter call it locally where practical
-- let the worker call the same processor executable where practical
+- Python ProcessorCore only when Python is an official Synology package dependency or packaged as a controlled executable
+- C/C++ ProcessorCore components shipped as compiled package binaries for each supported Synology architecture
+- other native ProcessorCore executables shipped for the target Synology architecture
+- external tool integration only when explicit, configurable, status-visible, and license-aware
 ```
 
-Target executable contract:
+Recommended executable boundary:
 
 ```text
 av-imgdata-processor run \
@@ -348,7 +339,6 @@ Example capability payload:
     "hashing"
   ],
   "features": {
-    "gpu": false,
     "api_file_transfer": true,
     "share_file_transfer": false
   }
@@ -410,93 +400,50 @@ Worker -> DSM: result upload
 
 The pull model is preferred because the worker can run behind NAT, on Windows desktops, on laptops, in Docker, or in cloud environments without requiring DSM to initiate inbound connections.
 
-## Component And Language Matrix
+## DSM-Compatible Component Matrix
 
-This matrix is for language selection. It does not force the entire worker into one language.
+| Component | Allowed DSM runtime | Notes |
+|---|---|---|
+| DSM package lifecycle | `/bin/sh` | Package start/stop/status scripts remain shell scripts. |
+| DSM API routes | Existing backend runtime, official dependency, or packaged runtime | Keep routes thin. |
+| Job dispatcher | Existing backend runtime, official dependency, or packaged runtime | Must remain close to runtime state and persistence. |
+| Worker registration API | Existing backend runtime | DSM side owns worker identity and token validation. |
+| Variant B file streaming endpoints | Existing backend runtime with streaming I/O | Must not load full files into memory. |
+| Status payload builder | Existing backend runtime | DSM remains source of truth for UI status. |
+| Runtime state and job persistence | Existing backend runtime / SQLite-backed services | Worker must not persist authoritative state. |
+| Local ProcessorCore | Python with official dependency, packaged executable, or C/C++ native binary | Must conform to ProcessorContract. |
+| Hashing hot path | C/C++ native binary or existing backend runtime | C/C++ is acceptable when shipped as package binary. |
+| Binary parsing hot path | C/C++ native binary or packaged executable | Requires strict fixtures and validation. |
+| Image processing primitive | C/C++ native binary or external tool | Keep as narrow processor module. |
+| ExifTool integration | Existing backend adapter or packaged external tool | Must stay explicit and status-visible. |
+| Web UI | Browser JavaScript | No NAS backend runtime dependency. |
+| Contract tests | Existing test stack outside runtime package | Tests validate schemas and executable behavior. |
 
-| Component | Owner | Go | Rust | C/C++ | Python | Notes |
-|---|---|---:|---:|---:|---:|---|
-| DSM package lifecycle | DSM package | No | No | No | Existing | DSM-native scripts and current backend patterns should stay. |
-| DSM API routes | DSM backend | No | No | No | Yes/current | Keep thin and close to existing backend. |
-| Job dispatcher | DSM backend | No | No | No | Yes/current | Needs runtime state and persistence integration. |
-| Worker registration API | DSM backend + worker | Good | Good | Possible | DSM side current | JSON/HTTP contract allows different languages per side. |
-| Worker heartbeat loop | Worker | Good | Good | Possible | Possible | C/C++ adds more lifecycle and error-handling code. |
-| Worker job polling | Worker | Good | Good | Possible | Possible | HTTP, retry, backoff, cancellation, structured errors required. |
-| Worker API file transfer | Worker | Good | Good | Risky | Possible | C/C++ must handle streaming, TLS, timeouts, partial files, cleanup safely. |
-| Worker config loading | Worker | Good | Good | Possible | Possible | YAML/JSON parsing and validation are easier in Go/Rust/Python. |
-| Worker service/daemon mode | Worker | Good | Good | Possible | Possible | Windows service plus systemd support is more maintenance in C/C++. |
-| Worker CLI | Worker | Good | Good | Possible | Good | C/C++ is possible but less productive for config/help/diagnostics. |
-| Local temp workspace | Worker | Good | Good | Possible | Possible | C/C++ needs careful cleanup and path handling. |
-| JSON Schema validation | Worker + tests | Good | Good | Possible | Good | C/C++ libraries exist but add dependency/build complexity. |
-| Processor contract | Shared | N/A | N/A | N/A | N/A | JSON Schema/OpenAPI is language-neutral. |
-| Existing metadata parsing | ProcessorCore | Avoid rewrite | Avoid rewrite first | Avoid rewrite first | Best first | Reuse existing behavior before native rewrites. |
-| Hashing hot path | Processor module | Good | Good | Good | Okay | C/C++ is suitable here if measured. |
-| Binary parsing hot path | Processor module | Good | Good | Good | Depends | C/C++ is suitable only with strong fixtures and fuzz/error tests. |
-| Image processing primitive | Processor module | Good | Good | Good | Good with libraries | C/C++ suitable if using stable library bindings and narrow scope. |
-| Face/AI processing | Optional processor | Wrapper | Wrapper | Wrapper only | Often best | AI stacks often depend on Python/native wheels. Keep optional/license-aware. |
-| Result validation before commit | DSM backend | No | No | No | Yes/current | DSM-only authority. |
-| Final DSM/Photos writes | DSM backend | No | No | No | Yes/current | Must not move to worker. |
-| Web UI | Browser | No | No | No | JS/Vue | Existing UI remains browser-side. |
-| Contract tests | Tests | Useful | Useful | Limited | Good | Test stack should validate all implementations against shared fixtures. |
+## NAS-Language Decision Rules
 
-## Worker Language Decision
-
-The worker language is not finalized by this concept. The decision should be made after separating worker responsibilities into two categories:
+Do not choose one language for the whole system. Choose by runtime category.
 
 ```text
-1. Worker runtime/orchestration
-   - API client
-   - polling
-   - heartbeat
-   - config
-   - logging
-   - service mode
-   - file transfer
-   - invoking ProcessorCore
-
-2. Processor modules
-   - hashing
-   - parsing
-   - metadata extraction
-   - preview generation
-   - image or AI-heavy processing
+- Use shell only for DSM lifecycle scripts.
+- Use the existing backend runtime only if it is packaged or declared as an official Synology dependency.
+- Use browser JavaScript only for UI-side work.
+- Use C/C++ for NAS-local performance components when shipped as compiled package binaries.
+- Use native executables for isolated processor modules instead of requiring toolchains on DSM.
+- Do not require Go, Rust, C/C++ compiler toolchains, .NET, Ruby, or user-managed venvs on DSM.
 ```
 
-The runtime/orchestration layer has different requirements than processor modules. C/C++ may be excellent for narrow processor modules, but it is not automatically the best choice for the worker runtime.
+C/C++ remains valid for NAS package components, especially for:
 
-## Which Worker Components Exclude Or Strongly Discourage C/C++
+```text
+- hashing large files
+- binary parsing
+- image processing primitives
+- compression/decompression
+- native library bindings
+- bounded ProcessorCore executables
+```
 
-Strictly speaking, few components make C/C++ impossible. The issue is not capability; it is maintenance cost, security risk, dependency complexity, and error handling.
-
-### Components that strongly discourage C/C++ as first choice
-
-| Component | Why C/C++ is a poor first choice |
-|---|---|
-| Worker API client | Requires robust HTTPS/TLS, JSON, auth headers, retry/backoff, timeouts, proxy handling, and structured errors. Go/Rust provide this with less custom code. |
-| Variant B file streaming | Needs safe streaming download/upload, partial file cleanup, hash verification, temp staging, cancellation, timeout handling, and memory bounds. C/C++ can do it, but mistakes are more costly. |
-| Heartbeat and job polling loop | Mostly I/O orchestration, not CPU-bound. C/C++ adds complexity without meaningful performance gain. |
-| Service/daemon mode | Windows service, systemd, signal handling, graceful shutdown, and restart behavior are simpler to maintain in Go/Rust. |
-| Configuration loading and validation | YAML/JSON config parsing, defaults, migrations, and user-friendly errors are more cumbersome in C/C++. |
-| Structured logging and diagnostics | Cross-platform logs, log rotation, debug output, and support diagnostics are easier in Go/Rust/Python. |
-| Contract/schema validation | JSON Schema validation and helpful validation errors are more productive in Python/Go/Rust. C/C++ adds library and build burden. |
-| Cross-platform packaging | Windows/Linux/macOS builds are possible in C/C++, but runtime library, TLS, compiler, and dependency differences increase support load. |
-| Worker update/installation UX | Installer/service integration plus user diagnostics are not performance-critical. C/C++ gives little benefit. |
-| Error reporting back to DSM | Structured, stable error categories matter more than raw speed. Safer higher-level languages reduce accidental divergence. |
-
-### Components where C/C++ is acceptable or useful
-
-| Component | C/C++ suitability | Condition |
-|---|---:|---|
-| Hashing large files | Good | Only if Go/Rust/Python-native library is not fast enough. |
-| Binary parsing | Good | Must have fixtures, bounds checks, fuzz/error tests, and strict output contract. |
-| Image/video primitive | Good | Prefer narrow module around a stable library; do not make it the whole worker. |
-| Compression/decompression | Good | Use well-maintained libraries; keep wrapper small. |
-| Existing native library binding | Good | Use when an existing C/C++ library is the correct dependency. |
-| GPU/native acceleration wrapper | Conditional | Keep orchestration outside C/C++; expose a narrow processor contract. |
-
-### Components that should not be in C/C++ for this project
-
-These are not good C/C++ targets because they are authority, policy, or product-behavior components, not CPU-bound processing:
+C/C++ should not take over DSM authority components:
 
 ```text
 - DSM authentication/session logic
@@ -510,115 +457,15 @@ These are not good C/C++ targets because they are authority, policy, or product-
 - UI-visible workflow state decisions
 ```
 
-Those should remain DSM-backend owned.
+## External Worker Language Position
 
-## Language Options For The Worker Runtime
+The external worker language is intentionally not a DSM runtime decision.
 
-### Option A: Go worker runtime
+The worker may be implemented in any language that can produce a supported executable or package for the intended external platform. The DSM package only communicates with it through the worker API and ProcessorContract.
 
-Good fit when the worker is primarily an orchestrator.
-
-```text
-Strengths:
-- single binaries
-- strong HTTP/TLS/JSON support
-- simple concurrency
-- good Windows/Linux/macOS builds
-- good CLI/service mode support
-- lower operational overhead than Python venv
-
-Weaknesses:
-- less ideal than Rust/C for very tight CPU loops
-- reimplementing existing Python domain logic in Go would risk divergence
-```
-
-Use Go if the worker mostly downloads files, runs ProcessorCore, uploads results, and reports status.
-
-### Option B: Rust worker runtime
-
-Good fit when memory safety, native binaries, and future native processing are important.
-
-```text
-Strengths:
-- native speed
-- strong memory safety
-- good HTTP/JSON ecosystem
-- good cross-platform builds
-- better fit than C/C++ for safe orchestration
-
-Weaknesses:
-- higher learning/build complexity than Go
-- fewer contributors may be comfortable with it
-```
-
-Use Rust if the worker runtime and processor modules are expected to converge into a native implementation over time.
-
-### Option C: C/C++ worker runtime
-
-Possible, but not recommended as the default runtime.
-
-```text
-Strengths:
-- maximum control
-- excellent for native library integration
-- good for narrow hot paths
-
-Weaknesses:
-- high maintenance cost for HTTP/TLS/config/service/error handling
-- higher risk of memory and lifetime errors
-- more complex cross-platform dependency packaging
-- little performance benefit for I/O-heavy orchestration
-```
-
-Use C/C++ only if there is a strong external constraint, such as an existing mature C/C++ codebase that already implements most worker runtime functions safely.
-
-### Option D: Python worker runtime
-
-Useful for prototypes or Python-heavy processing, but not ideal as an end-user default.
-
-```text
-Strengths:
-- fastest to prototype
-- can reuse existing code directly
-- strong library ecosystem
-
-Weaknesses:
-- venv and Python version support burden
-- weaker end-user packaging story
-- less attractive for Windows service deployment
-```
-
-Use Python for ProcessorCore first if current logic is Python-heavy. Avoid requiring users to manage a venv for the worker runtime.
-
-## Recommended Worker Language Position
-
-Do not decide only between Go and C/C++. Decide by layer:
-
-```text
-Worker runtime/orchestration:
-  Preferred: Go or Rust
-  Not preferred: C/C++
-
-ProcessorCore first extraction:
-  Preferred: existing Python implementation behind JSON contract
-  Later: packaged executable if cross-language reuse is needed
-
-Measured hot paths:
-  Preferred: Rust or C/C++ module behind ProcessorContract
-```
-
-Current recommendation:
-
-```text
-- Keep the worker runtime language open between Go and Rust.
-- Do not choose C/C++ for the full worker runtime unless there is a concrete existing C/C++ foundation.
-- Allow C/C++ for narrow processor modules where measurement proves value.
-- Use the ProcessorContract so the runtime language can be changed later without changing DSM workflows.
-```
+The DSM concept therefore does not require a Go/Rust/C#/Java/.NET/etc. runtime on the NAS for the worker.
 
 ## Shared Local And Worker Execution Components
-
-Some parts are needed by both local DSM execution and external worker execution. These must be identified before implementation to avoid duplicate logic.
 
 Required by both local and worker execution:
 
@@ -678,7 +525,7 @@ Worker-owned only:
 
 ## Duplication Avoidance Strategy
 
-The central rule is: local and remote execution must use the same processor contract, and where practical the same processor implementation.
+The central rule is: local and remote execution must use the same processor contract, and where practical the same processor implementation or executable.
 
 Target execution model:
 
@@ -699,8 +546,6 @@ UI/API request
   -> DSM status builder exposes final state
 ```
 
-The dispatcher decides where a job runs. The job implementation should not know whether it was started locally or remotely.
-
 Preferred contract:
 
 ```text
@@ -713,13 +558,13 @@ Both local and worker execution must produce the same `ProcessorResult` shape.
 
 ## Processor Implementation Options
 
-| Option | Description | Duplication risk | Operational risk | Recommendation |
-|---|---|---:|---:|---|
-| Shared Python processor library | Extract current processing logic into importable Python modules used by local DSM path and optionally by packaged worker processor | Low | Medium | Good first extraction if current behavior is Python-heavy. |
-| Processor executable | Package processing as a CLI executable with JSON input/output; DSM local adapter and worker both invoke it | Very low | Medium | Best long-term cross-language anti-duplication boundary. |
-| Go/Rust worker reimplements Python logic | Recreate processing logic natively | High | Medium | Avoid until tests and profiling prove it is worth it. |
-| C/C++ processor module | Native module for a measured hot path | Low to medium | Medium | Good only behind the ProcessorContract. |
-| Separate local and remote implementations | Local Python logic and remote native logic independently implement same job | Very high | High | Do not use except as a temporary migration step behind contract tests. |
+| Option | Description | DSM compatibility | Recommendation |
+|---|---|---|---|
+| Existing backend modules | Keep current implementation behind LocalProcessorAdapter | Compatible if backend runtime is packaged/official | Good first step. |
+| Python processor library | Extract current logic into reusable modules | Compatible only with official/package-managed runtime | Useful if current code is Python-heavy. |
+| Processor executable | CLI executable with JSON input/output | Compatible if shipped for target architecture | Best long-term anti-duplication boundary. |
+| C/C++ processor module | Native processor for measured hot path | Compatible when shipped as package binary | Good for NAS performance components. |
+| Separate local and remote implementations | Local and worker each implement same job independently | Compatible but high divergence risk | Avoid. |
 
 Recommended path:
 
@@ -729,7 +574,7 @@ Recommended path:
 3. Move pure processing into a ProcessorCore boundary.
 4. Let LocalProcessorAdapter call ProcessorCore locally.
 5. Let RemoteWorkerProcessorAdapter send the same job contract to the worker.
-6. Let the worker call a packaged ProcessorCore executable or a contract-tested native module.
+6. Use package-managed backend modules or shipped native/C/C++ executables for DSM-local processing.
 ```
 
 ## Current Package Areas Relevant For Local And Worker Execution
@@ -749,8 +594,6 @@ Recommended path:
 | UI rendering and reconnect behavior | Yes | No | Browser/DSM only. Worker is not a UI state owner. |
 
 ## Contract Tests To Prevent Duplication Drift
-
-Before moving real work to the worker, add tests that compare local and remote-style execution through the same contract.
 
 Required tests:
 
@@ -800,7 +643,7 @@ The browser client must not own:
 
 A desktop client can be added later as a setup wrapper only. It should not contain processing logic.
 
-The worker should include CLI commands from the first version:
+The worker may include CLI commands:
 
 ```text
 worker configure
@@ -854,7 +697,7 @@ remote_script
 
 ## Configuration Example
 
-Windows example:
+Windows worker example:
 
 ```yaml
 server:
@@ -880,7 +723,7 @@ logging:
   file: "worker.log"
 ```
 
-Linux example:
+Linux worker example:
 
 ```yaml
 server:
@@ -904,26 +747,27 @@ capabilities:
 
 ## Implementation Phases
 
-### Phase 1: Repository structure and contract
+### Phase 1: Runtime and repository constraints
 
 Status: Open.
 
 Tasks:
 
 ```text
+- document official DSM runtime dependencies
+- decide which backend runtime is an explicit package dependency
+- decide which C/C++ or native processor binaries are shipped with the package
 - add processor_contract/
 - add initial JSON schemas
-- add OpenAPI worker API draft
-- add examples and fixtures
 - add contract validation tool
 ```
 
 Acceptance criteria:
 
 ```text
+- package does not require manual runtime/toolchain installation on DSM
+- C/C++ components are shipped as compiled artifacts, not built on the NAS
 - schemas validate examples
-- version field is present
-- contract tests can run without optional worker implementation
 ```
 
 ### Phase 2: Local job abstraction
@@ -961,7 +805,7 @@ Tasks:
 - define ProgressEvent schema
 - add fixtures for first supported job types
 - add local-vs-worker-simulation equivalence tests
-- decide whether first ProcessorCore stays Python or becomes a processor executable
+- decide whether first ProcessorCore stays in package-managed backend modules or becomes a processor executable
 ```
 
 Acceptance criteria:
@@ -980,8 +824,6 @@ Tasks:
 
 ```text
 - create worker subproject
-- decide between Go and Rust for runtime/orchestration
-- do not choose C/C++ for the full runtime unless a concrete constraint requires it
 - implement configuration loading
 - implement registration
 - implement heartbeat
@@ -993,11 +835,11 @@ Tasks:
 Acceptance criteria:
 
 ```text
-- worker runs on Windows and Linux
+- worker runs on at least Windows and Linux
 - worker can register and heartbeat
 - worker can pull a test job
 - worker can download/upload through Variant B API transfer
-- worker does not require a user-managed Python venv
+- worker does not require a NAS-side runtime beyond DSM package endpoints
 ```
 
 ### Phase 5: First real remote job
@@ -1054,7 +896,7 @@ Tasks:
 - measure DSM API transfer throughput
 - measure CPU time moved away from DSM
 - add chunked/resumable upload only if large files require it
-- evaluate Rust/C/C++ modules only for measured hot paths
+- evaluate C/C++ native processor components only for measured hot paths
 - evaluate multiple parallel workers only after single-worker behavior is stable
 ```
 
@@ -1072,6 +914,8 @@ Version 1 should include:
 
 ```text
 - monorepo structure with worker/ and processor_contract/
+- DSM package limited to official/package-managed runtimes and shipped native binaries
+- C/C++ allowed for shipped NAS processor components
 - pull model
 - Variant B API file transfer only
 - token authentication
@@ -1094,8 +938,8 @@ Version 1 should not include:
 - arbitrary shell commands
 - dynamic remote scripts
 - mandatory Python venv
+- manual NAS-side compiler/toolchain installation
 - independent duplicate reimplementation of existing parser/workflow logic
-- full C/C++ worker runtime without a concrete external requirement
 ```
 
 ## Performance Expectation
@@ -1105,6 +949,7 @@ Expected benefits:
 ```text
 - DSM package remains responsive during heavy operations
 - CPU and RAM-heavy work can run on stronger Windows/Linux/cloud systems
+- NAS-local C/C++ processor binaries can improve bounded local hot paths
 - worker can use more parallelism than the DSM package should use locally
 - UI remains browser-side and avoids adding rendering load to DSM
 ```
@@ -1133,13 +978,14 @@ Adopt this direction:
 
 ```text
 DSM package = controller and file authority
+DSM runtimes = shell, official/package-managed backend runtime, browser JS, shipped native binaries
+C/C++ = valid for shipped NAS processor components and measured local hot paths
 Web UI = browser client for display and configuration
 Worker = optional external execution host, not a second backend
-Worker runtime language = open between Go and Rust until implementation decision
-C/C++ = allowed for narrow measured processor modules, not preferred for full worker runtime
+Worker runtime language = external-platform decision, not NAS runtime requirement
 File transfer = Variant B through DSM API only
 ProcessorContract = anti-duplication boundary
 Local and remote execution = same job/result/progress schema
-ProcessorCore = shared implementation where practical, executable boundary if cross-language reuse is needed
-Python venv = prototype or plugin option, not preferred user-managed runtime
+ProcessorCore = shared implementation or executable where practical
+No manual NAS-side compiler/toolchain/runtime setup
 ```
