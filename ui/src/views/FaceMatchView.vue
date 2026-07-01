@@ -49,16 +49,25 @@
 							<span class="face-match-switch-slider"></span>
 							<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_save_only', 'Save matches only') }}</span>
 						</label>
-						<label
-							v-if="vm.selectedFaceMatchingAction === 'search_missing_faces_insightface'"
-							class="face-match-switch"
-							:title="vm.$avt('face_match:hint_recognize_missing_faces', 'Detected missing faces are compared with existing InsightFace recognition profiles and suggested for a Photos person when matched.')"
-						>
+							<label
+								v-if="vm.selectedFaceMatchingAction === 'search_missing_faces_insightface'"
+								class="face-match-switch"
+								:title="vm.$avt('face_match:hint_recognize_missing_faces', 'Detected missing faces are compared with existing InsightFace person profiles and suggested for a Photos person when matched.')"
+							>
 							<input v-model="vm.faceMatchRecognizeMissingInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasInsightFaceForFaceMatch" />
 							<span class="face-match-switch-slider"></span>
-							<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_recognize_missing_faces', 'Person recognition with InsightFace') }}</span>
-						</label>
-						<label
+								<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_recognize_missing_faces', 'Person recognition with InsightFace') }}</span>
+							</label>
+							<label
+								v-if="vm.selectedFaceMatchingAction === 'search_missing_faces_insightface' && vm.faceMatchRecognizeMissingInsightFacePersons"
+								class="face-match-switch"
+								:title="vm.$avt('face_match:hint_skip_unknown_missing_faces', 'Detected missing faces without a matching InsightFace person profile are skipped automatically.')"
+							>
+								<input :checked="vm.faceMatchSkipUnknownInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasInsightFaceForFaceMatch" @change="vm.setFaceMatchSkipUnknownInsightFacePersons($event.target.checked)" />
+								<span class="face-match-switch-slider"></span>
+								<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_skip_unknown_missing_faces', 'Skip unknown persons') }}</span>
+							</label>
+							<label
 							class="face-match-switch"
 							:title="vm.$avt('face_match:hint_use_findings', 'Load saved matches instead of starting a new search.')"
 					>

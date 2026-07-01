@@ -376,6 +376,67 @@
 						</v-button>
 					</div>
 
+					<div class="config-card-desc">
+						{{ vm.$avt('config:pip_wheelhouse_package_install_hint', 'Load the configured wheelhouse manifest, select one package from it, and install or reinstall that package. Reinstall downloads the wheelhouse assets again and does not use a local backup.') }}
+					</div>
+
+					<div class="config-actions config-actions-right">
+						<v-button @click="vm.loadPipWheelhousePackages" :disabled="vm.pipWheelhousePackagesLoading || vm.pipWheelhousePackageInstalling || vm.pipWheelhousePackageReinstalling" style="width: 220px;">
+							{{ vm.pipWheelhousePackagesLoading ? vm.$avt('config:button_pip_wheelhouse_loading', 'Loading wheelhouse...') : vm.$avt('config:button_pip_wheelhouse_load', 'Load wheelhouse packages') }}
+						</v-button>
+					</div>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$avt('config:label_pip_wheelhouse_package', 'Wheelhouse package') }}</span>
+						<select
+							:value="vm.selectedPipWheelhousePackageName"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving || vm.pipWheelhousePackagesLoading || vm.pipWheelhousePackageInstalling || vm.pipWheelhousePackageReinstalling || !vm.pipWheelhousePackages.length"
+							@change="vm.setSelectedPipWheelhousePackageName($event.target.value)"
+						>
+							<option value="">{{ vm.$avt('config:option_pip_wheelhouse_package_none', 'No package loaded') }}</option>
+							<option
+								v-for="packageInfo in vm.pipWheelhousePackages"
+								:key="`pip-wheelhouse-package-${packageInfo.name}`"
+								:value="packageInfo.name"
+							>
+								{{ packageInfo.name }}{{ packageInfo.installed_version ? ` (${vm.$avt('status:installed', 'Installed')}: ${packageInfo.installed_version})` : '' }}
+							</option>
+						</select>
+					</label>
+
+					<div v-if="vm.selectedPipWheelhousePackageStatus.file" class="sm-kv-list">
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_wheelhouse_file', 'Wheel file') }}</div>
+							<div class="sm-kv-value">{{ vm.selectedPipWheelhousePackageStatus.file }}</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_wheelhouse_size', 'Wheel size') }}</div>
+							<div class="sm-kv-value">{{ Number(vm.selectedPipWheelhousePackageStatus.size) || 0 }}</div>
+						</div>
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_wheelhouse_installed_version', 'Installed version') }}</div>
+							<div class="sm-kv-value">{{ vm.selectedPipWheelhousePackageStatus.installed_version || '-' }}</div>
+						</div>
+					</div>
+
+					<div class="config-actions config-actions-right">
+						<v-button
+							@click="vm.installSelectedPipWheelhousePackage(false)"
+							:disabled="!vm.selectedPipWheelhousePackageName || vm.pipWheelhousePackageInstalling || vm.pipWheelhousePackageReinstalling"
+							style="width: 220px;"
+						>
+							{{ vm.pipWheelhousePackageInstalling ? vm.$avt('config:button_pip_package_installing', 'Installing package...') : vm.$avt('config:button_pip_package_install', 'Install selected package') }}
+						</v-button>
+						<v-button
+							@click="vm.installSelectedPipWheelhousePackage(true)"
+							:disabled="!vm.selectedPipWheelhousePackageName || vm.pipWheelhousePackageInstalling || vm.pipWheelhousePackageReinstalling"
+							style="width: 220px;"
+						>
+							{{ vm.pipWheelhousePackageReinstalling ? vm.$avt('config:button_pip_package_reinstalling', 'Reinstalling package...') : vm.$avt('config:button_pip_package_reinstall', 'Reinstall selected package') }}
+						</v-button>
+					</div>
+
 					<label class="config-checkbox">
 						<input
 							:checked="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"

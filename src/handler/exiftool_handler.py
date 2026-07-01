@@ -20,6 +20,13 @@ class _ExifToolResult:
         self.stderr = str(stderr or "")
 
 
+class _ExifToolBinaryResult:
+    def __init__(self, returncode: int, stdout: bytes = b"", stderr: str = ""):
+        self.returncode = int(returncode)
+        self.stdout = bytes(stdout or b"")
+        self.stderr = str(stderr or "")
+
+
 class PersistentExifToolProcess:
     """Serialized ExifTool -stay_open reader for metadata read calls."""
 
@@ -207,6 +214,27 @@ class ExifToolHandler:
             return _ExifToolResult(126, "", f"exiftool_execution_failed: {exc}")
         return _ExifToolResult(result.returncode, result.stdout, result.stderr)
 
+    def _runSubprocessExifToolBytes(self, args: List[str]) -> _ExifToolBinaryResult:
+        executable_path, _ = self.resolveExecutable()
+        if not executable_path:
+            return _ExifToolBinaryResult(127, b"", "exiftool_not_available")
+        try:
+            result = subprocess.run(
+                [executable_path, *args],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=max(1.0, self._persistentTimeoutSeconds()),
+            )
+        except subprocess.TimeoutExpired:
+            return _ExifToolBinaryResult(124, b"", "exiftool_execution_timeout")
+        except FileNotFoundError:
+            return _ExifToolBinaryResult(127, b"", "exiftool_not_found")
+        except OSError as exc:
+            return _ExifToolBinaryResult(126, b"", f"exiftool_execution_failed: {exc}")
+        stderr = result.stderr.decode("utf-8", errors="replace") if isinstance(result.stderr, bytes) else str(result.stderr or "")
+        return _ExifToolBinaryResult(result.returncode, result.stdout or b"", stderr)
+
     def _runPersistentExifTool(self, args: List[str]) -> _ExifToolResult:
         executable_path, _ = self.resolveExecutable()
         if not executable_path:
@@ -243,6 +271,15 @@ class ExifToolHandler:
             return None
         xmp_content = result.stdout.strip()
         return xmp_content if xmp_content else None
+
+    def extractEmbeddedJpegPreview(self, image_path: str) -> Optional[bytes]:
+        for tag in ("PreviewImage", "JpgFromRaw", "ThumbnailImage"):
+            result = self._runSubprocessExifToolBytes(["-b", f"-{tag}", image_path])
+            if result.returncode != 0 or not result.stdout:
+                continue
+            if result.stdout.startswith(b"\xff\xd8"):
+                return result.stdout
+        return None
 
     def readImageDimensions(self, image_path: str) -> Dict[str, Any]:
         result = self._runExifTool(["-s3", "-ImageWidth", "-ImageHeight", image_path])

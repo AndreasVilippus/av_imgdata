@@ -3473,6 +3473,64 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(self.service._faceSignature(faces[0]).get("face_id"), 77)
         self.assertEqual(self.service._faceSignature(faces[0]).get("person_id"), 42)
 
+    def test_replace_photos_face_position_adds_replacement_and_deletes_original(self):
+        self.service.photos.list_faceFotoTeamItems = Mock(return_value=[
+            {
+                "face_id": 77,
+                "face_name": "Person Legacy",
+                "person_id": 11,
+                "bbox": {
+                    "top_left": {"x": 0.35, "y": 0.35},
+                    "bottom_right": {"x": 0.55, "y": 0.55},
+                },
+            }
+        ])
+        self.service.photos.addFaceToItem = Mock(return_value={
+            "list": [{"face_id": 88, "face_id_temp": "42-123"}]
+        })
+        self.service.photos.deleteFace = Mock(return_value={"deleted": True})
+
+        with patch("imgdata.monotonic", return_value=0.123):
+            result = self.service.replacePhotosFacePosition(
+                user_key="user",
+                cookies={"_SSID": "sid"},
+                base_url="https://example.test",
+                image_path="/volume1/photo/test.jpg",
+                face_data={
+                    "source": "photos",
+                    "source_format": "PHOTOS",
+                    "name": "Person Legacy",
+                    "face_id": 77,
+                    "person_id": 11,
+                    "item_id": 42,
+                },
+                source_face_data={
+                    "source": "insightface",
+                    "source_format": "INSIGHTFACE",
+                    "name": "Person Legacy",
+                    "x": 0.5,
+                    "y": 0.5,
+                    "w": 0.4,
+                    "h": 0.4,
+                },
+            )
+
+        self.assertTrue(result["updated"])
+        self.assertEqual(result["face_id"], 88)
+        self.assertEqual(result["deleted_face_id"], 77)
+        self.service.photos.addFaceToItem.assert_called_once()
+        add_call = self.service.photos.addFaceToItem.call_args.kwargs
+        self.assertEqual(add_call["id_item"], 42)
+        self.assertEqual(add_call["person_id"], 11)
+        self.assertEqual(add_call["face_id_temp"], "42-123")
+        self.assertEqual(add_call["face_bbox"]["top_left"]["x"], 0.3)
+        self.service.photos.deleteFace.assert_called_once_with(
+            user_key="user",
+            cookies={"_SSID": "sid"},
+            base_url="https://example.test",
+            face_id=77,
+        )
+
     def test_checks_replace_metadata_face_name_route_forwards_photos_override(self):
         face = {
             "name": "Person Legacy",

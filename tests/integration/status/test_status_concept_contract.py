@@ -13,10 +13,11 @@ def test_status_concept_defines_state_ownership_and_mode_identity():
     assert "`scan` und `findings` dürfen nicht gegenseitig als Fortsetzung interpretiert werden" in concept
     assert "Backend-Progress darf nicht unbesehen in die UI geschrieben werden" in concept
     assert "Progress zunächst lesen können, ohne ihn sofort anzuwenden" in concept
-    assert "InsightFace-Prozesse folgen demselben Prinzip" in concept
+    assert "InsightFace-Prozesse und darauf aufbauende Bereinigungen" in concept
     assert "`immediate` verwendet nur den aktiven Laufzustand" in concept
     assert "`save_only` schreibt eine persistente Fundliste" in concept
     assert "`findings` arbeitet ausschließlich eine explizit ausgewählte persistente Fundliste ab" in concept
+    assert "Eine gespeicherte Fundliste wird von `immediate` oder `save_only` nicht gelesen" in concept
 
 
 def test_status_concept_scopes_stop_requested_to_operation_and_mode():
@@ -77,7 +78,7 @@ def test_status_concept_defines_save_only_findings_streaming_persistence():
     assert "Save-only-Scans dürfen gefundene Fundlisten-Einträge nicht nur im Worker-Speicher halten" in concept
     assert "Während des laufenden `scan` werden neue Fundlisten-Einträge debounced in die persistente Fundliste geschrieben" in concept
     assert "Bei `stopped`, `failed` oder `finished` wird die aktuell bekannte Fundliste erzwungen geschrieben" in concept
-    assert "Ein Resume eines Save-only-Scans lädt die bereits persistierte Fundliste derselben Aktion und hängt neue Treffer daran an" in concept
+    assert "Nur ein expliziter Resume eines Save-only-Scans lädt die bereits persistierte Fundliste derselben Aktion und hängt neue Treffer daran an" in concept
     assert "Resume-Skip-Listen müssen aus dem Resume-Cursor und aus den bereits persistierten Einträgen aufgebaut werden" in concept
     assert "`findings_count` eines Save-only-Scans beschreibt die Anzahl der persistierten offenen Fundlisten-Einträge" in concept
 

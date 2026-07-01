@@ -116,6 +116,24 @@ class PhotosHandlerSortTests(unittest.TestCase):
         self.assertEqual(params["face"][0]["face_bounding_box"]["top_left"]["x"], 0.1)
         self.assertEqual(params["face"][0]["face_bounding_box"]["bottom_right"]["y"], 0.4)
 
+    def test_delete_face_posts_expected_payload(self):
+        session_manager = DummySessionManager(post_payloads=[{"success": True, "data": {"deleted": True}}])
+        handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))
+
+        result = handler.deleteFace(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            face_id=77,
+        )
+
+        self.assertEqual(result, {"deleted": True})
+        self.assertEqual(len(session_manager.post_calls), 1)
+        params = session_manager.post_calls[0]["params"]
+        self.assertEqual(params["method"], "delete_face")
+        self.assertEqual(params["version"], "1")
+        self.assertEqual(params["face_id"], [77])
+
     def test_index_foto_team_paths_submits_basic_index_request_without_status_poll(self):
         session_manager = DummySessionManager(
             post_payloads=[{"success": True, "data": {"accepted": True}}]

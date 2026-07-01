@@ -23,6 +23,9 @@ PORT="9771"
 
 export NO_ALBUMENTATIONS_UPDATE=1
 
+# Repository root (script directory's parent) — used to ensure imports work in test environments
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
 is_running() {
     [ -f "${PID_FILE}" ] || return 1
     pid="$(cat "${PID_FILE}" 2>/dev/null)"
@@ -340,6 +343,13 @@ status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_ke
 ' "${PIP_STATUS_FILE}" "${package_key}" "${req_name}" "${status}" "${message}" >> "${LOG_FILE}" 2>&1
 }
 
+update_install_on_start_config() {
+    PYTHONPATH="${SYNOPKG_PKGDEST}/src:${REPO_ROOT}/src" "${PYTHON}" - <<'PY'
+from services.config_service import ConfigService
+ConfigService().ensureInstallOnStartConfig()
+PY
+}
+
 install_optional_python_packages() {
     enabled_optional_requirement_files | while IFS='|' read -r package_key req_name wheelhouse_enabled wheelhouse_manifest_url wheelhouse_target; do
         [ -n "${package_key}" ] || continue
@@ -404,6 +414,7 @@ start() {
         return 1
     fi
 
+    update_install_on_start_config
     install_optional_python_packages
 
     "${UVICORN}" "${APP_MODULE}" \

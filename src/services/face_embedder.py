@@ -8,6 +8,13 @@ from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
 class InsightFaceEmbedder(InsightFaceDetector):
     """Loads InsightFace detection and recognition without changing detector behavior."""
 
+    def __init__(self, *args: Any, max_image_edge: int = 4096, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        try:
+            self.max_image_edge = max(0, int(max_image_edge or 0))
+        except (TypeError, ValueError):
+            self.max_image_edge = 4096
+
     def _load_app(self):
         if self._app is not None:
             return self._app
@@ -42,6 +49,7 @@ class InsightFaceEmbedder(InsightFaceDetector):
         image = cv2.imread(str(image_path))
         if image is None:
             raise ValueError(f"image could not be read: {image_path}")
+        image = self._resize_for_recognition(image, cv2)
         return self._detect_and_embed_image(image)
 
     def detect_and_embed_bytes(self, image_bytes: bytes) -> List[Dict[str, Any]]:
@@ -55,7 +63,21 @@ class InsightFaceEmbedder(InsightFaceDetector):
         image = cv2.imdecode(numpy.frombuffer(image_bytes, dtype=numpy.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError("image preview could not be decoded")
+        image = self._resize_for_recognition(image, cv2)
         return self._detect_and_embed_image(image)
+
+    def _resize_for_recognition(self, image: Any, cv2: Any) -> Any:
+        max_edge = int(self.max_image_edge or 0)
+        if max_edge <= 0:
+            return image
+        height, width = image.shape[:2]
+        largest = max(int(width), int(height))
+        if largest <= max_edge:
+            return image
+        scale = max_edge / float(largest)
+        target_size = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+        interpolation = getattr(cv2, "INTER_AREA", 3)
+        return cv2.resize(image, target_size, interpolation=interpolation)
 
     def _detect_and_embed_image(self, image: Any) -> List[Dict[str, Any]]:
         height, width = image.shape[:2]

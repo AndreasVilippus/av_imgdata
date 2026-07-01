@@ -67,6 +67,38 @@
 						/>
 					</label>
 
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('config:label_image_decoder_max_edge', 'HEIC decoder max image edge') }}</span>
+						<input
+							v-model.number="configModel.files.IMAGE_DECODER_MAX_EDGE"
+							type="number"
+							min="0"
+							max="20000"
+							step="128"
+							class="config-text-input"
+							:disabled="saving"
+						/>
+						<span class="config-card-desc">
+							{{ $avt('config:hint_image_decoder_max_edge', 'Limits decoded HEIC/HEIF images before recognition. 0 disables this resize.') }}
+						</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('config:label_recognition_image_max_edge', 'Recognition max image edge') }}</span>
+						<input
+							v-model.number="configModel.files.RECOGNITION_IMAGE_MAX_EDGE"
+							type="number"
+							min="0"
+							max="20000"
+							step="128"
+							class="config-text-input"
+							:disabled="saving"
+						/>
+						<span class="config-card-desc">
+							{{ $avt('config:hint_recognition_image_max_edge', 'Limits images passed to OpenCV/InsightFace for face recognition. 0 disables this resize.') }}
+						</span>
+					</label>
+
 					<label class="config-checkbox">
 						<input v-model="configModel.photos.REINDEX_MISSING_ITEMS" type="checkbox" :disabled="saving" />
 						<span>{{ $avt('config:label_reindex_missing_photos_items', 'Reindex images not found in Photos') }}</span>
@@ -251,19 +283,32 @@
 				<div class="config-card-desc">{{ $avt('config:section_debugging_desc', 'Diagnostic options for backend request and status troubleshooting.') }}</div>
 
 				<div class="config-form-grid">
-					<label class="config-checkbox" :title="$avt('config:hint_backend_debug_enabled', 'Writes backend request and status diagnostics to a rotating package log. Keep disabled during normal operation.')">
-						<input
-							v-model="configModel.debug.BACKEND_DEBUG_ENABLED"
-							type="checkbox"
+						<label class="config-checkbox" :title="$avt('config:hint_backend_debug_enabled', 'Writes backend request and status diagnostics to a rotating package log. Keep disabled during normal operation.')">
+							<input
+								v-model="configModel.debug.BACKEND_DEBUG_ENABLED"
+								type="checkbox"
 							:disabled="saving"
-						/>
-						<span>{{ $avt('config:label_backend_debug_enabled', 'Enable backend debug log') }}</span>
-					</label>
-					<div class="config-card-desc">
-						{{ $avt('config:hint_backend_debug_log_path', 'Log path: {path}', { path: backendDebugLogPath || configModel.debug.BACKEND_DEBUG_LOG_PATH || 'backend-debug.log' }) }}
+							/>
+							<span>{{ $avt('config:label_backend_debug_enabled', 'Enable backend debug log') }}</span>
+						</label>
+						<label class="config-field">
+							<span class="config-field-label">{{ $avt('config:label_backend_debug_log_path', 'Backend debug log path') }}</span>
+							<input
+								v-model.trim="configModel.debug.BACKEND_DEBUG_LOG_PATH"
+								type="text"
+								class="config-text-input"
+								:disabled="saving"
+								:placeholder="$avt('config:placeholder_backend_debug_log_path', 'Leave empty for package var/backend-debug.log')"
+							/>
+							<span class="config-card-desc">
+								{{ $avt('config:hint_backend_debug_log_path_input', 'Use an absolute path to write the debug log directly to another location. Leave empty to use the package var directory.') }}
+							</span>
+						</label>
+						<div class="config-card-desc">
+							{{ $avt('config:hint_backend_debug_log_path', 'Log path: {path}', { path: backendDebugLogPath || configModel.debug.BACKEND_DEBUG_LOG_PATH || 'backend-debug.log' }) }}
+						</div>
 					</div>
-				</div>
-			</section>
+				</section>
 		</div>
 	</section>
 </template>
@@ -356,6 +401,8 @@ export default {
 					IMAGE_EXTENSIONS_NATIVE_ONLY: true,
 					IMAGE_EXTENSIONS: ['jpg', 'jpeg', 'tif', 'tiff', 'png', 'heic', 'heif', 'dng', 'cr2', 'cr3', 'nef', 'nrw', 'arw', 'orf', 'rw2', 'raf', 'pef'],
 					EXIFTOOL_IMAGE_EXTENSIONS: [],
+					IMAGE_DECODER_MAX_EDGE: 4096,
+					RECOGNITION_IMAGE_MAX_EDGE: 4096,
 					SIDECAR_LOOKUP_VARIANTS: ['same_dir_stem', 'same_dir_filename', 'xmp_dir_stem', 'xmp_dir_filename'],
 				},
 				metadata: {
@@ -542,6 +589,8 @@ export default {
 					IMAGE_EXTENSIONS_NATIVE_ONLY: Boolean(files.IMAGE_EXTENSIONS_NATIVE_ONLY ?? defaults.files.IMAGE_EXTENSIONS_NATIVE_ONLY),
 					IMAGE_EXTENSIONS: imageExtensions,
 					EXIFTOOL_IMAGE_EXTENSIONS: exiftoolImageExtensions,
+					IMAGE_DECODER_MAX_EDGE: Math.max(0, Math.min(20000, Number(files.IMAGE_DECODER_MAX_EDGE ?? defaults.files.IMAGE_DECODER_MAX_EDGE) || 0)),
+					RECOGNITION_IMAGE_MAX_EDGE: Math.max(0, Math.min(20000, Number(files.RECOGNITION_IMAGE_MAX_EDGE ?? defaults.files.RECOGNITION_IMAGE_MAX_EDGE) || 0)),
 					SIDECAR_LOOKUP_VARIANTS: sidecarLookupVariants,
 				},
 				metadata: {
@@ -643,6 +692,8 @@ export default {
 				MANUAL_PATHEXIFTOOL: this.configModel.files.MANUAL_PATHEXIFTOOL,
 				IMAGE_EXTENSIONS_NATIVE_ONLY: this.configModel.files.IMAGE_EXTENSIONS_NATIVE_ONLY,
 				EXIFTOOL_IMAGE_EXTENSIONS: this.configModel.files.EXIFTOOL_IMAGE_EXTENSIONS,
+				IMAGE_DECODER_MAX_EDGE: this.configModel.files.IMAGE_DECODER_MAX_EDGE,
+				RECOGNITION_IMAGE_MAX_EDGE: this.configModel.files.RECOGNITION_IMAGE_MAX_EDGE,
 			};
 			this.configModel = this.createDefaultConfig();
 			this.configModel.files = {

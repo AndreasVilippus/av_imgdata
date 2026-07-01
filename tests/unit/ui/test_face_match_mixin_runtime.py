@@ -58,6 +58,15 @@ def face_match_runtime_script(test_body: str) -> str:
             const root = component.getResponseData(data);
             return root && typeof root[key] === 'object' && root[key] ? root[key] : {{}};
           }});
+          component.getBackendImagePreviewUrl = component.getBackendImagePreviewUrl || ((path) => {{
+            const normalized = String(path || '').trim();
+            return normalized ? `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${{encodeURIComponent(normalized)}}` : '';
+          }});
+          component.isBrowserImageCompatiblePath = component.isBrowserImageCompatiblePath || ((path) => {{
+            const match = String(path || '').trim().toLowerCase().match(/\\.([a-z0-9]+)(?:[?#].*)?$/);
+            const extension = match ? match[1] : '';
+            return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif'].indexOf(extension) >= 0;
+          }});
           component.output = '';
           component.stopFaceMatchProgressPolling = component.stopFaceMatchProgressPolling || (() => {{}});
           component.resetFaceMatchSelectionState = component.resetFaceMatchSelectionState || (() => {{}});
@@ -1211,6 +1220,32 @@ def test_thumbnail_error_switches_to_backend_image_fallback_runtime():
     )
 
     assert result["fallback"].endswith("Zweites%20Bild.jpg")
+
+
+def test_heic_preview_uses_backend_image_url_without_synology_thumbnail_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              faceMatchResult: {
+                image_path: '/volume1/photo/Familie/Test Bild.heic',
+                image: { id: 115579 },
+              },
+              getPhotoThumbnailUrl: (image) => `/synofoto/api/v2/t/Thumbnail/get?id=${image.id}`,
+            });
+
+            const url = component.getCurrentFaceMatchImageUrl();
+
+            assert.strictEqual(
+              url,
+              '/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=%2Fvolume1%2Fphoto%2FFamilie%2FTest%20Bild.heic'
+            );
+            console.log(JSON.stringify({ url }));
+            """
+        )
+    )
+
+    assert result["url"].endswith("Test%20Bild.heic")
 
 
 def test_stale_backend_running_phase_does_not_keep_stop_state_runtime():

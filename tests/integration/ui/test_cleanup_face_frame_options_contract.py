@@ -3,11 +3,15 @@ from pathlib import Path
 
 def test_face_frame_options_use_individual_sources_and_labeled_standard_fields():
     source = Path("ui/src/components/cleanup/FaceFrameStandardizationOptions.vue").read_text(encoding="utf-8")
+    mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
 
     for source_key in ("photos", "acd", "microsoft", "mwg_regions"):
         assert f"key: '{source_key}'" in source
     assert "selection_mode" in source
     assert "operation_mode" in source
+    for threshold_key in ("safe_iou", "review_iou", "safe_center_delta", "safe_size_delta"):
+        assert threshold_key in source
+        assert threshold_key in mixin
     for mode in ("immediate", "save_only", "findings"):
         assert f'value="{mode}"' in source
     assert "sm-form-label" in source
@@ -56,12 +60,17 @@ def test_face_frame_manual_review_shows_current_and_insightface_previews_without
     assert "getFaceMatchBoxStyle" in source
     assert "getFaceFrameApplyIconUrl" in source
     assert "face-match-icon-button-floating" in source
+    assert "button_apply_all" in source
+    assert "applyAllFaceFrameFindings()" in source
     assert "nextFaceFrameFinding" not in source
     assert "<table" not in source
     assert '!vm.cleanupLoading' in source
 
     mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
     assert "resolveLocalIconUrl('face_to_left.png')" in mixin
+    assert "async applyAllFaceFrameFindings()" in mixin
+    assert "this.faceFrameReviewFindings" in mixin
+    assert "await this.applyFaceFrameItems(selectedItemIds)" in mixin
 
 
 def test_face_frame_apply_uses_persisted_selection_endpoint():
@@ -69,6 +78,7 @@ def test_face_frame_apply_uses_persisted_selection_endpoint():
 
     assert "/api/cleanup_face_frames_select" in mixin
     assert "/api/cleanup_face_frames_apply" in mixin
+    assert "async applyFaceFrameItems(selectedItemIds)" in mixin
     api = Path("src/api/imgdata_api.py").read_text(encoding="utf-8")
     assert '@router.post("/cleanup_face_frames_select")' in api
     assert '@router.post("/cleanup_face_frames_apply")' in api
@@ -81,3 +91,27 @@ def test_face_frame_findings_sync_replaces_scan_progress_with_current_list_entry
     assert "current_path: currentFinding" in mixin
     assert "kind: 'entries'" in mixin
     assert "processedCount" in mixin
+
+
+def test_face_frame_status_uses_progress_card_for_total_and_counters_for_details():
+    view = Path("ui/src/views/CleanupView.vue").read_text(encoding="utf-8")
+    mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
+    service = Path("src/services/face_frame_standardization_service.py").read_text(encoding="utf-8")
+
+    assert 'v-if="vm.shouldShowCleanupStatusCounters()"' in view
+    assert "shouldShowCleanupStatusCounters()" in mixin
+    assert "this.selectedRecognitionAction !== 'recognition_build_profiles'" in mixin
+    assert "return ''" in mixin
+    for counter in ("checked", "findings", "automatic", "written", "errors"):
+        assert f'_buildStatusCounter("{counter}"' in service
+    assert "cleanup:label_checked_count" in service
+    assert "cleanup:label_automatic" in service
+    assert "cleanup:label_corrected" in service
+
+
+def test_face_frame_new_scan_clears_local_review_findings_without_using_saved_list():
+    mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
+
+    assert "this.faceFrameOptions.operation_mode !== 'findings' && !cleanupOptions.resume_existing" in mixin
+    assert "this.faceFrameFindings = []" in mixin
+    assert "this.faceFrameCurrentIndex = 0" in mixin

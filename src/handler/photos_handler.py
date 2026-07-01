@@ -746,6 +746,28 @@ class PhotosHandler:
         data = payload.get("data", {})
         return data if isinstance(data, dict) else {}
 
+    def deleteFace(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        face_id: int,
+    ) -> Dict[str, Any]:
+        payload = self._session_manager.call_api_post(
+            user_key=user_key,
+            cookies=cookies,
+            base_url=base_url,
+            api="SYNO.FotoTeam.Browse.Person",
+            params={
+                "method": "delete_face",
+                "version": "1",
+                "face_id": [int(face_id)],
+            },
+        )
+        data = payload.get("data", {})
+        return data if isinstance(data, dict) else {}
+
     def addFaceToItem(
         self,
         *,

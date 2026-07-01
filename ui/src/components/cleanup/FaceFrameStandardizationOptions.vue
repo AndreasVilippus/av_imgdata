@@ -2,7 +2,7 @@
 	<section :class="['config-card', 'cleanup-options-card', { 'cleanup-options-card-modal': modal }]">
 		<div class="sm-section-title">{{ vm.$avt('cleanup:face_frames_options', 'Preview options') }}</div>
 		<div class="config-card-desc">
-			{{ vm.$avt('cleanup:face_frames_preview_only', 'The scan only creates a preview. Selected metadata frames can then be applied; Photos frames remain locked.') }}
+			{{ vm.$avt('cleanup:face_frames_preview_only', 'The scan creates a preview first. Selected metadata and Photos frames can then be applied.') }}
 		</div>
 
 		<div class="cleanup-options-section">
@@ -38,6 +38,24 @@
 					<option value="safe_matches">{{ vm.$avt('cleanup:face_frames_selection_safe', 'Apply safe metadata findings automatically') }}</option>
 				</select>
 			</label>
+			<div class="sm-form-grid">
+				<label class="sm-form-field">
+					<span class="sm-form-label">{{ vm.$avt('cleanup:face_frames_safe_iou', 'Safe IoU threshold') }}</span>
+					<input :value="vm.faceFrameOptions.safe_iou" type="number" min="0" max="1" step="0.01" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateFaceFrameOption('safe_iou', Number($event.target.value))" />
+				</label>
+				<label class="sm-form-field">
+					<span class="sm-form-label">{{ vm.$avt('cleanup:face_frames_review_iou', 'Review IoU threshold') }}</span>
+					<input :value="vm.faceFrameOptions.review_iou" type="number" min="0" max="1" step="0.01" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateFaceFrameOption('review_iou', Number($event.target.value))" />
+				</label>
+				<label class="sm-form-field">
+					<span class="sm-form-label">{{ vm.$avt('cleanup:face_frames_safe_center_delta', 'Safe center deviation') }}</span>
+					<input :value="vm.faceFrameOptions.safe_center_delta" type="number" min="0" max="1" step="0.01" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateFaceFrameOption('safe_center_delta', Number($event.target.value))" />
+				</label>
+				<label class="sm-form-field">
+					<span class="sm-form-label">{{ vm.$avt('cleanup:face_frames_safe_size_delta', 'Safe size deviation') }}</span>
+					<input :value="vm.faceFrameOptions.safe_size_delta" type="number" min="0" max="1" step="0.01" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateFaceFrameOption('safe_size_delta', Number($event.target.value))" />
+				</label>
+			</div>
 		</div>
 
 		<div v-if="vm.faceFrameOptions.operation_mode !== 'findings'" class="cleanup-options-section">

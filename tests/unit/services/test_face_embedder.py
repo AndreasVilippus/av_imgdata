@@ -67,3 +67,21 @@ def test_embedder_decodes_preview_bytes():
         result = embedder.detect_and_embed_bytes(b"jpeg")
 
     assert result == [{"embedding": [1.0]}]
+
+
+def test_embedder_limits_image_edge_before_detection():
+    embedder = InsightFaceEmbedder(model_name="test", max_image_edge=100)
+    source_image = type("Image", (), {"shape": (500, 1000, 3)})()
+    resized_image = type("Image", (), {"shape": (50, 100, 3)})()
+    resized = []
+    cv2 = type("Cv2", (), {
+        "INTER_AREA": 3,
+        "imread": staticmethod(lambda _path: source_image),
+        "resize": staticmethod(lambda image, size, interpolation=None: resized.append((image, size, interpolation)) or resized_image),
+    })
+    with patch.dict("sys.modules", {"cv2": cv2}), patch.object(embedder, "_detect_and_embed_image", return_value=[{"embedding": [1.0]}]) as detect:
+        result = embedder.detect_and_embed(Path("/tmp/image.jpg"))
+
+    assert result == [{"embedding": [1.0]}]
+    assert resized == [(source_image, (100, 50), 3)]
+    detect.assert_called_once_with(resized_image)

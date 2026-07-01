@@ -106,6 +106,52 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         self.assertIsNone(service._merged_config_cache)
         self.assertIsNone(service._merged_config_cache_signature)
 
+    def test_ensureInstallOnStartConfig_updates_wheelhouse_defaults_when_enabled(self):
+        service = ConfigService(str(self.config_file))
+        service.writeConfig({
+            "pip_packages": {
+                "INSIGHTFACE": {
+                    "INSTALL_ON_START": True,
+                    "WHEELHOUSE_ENABLED": False,
+                    "WHEELHOUSE_MANIFEST_URL": "https://example.invalid/releases/download/dsm7-x86_64-python38/wheelhouse-manifest.json",
+                    "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
+                    "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
+                },
+            },
+        })
+
+        updated = service.ensureInstallOnStartConfig()
+        self.assertTrue(updated)
+
+        stored = json.loads(self.config_file.read_text(encoding="utf-8"))
+        insightface = stored["pip_packages"]["INSIGHTFACE"]
+        self.assertEqual(
+            insightface["WHEELHOUSE_MANIFEST_URL"],
+            ConfigService.defaultConfig()["pip_packages"]["INSIGHTFACE"]["WHEELHOUSE_MANIFEST_URL"],
+        )
+        self.assertEqual(
+            insightface["WHEELHOUSE_TARGET"],
+            ConfigService.defaultConfig()["pip_packages"]["INSIGHTFACE"]["WHEELHOUSE_TARGET"],
+        )
+        self.assertTrue(insightface["WHEELHOUSE_ENABLED"])
+
+    def test_ensureInstallOnStartConfig_keeps_config_when_disabled(self):
+        service = ConfigService(str(self.config_file))
+        service.writeConfig({
+            "pip_packages": {
+                "INSIGHTFACE": {
+                    "INSTALL_ON_START": False,
+                    "WHEELHOUSE_ENABLED": False,
+                    "WHEELHOUSE_MANIFEST_URL": "https://example.invalid/releases/download/dsm7-x86_64-python38/wheelhouse-manifest.json",
+                    "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
+                    "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
+                },
+            },
+        })
+
+        updated = service.ensureInstallOnStartConfig()
+        self.assertFalse(updated)
+
     def test_writeChecksIgnoreList_invalidates_cache(self):
         """
         Test: writeChecksIgnoreList() invalidiert den Cache.
@@ -323,6 +369,29 @@ class TestConfigServiceDefaults(unittest.TestCase):
         self.assertEqual(config["files"]["EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS"], 300)
         self.assertNotIn("EXIFTOOL_BATCH_READ_ENABLED", ConfigService.defaultConfig()["files"])
         self.assertNotIn("EXIFTOOL_BATCH_SIZE", ConfigService.defaultConfig()["files"])
+
+    def test_image_decoder_config_is_normalized(self):
+        service = ConfigService(str(self.config_file))
+        with self.config_file.open("w") as f:
+            json.dump({
+                "files": {
+                    "IMAGE_DECODER_ENABLED": 1,
+                    "IMAGE_DECODER_EXTENSIONS": [".HEIC", "heif", "", ".HEIC"],
+                    "IMAGE_DECODER_ORDER": ["pillow-heif", "invalid", "ffmpeg"],
+                    "IMAGE_DECODER_TIMEOUT_SECONDS": 0,
+                    "IMAGE_DECODER_MAX_EDGE": 50000,
+                    "RECOGNITION_IMAGE_MAX_EDGE": "bad",
+                },
+            }, f)
+
+        config = service.readMergedConfig()
+
+        self.assertTrue(config["files"]["IMAGE_DECODER_ENABLED"])
+        self.assertEqual(config["files"]["IMAGE_DECODER_EXTENSIONS"], ["heic", "heif"])
+        self.assertEqual(config["files"]["IMAGE_DECODER_ORDER"], ["pillow-heif", "ffmpeg"])
+        self.assertEqual(config["files"]["IMAGE_DECODER_TIMEOUT_SECONDS"], 1)
+        self.assertEqual(config["files"]["IMAGE_DECODER_MAX_EDGE"], 20000)
+        self.assertEqual(config["files"]["RECOGNITION_IMAGE_MAX_EDGE"], 4096)
 
 
 if __name__ == "__main__":

@@ -14,10 +14,11 @@ export default {
 			faceMatchSkippedTargets: [],
 				faceMatchPreviewMode: 'photo',
 				faceMatchAutoAssignKnown: false,
-				faceMatchSaveOnly: false,
-				faceMatchUseStoredFindings: false,
-				faceMatchRecognizeMissingInsightFacePersons: false,
-				faceMatchTransferredCount: 0,
+					faceMatchSaveOnly: false,
+					faceMatchUseStoredFindings: false,
+					faceMatchRecognizeMissingInsightFacePersons: false,
+					faceMatchSkipUnknownInsightFacePersons: false,
+					faceMatchTransferredCount: 0,
 			faceMatchProgressBase: {
 				persons_read: 0,
 				images_read: 0,
@@ -533,8 +534,8 @@ export default {
 			}
 			return !!this.faceMatchResultSummary.found;
 		},
-	},
-	watch: {
+		},
+		watch: {
 			selectedFaceMatchingAction(nextAction) {
 				if (!['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(nextAction)) {
 					this.faceMatchSaveOnly = false;
@@ -543,10 +544,13 @@ export default {
 					this.cleanupRuntimeAction = 'recognition_analyze_unknown_faces';
 					this.fetchRecognitionFindings();
 				}
+				if (nextAction !== 'search_missing_faces_insightface') {
+					this.faceMatchSkipUnknownInsightFacePersons = false;
+				}
 				if (!this.faceMatchFindingsStatusMatchesAction(nextAction)) {
 					this.faceMatchUseStoredFindings = false;
 					this.resetFaceMatchFindingsReview();
-			}
+				}
 			if (nextAction === 'load_photo_face_match_findings') {
 				this.faceMatchUseStoredFindings = true;
 				this.selectedFaceMatchingAction = 'search_photo_face_in_file';
@@ -589,8 +593,11 @@ export default {
 		this.resolveMetadataFaceDeleteConfirm(false);
 		this.stopFaceMatchProgressPolling();
 	},
-	methods: {
-		faceMatchNumberFrom(...values) {
+		methods: {
+			setFaceMatchSkipUnknownInsightFacePersons(value) {
+				this.faceMatchSkipUnknownInsightFacePersons = !!value;
+			},
+			faceMatchNumberFrom(...values) {
 			for (const value of values) {
 				const numeric = Number(value);
 				if (Number.isFinite(numeric) && numeric > 0) {
@@ -1217,11 +1224,13 @@ export default {
 		},
 		getCurrentFaceMatchImageFallbackUrl() {
 			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
-			return imagePath
-				? `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${encodeURIComponent(imagePath)}`
-				: '';
+			return this.getBackendImagePreviewUrl(imagePath);
 		},
 		getCurrentFaceMatchImageUrl() {
+			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
+			if (imagePath && !this.isBrowserImageCompatiblePath(imagePath)) {
+				return this.getCurrentFaceMatchImageFallbackUrl();
+			}
 			const thumbnailUrl = this.getFaceMatchThumbnailUrl(this.faceMatchResult && this.faceMatchResult.image);
 			if (thumbnailUrl) {
 				return thumbnailUrl;
@@ -2088,17 +2097,20 @@ export default {
 				this.resetFaceMatchSelectionState();
 			}
 			this.output = this.$avt('face_match:output_start_action', 'Starting action: {action}', { action: this.selectedFaceMatchingAction });
-			try {
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
-					action: this.selectedFaceMatchingAction,
-					auto: this.faceMatchAutoAssignKnown,
+				try {
+					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
+						action: this.selectedFaceMatchingAction,
+						auto: this.faceMatchAutoAssignKnown,
 						save_only: this.faceMatchUseStoredFindings ? false : this.faceMatchSaveOnly,
 						recognize_persons: this.selectedFaceMatchingAction === 'search_missing_faces_insightface'
 							&& this.faceMatchRecognizeMissingInsightFacePersons,
+						skip_unknown_persons: this.selectedFaceMatchingAction === 'search_missing_faces_insightface'
+							&& this.faceMatchRecognizeMissingInsightFacePersons
+							&& this.faceMatchSkipUnknownInsightFacePersons,
 						resume_from_progress: resumeFromProgress,
-					skip_face_ids: this.faceMatchSkippedFaceIds,
-					skip_targets: this.faceMatchSkippedTargets,
-				}, { requireResumeMessage: true });
+						skip_face_ids: this.faceMatchSkippedFaceIds,
+						skip_targets: this.faceMatchSkippedTargets,
+					}, { requireResumeMessage: true });
 				const faceMatches = this.getResponseDataObject(data, 'face_matches');
 				if (!this.applyFaceMatchingProgress(faceMatches, { authoritative: true })) {
 					return;

@@ -87,6 +87,10 @@ class FaceFrameStandardizationService:
             "min_width_ratio": max(0.0, float(insightface.get("min_face_width_ratio", insightface.get("min_width_ratio", 0.0)) or 0.0)),
             "min_height_ratio": max(0.0, float(insightface.get("min_face_height_ratio", insightface.get("min_height_ratio", 0.0)) or 0.0)),
             "min_area_ratio": max(0.0, float(insightface.get("min_face_area_ratio", insightface.get("min_area_ratio", 0.0)) or 0.0)),
+            "safe_iou": max(0.0, min(1.0, float(source.get("safe_iou", 0.65)))),
+            "review_iou": max(0.0, min(1.0, float(source.get("review_iou", 0.30)))),
+            "safe_center_delta": max(0.0, min(1.0, float(source.get("safe_center_delta", 0.08)))),
+            "safe_size_delta": max(0.0, min(1.0, float(source.get("safe_size_delta", 0.50)))),
             "resume_existing": bool(source.get("resume_existing", False)),
         }
 
@@ -219,7 +223,7 @@ class FaceFrameStandardizationService:
 
     @staticmethod
     def _prepare_automatic_selections(entries: List[Dict[str, Any]]) -> None:
-        writable_formats = {"ACD", "MICROSOFT", "MWG_REGIONS"}
+        writable_formats = {"PHOTOS", "ACD", "MICROSOFT", "MWG_REGIONS"}
         for entry in entries:
             if str(entry.get("write_state") or "pending").strip().lower() != "pending":
                 continue
@@ -232,6 +236,7 @@ class FaceFrameStandardizationService:
             entry["selection_state"] = "selected" if is_safe_writable else "review"
 
     def sync_review_progress(self, *, user_key: str, operation_mode: str = "immediate") -> Dict[str, Any]:
+        status_mode = "findings" if str(operation_mode or "").strip().lower() == "findings" else "scan"
         findings = self._read_working_findings(user_key=user_key, operation_mode=operation_mode)
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
         open_entries = self._open_entries(entries)
@@ -244,7 +249,7 @@ class FaceFrameStandardizationService:
         status = self.backend._buildStatusPayload(
             operation="cleanup",
             action=self.ACTION,
-            mode="findings",
+            mode=status_mode,
             phase="review_required" if open_entries else "finished",
             progress=self.backend._buildStatusProgress(
                 kind="entries",
@@ -278,7 +283,15 @@ class FaceFrameStandardizationService:
             status=status,
         )
 
-    def apply_selected(self, *, selected_item_ids: Any = None, user_key: str = "", operation_mode: str = "findings") -> Dict[str, Any]:
+    def apply_selected(
+        self,
+        *,
+        selected_item_ids: Any = None,
+        user_key: str = "",
+        operation_mode: str = "findings",
+        cookies: Any = None,
+        base_url: str = "",
+    ) -> Dict[str, Any]:
         requested_ids = {
             str(item or "").strip()
             for item in list(selected_item_ids or [])
@@ -302,9 +315,9 @@ class FaceFrameStandardizationService:
                     continue
                 source_frame = entry.get("source_frame") if isinstance(entry.get("source_frame"), dict) else {}
                 source_format = str(source_frame.get("source_format") or "").strip().upper()
-                if source_format not in {"ACD", "MICROSOFT", "MWG_REGIONS"}:
+                if source_format not in {"PHOTOS", "ACD", "MICROSOFT", "MWG_REGIONS"}:
                     entry["write_state"] = "locked"
-                    entry["warnings"] = [*list(entry.get("warnings") or []), "photos_or_unknown_target_not_writable"]
+                    entry["warnings"] = [*list(entry.get("warnings") or []), "unknown_target_not_writable"]
                     skipped_count += 1
                     continue
                 target = entry.get("target_frame") if isinstance(entry.get("target_frame"), dict) else {}
@@ -329,11 +342,21 @@ class FaceFrameStandardizationService:
                     "h": y2 - y1,
                 }
                 try:
-                    result = self.backend.replaceMetadataFacePosition(
-                        image_path=str(entry.get("image_path") or ""),
-                        face_data=source_frame,
-                        source_face_data=replacement,
-                    )
+                    if source_format == "PHOTOS":
+                        result = self.backend.replacePhotosFacePosition(
+                            user_key=user_key,
+                            cookies=dict(cookies or {}),
+                            base_url=base_url,
+                            image_path=str(entry.get("image_path") or ""),
+                            face_data=source_frame,
+                            source_face_data=replacement,
+                        )
+                    else:
+                        result = self.backend.replaceMetadataFacePosition(
+                            image_path=str(entry.get("image_path") or ""),
+                            face_data=source_frame,
+                            source_face_data=replacement,
+                        )
                 except Exception as exc:
                     result = {"updated": False, "warning": f"{type(exc).__name__}: {exc}"}
                 if result.get("updated"):
@@ -360,7 +383,7 @@ class FaceFrameStandardizationService:
         return backend._buildStatusPayload(
             operation="cleanup",
             action=self.ACTION,
-            mode="preview",
+            mode="scan",
             phase=phase,
             progress=backend._buildStatusProgress(
                 kind="files",
@@ -374,9 +397,10 @@ class FaceFrameStandardizationService:
                 fallback_secondary_label="remaining",
             ),
             counters=[
+                backend._buildStatusCounter("checked", value=files_scanned, label_key="cleanup:label_checked_count", fallback_label="Checked", show_when_zero=True),
                 backend._buildStatusCounter("findings", value=findings_count, label_key="cleanup:label_findings", fallback_label="Findings", show_when_zero=True),
-                backend._buildStatusCounter("selected", value=selected_count, label_key="cleanup:label_selected", fallback_label="Selected", show_when_zero=True),
-                backend._buildStatusCounter("written", value=written_count, label_key="cleanup:label_written", fallback_label="Written", show_when_zero=True),
+                backend._buildStatusCounter("automatic", value=selected_count, label_key="cleanup:label_automatic", fallback_label="Automatic", show_when_zero=True),
+                backend._buildStatusCounter("written", value=written_count, label_key="cleanup:label_corrected", fallback_label="Corrected", show_when_zero=True),
                 backend._buildStatusCounter("errors", value=errors_count, label_key="cleanup:label_errors", fallback_label="Errors"),
             ],
         )
@@ -389,6 +413,13 @@ class FaceFrameStandardizationService:
         written_count = int(updates.get("written_count") or 0)
         errors_count = int(updates.get("errors_count") or 0)
         phase = str(updates.pop("phase", "") or ("running" if updates.get("running") else "finished"))
+        updates.setdefault("files_scanned", files_scanned)
+        updates.setdefault("total_files", total_files)
+        updates.setdefault("findings_count", findings_count)
+        updates.setdefault("selected_count", selected_count)
+        updates.setdefault("written_count", written_count)
+        updates.setdefault("errors_count", errors_count)
+        updates.setdefault("current_path", "")
         updates["action"] = self.ACTION
         updates["status"] = self._status(
             phase=phase,
@@ -447,11 +478,14 @@ class FaceFrameStandardizationService:
         storage_mode = str(options.get("operation_mode") or "immediate").strip().lower()
         persist_findings = storage_mode == "save_only"
         active_findings = storage_mode == "immediate"
-        previous = self._read_active_findings(user_key) if active_findings and bool(options.get("resume_existing", False)) else (
-            self.findings(operation_mode="save_only") if persist_findings else {}
-        )
         resume_existing = bool(options.get("resume_existing", False))
-        previous_entries = previous.get("entries") if (resume_existing or persist_findings) and isinstance(previous.get("entries"), list) else []
+        if resume_existing and active_findings:
+            previous = self._read_active_findings(user_key)
+        elif resume_existing and persist_findings:
+            previous = self.findings(operation_mode="save_only")
+        else:
+            previous = {}
+        previous_entries = previous.get("entries") if resume_existing and isinstance(previous.get("entries"), list) else []
         resolved_ids = {
             str(entry.get("item_id") or "")
             for entry in previous_entries
@@ -537,7 +571,13 @@ class FaceFrameStandardizationService:
                             break
                         best = max(detection_boxes, key=lambda item: frame_metrics(source.bbox, item)["iou"])
                         metrics = frame_metrics(source.bbox, best)
-                        decision = match_decision(metrics)
+                        decision = match_decision(
+                            metrics,
+                            safe_iou=options["safe_iou"],
+                            review_iou=options["review_iou"],
+                            safe_center_delta=options["safe_center_delta"],
+                            safe_size_delta=options["safe_size_delta"],
+                        )
                         target = build_target_frame(
                             source.bbox,
                             best,
@@ -553,7 +593,7 @@ class FaceFrameStandardizationService:
                         auto_selected = (
                             options["selection_mode"] == "safe_matches"
                             and decision == "safe"
-                            and str(source.source_format or "").strip().upper() in {"ACD", "MICROSOFT", "MWG_REGIONS"}
+                            and str(source.source_format or "").strip().upper() in {"PHOTOS", "ACD", "MICROSOFT", "MWG_REGIONS"}
                         )
                         entries.append({
                             "item_id": item_id,
@@ -562,6 +602,9 @@ class FaceFrameStandardizationService:
                                 "source": source.source,
                                 "source_format": source.source_format,
                                 "name": source.name,
+                                "face_id": getattr(source, "face_id", None),
+                                "person_id": getattr(source, "person_id", None),
+                                "item_id": getattr(source, "item_id", None),
                                 **to_xywh(source.bbox),
                                 "bbox": to_bbox_dict(source.bbox),
                                 "orientation": getattr(source, "orientation", None),
@@ -611,7 +654,12 @@ class FaceFrameStandardizationService:
                     self._write_active_findings(user_key, payload)
                 apply_result = {"written_count": 0, "errors_count": 0}
                 if active_findings and options["selection_mode"] == "safe_matches":
-                    apply_result = self.apply_selected(user_key=user_key, operation_mode="immediate")
+                    apply_result = self.apply_selected(
+                        user_key=user_key,
+                        operation_mode="immediate",
+                        cookies=cookies,
+                        base_url=base_url,
+                    )
                     payload = apply_result.get("findings") if isinstance(apply_result.get("findings"), dict) else payload
                     entries = payload.get("entries") if isinstance(payload.get("entries"), list) else entries
                 open_entries = self._open_entries(entries)
@@ -651,7 +699,12 @@ class FaceFrameStandardizationService:
                 self._write_active_findings(user_key, payload)
             apply_result = {"written_count": 0, "skipped_count": 0, "errors_count": 0}
             if active_findings and not stopped and options["selection_mode"] == "safe_matches":
-                apply_result = self.apply_selected(user_key=user_key, operation_mode="immediate")
+                apply_result = self.apply_selected(
+                    user_key=user_key,
+                    operation_mode="immediate",
+                    cookies=cookies,
+                    base_url=base_url,
+                )
                 payload = apply_result.get("findings") if isinstance(apply_result.get("findings"), dict) else payload
                 entries = payload.get("entries") if isinstance(payload.get("entries"), list) else entries
             open_entries = self._open_entries(entries)

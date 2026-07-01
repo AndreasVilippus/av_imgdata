@@ -153,6 +153,16 @@ export default {
 		getPhotoThumbnailUrl() {
 			return '';
 		},
+		getBackendImagePreviewUrl(path) {
+			const normalized = String(path || '').trim();
+			return normalized ? `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${encodeURIComponent(normalized)}` : '';
+		},
+		isBrowserImageCompatiblePath(path) {
+			const normalized = String(path || '').trim().toLowerCase();
+			const match = normalized.match(/\.([a-z0-9]+)(?:[?#].*)?$/);
+			const extension = match ? match[1] : '';
+			return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif'].indexOf(extension) >= 0;
+		},
 	},
 };
 </script>

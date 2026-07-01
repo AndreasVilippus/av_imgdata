@@ -47,6 +47,9 @@
 				</div>
 			</div>
 			<div class="face-match-action-buttons face-frame-review-actions">
+				<v-button @click="vm.applyAllFaceFrameFindings()" :disabled="vm.faceFrameDecisionLoading || vm.faceFrameApplyLoading" style="width: 160px;">
+					{{ vm.$avt('cleanup:button_apply_all', 'Apply all') }}
+				</v-button>
 				<v-button @click="vm.decideFaceFrameCurrent(false)" :disabled="vm.faceFrameDecisionLoading" style="width: 160px;">
 					{{ vm.$avt('cleanup:button_skip', 'Skip') }}
 				</v-button>

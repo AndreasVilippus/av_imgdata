@@ -106,7 +106,7 @@ export default {
 		async fetchStatusPipPackagesStatus() {
 			this.statusPipPackagesLoading = true;
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status', {}, { resume: false, requireSynoToken: false });
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
 				this.statusPipPackagesStatus = this.getResponseData(data);
 			} catch (err) {
 				this.statusPipPackagesStatus = {
@@ -128,40 +128,6 @@ export default {
 				}))
 				.sort((left, right) => String(left.label || left.key).localeCompare(String(right.label || right.key)));
 		},
-		getStatusPipPackageInstallStatusLabel(packageStatus) {
-			const installStatus = packageStatus && typeof packageStatus === 'object' ? packageStatus.install_status : {};
-			const status = String(installStatus && installStatus.status || '').trim().toLowerCase();
-			if (!status) {
-				return this.$avt('status:not_available', 'Not available');
-			}
-			if (status === 'success') {
-				return this.$avt('config:pip_install_status_success', 'Last installation completed.');
-			}
-			if (status === 'failed') {
-				return this.$avt('config:pip_install_status_failed', 'Last installation failed.');
-			}
-			return status;
-		},
-		getStatusPipPackageModulesText(packageStatus) {
-			const modules = packageStatus && Array.isArray(packageStatus.modules) ? packageStatus.modules : [];
-			const parts = modules.map((moduleStatus) => {
-				const packageName = String(moduleStatus && moduleStatus.package || moduleStatus && moduleStatus.module || '').trim();
-				if (!packageName) {
-					return '';
-				}
-				let label = this.$avt('status:not_installed', 'Not installed');
-				if (moduleStatus && moduleStatus.installed) {
-					label = String(moduleStatus.version || this.$avt('status:installed', 'Installed'));
-				} else {
-					const importError = String(moduleStatus && moduleStatus.import_error || '').trim();
-					if (importError) {
-						label = `${label}: ${importError}`;
-					}
-				}
-				return `${packageName}: ${label}`;
-			}).filter(Boolean);
-			return parts.length ? parts.join(', ') : this.$avt('status:not_available', 'Not available');
-		},
 		getStatusPipPackageStatusBlocks(packageStatus) {
 			return packageStatus && Array.isArray(packageStatus.status_blocks)
 				? packageStatus.status_blocks.filter((block) => block && typeof block === 'object')
@@ -176,23 +142,6 @@ export default {
 			const value = block && Object.prototype.hasOwnProperty.call(block, 'value') ? block.value : '';
 			const text = String(value ?? '').trim();
 			return text || this.$avt('status:not_available', 'Not available');
-		},
-		getStatusPipPackageModelsText(packageStatus) {
-			const modelStatus = packageStatus && packageStatus.model_status && typeof packageStatus.model_status === 'object'
-				? packageStatus.model_status
-				: {};
-			const activeName = String(packageStatus && packageStatus.active_model_name || '').trim();
-			const models = Array.isArray(modelStatus.models) ? modelStatus.models : [];
-			const installedCount = models.filter((model) => model && model.installed).length;
-			if (activeName || installedCount) {
-				return `${activeName || this.$avt('status:not_available', 'Not available')} (${installedCount})`;
-			}
-			return this.$avt('status:not_available', 'Not available');
-		},
-		getStatusPipPackageConflictsText(packageStatus) {
-			const conflicts = packageStatus && Array.isArray(packageStatus.conflicts) ? packageStatus.conflicts : [];
-			const parts = conflicts.map((item) => `${String(item.package || '').trim()} ${String(item.version || '').trim()}`.trim()).filter(Boolean);
-			return parts.length ? parts.join(', ') : this.$avt('status:no', 'No');
 		},
 		getPerlStatusValue() {
 			const perlInfo = this.exiftoolStatus && typeof this.exiftoolStatus === 'object'

@@ -749,6 +749,36 @@ def test_start_face_matching_discovery_preserves_search_photo_progress_when_skip
     assert progress["resume_cursor"]["persons_read"] == 42
 
 
+def test_start_face_matching_discovery_passes_insightface_skip_unknown_options_to_worker():
+    service = make_service()
+    captured = {}
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return False
+
+    with patch("services.face_match_workflow_service.Thread", FakeThread):
+        progress = service.startFaceMatchingDiscovery(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            action="search_missing_faces_insightface",
+            recognize_persons=True,
+            skip_unknown_persons=True,
+        )
+
+    assert progress["resume_cursor"]["recognize_persons"] is True
+    assert progress["resume_cursor"]["skip_unknown_persons"] is True
+    assert captured["kwargs"]["kwargs"]["recognize_persons"] is True
+    assert captured["kwargs"]["kwargs"]["skip_unknown_persons"] is True
+
+
 def test_run_checks_scan_preserves_latest_progress_on_session_error():
     service = make_service()
     service._setChecksProgress(

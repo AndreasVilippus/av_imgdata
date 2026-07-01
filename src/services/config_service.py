@@ -61,7 +61,7 @@ class ConfigService:
                     "INSTALL_ON_START": False,
                     "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
                     "WHEELHOUSE_ENABLED": True,
-                    "WHEELHOUSE_MANIFEST_URL": "https://github.com/AndreasVilippus/av_imgdata-wheelhouse/releases/download/dsm7-x86_64-python38-2026.04.23/wheelhouse-manifest.json",
+                    "WHEELHOUSE_MANIFEST_URL": "https://github.com/AndreasVilippus/av_imgdata-wheelhouse/releases/download/dsm7-x86_64-python38-2026.06.22/wheelhouse-manifest.json",
                     "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
                     "MODEL_ROOT": "",
                     "MODEL_NAME": "",
@@ -90,6 +90,16 @@ class ConfigService:
                 "EMBEDDED_XMP_FULL_SCAN_MAX_BYTES": 67108864,
                 "EXIFTOOL_PERSISTENT_ENABLED": True,
                 "EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS": 30,
+                "IMAGE_DECODER_ENABLED": True,
+                "IMAGE_DECODER_EXTENSIONS": ["heic", "heif"],
+                "IMAGE_DECODER_ORDER": ["pillow-heif", "heif-convert", "magick", "ffmpeg", "convert"],
+                "IMAGE_DECODER_MAX_EDGE": 4096,
+                "RECOGNITION_IMAGE_MAX_EDGE": 4096,
+                "IMAGE_DECODER_TIMEOUT_SECONDS": 30,
+                "PATH_HEIF_CONVERT": "heif-convert",
+                "PATH_IMAGEMAGICK": "magick",
+                "PATH_FFMPEG": "ffmpeg",
+                "PATH_CONVERT": "convert",
             },
             "metadata": {
                 "SCHEMAS": {
@@ -174,6 +184,30 @@ class ConfigService:
         self._merged_config_cache_signature = None
         return True
 
+    def ensureInstallOnStartConfig(self) -> bool:
+        config = self.readConfig()
+        if not isinstance(config, dict):
+            return False
+        pip_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
+        insightface = pip_packages.get("INSIGHTFACE") if isinstance(pip_packages.get("INSIGHTFACE"), dict) else {}
+        if not bool(insightface.get("INSTALL_ON_START", False)):
+            return False
+
+        defaults = self.defaultConfig()["pip_packages"]["INSIGHTFACE"]
+        changed = False
+        for key in ("WHEELHOUSE_ENABLED", "WHEELHOUSE_MANIFEST_URL", "WHEELHOUSE_TARGET", "REQUIREMENTS_FILE"):
+            default_value = defaults.get(key)
+            if insightface.get(key) != default_value:
+                insightface[key] = default_value
+                changed = True
+
+        if not changed:
+            return False
+
+        pip_packages["INSIGHTFACE"] = insightface
+        config["pip_packages"] = pip_packages
+        return self.writeConfig(config)
+
     @classmethod
     def normalizeConfig(cls, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         normalized = cls._mergeDefaults(cls.defaultConfig(), config if isinstance(config, dict) else {})
@@ -217,6 +251,38 @@ class ConfigService:
             minimum=1,
             maximum=300,
         )
+        files["IMAGE_DECODER_ENABLED"] = bool(files.get("IMAGE_DECODER_ENABLED", True))
+        files["IMAGE_DECODER_TIMEOUT_SECONDS"] = cls._clamp_int(
+            files.get("IMAGE_DECODER_TIMEOUT_SECONDS"),
+            default=30,
+            minimum=1,
+            maximum=300,
+        )
+        files["IMAGE_DECODER_MAX_EDGE"] = cls._clamp_int(
+            files.get("IMAGE_DECODER_MAX_EDGE"),
+            default=4096,
+            minimum=0,
+            maximum=20000,
+        )
+        files["RECOGNITION_IMAGE_MAX_EDGE"] = cls._clamp_int(
+            files.get("RECOGNITION_IMAGE_MAX_EDGE"),
+            default=4096,
+            minimum=0,
+            maximum=20000,
+        )
+        files["IMAGE_DECODER_EXTENSIONS"] = cls._normalizeStringList(
+            files.get("IMAGE_DECODER_EXTENSIONS"),
+            default=["heic", "heif"],
+            lowercase=True,
+            strip_prefix=".",
+        )
+        decoder_order = cls._normalizeStringList(
+            files.get("IMAGE_DECODER_ORDER"),
+            default=["pillow-heif", "heif-convert", "magick", "ffmpeg", "convert"],
+            lowercase=True,
+        )
+        allowed_decoders = {"pillow-heif", "heif-convert", "magick", "ffmpeg", "convert"}
+        files["IMAGE_DECODER_ORDER"] = [decoder for decoder in decoder_order if decoder in allowed_decoders]
 
         photos = config.get("photos", {}) if isinstance(config.get("photos"), dict) else {}
         photos["REINDEX_MISSING_ITEMS"] = bool(photos.get("REINDEX_MISSING_ITEMS", False))
@@ -260,6 +326,28 @@ class ConfigService:
         except (TypeError, ValueError):
             number = default
         return max(minimum, min(maximum, number))
+
+    @staticmethod
+    def _normalizeStringList(
+        value: Any,
+        *,
+        default: List[str],
+        lowercase: bool = False,
+        strip_prefix: str = "",
+    ) -> List[str]:
+        source = value if isinstance(value, list) else default
+        normalized: List[str] = []
+        for item in source:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            if strip_prefix:
+                text = text.lstrip(strip_prefix)
+            if lowercase:
+                text = text.lower()
+            if text and text not in normalized:
+                normalized.append(text)
+        return normalized or list(default)
 
     @staticmethod
     def _clamp_float(value: Any, *, default: float, minimum: float, maximum: float) -> float:

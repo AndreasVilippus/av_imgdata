@@ -63,6 +63,8 @@ def test_face_matching_action_normalizes_request_and_starts_discovery(monkeypatc
             "action": "search_photo_face_in_file",
             "auto": True,
             "save_only": True,
+            "recognize_persons": True,
+            "skip_unknown_persons": True,
             "resume_from_progress": True,
             "limit": "12",
             "offset": "3",
@@ -100,6 +102,8 @@ def test_face_matching_action_normalizes_request_and_starts_discovery(monkeypatc
         auto=True,
         save_only=True,
         resume_from_progress=True,
+        recognize_persons=True,
+        skip_unknown_persons=True,
     )
 
 
@@ -206,6 +210,34 @@ def test_status_routes_run_blocking_service_calls_off_event_loop(monkeypatch):
     imgdata_api.IMGDATA.pipPackagesStatus.assert_called_once()
 
 
+def test_pip_wheelhouse_routes_run_blocking_service_calls_off_event_loop(monkeypatch):
+    async def request_body(_request):
+        return {
+            "package_key": "INSIGHTFACE",
+            "package_name": "insightface",
+            "reinstall": True,
+        }
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "pipWheelhousePackages", Mock(return_value={"packages": []}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "installPipWheelhousePackage", Mock(return_value={"success": True, "message": "ok"}))
+
+    packages_payload = _run(imgdata_api.pip_wheelhouse_packages(object()))
+    install_payload = _run(imgdata_api.pip_wheelhouse_package_install(object()))
+
+    assert packages_payload["success"] is True
+    assert install_payload["success"] is True
+    assert len(calls) == 2
+    imgdata_api.IMGDATA.pipWheelhousePackages.assert_called_once_with(package_key="INSIGHTFACE")
+    imgdata_api.IMGDATA.installPipWheelhousePackage.assert_called_once_with(
+        package_key="INSIGHTFACE",
+        package_name="insightface",
+        reinstall=True,
+    )
+
+
 def test_progress_and_findings_routes_run_blocking_service_calls_off_event_loop(monkeypatch):
     async def request_body(_request):
         return {"check_type": "duplicate_faces", "action": "mark_missing_photos_faces"}
@@ -261,6 +293,107 @@ def test_progress_and_findings_routes_run_blocking_service_calls_off_event_loop(
     imgdata_api.IMGDATA.getChecksFindingEntries.assert_not_called()
 
 
+def test_recognition_review_runs_blocking_service_calls_off_event_loop(monkeypatch):
+    async def request_body(_request):
+        return {
+            "action": "recognition_analyze_unknown_faces",
+            "item_id": "item-1",
+            "decision": "accepted",
+            "operation_mode": "findings",
+        }
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA.face_recognition, "update_review", Mock(return_value={"open": 0}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.face_recognition, "sync_review_progress", Mock(return_value={"running": False}))
+
+    payload = _run(imgdata_api.recognition_review(object()))
+
+    assert payload.status_code == 200
+    assert len(calls) == 2
+    imgdata_api.IMGDATA.face_recognition.update_review.assert_called_once_with(
+        action="recognition_analyze_unknown_faces",
+        item_id="item-1",
+        decision="accepted",
+        user_key="user-1",
+        operation_mode="findings",
+    )
+    imgdata_api.IMGDATA.face_recognition.sync_review_progress.assert_called_once_with(
+        user_key="user-1",
+        action="recognition_analyze_unknown_faces",
+        operation_mode="findings",
+    )
+
+
+def test_recognition_suggestions_apply_forwards_assignment_action(monkeypatch):
+    async def request_body(_request):
+        return {
+            "action": "recognition_check_person_assignments",
+            "selected_suggestion_ids": ["assign-1"],
+            "operation_mode": "findings",
+        }
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA.face_recognition, "apply_suggestions", Mock(return_value={"written_count": 1}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.face_recognition, "sync_review_progress", Mock(return_value={"running": False}))
+
+    payload = _run(imgdata_api.recognition_suggestions_apply(object()))
+
+    assert payload.status_code == 200
+    assert len(calls) == 2
+    imgdata_api.IMGDATA.face_recognition.apply_suggestions.assert_called_once_with(
+        user_key="user-1",
+        cookies={"_SSID": "sid-1"},
+        base_url="https://dsm.example.test",
+        selected_ids=["assign-1"],
+        operation_mode="findings",
+        action="recognition_check_person_assignments",
+    )
+    imgdata_api.IMGDATA.face_recognition.sync_review_progress.assert_called_once_with(
+        user_key="user-1",
+        action="recognition_check_person_assignments",
+        operation_mode="findings",
+    )
+
+
+def test_cleanup_progress_logs_compact_progress_summary(monkeypatch):
+    async def request_body(_request):
+        return {"action": "recognition_build_profiles"}
+
+    debug_log = Mock()
+    progress = {
+        "operation_id": "cleanup-recognition-1",
+        "revision": 12,
+        "action": "recognition_build_profiles",
+        "running": True,
+        "finished": False,
+        "status": {"operation": "cleanup", "phase": "reading_reference_images"},
+        "persons_scanned": 2,
+        "persons_total": 214,
+        "images_scanned": 42,
+        "images_total": 933,
+        "profiles_built": 2,
+    }
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api, "backend_debug_log", debug_log)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getCleanupProgress", Mock(return_value=progress))
+
+    response = _run(imgdata_api.cleanup_progress(object()))
+
+    assert response.status_code == 200
+    imgdata_api.IMGDATA.getCleanupProgress.assert_called_once_with("user-1", "recognition_build_profiles")
+    debug_log.assert_called_once()
+    assert debug_log.call_args.args == ("cleanup_progress_end",)
+    assert debug_log.call_args.kwargs["progress"]["running"] is True
+    assert debug_log.call_args.kwargs["progress"]["status_phase"] == "reading_reference_images"
+    assert debug_log.call_args.kwargs["persons_total"] == 214
+    assert debug_log.call_args.kwargs["profiles_built"] == 2
+
+
 def test_file_image_runs_synology_status_lookup_off_event_loop(monkeypatch, tmp_path):
     calls = _install_backend_call_recorder(monkeypatch)
     image_path = tmp_path / "image.jpg"
@@ -275,6 +408,53 @@ def test_file_image_runs_synology_status_lookup_off_event_loop(monkeypatch, tmp_
     assert response.status_code == 200
     assert len(calls) == 1
     imgdata_api.IMGDATA.status_system.assert_called_once()
+
+
+def test_file_image_decodes_heic_preview_before_returning_original(monkeypatch, tmp_path):
+    calls = _install_backend_call_recorder(monkeypatch)
+    image_path = tmp_path / "image.heic"
+    image_path.write_bytes(b"\x00\x00\x00\x18ftypheic")
+    decoded = type("Decoded", (), {"success": True, "image_bytes": b"\xff\xd8decoded", "source": "pillow-heif", "error": ""})()
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": str(tmp_path)}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.files, "extractEmbeddedJpegPreview", Mock(return_value=None))
+    monkeypatch.setattr(imgdata_api.IMGDATA.image_decoder, "decode_to_jpeg", Mock(return_value=decoded))
+
+    response = _run(imgdata_api.file_image(object(), path=str(image_path)))
+
+    assert response.status_code == 200
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"\xff\xd8decoded"
+    assert len(calls) == 2
+    imgdata_api.IMGDATA.image_decoder.decode_to_jpeg.assert_called_once_with(str(image_path))
+
+
+def test_file_image_returns_placeholder_for_incompatible_image_when_preview_fails(monkeypatch, tmp_path):
+    calls = _install_backend_call_recorder(monkeypatch)
+    image_path = tmp_path / "image.heic"
+    image_path.write_bytes(b"\x00\x00\x00\x18ftypheic")
+    decoded = type("Decoded", (), {
+        "success": False,
+        "image_bytes": b"",
+        "source": "pillow-heif",
+        "error": "decoder_not_installed",
+    })()
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": str(tmp_path)}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.files, "extractEmbeddedJpegPreview", Mock(return_value=None))
+    monkeypatch.setattr(imgdata_api.IMGDATA.image_decoder, "decode_to_jpeg", Mock(return_value=decoded))
+    monkeypatch.setattr(imgdata_api, "backend_debug_log", Mock())
+
+    response = _run(imgdata_api.file_image(object(), path=str(image_path)))
+
+    assert response.status_code == 200
+    assert response.media_type == "image/svg+xml"
+    assert b"Preview unavailable" in response.body
+    assert b"ftypheic" not in response.body
+    assert len(calls) == 2
+    imgdata_api.backend_debug_log.assert_called_once()
 
 
 def test_face_assign_match_assigns_removes_finding_and_saves_mapping(monkeypatch):

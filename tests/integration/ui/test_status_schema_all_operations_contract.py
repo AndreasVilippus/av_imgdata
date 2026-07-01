@@ -60,3 +60,8 @@ def test_status_view_places_system_before_files_and_pip_packages_below_files():
     assert system_pos < files_pos < pip_pos
     assert "vm.getStatusPipPackageStatusBlocks(packageStatus)" in view
     assert "vm.getStatusPipPackageStatusBlockLabel(statusBlock)" in view
+    assert "status:pip_package_status" not in view
+    assert "status:pip_package_no_status_blocks" not in view
+    assert "vm.getStatusPipPackageInstallStatusLabel(packageStatus)" not in view
+    assert "vm.getStatusPipPackageModulesText(packageStatus)" not in view
+    assert "vm.getStatusPipPackageConflictsText(packageStatus)" not in view

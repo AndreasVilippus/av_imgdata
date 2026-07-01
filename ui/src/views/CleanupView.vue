@@ -10,8 +10,9 @@
 					<select v-model="vm.selectedCleanupAction" class="face-match-select" :disabled="vm.cleanupLoading">
 						<option value="normalize_names">{{ vm.$avt('cleanup:action_normalize_names', 'Adjust names by reference list') }}</option>
 							<option value="standardize_face_frames">{{ vm.$avt('cleanup:action_standardize_face_frames', 'Standardize face frames') }}</option>
-							<option value="recognition_build_profiles">{{ vm.$avt('cleanup:action_recognition_build_profiles', 'Build recognition profiles') }}</option>
+								<option value="recognition_build_profiles">{{ vm.$avt('cleanup:action_recognition_build_profiles', 'Build person profiles') }}</option>
 							<option value="recognition_check_reference_outliers">{{ vm.$avt('cleanup:action_recognition_check_outliers', 'Review recognition reference faces') }}</option>
+							<option value="recognition_check_person_assignments">{{ vm.$avt('cleanup:action_recognition_check_assignments', 'Check person assignments with InsightFace') }}</option>
 						</select>
 				</div>
 				<div v-if="vm.selectedCleanupAction === 'normalize_names'" class="checks-actions-row checks-actions-row-switches">
@@ -55,11 +56,13 @@
 						:total="Number(vm.getCleanupStatusProgress().total) || 0"
 						:primary-label="vm.getCleanupStatusProgressPrimaryLabel()"
 						:secondary-label="vm.getCleanupStatusProgressSecondaryLabel()"
-						:status-text="vm.getCleanupStatusHeadline()"
+						:status-text="vm.getCleanupProgressOverviewStatusText()"
 					/>
 				</div>
-				<div v-if="vm.selectedCleanupAction === 'normalize_names'" class="face-match-status-stats">
+				<div v-if="vm.shouldShowCleanupStatusCounters()" class="face-match-status-stats">
 					<span v-for="counter in vm.getCleanupStatusCounters()" :key="`cleanup-counter-${counter.key}`">{{ vm.formatCleanupStatusCounter(counter) }}</span>
+				</div>
+				<div v-if="vm.selectedCleanupAction === 'normalize_names'" class="face-match-status-stats">
 					<span>{{ vm.$avt('cleanup:label_mappings', 'Mappings') }}: {{ vm.cleanupProgress.mappings_count || 0 }}</span>
 					<span>{{ vm.$avt('cleanup:label_persons_scanned', 'Persons scanned') }}: {{ vm.cleanupProgress.persons_scanned || 0 }}</span>
 					<span>{{ vm.$avt('cleanup:label_persons_updated', 'Persons updated') }}: {{ vm.cleanupProgress.persons_updated || 0 }}</span>
@@ -68,7 +71,7 @@
 					<span>{{ vm.$avt('cleanup:label_files_updated', 'Files updated') }}: {{ vm.cleanupProgress.files_updated || 0 }}</span>
 					<span>{{ vm.$avt('cleanup:label_metadata_faces_updated', 'Metadata faces updated') }}: {{ vm.cleanupProgress.metadata_faces_updated || 0 }}</span>
 				</div>
-				<div class="face-match-status-context">
+				<div v-if="vm.selectedCleanupAction !== 'recognition_build_profiles'" class="face-match-status-context">
 					<span v-if="vm.cleanupProgress.current_name">{{ vm.$avt('cleanup:label_current_name', 'Current name') }}: {{ vm.cleanupProgress.current_name }}</span>
 					<span v-if="vm.cleanupProgress.current_path">{{ vm.$avt('cleanup:label_current_path', 'Current file') }}: {{ vm.cleanupProgress.current_path }}</span>
 					<span v-if="vm.cleanupProgress.warning">{{ vm.$avt(vm.cleanupProgress.warning, 'Warning') }}</span>

@@ -18,6 +18,15 @@ def test_exact_frame_is_safe():
     assert match_decision(metrics) == "safe"
 
 
+def test_match_decision_uses_configured_deviation_thresholds():
+    metrics = {"iou": 0.60, "center_delta": 0.04, "size_delta": 0.10}
+
+    assert match_decision(metrics) == "review"
+    assert match_decision(metrics, safe_iou=0.55) == "safe"
+    assert match_decision(metrics, safe_iou=0.55, safe_center_delta=0.03) == "review"
+    assert match_decision(metrics, review_iou=0.70) == "conflict"
+
+
 def test_unrelated_frame_is_conflict():
     metrics = frame_metrics(
         BoundingBox(0.0, 0.0, 0.2, 0.2),
@@ -60,6 +69,24 @@ def test_preview_options_cannot_enable_writes_and_are_bounded():
     assert options["profile"] == "normal"
     assert options["changed_since_days"] == 0
     assert options["det_thresh"] == 1.0
+    assert options["safe_iou"] == 0.65
+    assert options["review_iou"] == 0.30
+    assert options["safe_center_delta"] == 0.08
+    assert options["safe_size_delta"] == 0.50
+
+
+def test_preview_options_normalize_decision_thresholds():
+    options = FaceFrameStandardizationService.normalize_options({
+        "safe_iou": 2,
+        "review_iou": -1,
+        "safe_center_delta": 0.12,
+        "safe_size_delta": 0.25,
+    })
+
+    assert options["safe_iou"] == 1.0
+    assert options["review_iou"] == 0.0
+    assert options["safe_center_delta"] == 0.12
+    assert options["safe_size_delta"] == 0.25
 
 
 def test_preview_options_normalize_individual_sources_and_selection_mode():
@@ -271,6 +298,59 @@ def test_review_all_mode_does_not_preselect_safe_findings():
     assert active["entries"][0]["selection_state"] == "review"
 
 
+def test_standardization_passes_configured_thresholds_to_match_decision():
+    metadata_faces = [
+        MetadataFace.from_center_box(
+            name="Person",
+            x=0.5,
+            y=0.5,
+            w=0.2,
+            h=0.2,
+            source="metadata",
+            source_format="ACD",
+        ),
+    ]
+    backend = SimpleNamespace(
+        core=SimpleNamespace(getSharedFolder=Mock(return_value="/photo")),
+        checks_workflow=SimpleNamespace(get_candidate_paths=Mock(return_value=["/photo/test.jpg"])),
+        file_analysis=SimpleNamespace(writeCheckFindings=Mock()),
+        _configuredInsightFaceModelName=Mock(return_value="buffalo_l"),
+        _configuredInsightFaceModelRoot=Mock(return_value="/models"),
+        _readImageMetadata=Mock(return_value=SimpleNamespace(faces=metadata_faces)),
+        _loadPhotoFacesForImage=Mock(return_value=[]),
+        _shouldStopCleanup=Mock(return_value=False),
+        _setCleanupProgress=Mock(),
+        _buildStatusPayload=Mock(return_value={"schema_version": 1}),
+        _buildStatusProgress=Mock(return_value={}),
+        _buildStatusCounter=Mock(return_value={}),
+    )
+    detector = Mock()
+    detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
+
+    service = FaceFrameStandardizationService(backend)
+    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector), \
+            patch("services.face_frame_standardization_service.match_decision", return_value="review") as decision:
+        service._run(
+            user_key="user",
+            cookies={},
+            base_url="http://example.test",
+            options=FaceFrameStandardizationService.normalize_options({
+                "sources": ["acd"],
+                "safe_iou": 0.72,
+                "review_iou": 0.44,
+                "safe_center_delta": 0.06,
+                "safe_size_delta": 0.40,
+            }),
+        )
+
+    assert decision.call_args.kwargs == {
+        "safe_iou": 0.72,
+        "review_iou": 0.44,
+        "safe_center_delta": 0.06,
+        "safe_size_delta": 0.40,
+    }
+
+
 def test_immediate_mode_resumes_after_previous_review_path():
     options = FaceFrameStandardizationService.normalize_options({
         "sources": ["acd"],
@@ -423,7 +503,7 @@ def test_sync_review_progress_uses_current_open_finding_and_list_progress():
     assert progress["status"]["progress"]["total"] == 2
 
 
-def test_apply_selected_writes_metadata_and_locks_photos():
+def test_apply_selected_writes_metadata_and_photos():
     payload = {
         "entries": [
             {
@@ -446,7 +526,14 @@ def test_apply_selected_writes_metadata_and_locks_photos():
             {
                 "item_id": "photos",
                 "image_path": "/photo/test.jpg",
-                "source_frame": {"source": "photos", "source_format": "PHOTOS"},
+                "source_frame": {
+                    "source": "photos",
+                    "source_format": "PHOTOS",
+                    "name": "Person",
+                    "face_id": 77,
+                    "person_id": 11,
+                    "item_id": 42,
+                },
                 "target_frame": {"bbox": {"x1": 0.3, "y1": 0.3, "x2": 0.7, "y2": 0.7}},
                 "selection_state": "selected",
                 "write_state": "pending",
@@ -461,17 +548,28 @@ def test_apply_selected_writes_metadata_and_locks_photos():
             writeCheckFindings=Mock(return_value=True),
         ),
         replaceMetadataFacePosition=Mock(return_value={"updated": True}),
+        replacePhotosFacePosition=Mock(return_value={"updated": True}),
     )
 
-    result = FaceFrameStandardizationService(backend).apply_selected()
+    result = FaceFrameStandardizationService(backend).apply_selected(
+        user_key="user",
+        cookies={"_SSID": "sid"},
+        base_url="https://example.test",
+    )
 
-    assert result["written_count"] == 1
-    assert result["skipped_count"] == 1
+    assert result["written_count"] == 2
+    assert result["skipped_count"] == 0
     assert payload["entries"][0]["write_state"] == "written"
-    assert payload["entries"][1]["write_state"] == "locked"
+    assert payload["entries"][1]["write_state"] == "written"
     replacement = backend.replaceMetadataFacePosition.call_args.kwargs["source_face_data"]
     assert replacement["x"] == approx(0.5)
     assert replacement["w"] == approx(0.4)
+    photos_call = backend.replacePhotosFacePosition.call_args.kwargs
+    assert photos_call["user_key"] == "user"
+    assert photos_call["cookies"] == {"_SSID": "sid"}
+    assert photos_call["base_url"] == "https://example.test"
+    assert photos_call["face_data"]["face_id"] == 77
+    assert photos_call["source_face_data"]["w"] == approx(0.4)
 
 
 def test_safe_mode_automatically_applies_safe_metadata_findings():
@@ -526,6 +624,21 @@ def test_safe_mode_automatically_applies_safe_metadata_findings():
     assert entry["selection_state"] == "selected"
     assert entry["write_state"] == "written"
     backend.replaceMetadataFacePosition.assert_called_once()
+
+
+def test_safe_mode_automatically_selects_safe_photos_findings():
+    entries = [
+        {
+            "source_frame": {"source_format": "PHOTOS"},
+            "match": {"decision": "safe"},
+            "selection_state": "review",
+            "write_state": "pending",
+        }
+    ]
+
+    FaceFrameStandardizationService._prepare_automatic_selections(entries)
+
+    assert entries[0]["selection_state"] == "selected"
 
 
 def test_safe_mode_recalculates_open_selections_from_previous_manual_run():
@@ -599,3 +712,143 @@ def test_safe_mode_recalculates_open_selections_from_previous_manual_run():
     assert review["selection_state"] == "review"
     assert review["write_state"] == "pending"
     backend.replaceMetadataFacePosition.assert_called_once()
+
+
+def test_face_frame_progress_overwrites_legacy_fields_on_new_status():
+    captured = []
+    backend = SimpleNamespace(
+        _setCleanupProgress=Mock(side_effect=lambda user_key, **updates: captured.append((user_key, updates)) or updates),
+        _buildStatusPayload=Mock(return_value={"schema_version": 1}),
+        _buildStatusProgress=Mock(return_value={}),
+        _buildStatusCounter=Mock(return_value={}),
+    )
+
+    FaceFrameStandardizationService(backend)._set_progress(
+        "user",
+        running=True,
+        finished=False,
+        phase="listing_files",
+        message_key="cleanup:face_frames_listing_files",
+        message="Building image list.",
+        options=FaceFrameStandardizationService.normalize_options({}),
+    )
+
+    _user_key, update = captured[0]
+    assert update["files_scanned"] == 0
+    assert update["total_files"] == 0
+    assert update["findings_count"] == 0
+    assert update["selected_count"] == 0
+    assert update["written_count"] == 0
+    assert update["errors_count"] == 0
+    assert update["current_path"] == ""
+
+
+def test_face_frame_status_uses_file_progress_and_detail_counters():
+    counters = []
+    backend = SimpleNamespace(
+        _buildStatusProgress=Mock(side_effect=lambda **kwargs: kwargs),
+        _buildStatusCounter=Mock(side_effect=lambda key, **kwargs: counters.append((key, kwargs)) or {"key": key, **kwargs}),
+        _buildStatusPayload=Mock(side_effect=lambda **kwargs: kwargs),
+    )
+
+    status = FaceFrameStandardizationService(backend)._status(
+        phase="running",
+        files_scanned=12,
+        total_files=65,
+        findings_count=3,
+        selected_count=2,
+        written_count=1,
+        errors_count=0,
+    )
+
+    assert status["progress"]["kind"] == "files"
+    assert status["mode"] == "scan"
+    assert status["progress"]["current"] == 12
+    assert status["progress"]["total"] == 65
+    assert [key for key, _kwargs in counters] == ["checked", "findings", "automatic", "written", "errors"]
+    labels = {key: kwargs["label_key"] for key, kwargs in counters}
+    assert labels["checked"] == "cleanup:label_checked_count"
+    assert labels["automatic"] == "cleanup:label_automatic"
+    assert labels["written"] == "cleanup:label_corrected"
+
+
+def test_face_frame_review_status_schema_uses_integrated_modes():
+    backend = SimpleNamespace(
+        _setCleanupProgress=Mock(side_effect=lambda _user_key, **updates: updates),
+        _buildStatusProgress=Mock(side_effect=lambda **kwargs: kwargs),
+        _buildStatusCounter=Mock(side_effect=lambda key, **kwargs: {"key": key, **kwargs}),
+        _buildStatusPayload=Mock(side_effect=lambda **kwargs: kwargs),
+        file_analysis=SimpleNamespace(readCheckFindings=Mock(return_value={
+            "entries": [{"item_id": "stored", "selection_state": "review", "write_state": "pending"}],
+        })),
+    )
+    service = FaceFrameStandardizationService(backend)
+    service._write_active_findings("user", {
+        "entries": [{"item_id": "active", "selection_state": "review", "write_state": "pending"}],
+    })
+
+    active = service.sync_review_progress(user_key="user", operation_mode="immediate")
+    stored = service.sync_review_progress(user_key="user", operation_mode="findings")
+
+    assert active["status"]["mode"] == "scan"
+    assert stored["status"]["mode"] == "findings"
+
+
+def test_save_only_start_ignores_persisted_findings_without_explicit_resume():
+    stored = {
+        "face_frame_standardization": {
+            "mode": "save_only",
+            "entries": [
+                {
+                    "item_id": FaceFrameStandardizationService._finding_id("/photo/test.jpg", "ACD", 0),
+                    "image_path": "/photo/test.jpg",
+                    "selection_state": "selected",
+                    "write_state": "written",
+                },
+            ],
+        },
+    }
+    backend = SimpleNamespace(
+        core=SimpleNamespace(getSharedFolder=Mock(return_value="/photo")),
+        checks_workflow=SimpleNamespace(get_candidate_paths=Mock(return_value=["/photo/test.jpg"])),
+        file_analysis=SimpleNamespace(
+            lockCheckFindings=Mock(side_effect=lambda finding_type: __import__("contextlib").nullcontext()),
+            readCheckFindings=Mock(side_effect=lambda finding_type: stored.get(finding_type, {})),
+            writeCheckFindings=Mock(side_effect=lambda finding_type, payload: stored.__setitem__(finding_type, payload) or True),
+        ),
+        _configuredInsightFaceModelName=Mock(return_value="buffalo_l"),
+        _configuredInsightFaceModelRoot=Mock(return_value="/models"),
+        _readImageMetadata=Mock(return_value=SimpleNamespace(faces=[
+            MetadataFace.from_center_box(
+                name="Person",
+                x=0.5,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="ACD",
+            ),
+        ])),
+        _loadPhotoFacesForImage=Mock(return_value=[]),
+        _shouldStopCleanup=Mock(return_value=False),
+        _setCleanupProgress=Mock(),
+        _buildStatusPayload=Mock(return_value={"schema_version": 1}),
+        _buildStatusProgress=Mock(return_value={}),
+        _buildStatusCounter=Mock(return_value={}),
+    )
+    detector = Mock()
+    detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
+
+    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
+        FaceFrameStandardizationService(backend)._run(
+            user_key="user",
+            cookies={},
+            base_url="http://example.test",
+            options=FaceFrameStandardizationService.normalize_options({
+                "operation_mode": "save_only",
+                "sources": ["acd"],
+            }),
+        )
+
+    assert len(stored["face_frame_standardization"]["entries"]) == 1
+    assert stored["face_frame_standardization"]["entries"][0]["write_state"] == "pending"

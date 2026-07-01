@@ -379,6 +379,29 @@ def _save_name_mapping_if_requested(*, save_mapping: bool, source_name: Any, tar
     )
 
 
+def _is_browser_image_compatible_path(path: str) -> bool:
+    extension = Path(path).suffix.lower().lstrip(".")
+    return extension in {"jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif"}
+
+
+def _image_preview_unavailable_response() -> Response:
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">'
+        '<rect width="640" height="420" fill="#f3f4f6"/>'
+        '<rect x="160" y="110" width="320" height="200" rx="8" fill="#ffffff" stroke="#cbd5e1"/>'
+        '<path d="M230 250l55-68 45 52 34-40 46 56z" fill="#cbd5e1"/>'
+        '<circle cx="398" cy="166" r="22" fill="#cbd5e1"/>'
+        '<text x="320" y="348" text-anchor="middle" font-family="Arial, sans-serif" '
+        'font-size="24" fill="#475569">Preview unavailable</text>'
+        "</svg>"
+    )
+    return Response(
+        content=svg.encode("utf-8"),
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 def _refresh_checks_mutation_state(
     session_ctx: Dict[str, Any],
     *,
@@ -686,19 +709,11 @@ async def status(request: Request):
 
 @router.post("/exiftool_status")
 async def exiftool_status(request: Request):
-    started = time.monotonic()
-    session_ctx, error_response = await _prepare_session_request(request)
+    _session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
     data = await _run_backend_call(lambda: IMGDATA.exiftool_status())
-    backend_debug_log(
-        "exiftool_status_end",
-        duration_ms=round((time.monotonic() - started) * 1000, 2),
-        user_key_hash=_debug_user_key(session_ctx["user_key"]),
-        installed=bool(data.get("installed")) if isinstance(data, dict) else None,
-        available=bool(data.get("available")) if isinstance(data, dict) else None,
-    )
     return {
         "success": True,
         "data": data,
@@ -714,6 +729,46 @@ async def pip_packages_status(request: Request):
     return {
         "success": True,
         "data": await _run_backend_call(lambda: IMGDATA.pipPackagesStatus()),
+    }
+
+
+@router.post("/pip_wheelhouse_packages")
+async def pip_wheelhouse_packages(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    try:
+        data = await _run_backend_call(lambda: IMGDATA.pipWheelhousePackages(
+            package_key=str(body.get("package_key") or "INSIGHTFACE"),
+        ))
+    except Exception as exc:
+        return JSONResponse(_operation_exception_response(exc, message="pip_wheelhouse_packages_failed"))
+    return {
+        "success": True,
+        "data": data,
+    }
+
+
+@router.post("/pip_wheelhouse_package_install")
+async def pip_wheelhouse_package_install(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    try:
+        data = await _run_backend_call(lambda: IMGDATA.installPipWheelhousePackage(
+            package_key=str(body.get("package_key") or "INSIGHTFACE"),
+            package_name=str(body.get("package_name") or ""),
+            reinstall=bool(body.get("reinstall")),
+        ))
+    except Exception as exc:
+        return JSONResponse(_operation_exception_response(exc, message="pip_wheelhouse_package_install_failed"))
+    return {
+        "success": True,
+        "data": data,
     }
 
 
@@ -840,6 +895,7 @@ async def face_matching_action(request: Request):
     auto = bool(body.get("auto"))
     save_only = bool(body.get("save_only"))
     recognize_persons = bool(body.get("recognize_persons"))
+    skip_unknown_persons = bool(body.get("skip_unknown_persons"))
     resume_from_progress = bool(body.get("resume_from_progress"))
     refresh = bool(body.get("refresh"))
     default_limit = _configured_max_photos_persons()
@@ -891,6 +947,7 @@ async def face_matching_action(request: Request):
             auto=auto,
             save_only=save_only,
             recognize_persons=recognize_persons,
+            skip_unknown_persons=skip_unknown_persons,
             resume_from_progress=resume_from_progress,
             refresh=refresh,
             limit=limit,
@@ -913,6 +970,8 @@ async def face_matching_action(request: Request):
                     auto=auto,
                     save_only=save_only,
                     resume_from_progress=resume_from_progress,
+                    recognize_persons=recognize_persons,
+                    skip_unknown_persons=skip_unknown_persons,
                 )
             )
         else:
@@ -1901,6 +1960,8 @@ async def cleanup_face_frames_apply(request: Request):
                 selected_item_ids=selected_item_ids if isinstance(selected_item_ids, list) else None,
                 user_key=session_ctx["user_key"],
                 operation_mode=str(body.get("operation_mode") or "findings"),
+                cookies=session_ctx["cookies"],
+                base_url=session_ctx["base_url"],
             )
         )
         await _run_backend_call(
@@ -1940,18 +2001,18 @@ async def recognition_review(request: Request):
     if not item_id or not decision:
         return JSONResponse({"success": False, "error": {"code": 400, "message": "invalid_recognition_review_request"}})
     operation_mode = str(body.get("operation_mode") or "findings")
-    result = IMGDATA.face_recognition.update_review(
+    result = await _run_backend_call(lambda: IMGDATA.face_recognition.update_review(
         action=action,
         item_id=item_id,
         decision=decision,
         user_key=session_ctx["user_key"],
         operation_mode=operation_mode,
-    )
-    IMGDATA.face_recognition.sync_review_progress(
+    ))
+    await _run_backend_call(lambda: IMGDATA.face_recognition.sync_review_progress(
         user_key=session_ctx["user_key"],
         action=action,
         operation_mode=operation_mode,
-    )
+    ))
     return JSONResponse({"success": True, "data": result})
 
 
@@ -1962,6 +2023,7 @@ async def recognition_suggestions_apply(request: Request):
         return JSONResponse(error_response)
     body = await _read_request_body(request)
     selected_ids = body.get("selected_suggestion_ids")
+    action = str(body.get("action") or "recognition_analyze_unknown_faces")
     try:
         result = await _run_backend_call(lambda: IMGDATA.face_recognition.apply_suggestions(
             user_key=session_ctx["user_key"],
@@ -1969,10 +2031,11 @@ async def recognition_suggestions_apply(request: Request):
             base_url=session_ctx["base_url"],
             selected_ids=selected_ids if isinstance(selected_ids, list) else None,
             operation_mode=str(body.get("operation_mode") or "findings"),
+            action=action,
         ))
         await _run_backend_call(lambda: IMGDATA.face_recognition.sync_review_progress(
             user_key=session_ctx["user_key"],
-            action="recognition_analyze_unknown_faces",
+            action=action,
             operation_mode=str(body.get("operation_mode") or "findings"),
         ))
     except Exception as exc:
@@ -1982,15 +2045,28 @@ async def recognition_suggestions_apply(request: Request):
 
 @router.post("/cleanup_progress")
 async def cleanup_progress(request: Request):
+    started = time.monotonic()
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return JSONResponse(error_response)
 
     body = await _read_request_body(request)
     action = body.get("action", "normalize_names")
+    progress = IMGDATA.getCleanupProgress(session_ctx["user_key"], str(action or "normalize_names"))
+    backend_debug_log(
+        "cleanup_progress_end",
+        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        progress=_progress_debug_summary(progress) if isinstance(progress, dict) else {},
+        persons_scanned=int(progress.get("persons_scanned") or 0) if isinstance(progress, dict) else None,
+        persons_total=int(progress.get("persons_total") or 0) if isinstance(progress, dict) else None,
+        images_scanned=int(progress.get("images_scanned") or 0) if isinstance(progress, dict) else None,
+        images_total=int(progress.get("images_total") or 0) if isinstance(progress, dict) else None,
+        profiles_built=int(progress.get("profiles_built") or 0) if isinstance(progress, dict) else None,
+    )
     return JSONResponse({
         "success": True,
-        "data": IMGDATA.getCleanupProgress(session_ctx["user_key"], str(action or "normalize_names")),
+        "data": progress,
     })
 
 
@@ -2285,6 +2361,27 @@ async def file_image(request: Request, path: str = ""):
             media_type="image/jpeg",
             headers={"Cache-Control": "private, max-age=3600"},
         )
+
+    decoder = getattr(IMGDATA, "image_decoder", None)
+    if decoder is not None:
+        decoded = await _run_backend_call(lambda: decoder.decode_to_jpeg(requested))
+        if getattr(decoded, "success", False) and getattr(decoded, "image_bytes", b""):
+            return Response(
+                content=decoded.image_bytes,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "private, max-age=3600"},
+            )
+        error = str(getattr(decoded, "error", "") or "")
+        if error and error not in {"image_decoder_extension_not_enabled", "image_decoder_disabled"}:
+            backend_debug_log(
+                "file_image_decoder_failed",
+                path=requested,
+                source=str(getattr(decoded, "source", "") or "image_decoder"),
+                error=error,
+            )
+
+    if not _is_browser_image_compatible_path(requested):
+        return _image_preview_unavailable_response()
 
     return FileResponse(requested)
 

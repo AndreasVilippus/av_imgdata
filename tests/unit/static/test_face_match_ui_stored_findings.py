@@ -68,10 +68,25 @@ def test_face_match_image_preview_uses_backend_fallback_after_thumbnail_error():
     view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
 
     assert "getCurrentFaceMatchImageFallbackUrl()" in source
+    assert "this.getBackendImagePreviewUrl(imagePath)" in source
+    assert "!this.isBrowserImageCompatiblePath(imagePath)" in source
     assert "handleFaceMatchImagePreviewError(event)" in source
     assert "image.dataset.avFallbackApplied = 'true'" in source
     assert "image.src = fallbackUrl" in source
     assert view.count('@error="vm.handleFaceMatchImagePreviewError"') == 4
+
+
+def test_file_image_preview_url_building_is_centralized():
+    app = Path("ui/src/App.vue").read_text(encoding="utf-8")
+    face_match = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    checks = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
+    cleanup = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
+
+    assert "getBackendImagePreviewUrl(path)" in app
+    assert "isBrowserImageCompatiblePath(path)" in app
+    assert face_match.count("/webman/3rdparty/AV_ImgData/index.cgi/api/file_image") == 0
+    assert checks.count("/webman/3rdparty/AV_ImgData/index.cgi/api/file_image") == 0
+    assert cleanup.count("/webman/3rdparty/AV_ImgData/index.cgi/api/file_image") == 0
 
 
 def test_dsm_api_type_error_gets_explicit_network_failure_message():

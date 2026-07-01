@@ -62,3 +62,33 @@ def test_exiftool_persistent_config_is_visible_and_normalized():
     assert '"EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS": 30' in config
     assert "EXIFTOOL_PERSISTENT_ENABLED: true" in mixin
     assert "EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS: 30" in mixin
+
+
+def test_pip_packages_ui_can_load_select_install_and_reinstall_wheelhouse_packages():
+    view = Path("ui/src/views/ExternalLibrariesView.vue").read_text(encoding="utf-8")
+    mixin = Path("ui/src/mixins/externalLibrariesMixin.js").read_text(encoding="utf-8")
+    api = Path("src/api/imgdata_api.py").read_text(encoding="utf-8")
+    client = Path("ui/src/services/dsm-api-client.js").read_text(encoding="utf-8")
+
+    assert "vm.loadPipWheelhousePackages" in view
+    assert "vm.selectedPipWheelhousePackageName" in view
+    assert "vm.installSelectedPipWheelhousePackage(false)" in view
+    assert "vm.installSelectedPipWheelhousePackage(true)" in view
+    assert "/api/pip_wheelhouse_packages" in mixin
+    assert "/api/pip_wheelhouse_package_install" in mixin
+    assert "@router.post(\"/pip_wheelhouse_packages\")" in api
+    assert "@router.post(\"/pip_wheelhouse_package_install\")" in api
+    assert "pip_wheelhouse_package_install: 900000" in client
+
+
+def test_configuration_view_exposes_backend_debug_log_path():
+    view = Path("ui/src/views/ConfigurationView.vue").read_text(encoding="utf-8")
+    ger = Path("ui/texts/ger/strings").read_text(encoding="utf-8")
+    enu = Path("ui/texts/enu/strings").read_text(encoding="utf-8")
+
+    assert "configModel.debug.BACKEND_DEBUG_LOG_PATH" in view
+    assert "config:label_backend_debug_log_path" in view
+    assert "config:placeholder_backend_debug_log_path" in view
+    assert "config:hint_backend_debug_log_path_input" in view
+    assert "label_backend_debug_log_path=" in ger
+    assert "label_backend_debug_log_path=" in enu

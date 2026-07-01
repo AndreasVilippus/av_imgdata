@@ -12,6 +12,11 @@ export default {
 			exiftoolExtensionsLoading: false,
 			pipPackagesStatus: {},
 			pipPackagesStatusLoading: false,
+			pipWheelhousePackages: [],
+			pipWheelhousePackagesLoading: false,
+			selectedPipWheelhousePackageName: '',
+			pipWheelhousePackageInstalling: false,
+			pipWheelhousePackageReinstalling: false,
 			insightFaceModelDeleting: '',
 		};
 	},
@@ -96,6 +101,10 @@ export default {
 				.map((modelStatus) => String(modelStatus && modelStatus.name || '').trim())
 				.filter((name, index, names) => name && names.indexOf(name) === index)
 				.sort((left, right) => left.localeCompare(right));
+		},
+		selectedPipWheelhousePackageStatus() {
+			const selected = String(this.selectedPipWheelhousePackageName || '').trim().toLowerCase();
+			return this.pipWheelhousePackages.find((item) => String(item && item.name || '').trim().toLowerCase() === selected) || {};
 		},
 	},
 	methods: {
@@ -493,6 +502,9 @@ export default {
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
 				await this.fetchPipPackagesStatus();
+				if (this.selectedOption === 'external_libraries_pip_packages') {
+					await this.loadPipWheelhousePackages();
+				}
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
@@ -502,12 +514,65 @@ export default {
 		async fetchPipPackagesStatus() {
 			this.pipPackagesStatusLoading = true;
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status', {}, { resume: false, requireSynoToken: false });
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
 				this.pipPackagesStatus = this.getResponseData(data);
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
 				this.pipPackagesStatusLoading = false;
+			}
+		},
+		async loadPipWheelhousePackages() {
+			this.pipWheelhousePackagesLoading = true;
+			this.externalLibrariesMessage = '';
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_wheelhouse_packages', {
+					package_key: 'INSIGHTFACE',
+				}, { resume: false, requireSynoToken: false });
+				const payload = this.getResponseData(data);
+				this.pipWheelhousePackages = Array.isArray(payload.packages) ? payload.packages : [];
+				if (!this.selectedPipWheelhousePackageName && this.pipWheelhousePackages.length) {
+					this.selectedPipWheelhousePackageName = String(this.pipWheelhousePackages[0].name || '');
+				}
+				if (this.selectedPipWheelhousePackageName && !this.selectedPipWheelhousePackageStatus.name) {
+					this.selectedPipWheelhousePackageName = this.pipWheelhousePackages.length ? String(this.pipWheelhousePackages[0].name || '') : '';
+				}
+			} catch (err) {
+				this.pipWheelhousePackages = [];
+				this.externalLibrariesMessage = `Error: ${err.message}`;
+			} finally {
+				this.pipWheelhousePackagesLoading = false;
+			}
+		},
+		setSelectedPipWheelhousePackageName(value) {
+			this.selectedPipWheelhousePackageName = String(value || '').trim();
+		},
+		async installSelectedPipWheelhousePackage(reinstall = false) {
+			const packageName = String(this.selectedPipWheelhousePackageName || '').trim();
+			if (!packageName || this.pipWheelhousePackageInstalling || this.pipWheelhousePackageReinstalling) {
+				return;
+			}
+			if (reinstall) {
+				this.pipWheelhousePackageReinstalling = true;
+			} else {
+				this.pipWheelhousePackageInstalling = true;
+			}
+			this.externalLibrariesMessage = '';
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_wheelhouse_package_install', {
+					package_key: 'INSIGHTFACE',
+					package_name: packageName,
+					reinstall: !!reinstall,
+				}, { resume: false, requireSynoToken: false, timeoutMs: 900000 });
+				const payload = this.getResponseData(data);
+				this.externalLibrariesMessage = payload.message || this.$avt('config:message_pip_package_installed', 'pip package installation finished.');
+				await this.fetchPipPackagesStatus();
+				await this.loadPipWheelhousePackages();
+			} catch (err) {
+				this.externalLibrariesMessage = `Error: ${err.message}`;
+			} finally {
+				this.pipWheelhousePackageInstalling = false;
+				this.pipWheelhousePackageReinstalling = false;
 			}
 		},
 		async deleteInsightFaceModel(modelName) {

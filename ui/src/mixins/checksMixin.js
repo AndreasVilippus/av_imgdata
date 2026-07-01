@@ -248,10 +248,7 @@ export default {
 		},
 		getChecksImageUrl(item) {
 			const imagePath = item && item.image_path ? String(item.image_path).trim() : '';
-			if (!imagePath) {
-				return '';
-			}
-			return `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${encodeURIComponent(imagePath)}`;
+			return this.getBackendImagePreviewUrl(imagePath);
 		},
 		getChecksDeleteFaceBaseIconUrl() {
 			return this.resolveLocalIconUrl('face.png');

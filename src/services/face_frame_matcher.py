@@ -19,12 +19,19 @@ def frame_metrics(source: BoundingBox, detected: BoundingBox) -> Dict[str, float
     }
 
 
-def match_decision(metrics: Dict[str, float]) -> str:
+def match_decision(
+    metrics: Dict[str, float],
+    *,
+    safe_iou: float = 0.65,
+    review_iou: float = 0.30,
+    safe_center_delta: float = 0.08,
+    safe_size_delta: float = 0.50,
+) -> str:
     iou = float(metrics.get("iou") or 0.0)
     center_delta = float(metrics.get("center_delta") or 0.0)
     size_delta = float(metrics.get("size_delta") or 0.0)
-    if iou >= 0.65 and center_delta <= 0.08 and size_delta <= 0.50:
+    if iou >= safe_iou and center_delta <= safe_center_delta and size_delta <= safe_size_delta:
         return "safe"
-    if iou >= 0.30:
+    if iou >= review_iou:
         return "review"
     return "conflict"

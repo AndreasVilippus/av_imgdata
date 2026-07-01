@@ -2,7 +2,7 @@
 	<section class="config-card cleanup-options-card">
 		<div class="sm-section-title">{{ vm.$avt('cleanup:recognition_options', 'Recognition options') }}</div>
 		<div class="config-card-desc">
-			{{ vm.$avt('cleanup:recognition_options_hint', 'Recognition profiles are built from existing Photos persons. InsightFace itself is not trained.') }}
+			{{ vm.$avt('cleanup:recognition_options_hint', 'Person profiles are built from existing Photos persons. InsightFace itself is not trained.') }}
 		</div>
 
 		<div v-if="!isProfileBuild" class="cleanup-options-section">
@@ -101,7 +101,10 @@ export default {
 				return this.vm.selectedRecognitionAction === 'recognition_check_reference_outliers';
 			},
 			isSuggestionScan() {
-				return this.vm.selectedRecognitionAction === 'recognition_analyze_unknown_faces';
+				return [
+					'recognition_analyze_unknown_faces',
+					'recognition_check_person_assignments',
+				].includes(this.vm.selectedRecognitionAction);
 			},
 		automaticDecisionLabel() {
 			return this.isSuggestionScan

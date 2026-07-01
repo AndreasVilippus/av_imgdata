@@ -12,6 +12,8 @@
 				<div class="face-match-image-path">{{ vm.recognitionCurrentFinding.image_path }}</div>
 				<div class="face-match-status-stats">
 					<span>{{ vm.$avt('cleanup:recognition_person', 'Person') }}: {{ vm.getRecognitionPersonName(vm.recognitionCurrentFinding) }}</span>
+					<span v-if="vm.recognitionCurrentFinding.current_person_name">{{ vm.$avt('cleanup:recognition_current_person', 'Current Photos person') }}: {{ vm.recognitionCurrentFinding.current_person_name }}</span>
+					<span v-if="vm.recognitionCurrentFinding.best_person_name">{{ vm.$avt('cleanup:recognition_suggested_person', 'Suggested person') }}: {{ vm.recognitionCurrentFinding.best_person_name }}</span>
 					<span v-if="vm.recognitionCurrentFinding.best_score !== undefined">{{ vm.$avt('cleanup:recognition_score', 'Score') }}: {{ Number(vm.recognitionCurrentFinding.best_score || 0).toFixed(3) }}</span>
 					<span v-if="vm.recognitionCurrentFinding.decision">{{ vm.$avt('cleanup:recognition_decision', 'Decision') }}: {{ vm.recognitionCurrentFinding.decision }}</span>
 				</div>
@@ -25,7 +27,11 @@
 					:disabled="vm.recognitionDecisionLoading"
 					@click.prevent="vm.acceptRecognitionCurrent"
 				>
-					<img :src="vm.getRecognitionApplyIconUrl()" alt="" class="face-match-icon-image" />
+					<span v-if="vm.isRecognitionOutlierAction" class="face-match-icon-stack">
+						<img :src="vm.getRecognitionExcludeReferenceBaseIconUrl()" alt="" class="face-match-icon-image" />
+						<img :src="vm.getRecognitionExcludeReferenceOverlayIconUrl()" alt="" class="face-match-icon-overlay" />
+					</span>
+					<img v-else :src="vm.getRecognitionApplyIconUrl()" alt="" class="face-match-icon-image" />
 				</button>
 				<div class="face-match-col">
 					<h2>{{ leftTitle }}</h2>
@@ -70,19 +76,25 @@ export default {
 		reviewTitle() {
 			return this.vm.isRecognitionOutlierAction
 				? this.vm.$avt('cleanup:recognition_outlier_review_title', 'Review reference face')
+				: this.vm.isRecognitionAssignmentAction
+					? this.vm.$avt('cleanup:recognition_assignment_review_title', 'Review person assignment')
 				: this.vm.$avt('cleanup:recognition_suggestion_review_title', 'Review recognition suggestion');
 		},
 		leftTitle() {
 			return this.vm.isRecognitionOutlierAction
 				? this.vm.$avt('cleanup:recognition_suspected_reference', 'Suspected reference face')
+				: this.vm.isRecognitionAssignmentAction
+					? this.vm.$avt('cleanup:recognition_assigned_face', 'Currently assigned Photos face')
 				: this.vm.$avt('cleanup:recognition_unknown_face', 'Unknown Photos face');
 		},
 		rightTitle() {
-			return this.vm.$avt('cleanup:recognition_profile_reference', 'Recognition profile reference');
+			return this.vm.$avt('cleanup:recognition_profile_reference', 'Person profile reference');
 		},
 		primaryTooltip() {
 			return this.vm.isRecognitionOutlierAction
-				? this.vm.$avt('cleanup:recognition_exclude_reference', 'Exclude from recognition profile')
+				? this.vm.$avt('cleanup:recognition_exclude_reference', 'Exclude from person profile')
+				: this.vm.isRecognitionAssignmentAction
+					? this.vm.$avt('cleanup:recognition_reassign_person', 'Assign suggested person')
 				: this.vm.$avt('cleanup:recognition_assign_person', 'Assign suggested person');
 		},
 	},

@@ -95,6 +95,47 @@ class ExifToolHandlerTests(unittest.TestCase):
             self.assertTrue(result["updated"])
             self.assertIn("Bad MakerNotes offset", result["stderr"])
 
+    def test_extract_embedded_jpeg_preview_reads_binary_preview_tag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            executable = Path(tmpdir) / "exiftool"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            target = Path(tmpdir) / "image.heic"
+            target.write_bytes(b"heic")
+            handler = ExifToolHandler(StubConfigService(str(executable)))
+
+            class Completed:
+                returncode = 0
+                stdout = b"\xff\xd8jpeg-preview\xff\xd9"
+                stderr = b""
+
+            with patch("handler.exiftool_handler.subprocess.run", return_value=Completed()) as run_mock:
+                preview = handler.extractEmbeddedJpegPreview(str(target))
+
+            self.assertEqual(preview, b"\xff\xd8jpeg-preview\xff\xd9")
+            command = run_mock.call_args[0][0]
+            self.assertIn("-b", command)
+            self.assertIn("-PreviewImage", command)
+
+    def test_extract_embedded_jpeg_preview_ignores_non_jpeg_binary_tag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            executable = Path(tmpdir) / "exiftool"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            target = Path(tmpdir) / "image.heic"
+            target.write_bytes(b"heic")
+            handler = ExifToolHandler(StubConfigService(str(executable)))
+
+            class Completed:
+                returncode = 0
+                stdout = b"not-jpeg"
+                stderr = b""
+
+            with patch("handler.exiftool_handler.subprocess.run", return_value=Completed()):
+                preview = handler.extractEmbeddedJpegPreview(str(target))
+
+            self.assertIsNone(preview)
+
     def test_persistent_reader_handles_multiline_output_without_text_buffer_timeout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             executable = Path(tmpdir) / "fake_exiftool.py"

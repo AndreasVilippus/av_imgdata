@@ -4,8 +4,13 @@ import json
 import os
 import importlib
 import importlib.util
+import hashlib
 import shutil
+import subprocess
+import sys
+import tempfile
 import traceback
+import urllib.request
 import zipfile
 from contextlib import nullcontext
 from copy import deepcopy
@@ -36,6 +41,7 @@ from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
 from services.face_embedder import InsightFaceEmbedder
 from services.face_frame_standardization_service import FaceFrameStandardizationService
 from services.face_recognition_service import FaceRecognitionService
+from services.image_decode_service import ImageDecodeService
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
 from services.face_match_mutation_service import FaceMatchMutationService
@@ -152,6 +158,7 @@ class ImgDataService:
         self.photos = PhotosHandler(session_manager, self.config)
         self.photos_lookup_cache = PhotosLookupCache()
         self.files = FileHandler(self.config)
+        self.image_decoder = ImageDecodeService(self.config)
         self.metadata_parser = MetadataParser()
         self.name_mappings = NameMappingService()
         self.face_suppressions = FaceSuppressionRepository(self.name_mappings._database)
@@ -1540,6 +1547,136 @@ class ImgDataService:
             "details": write_result if not write_result.get("updated") else None,
         }
 
+    def replacePhotosFacePosition(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        image_path: str,
+        face_data: Dict[str, Any],
+        source_face_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        try:
+            face_id = int((face_data or {}).get("face_id"))
+        except (TypeError, ValueError):
+            return {"updated": False, "warning": "checks:warning_photos_face_id_missing"}
+        try:
+            item_id = int((face_data or {}).get("item_id"))
+        except (TypeError, ValueError):
+            item_id = None
+
+        if item_id is None:
+            shared_folder = self.core.getSharedFolder(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                folder_name="photo",
+            )
+            if not shared_folder:
+                return {"updated": False, "warning": "shared_folder_not_found"}
+            item = self.photos.findFotoTeamItemByPath(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                shared_folder=shared_folder,
+                image_path=image_path,
+                additional=["thumbnail"],
+                lookup_cache=self.photos_lookup_cache,
+            )
+            try:
+                item_id = int(item.get("id"))
+            except (AttributeError, TypeError, ValueError):
+                return {"updated": False, "warning": "photos_item_not_found_for_image"}
+
+        person_id = (face_data or {}).get("person_id")
+        try:
+            person_id_int = int(person_id)
+        except (TypeError, ValueError):
+            person_id_int = None
+        person_name = str((face_data or {}).get("name") or "").strip()
+
+        with self._writeOperationLock(
+            self._photosItemWriteLockKey(item_id),
+            phase="photos_face_position_replace",
+            context={
+                "image_path": str(image_path or "").strip(),
+                "item_id": int(item_id),
+                "face_id": int(face_id),
+                "person_id": person_id_int,
+                "person_name": person_name,
+            },
+        ):
+            before_faces = self.photos.list_faceFotoTeamItems(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                id_item=int(item_id),
+            )
+            before_face = next(
+                (
+                    face for face in before_faces
+                    if isinstance(face, dict) and str(face.get("face_id")) == str(face_id)
+                ),
+                None,
+            )
+            if before_face is None:
+                return {"updated": False, "warning": "checks:warning_face_position_replace_not_found"}
+
+            face_id_temp = f"{item_id}-{int(monotonic() * 1000)}"
+            add_result = self.photos.addFaceToItem(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                id_item=int(item_id),
+                face_bbox=self._metadataFaceToPhotosBoundingBox(source_face_data),
+                face_id_temp=face_id_temp,
+                person_id=person_id_int,
+                person_name=person_name if person_id_int is None else None,
+            )
+            created_face_id = self._extractCreatedPhotosFaceId(
+                add_result=add_result,
+                face_id_temp=face_id_temp,
+            )
+            if created_face_id is None:
+                created_face = self._findCreatedPhotosFaceAfterAdd(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    item_id=int(item_id),
+                    metadata_face=MetadataFace.from_dict(source_face_data if isinstance(source_face_data, dict) else {}),
+                    before_faces=before_faces,
+                )
+                if isinstance(created_face, dict):
+                    try:
+                        created_face_id = int(created_face.get("face_id"))
+                    except (TypeError, ValueError):
+                        created_face_id = None
+            if created_face_id is None:
+                return {
+                    "updated": False,
+                    "warning": "photos_face_create_returned_no_id",
+                    "add_result": add_result,
+                }
+
+            delete_result = self.photos.deleteFace(
+                user_key=user_key,
+                cookies=cookies,
+                base_url=base_url,
+                face_id=int(face_id),
+            )
+
+        return {
+            "updated": True,
+            "warning": "",
+            "operation": "photos_face_position_replace",
+            "face_id": int(created_face_id),
+            "deleted_face_id": int(face_id),
+            "item_id": int(item_id),
+            "add_result": add_result,
+            "delete_result": delete_result,
+        }
+
     def _setFaceMatchingProgress(self, user_key: str, **updates: Any) -> None:
         with self.runtime_state.lock("face_match_progress"):
             current = dict(self.runtime_state.memory("face_match_progress").get(user_key, {}))
@@ -1713,6 +1850,7 @@ class ImgDataService:
         auto: bool,
         save_only: bool,
         recognize_persons: bool = False,
+        skip_unknown_persons: bool = False,
         action: str = "search_photo_face_in_file",
         findings_count: int = 0,
         path_index: int = 0,
@@ -1729,6 +1867,7 @@ class ImgDataService:
             "auto": bool(auto),
             "save_only": bool(save_only),
             "recognize_persons": bool(recognize_persons),
+            "skip_unknown_persons": bool(skip_unknown_persons),
             "action": str(action or "search_photo_face_in_file"),
             "findings_count": max(0, int(findings_count)),
             "path_index": max(0, int(path_index)),
@@ -1775,6 +1914,8 @@ class ImgDataService:
             transferred_count=next_count,
             auto=bool(current_cursor.get("auto", current.get("auto", False))),
             save_only=bool(current_cursor.get("save_only", current.get("save_only", False))),
+            recognize_persons=bool(current_cursor.get("recognize_persons", current.get("recognize_persons", False))),
+            skip_unknown_persons=bool(current_cursor.get("skip_unknown_persons", current.get("skip_unknown_persons", False))),
             action=action,
             findings_count=int(current_cursor.get("findings_count") or current.get("findings_count") or 0),
             path_index=int(current_cursor.get("path_index") or current.get("images_read") or 0),
@@ -2413,6 +2554,7 @@ class ImgDataService:
             "recognition_build_profiles",
             "recognition_check_reference_outliers",
             "recognition_analyze_unknown_faces",
+            "recognition_check_person_assignments",
         }
 
     @classmethod
@@ -4652,6 +4794,7 @@ class ImgDataService:
         for face in raw_faces:
             mapped = self._metadataFaceFromPhotoFace(face)
             if mapped is not None:
+                setattr(mapped, "item_id", item_id_int)
                 normalized_faces.append(mapped)
         return normalized_faces
 
@@ -6040,6 +6183,7 @@ class ImgDataService:
         save_only: bool = False,
         resume_from_progress: bool = False,
         recognize_persons: bool = False,
+        skip_unknown_persons: bool = False,
     ) -> Dict[str, Any]:
         return self.face_match_workflow.start_discovery(
             user_key=user_key,
@@ -6054,6 +6198,7 @@ class ImgDataService:
             save_only=save_only,
             resume_from_progress=resume_from_progress,
             recognize_persons=recognize_persons,
+            skip_unknown_persons=skip_unknown_persons,
         )
 
     def searchPhotoFaceInFile(
@@ -7745,6 +7890,7 @@ class ImgDataService:
         auto: bool = False,
         save_only: bool = False,
         recognize_persons: bool = False,
+        skip_unknown_persons: bool = False,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
@@ -7804,6 +7950,7 @@ class ImgDataService:
                 save_only=save_only,
                 action=action,
                 recognize_persons=bool(recognize_persons),
+                skip_unknown_persons=bool(skip_unknown_persons),
                 findings_count=findings_count,
                 path_index=path_index,
                 images_read=images_read,
@@ -7863,6 +8010,7 @@ class ImgDataService:
                 InsightFaceEmbedder(
                     model_name=self._configuredInsightFaceModelName(),
                     model_root=self._configuredInsightFaceModelRoot(),
+                    max_image_edge=self._recognitionImageMaxEdge(),
                 )
                 if recognize_persons else
                 InsightFaceDetector(
@@ -7897,6 +8045,7 @@ class ImgDataService:
                     save_only=save_only,
                     action=action,
                     recognize_persons=bool(recognize_persons),
+                    skip_unknown_persons=bool(skip_unknown_persons),
                     findings_count=findings_count,
                     path_index=path_index,
                     images_read=images_read,
@@ -7931,6 +8080,7 @@ class ImgDataService:
                     save_only=save_only,
                     action=action,
                     recognize_persons=bool(recognize_persons),
+                    skip_unknown_persons=bool(skip_unknown_persons),
                     findings_count=findings_count,
                     path_index=path_index,
                     images_read=images_read,
@@ -7973,6 +8123,7 @@ class ImgDataService:
                             save_only=save_only,
                             action=action,
                             recognize_persons=bool(recognize_persons),
+                            skip_unknown_persons=bool(skip_unknown_persons),
                             findings_count=findings_count,
                         ),
                     }
@@ -7994,6 +8145,7 @@ class ImgDataService:
                         save_only=save_only,
                         action=action,
                         recognize_persons=bool(recognize_persons),
+                        skip_unknown_persons=bool(skip_unknown_persons),
                         findings_count=findings_count,
                     ),
                 )
@@ -8026,6 +8178,7 @@ class ImgDataService:
                         save_only=save_only,
                         action=action,
                         recognize_persons=bool(recognize_persons),
+                        skip_unknown_persons=bool(skip_unknown_persons),
                         findings_count=findings_count,
                     ),
                 )
@@ -8111,6 +8264,29 @@ class ImgDataService:
                 target_token = self._faceMatchTargetToken(image_path=image_path, face=target_face)
                 if target_token in skip_target_tokens:
                     continue
+                if recognize_persons and skip_unknown_persons and not isinstance(matched_person, dict):
+                    skip_target_tokens.append(target_token)
+                    self._setFaceMatchingProgress(
+                        user_key,
+                        findings_count=findings_count,
+                        resume_cursor=self._buildFaceMatchResumeCursor(
+                            skip_face_ids=[],
+                            skip_targets=skip_target_tokens,
+                            transferred_count=transferred_count,
+                            auto=auto,
+                            save_only=save_only,
+                            action=action,
+                            recognize_persons=bool(recognize_persons),
+                            skip_unknown_persons=True,
+                            findings_count=findings_count,
+                            path_index=images_read,
+                            images_read=images_read,
+                            faces_read=faces_read,
+                            target_faces_read=target_faces_read,
+                            metadata_faces_read=metadata_faces_read,
+                        ),
+                    )
+                    continue
 
                 result_entry = {
                     "action": action,
@@ -8150,6 +8326,7 @@ class ImgDataService:
                         save_only=save_only,
                         action=action,
                         recognize_persons=bool(recognize_persons),
+                        skip_unknown_persons=bool(skip_unknown_persons),
                         findings_count=findings_count + 1,
                         path_index=images_read,
                         images_read=images_read,
@@ -8191,6 +8368,7 @@ class ImgDataService:
                             save_only=save_only,
                             action=action,
                             recognize_persons=bool(recognize_persons),
+                            skip_unknown_persons=bool(skip_unknown_persons),
                             findings_count=findings_count,
                             path_index=images_read,
                             images_read=images_read,
@@ -8243,6 +8421,7 @@ class ImgDataService:
                     save_only=save_only,
                     action=action,
                     recognize_persons=bool(recognize_persons),
+                    skip_unknown_persons=bool(skip_unknown_persons),
                     findings_count=findings_count,
                 ),
             }
@@ -8288,6 +8467,7 @@ class ImgDataService:
                     save_only=save_only,
                     action=action,
                     recognize_persons=bool(recognize_persons),
+                    skip_unknown_persons=bool(skip_unknown_persons),
                     findings_count=findings_count,
                 ),
             )
@@ -9993,6 +10173,13 @@ class ImgDataService:
         }
         return sorted(installed_names)[0] if installed_names else ""
 
+    def _recognitionImageMaxEdge(self) -> int:
+        try:
+            files = self.config.readMergedConfig().get("files", {})
+            return max(0, min(20000, int(files.get("RECOGNITION_IMAGE_MAX_EDGE", 4096))))
+        except Exception:
+            return 4096
+
     @staticmethod
     def _sanitizeInsightFaceModelName(value: str) -> str:
         return "".join(
@@ -10138,6 +10325,8 @@ class ImgDataService:
                     {"package": "insightface", "module": "insightface.app"},
                     {"package": "onnxruntime", "module": "onnxruntime"},
                     {"package": "opencv-python-headless", "module": "cv2"},
+                    {"package": "Pillow", "module": "PIL.Image"},
+                    {"package": "pillow-heif", "module": "pillow_heif"},
                 ],
                 "conflicts": ["opencv-python", "opencv-contrib-python", "opencv-contrib-python-headless"],
             },
@@ -10202,38 +10391,192 @@ class ImgDataService:
                 model_root = self._configuredInsightFaceModelRoot()
                 model_status = InsightFaceDetector.available_models(model_root)
                 active_model_name = self._configuredInsightFaceModelName(model_status)
-                installed_model_count = len([
-                    model for model in model_status.get("models", [])
-                    if isinstance(model, dict) and model.get("installed")
-                ])
                 result[key]["model_root_configured"] = str(configured.get("MODEL_ROOT") or "").strip()
                 result[key]["model_name_configured"] = str(configured.get("MODEL_NAME") or "").strip()
                 result[key]["model_status"] = model_status
                 result[key]["active_model_name"] = active_model_name
-                result[key]["status_blocks"] = [
-                    {
-                        "key": "active_model",
-                        "label_key": "status:pip_active_model",
-                        "fallback_label": "Active model",
-                        "value": active_model_name or "",
-                    },
-                    {
-                        "key": "installed_models",
-                        "label_key": "status:pip_installed_models",
-                        "fallback_label": "Installed models",
-                        "value": installed_model_count,
-                    },
-                    {
-                        "key": "model_store",
-                        "label_key": "status:pip_model_store",
-                        "fallback_label": "Model store",
-                        "value": str(model_status.get("model_store") or ""),
-                    },
-                ]
+                result[key]["status_blocks"] = self._insightFaceStatusBlocks()
         return {
             "packages": result,
             "status_file": str(status_file),
         }
+
+    def pipWheelhousePackages(self, *, package_key: str = "INSIGHTFACE") -> Dict[str, Any]:
+        package_key = self._normalizePipPackageKey(package_key)
+        spec = self._pipPackageRuntimeSpec(package_key)
+        manifest = self._downloadAndValidatePipWheelhouseManifest(spec)
+        packages = []
+        for entry in manifest.get("packages", []):
+            if not isinstance(entry, dict):
+                continue
+            package_name = str(entry.get("name") or "").strip()
+            if not package_name:
+                continue
+            installed_version = self._installedPythonPackageVersion(package_name)
+            packages.append({
+                "name": package_name,
+                "file": str(entry.get("file") or "").strip(),
+                "sha256": str(entry.get("sha256") or "").strip(),
+                "size": int(entry.get("size") or 0),
+                "installed": bool(installed_version),
+                "installed_version": installed_version,
+            })
+        packages.sort(key=lambda item: item["name"])
+        return {
+            "package_key": package_key,
+            "manifest_url": spec["manifest_url"],
+            "target": spec["target"],
+            "requirements_file": spec["requirements_file"],
+            "packages": packages,
+        }
+
+    def installPipWheelhousePackage(self, *, package_key: str = "INSIGHTFACE", package_name: str, reinstall: bool = False) -> Dict[str, Any]:
+        package_key = self._normalizePipPackageKey(package_key)
+        selected_name = self._normalizePipPackageName(package_name)
+        if not selected_name:
+            raise ValueError("pip_package_name_required")
+        spec = self._pipPackageRuntimeSpec(package_key)
+        manifest = self._downloadAndValidatePipWheelhouseManifest(spec)
+        package_entries = [
+            entry for entry in manifest.get("packages", [])
+            if isinstance(entry, dict) and self._normalizePipPackageName(entry.get("name")) == selected_name
+        ]
+        if not package_entries:
+            raise ValueError("pip_package_not_in_wheelhouse")
+
+        package_var = self.config._config_path.parent
+        package_var.mkdir(parents=True, exist_ok=True)
+        output_path = package_var / f"pip_manual_install_{package_key}_{selected_name}.log"
+        pip_command = [sys.executable, "-m", "pip", "install", "--only-binary=:all:", "--no-index"]
+        if reinstall:
+            pip_command.append("--force-reinstall")
+
+        with tempfile.TemporaryDirectory(prefix=f"pip_{package_key}_{selected_name}_", dir=str(package_var)) as tmpdir:
+            wheel_dir = Path(tmpdir)
+            self._downloadPipWheelhouseAssets(manifest, spec["manifest_url"], wheel_dir)
+            command = [*pip_command, "--find-links", str(wheel_dir), selected_name]
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=900)
+            output = str(result.stdout or "")
+            output_path.write_text(output, encoding="utf-8")
+
+        status = "success" if result.returncode == 0 else "failed"
+        message = "pip install completed" if result.returncode == 0 else (output[-900:].replace("\n", " ").strip() or "pip install failed")
+        self._writePipPackageInstallStatus(package_key, spec["requirements_file"], status, message)
+        return {
+            "package_key": package_key,
+            "package_name": selected_name,
+            "reinstall": bool(reinstall),
+            "status": status,
+            "success": result.returncode == 0,
+            "returncode": result.returncode,
+            "message": message,
+            "output_path": str(output_path),
+        }
+
+    @staticmethod
+    def _normalizePipPackageName(value: Any) -> str:
+        return str(value or "").strip().lower().replace("_", "-")
+
+    @staticmethod
+    def _normalizePipPackageKey(value: Any) -> str:
+        normalized = str(value or "INSIGHTFACE").strip().upper()
+        if normalized not in {"INSIGHTFACE"}:
+            raise ValueError("unsupported_pip_package")
+        return normalized
+
+    def _pipPackageRuntimeSpec(self, package_key: str) -> Dict[str, str]:
+        package_key = self._normalizePipPackageKey(package_key)
+        config = self.config.readMergedConfig()
+        configured_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
+        configured = configured_packages.get(package_key) if isinstance(configured_packages.get(package_key), dict) else {}
+        default_requirements = "requirements-optional-insightface.txt"
+        manifest_url = str(configured.get("WHEELHOUSE_MANIFEST_URL") or "").strip()
+        target = str(configured.get("WHEELHOUSE_TARGET") or "").strip()
+        requirements_file = str(configured.get("REQUIREMENTS_FILE") or default_requirements).strip()
+        if not manifest_url:
+            raise ValueError("pip_wheelhouse_manifest_url_missing")
+        if not target:
+            raise ValueError("pip_wheelhouse_target_missing")
+        if not requirements_file or "/" in requirements_file or "\\" in requirements_file:
+            raise ValueError("pip_requirements_file_invalid")
+        return {
+            "package_key": package_key,
+            "manifest_url": manifest_url,
+            "target": target,
+            "requirements_file": requirements_file,
+        }
+
+    def _downloadAndValidatePipWheelhouseManifest(self, spec: Dict[str, str]) -> Dict[str, Any]:
+        with urllib.request.urlopen(spec["manifest_url"], timeout=60) as response:
+            manifest_bytes = response.read()
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("pip_wheelhouse_manifest_invalid")
+        if str(manifest.get("target") or "").strip() != spec["target"]:
+            raise ValueError("pip_wheelhouse_target_mismatch")
+        manifest_requirements = str(manifest.get("requirements_file") or "").strip()
+        compatible_requirements = {spec["requirements_file"]}
+        if spec["package_key"] == "INSIGHTFACE":
+            compatible_requirements.add("requirements-runtime-insightface.txt")
+        if manifest_requirements not in compatible_requirements:
+            raise ValueError("pip_wheelhouse_requirements_mismatch")
+        packages = manifest.get("packages")
+        if not isinstance(packages, list) or not packages:
+            raise ValueError("pip_wheelhouse_manifest_packages_missing")
+        return manifest
+
+    @staticmethod
+    def _downloadPipWheelhouseAssets(manifest: Dict[str, Any], manifest_url: str, target_dir: Path) -> None:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        base_url = manifest_url.rsplit("/", 1)[0].rstrip("/")
+        for entry in manifest.get("packages", []):
+            if not isinstance(entry, dict):
+                raise ValueError("pip_wheelhouse_package_invalid")
+            filename = str(entry.get("file") or "").strip()
+            expected_hash = str(entry.get("sha256") or "").strip().lower()
+            if not filename or not expected_hash:
+                raise ValueError("pip_wheelhouse_package_incomplete")
+            destination = target_dir / filename
+            with urllib.request.urlopen(f"{base_url}/{filename}", timeout=180) as response:
+                destination.write_bytes(response.read())
+            digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+            if digest != expected_hash:
+                raise ValueError("pip_wheelhouse_package_hash_mismatch")
+
+    def _writePipPackageInstallStatus(self, package_key: str, requirements_file: str, status: str, message: str) -> None:
+        status_path = self.config._config_path.parent / "pip_packages_status.json"
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        packages = payload.get("packages") if isinstance(payload.get("packages"), dict) else {}
+        packages[package_key] = {
+            "status": status,
+            "success": status == "success",
+            "requirements_file": requirements_file,
+            "message": message,
+            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+        }
+        payload["packages"] = packages
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def _generatedFaceRecognitionProfilesCount(self) -> int:
+        try:
+            profiles = self.face_recognition.profiles().get("profiles", [])
+        except Exception:
+            return 0
+        return len(profiles) if isinstance(profiles, list) else 0
+
+    def _insightFaceStatusBlocks(self) -> List[Dict[str, Any]]:
+        return [{
+            "key": "generated_face_profiles",
+            "label_key": "status:pip_generated_face_profiles",
+            "fallback_label": "Generated person profiles",
+            "value": self._generatedFaceRecognitionProfilesCount(),
+        }]
 
     @staticmethod
     def _installedPythonPackageVersion(package_name: str) -> str:

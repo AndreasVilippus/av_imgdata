@@ -11,6 +11,7 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     for action in (
         "recognition_build_profiles",
         "recognition_check_reference_outliers",
+        "recognition_check_person_assignments",
     ):
         assert f'value="{action}"' in view
         assert f"'{action}'" in mixin
@@ -18,9 +19,17 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     assert 'value="search_missing_faces_insightface"' in face_match_view
     assert 'value="recognition_analyze_unknown_faces"' in face_match_view
     assert "faceMatchRecognizeMissingInsightFacePersons" in face_match_view
+    assert "faceMatchSkipUnknownInsightFacePersons" in face_match_view
+    assert "skip_unknown_persons:" in face_match_mixin
     assert "faceMatchRecognitionActionSelected" in face_match_view
     assert "getCleanupStatusProgress()" in face_match_view
     assert "getCleanupStatusCounters()" in face_match_view
+    assert "selectedCleanupAction === 'recognition_build_profiles'" not in view
+    assert "cleanup-recognition-counter" not in view
+    assert ':status-text="vm.getCleanupProgressOverviewStatusText()"' in view
+    assert "shouldShowCleanupStatusCounters()" in view
+    assert "cleanup:label_scanned" in Path("src/services/face_recognition_service.py").read_text(encoding="utf-8")
+    assert "progress_kind" in Path("src/services/face_recognition_service.py").read_text(encoding="utf-8")
     assert "recognize_persons:" in face_match_mixin
     for mode in ("immediate", "save_only", "findings"):
         assert f'value="{mode}"' in options
@@ -38,6 +47,7 @@ def test_recognition_actions_do_not_fall_back_to_name_cleanup():
         "recognition_build_profiles",
         "recognition_check_reference_outliers",
         "recognition_analyze_unknown_faces",
+        "recognition_check_person_assignments",
     ):
         assert f'"{action}"' in source
     assert "if normalized_action in FaceRecognitionService.ACTIONS:" in source
@@ -55,3 +65,10 @@ def test_recognition_review_uses_persisted_findings_and_apply_endpoints():
     assert 'class="panel face-match-split-panel"' in review
     assert "face-match-icon-button-floating" in review
     assert "getRecognitionApplyIconUrl" in review
+    assert "getRecognitionExcludeReferenceBaseIconUrl" in review
+    assert "getRecognitionExcludeReferenceOverlayIconUrl" in review
+    assert "face-match-icon-overlay" in review
+    assert "resolveLocalIconUrl('face.png')" in mixin
+    assert "resolveLocalIconUrl('del_icon.png')" in mixin
+    assert "recognitionCurrentFinding.current_person_name" in review
+    assert "action: this.selectedRecognitionAction" in mixin

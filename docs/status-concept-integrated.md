@@ -49,7 +49,7 @@ Supported long-running operations:
 
 `operation`, `mode`, `action`, and `operation_id` form the process identity. A `scan` state and a `findings` state must not overwrite each other without an explicit transition.
 
-InsightFace processes follow the same rule: `immediate` uses only the active run state, `save_only` writes a persistent findings list, and `findings` processes only an explicitly selected persistent findings list.
+InsightFace-driven processes, including face-frame standardization, follow the same rule: `immediate` uses only the active run state, `save_only` writes a persistent findings list, and `findings` processes only an explicitly selected persistent findings list. A saved findings list is not read by `immediate` or `save_only` unless the current run explicitly requests a resume.
 
 ## Phases
 
@@ -292,7 +292,7 @@ A stale `stopping` state may stop blocking only through an explicit stale timeou
 - A completed save-only progress count is historical after findings change.
 - Empty stored findings must report `0` even if old progress has a historical count.
 - Save-only scans must write findings debounced while running and force-write them on `stopped`, `failed`, or `finished`.
-- Resume must use persisted findings and skip lists so already stored entries are not duplicated or replaced.
+- Only an explicit resume may load persisted findings and skip lists so already stored entries are not duplicated or replaced.
 
 ## Button State Rules
 

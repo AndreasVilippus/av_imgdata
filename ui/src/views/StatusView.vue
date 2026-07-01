@@ -149,22 +149,6 @@
 						<div class="sm-section-title">{{ packageStatus.label || packageStatus.key }}</div>
 					</div>
 					<div class="sm-kv-list sm-kv-list-compact">
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:enabled', 'Enabled') }}</div>
-							<div class="sm-kv-value">{{ packageStatus.enabled ? vm.$avt('status:yes', 'Yes') : vm.$avt('status:no', 'No') }}</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:installed', 'Installed') }}</div>
-							<div class="sm-kv-value">{{ packageStatus.installed ? vm.$avt('status:yes', 'Yes') : vm.$avt('status:no', 'No') }}</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:pip_install_status', 'Last installation') }}</div>
-							<div class="sm-kv-value">{{ vm.getStatusPipPackageInstallStatusLabel(packageStatus) }}</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:pip_modules', 'Modules') }}</div>
-							<div class="sm-kv-value">{{ vm.getStatusPipPackageModulesText(packageStatus) }}</div>
-						</div>
 						<div
 							v-for="statusBlock in vm.getStatusPipPackageStatusBlocks(packageStatus)"
 							:key="`pip-package-${packageStatus.key}-status-${statusBlock.key}`"
@@ -172,14 +156,6 @@
 						>
 							<div class="sm-kv-key">{{ vm.getStatusPipPackageStatusBlockLabel(statusBlock) }}</div>
 							<div class="sm-kv-value">{{ vm.getStatusPipPackageStatusBlockValue(statusBlock) }}</div>
-						</div>
-						<div v-if="packageStatus.model_status && !vm.getStatusPipPackageStatusBlocks(packageStatus).length" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:pip_models', 'Models') }}</div>
-							<div class="sm-kv-value">{{ vm.getStatusPipPackageModelsText(packageStatus) }}</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:pip_conflicts', 'Conflicts') }}</div>
-							<div class="sm-kv-value">{{ vm.getStatusPipPackageConflictsText(packageStatus) }}</div>
 						</div>
 					</div>
 				</div>

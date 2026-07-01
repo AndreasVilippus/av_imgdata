@@ -32,6 +32,10 @@ export default {
 				min_width_ratio: 0,
 				min_height_ratio: 0,
 				min_area_ratio: 0,
+				safe_iou: 0.65,
+				review_iou: 0.30,
+				safe_center_delta: 0.08,
+				safe_size_delta: 0.50,
 			},
 			faceFrameFindings: [],
 			faceFrameFindingsLoading: false,
@@ -105,16 +109,21 @@ export default {
 					'recognition_build_profiles',
 					'recognition_check_reference_outliers',
 					'recognition_analyze_unknown_faces',
+					'recognition_check_person_assignments',
 				].includes(this.selectedRecognitionAction);
 			},
 			isRecognitionReviewAction() {
 				return [
 					'recognition_check_reference_outliers',
 					'recognition_analyze_unknown_faces',
+					'recognition_check_person_assignments',
 				].includes(this.selectedRecognitionAction);
 			},
 			isRecognitionOutlierAction() {
 				return this.selectedRecognitionAction === 'recognition_check_reference_outliers';
+			},
+			isRecognitionAssignmentAction() {
+				return this.selectedRecognitionAction === 'recognition_check_person_assignments';
 			},
 		recognitionManualReviewEnabled() {
 			return this.isRecognitionReviewAction && this.recognitionOptions.operation_mode !== 'save_only';
@@ -265,6 +274,10 @@ export default {
 			}
 			return [];
 		},
+		shouldShowCleanupStatusCounters() {
+			return this.selectedRecognitionAction !== 'recognition_build_profiles'
+				&& this.getCleanupStatusCounters().length > 0;
+		},
 		getCleanupStatusProgress() {
 			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
 				? this.cleanupProgress
@@ -274,6 +287,19 @@ export default {
 				: {};
 			if (status.schema_version === 1 && status.progress && typeof status.progress === 'object') {
 				return status.progress;
+			}
+			if (this.selectedCleanupAction === 'recognition_build_profiles' && Number(progress.persons_total) > 0) {
+				return {
+					kind: 'persons',
+					current: Number(progress.persons_scanned) || 0,
+					total: Number(progress.persons_total) || 0,
+					title_key: 'cleanup:label_persons',
+					fallback_title: 'Persons',
+					primary_label_key: 'cleanup:label_scanned',
+					fallback_primary_label: 'scanned',
+					secondary_label_key: 'cleanup:label_persons_remaining',
+					fallback_secondary_label: 'remaining',
+				};
 			}
 			if (Number(progress.total_files) > 0) {
 				return {
@@ -323,6 +349,28 @@ export default {
 			const label = String(counter.label || counter.key || '').replace(/:$/, '').trim();
 			const value = Math.max(0, Number(counter.value) || 0);
 			return label ? `${label}: ${value}` : String(value);
+		},
+		getCleanupProgressOverviewStatusText() {
+			if (this.selectedCleanupAction !== 'recognition_build_profiles') {
+				return '';
+			}
+			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+				? this.cleanupProgress
+				: {};
+			const parts = [];
+			const currentName = String(progress.current_name || '').trim();
+			if (currentName) {
+				parts.push(`${this.$avt('cleanup:label_current_name', 'Current name')}: ${currentName}`);
+			}
+			const counters = this.getCleanupStatusCounters()
+				.filter((counter) => !['findings', 'errors'].includes(counter.key))
+				.map((counter) => this.formatCleanupStatusCounter(counter))
+				.filter((text) => text);
+			parts.push(...counters);
+			if (parts.length) {
+				return parts.join(' | ');
+			}
+			return this.$avt('cleanup:recognition_profile_status_waiting', 'Waiting for person profile status...');
 		},
 		isCleanupProgressUpdateStale(current, next) {
 			const currentProgress = current && typeof current === 'object' ? current : {};
@@ -385,6 +433,7 @@ export default {
 						if ([
 							'recognition_check_reference_outliers',
 							'recognition_analyze_unknown_faces',
+							'recognition_check_person_assignments',
 						].includes(finishedAction)) {
 							this.fetchRecognitionFindings();
 						}
@@ -438,10 +487,12 @@ export default {
 					'recognition_build_profiles',
 					'recognition_check_reference_outliers',
 					'recognition_analyze_unknown_faces',
+					'recognition_check_person_assignments',
 				].includes(cleanupAction);
 				const isRecognitionReviewAction = [
 					'recognition_check_reference_outliers',
 					'recognition_analyze_unknown_faces',
+					'recognition_check_person_assignments',
 				].includes(cleanupAction);
 				if (
 					cleanupAction === 'standardize_face_frames'
@@ -490,6 +541,10 @@ export default {
 						} : {});
 					if (cleanupAction === 'standardize_face_frames') {
 						this.persistFaceFrameStartOptions();
+						if (this.faceFrameOptions.operation_mode !== 'findings' && !cleanupOptions.resume_existing) {
+							this.faceFrameFindings = [];
+							this.faceFrameCurrentIndex = 0;
+						}
 					}
 					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_start', {
 						action: cleanupAction,
@@ -550,12 +605,23 @@ export default {
 		},
 		getRecognitionImageUrl(path) {
 			const normalized = String(path || '').trim();
-			return normalized ? `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${encodeURIComponent(normalized)}` : '';
+			return this.getBackendImagePreviewUrl(normalized);
 		},
 		getRecognitionApplyIconUrl() {
 			return this.resolveLocalIconUrl('face_to_left.png');
 		},
+		getRecognitionExcludeReferenceBaseIconUrl() {
+			return this.resolveLocalIconUrl('face.png');
+		},
+		getRecognitionExcludeReferenceOverlayIconUrl() {
+			return this.resolveLocalIconUrl('del_icon.png');
+		},
 		getRecognitionPersonName(finding) {
+			if (this.isRecognitionAssignmentAction && finding) {
+				const current = String(finding.current_person_name || this.$avt('face_match:unknown_name', '(unnamed)'));
+				const suggested = String(finding.best_person_name || this.$avt('face_match:unknown_name', '(unnamed)'));
+				return `${current} -> ${suggested}`;
+			}
 			return String((finding && (finding.best_person_name || finding.person_name)) || this.$avt('face_match:unknown_name', '(unnamed)'));
 		},
 		async acceptRecognitionCurrent() {
@@ -579,6 +645,7 @@ export default {
 					});
 				if (options.apply) {
 					await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/recognition_suggestions_apply', {
+						action: this.selectedRecognitionAction,
 						selected_suggestion_ids: [itemId],
 						operation_mode: this.recognitionOptions.operation_mode,
 					});
@@ -650,7 +717,7 @@ export default {
 		},
 		getFaceFrameImageUrl(finding) {
 			const path = String(finding && finding.image_path || '').trim();
-			return path ? `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${encodeURIComponent(path)}` : '';
+			return this.getBackendImagePreviewUrl(path);
 		},
 		getFaceFrameApplyIconUrl() {
 			return this.resolveLocalIconUrl('face_to_left.png');
@@ -694,23 +761,46 @@ export default {
 				const selectedItemIds = this.faceFrameFindings
 					.filter((finding) => finding.selection_state === 'selected' && finding.write_state !== 'written')
 					.map((finding) => finding.item_id);
-				const response = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_face_frames_apply', {
-					selected_item_ids: selectedItemIds,
-					operation_mode: this.faceFrameOptions.operation_mode,
-				});
-				const result = this.getResponseData(response);
-				const findings = result.findings && Array.isArray(result.findings.entries) ? result.findings.entries : [];
-				this.faceFrameFindings = findings;
-				this.cleanupStatusMessage = this.$avt(
-					'cleanup:face_frames_apply_finished',
-					'Selected frames written: {written}; skipped: {skipped}; errors: {errors}',
-					{ written: result.written_count || 0, skipped: result.skipped_count || 0, errors: result.errors_count || 0 }
-				);
+				await this.applyFaceFrameItems(selectedItemIds);
 			} catch (err) {
 				this.cleanupStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {
 				this.faceFrameApplyLoading = false;
 			}
+		},
+		async applyAllFaceFrameFindings() {
+			const selectedItemIds = this.faceFrameReviewFindings
+				.map((finding) => finding.item_id)
+				.filter((itemId) => String(itemId || '').trim());
+			if (!selectedItemIds.length || this.faceFrameApplyLoading || this.faceFrameDecisionLoading) {
+				return;
+			}
+			this.faceFrameApplyLoading = true;
+			try {
+				await this.applyFaceFrameItems(selectedItemIds);
+				if (this.faceFrameOptions.operation_mode === 'immediate' && !this.faceFrameReviewFindings.length) {
+					await this.startCleanupRun({ skipFaceFrameOptionsDialog: true, resumeExisting: true });
+				}
+			} catch (err) {
+				this.cleanupStatusMessage = `Error: ${this.getErrorMessage(err)}`;
+			} finally {
+				this.faceFrameApplyLoading = false;
+			}
+		},
+		async applyFaceFrameItems(selectedItemIds) {
+			const response = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_face_frames_apply', {
+				selected_item_ids: selectedItemIds,
+				operation_mode: this.faceFrameOptions.operation_mode,
+			});
+			const result = this.getResponseData(response);
+			const findings = result.findings && Array.isArray(result.findings.entries) ? result.findings.entries : [];
+			this.faceFrameFindings = findings;
+			this.faceFrameCurrentIndex = 0;
+			this.cleanupStatusMessage = this.$avt(
+				'cleanup:face_frames_apply_finished',
+				'Selected frames written: {written}; skipped: {skipped}; errors: {errors}',
+				{ written: result.written_count || 0, skipped: result.skipped_count || 0, errors: result.errors_count || 0 }
+			);
 		},
 			async stopCleanupRun(options = {}) {
 				const action = String(options.actionOverride || this.cleanupRuntimeAction || this.selectedCleanupAction || 'normalize_names');
