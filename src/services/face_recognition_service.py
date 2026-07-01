@@ -151,6 +151,7 @@ class FaceRecognitionService:
 
     def _prepared_embedder(self, options: Dict[str, Any]) -> InsightFaceEmbedder:
         key = (
+            self.backend._faceProcessorRuntimeKey() if hasattr(self.backend, "_faceProcessorRuntimeKey") else ("python",),
             self.backend._configuredInsightFaceModelName(),
             str(self.backend._configuredInsightFaceModelRoot()),
             tuple(options["det_size"]), options["det_thresh"], options["max_num"],
@@ -160,27 +161,33 @@ class FaceRecognitionService:
         if self._embedder is not None and self._embedder_key == key:
             self._debug_log(
                 "recognition_embedder_reused",
-                model_name=key[0],
-                model_root=key[1],
-                det_size=list(key[2]),
-                det_thresh=key[3],
-                max_num=key[4],
+                model_name=key[1],
+                model_root=key[2],
+                det_size=list(key[3]),
+                det_thresh=key[4],
+                max_num=key[5],
             )
             return self._embedder
         self._debug_log(
             "recognition_embedder_prepare_start",
-            model_name=key[0],
-            model_root=key[1],
-            det_size=list(key[2]),
-            det_thresh=key[3],
-            max_num=key[4],
-            min_width_ratio=key[5],
-            min_height_ratio=key[6],
+            model_name=key[1],
+            model_root=key[2],
+            det_size=list(key[3]),
+            det_thresh=key[4],
+            max_num=key[5],
+            min_width_ratio=key[6],
+            min_height_ratio=key[7],
         )
-        embedder = InsightFaceEmbedder(
-            model_name=key[0], model_root=self.backend._configuredInsightFaceModelRoot(),
-            det_size=key[2], det_thresh=key[3], max_num=key[4],
-            min_width_ratio=key[5], min_height_ratio=key[6],
+        create_embedder = getattr(self.backend, "_createFaceEmbedder", None)
+        embedder = create_embedder(
+            model_name=key[1], model_root=self.backend._configuredInsightFaceModelRoot(),
+            det_size=key[3], det_thresh=key[4], max_num=key[5],
+            min_width_ratio=key[6], min_height_ratio=key[7],
+            max_image_edge=self._recognition_image_max_edge(),
+        ) if callable(create_embedder) else InsightFaceEmbedder(
+            model_name=key[1], model_root=self.backend._configuredInsightFaceModelRoot(),
+            det_size=key[3], det_thresh=key[4], max_num=key[5],
+            min_width_ratio=key[6], min_height_ratio=key[7],
             max_image_edge=self._recognition_image_max_edge(),
         )
         embedder.prepare()
@@ -188,11 +195,11 @@ class FaceRecognitionService:
         self._embedder_key = key
         self._debug_log(
             "recognition_embedder_prepare_finished",
-            model_name=key[0],
-            model_root=key[1],
-            det_size=list(key[2]),
-            det_thresh=key[3],
-            max_num=key[4],
+            model_name=key[1],
+            model_root=key[2],
+            det_size=list(key[3]),
+            det_thresh=key[4],
+            max_num=key[5],
         )
         return embedder
 

@@ -81,6 +81,22 @@ def test_pip_packages_ui_can_load_select_install_and_reinstall_wheelhouse_packag
     assert "pip_wheelhouse_package_install: 900000" in client
 
 
+def test_native_face_processor_config_is_visible_with_python_fallback():
+    view = Path("ui/src/views/ExternalLibrariesView.vue").read_text(encoding="utf-8")
+    mixin = Path("ui/src/mixins/externalLibrariesMixin.js").read_text(encoding="utf-8")
+    config = Path("src/services/config_service.py").read_text(encoding="utf-8")
+
+    assert "native_processors" in view
+    assert "FACE_PROCESSOR" in view
+    assert "setExternalLibrariesNativeProcessorConfigValue" in view
+    assert "label_enable_native_face_processor" in view
+    assert "label_native_face_processor_path" in view
+    assert "native_processors" in mixin
+    assert "FALLBACK_TO_PYTHON" not in mixin
+    assert '"native_processors"' in config
+    assert '"FACE_PROCESSOR"' in config
+
+
 def test_configuration_view_exposes_backend_debug_log_path():
     view = Path("ui/src/views/ConfigurationView.vue").read_text(encoding="utf-8")
     ger = Path("ui/texts/ger/strings").read_text(encoding="utf-8")

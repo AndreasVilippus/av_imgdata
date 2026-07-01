@@ -127,12 +127,15 @@ class PipPackagesStatusTests(unittest.TestCase):
             self.assertEqual(status["modules"][4]["package"], "pillow-heif")
             self.assertFalse(status["modules"][4]["installed"])
             self.assertEqual(status["conflicts"], [])
-            self.assertEqual(status["status_blocks"], [{
+            self.assertEqual(status["status_blocks"][0], {
                 "key": "generated_face_profiles",
                 "label_key": "status:pip_generated_face_profiles",
                 "fallback_label": "Generated person profiles",
                 "value": 2,
-            }])
+            })
+            self.assertEqual(status["status_blocks"][1]["key"], "native_face_processor")
+            self.assertEqual(status["processor_backend"], "native_unavailable")
+            self.assertIn("native_processor_status", status)
 
     def test_pip_packages_status_requires_successful_module_import(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -3,5 +3,6 @@ set -e
 
 make clean_python_artifacts ${MAKE_FLAGS}
 make ${MAKE_FLAGS}
+./tools/build-native-face-processor.sh
 echo "Build completed"
 exit 0

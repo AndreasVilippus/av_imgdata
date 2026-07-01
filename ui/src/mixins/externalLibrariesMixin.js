@@ -175,6 +175,16 @@ export default {
 						MODEL_NAME: '',
 					},
 				},
+				native_processors: {
+					FACE_PROCESSOR: {
+						ENABLED: true,
+						PATH: 'bin/av-imgdata-face-processor',
+						MODEL_ROOT: '',
+						MODEL_NAME: '',
+						TIMEOUT_SECONDS: 120,
+						MAX_IMAGE_BYTES: 67108864,
+					},
+				},
 			};
 		},
 		normalizeExternalLibrariesImageExtensions(value, fallback = []) {
@@ -279,6 +289,20 @@ export default {
 				);
 			}
 		},
+		setExternalLibrariesNativeProcessorConfigValue(processorKey, key, value) {
+			const nativeProcessors = this.externalLibrariesConfigModel.native_processors || {};
+			const processorConfig = nativeProcessors[processorKey] || {};
+			this.externalLibrariesConfigModel = {
+				...this.externalLibrariesConfigModel,
+				native_processors: {
+					...nativeProcessors,
+					[processorKey]: {
+						...processorConfig,
+						[key]: value,
+					},
+				},
+			};
+		},
 		getPipPackageInstallStatusLabel(installStatus) {
 			const status = String(installStatus && installStatus.status || '').trim().toLowerCase();
 			if (!status) {
@@ -348,6 +372,8 @@ export default {
 			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
 			const pipPackages = (root.pip_packages && typeof root.pip_packages === 'object' && !Array.isArray(root.pip_packages)) ? root.pip_packages : {};
 			const insightFace = (pipPackages.INSIGHTFACE && typeof pipPackages.INSIGHTFACE === 'object' && !Array.isArray(pipPackages.INSIGHTFACE)) ? pipPackages.INSIGHTFACE : {};
+			const nativeProcessors = (root.native_processors && typeof root.native_processors === 'object' && !Array.isArray(root.native_processors)) ? root.native_processors : {};
+			const faceProcessor = (nativeProcessors.FACE_PROCESSOR && typeof nativeProcessors.FACE_PROCESSOR === 'object' && !Array.isArray(nativeProcessors.FACE_PROCESSOR)) ? nativeProcessors.FACE_PROCESSOR : {};
 
 			const imageExtensions = this.normalizeExternalLibrariesImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
 			const exiftoolImageExtensions = this.normalizeExternalLibrariesImageExtensions(files.EXIFTOOL_IMAGE_EXTENSIONS, []);
@@ -457,6 +483,18 @@ export default {
 						WHEELHOUSE_TARGET: String(insightFace.WHEELHOUSE_TARGET || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_TARGET),
 						MODEL_ROOT: String(insightFace.MODEL_ROOT || defaults.pip_packages.INSIGHTFACE.MODEL_ROOT),
 						MODEL_NAME: String(insightFace.MODEL_NAME || defaults.pip_packages.INSIGHTFACE.MODEL_NAME),
+					},
+				},
+				native_processors: {
+					...nativeProcessors,
+					FACE_PROCESSOR: {
+						...faceProcessor,
+						ENABLED: Boolean(faceProcessor.ENABLED ?? defaults.native_processors.FACE_PROCESSOR.ENABLED),
+						PATH: String(faceProcessor.PATH || defaults.native_processors.FACE_PROCESSOR.PATH),
+						MODEL_ROOT: String(faceProcessor.MODEL_ROOT || defaults.native_processors.FACE_PROCESSOR.MODEL_ROOT),
+						MODEL_NAME: String(faceProcessor.MODEL_NAME || defaults.native_processors.FACE_PROCESSOR.MODEL_NAME),
+						TIMEOUT_SECONDS: Math.max(1, Math.min(3600, Number(faceProcessor.TIMEOUT_SECONDS) || defaults.native_processors.FACE_PROCESSOR.TIMEOUT_SECONDS)),
+						MAX_IMAGE_BYTES: Math.max(1048576, Math.min(1073741824, Number(faceProcessor.MAX_IMAGE_BYTES) || defaults.native_processors.FACE_PROCESSOR.MAX_IMAGE_BYTES)),
 					},
 				},
 			};

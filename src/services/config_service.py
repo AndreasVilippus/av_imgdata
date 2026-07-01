@@ -67,6 +67,16 @@ class ConfigService:
                     "MODEL_NAME": "",
                 },
             },
+            "native_processors": {
+                "FACE_PROCESSOR": {
+                    "ENABLED": True,
+                    "PATH": "bin/av-imgdata-face-processor",
+                    "MODEL_ROOT": "",
+                    "MODEL_NAME": "",
+                    "TIMEOUT_SECONDS": 120,
+                    "MAX_IMAGE_BYTES": 67108864,
+                },
+            },
             "files": {
                 "USE_EXIFTOOL": False,
                 "CHECK_EXIFTOOL_UPDATES": True,
@@ -286,6 +296,24 @@ class ConfigService:
 
         photos = config.get("photos", {}) if isinstance(config.get("photos"), dict) else {}
         photos["REINDEX_MISSING_ITEMS"] = bool(photos.get("REINDEX_MISSING_ITEMS", False))
+
+        native_processors = config.get("native_processors", {}) if isinstance(config.get("native_processors"), dict) else {}
+        face_processor = native_processors.get("FACE_PROCESSOR", {}) if isinstance(native_processors.get("FACE_PROCESSOR"), dict) else {}
+        face_processor["ENABLED"] = bool(face_processor.get("ENABLED", False))
+        face_processor["TIMEOUT_SECONDS"] = cls._clamp_int(
+            face_processor.get("TIMEOUT_SECONDS"),
+            default=120,
+            minimum=1,
+            maximum=3600,
+        )
+        face_processor["MAX_IMAGE_BYTES"] = cls._clamp_int(
+            face_processor.get("MAX_IMAGE_BYTES"),
+            default=67108864,
+            minimum=1048576,
+            maximum=1073741824,
+        )
+        native_processors["FACE_PROCESSOR"] = face_processor
+        config["native_processors"] = native_processors
 
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}
         debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED"))

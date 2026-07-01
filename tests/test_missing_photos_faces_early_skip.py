@@ -197,10 +197,12 @@ class MissingPhotosFacesEarlySkipTests(unittest.TestCase):
         face = self._face("")
         detector_marker = object()
 
-        with patch.object(self.service, "pipPackagesStatus", return_value={"packages": {"INSIGHTFACE": {"installed": True}}}), \
+        detector = type("FakeDetector", (), {"detect": lambda self, _path: [detector_marker]})()
+
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceDetector", return_value=detector), \
              patch.object(self.service.core, "getSharedFolder", return_value="/volume1/photo"), \
              patch.object(self.service, "_getFaceMatchCandidatePaths", return_value=[image_path]), \
-             patch("imgdata.InsightFaceDetector") as detector_cls, \
              patch.object(self.service, "_insightFaceDetectionToMetadataFace", return_value=face), \
              patch.object(self.service, "_refreshFaceMatchingSessionIfNeeded", return_value=0.0), \
              patch.object(self.service, "_shouldStopFaceMatching", return_value=False), \
@@ -208,7 +210,6 @@ class MissingPhotosFacesEarlySkipTests(unittest.TestCase):
              patch.object(self.service.photos, "list_faceFotoTeamItems", return_value=[]), \
              patch.object(self.service, "_selectMissingPhotosFaceCandidate", return_value=(face, {"INSIGHTFACE": 1})), \
              patch.object(self.service, "_writeFaceMatchFindings") as write_findings_mock:
-            detector_cls.return_value.detect.return_value = [detector_marker]
             result = self.service.searchMissingPhotosFacesWithInsightFace(
                 user_key="user",
                 cookies={},
@@ -230,17 +231,18 @@ class MissingPhotosFacesEarlySkipTests(unittest.TestCase):
         face = self._face("")
         detector_marker = object()
 
-        with patch.object(self.service, "pipPackagesStatus", return_value={"packages": {"INSIGHTFACE": {"installed": True}}}), \
+        detector = type("FakeDetector", (), {"detect": lambda self, _path: [detector_marker]})()
+
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceDetector", return_value=detector), \
              patch.object(self.service.core, "getSharedFolder", return_value="/volume1/photo"), \
              patch.object(self.service, "_getFaceMatchCandidatePaths", return_value=[image_path]), \
-             patch("imgdata.InsightFaceDetector") as detector_cls, \
              patch.object(self.service, "_insightFaceDetectionToMetadataFace", return_value=face), \
              patch.object(self.service, "_refreshFaceMatchingSessionIfNeeded", return_value=0.0), \
              patch.object(self.service, "_shouldStopFaceMatching", return_value=False), \
              patch.object(self.service.photos, "findFotoTeamItemByPath", return_value={"id": 42, "filename": "new.jpg"}), \
              patch.object(self.service.photos, "list_faceFotoTeamItems", return_value=[]), \
              patch.object(self.service, "_selectMissingPhotosFaceCandidate", return_value=(face, {"INSIGHTFACE": 1})):
-            detector_cls.return_value.detect.return_value = [detector_marker]
             result = self.service.searchMissingPhotosFacesWithInsightFace(
                 user_key="user",
                 cookies={},

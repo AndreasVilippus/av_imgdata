@@ -449,6 +449,30 @@
 
 					<label class="config-checkbox">
 						<input
+							:checked="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.ENABLED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving"
+							@change="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'ENABLED', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_enable_native_face_processor', 'Use native face processor') }}</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$avt('config:label_native_face_processor_path', 'Native processor path') }}</span>
+						<input
+							:value="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.PATH"
+							type="text"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.ENABLED"
+							@input="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'PATH', $event.target.value)"
+						/>
+						<span class="config-card-desc">
+							{{ vm.$avt('config:hint_native_face_processor_path', 'Relative paths are resolved inside the package target directory. The default is bin/av-imgdata-face-processor.') }}
+						</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input
 							:checked="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.INSTALL_ON_START"
 							type="checkbox"
 							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"

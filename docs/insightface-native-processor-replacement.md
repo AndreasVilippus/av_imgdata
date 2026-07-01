@@ -46,6 +46,35 @@ The design must allow additional platform builds later, but they are not require
 
 ## Current State
 
+Implemented in the current branch:
+
+```text
+- package build creates and installs bin/av-imgdata-face-processor
+- the backend calls that binary through NativeFaceProcessorService
+- the binary is no longer a no-op skeleton
+- version/status expose backend=python_bridge
+- detect/embed commands delegate through the package Python environment to the existing InsightFace detector/embedder
+- native processor start/finish/failure events are written to the backend debug logger
+```
+
+This makes the package-shipped binary path functional for the existing InsightFace
+workflows. It does not yet replace ONNXRuntime/OpenCV/InsightFace with pure C++
+inference code.
+
+Verified local dependency gap for a pure C++ implementation:
+
+```text
+- the available onnxruntime package is a Python wheel
+- no onnxruntime_c_api.h was found in the Toolkit/build environment
+- no linkable libonnxruntime.so was found in the Toolkit/build environment
+- the OpenCV wheel provides a Python extension, not usable C++ headers/libs for this processor
+- libjpeg-turbo headers/libs are available in the Toolkit sysroot
+```
+
+Therefore the next pure-native step is to add or build an ONNXRuntime C API
+distribution for the active DSM Toolkit target before replacing the bridge with
+real C++ detector/embedder inference.
+
 The optional InsightFace block is currently represented as Python package dependencies:
 
 ```text
@@ -310,7 +339,7 @@ Error example:
 Preferred dependency model:
 
 ```text
-- C++17 or C++20
+- C++11-compatible native CLI for DSM toolkit compiler compatibility
 - small JSON library vendored or built as source
 - ONNXRuntime C API if inference is required
 - minimal image decoding/preprocessing dependency set
@@ -384,23 +413,10 @@ Expected wrapper behavior after integration:
 7. result_spk/ contains the final SPK for the requested platform
 ```
 
-The wrapper may optionally expose flags later:
-
-```bash
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake --native-face=on
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake --native-face=off
-```
-
-Default for first implementation:
+Branch decision:
 
 ```text
-native face processor build = off or experimental
-```
-
-After proof:
-
-```text
-native face processor build = on for the currently supported platform
+native face processor build = required for the currently supported platform
 additional platforms = opt-in only
 ```
 
@@ -472,9 +488,7 @@ set -euo pipefail
 
 # existing backend/UI/package build steps stay in place
 
-if [ "${AV_IMGDATA_NATIVE_FACE:-0}" = "1" ]; then
-  ./tools/build-native-face-processor.sh
-fi
+./tools/build-native-face-processor.sh
 
 # existing Makefile/UI/toolkit build path continues here
 ```

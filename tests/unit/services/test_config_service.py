@@ -50,6 +50,27 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
 
         self.assertFalse(photos["REINDEX_MISSING_ITEMS"])
 
+    def test_native_face_processor_config_defaults_and_normalization(self):
+        service = ConfigService(str(self.config_file))
+        service.writeConfig({
+            "native_processors": {
+                "FACE_PROCESSOR": {
+                    "ENABLED": True,
+                    "PATH": "/tmp/native-face",
+                    "TIMEOUT_SECONDS": 99999,
+                    "MAX_IMAGE_BYTES": 1,
+                },
+            },
+        })
+
+        face_processor = service.readMergedConfig()["native_processors"]["FACE_PROCESSOR"]
+
+        self.assertTrue(face_processor["ENABLED"])
+        self.assertEqual(face_processor["PATH"], "/tmp/native-face")
+        self.assertEqual(face_processor["TIMEOUT_SECONDS"], 3600)
+        self.assertEqual(face_processor["MAX_IMAGE_BYTES"], 1048576)
+        self.assertNotIn("FALLBACK_TO_PYTHON", face_processor)
+
     def test_readMergedConfig_detects_file_change(self):
         """
         Test: Wenn config.json sich ändert,

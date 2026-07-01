@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://av-imgdata.local/schemas/face-native-result.schema.json",
+  "title": "AV ImgData native face processor result",
+  "type": "object",
+  "required": ["contract_version", "job_id", "type", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "contract_version": { "const": "1.0" },
+    "job_id": { "type": "string", "minLength": 1 },
+    "type": { "enum": ["face_native_detect", "face_native_embed"] },
+    "status": { "enum": ["completed", "failed"] },
+    "processor": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "backend": { "type": "string" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "faces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "face_id": { "type": "string" },
+              "confidence": { "type": "number" },
+              "bbox": {
+                "type": "object",
+                "required": ["x1", "y1", "x2", "y2"],
+                "properties": {
+                  "x1": { "type": "number" },
+                  "y1": { "type": "number" },
+                  "x2": { "type": "number" },
+                  "y2": { "type": "number" }
+                }
+              },
+              "box": {
+                "type": "object",
+                "required": ["x", "y", "width", "height", "unit"],
+                "properties": {
+                  "x": { "type": "number" },
+                  "y": { "type": "number" },
+                  "width": { "type": "number" },
+                  "height": { "type": "number" },
+                  "unit": { "const": "normalized" }
+                }
+              },
+              "embedding": {
+                "oneOf": [
+                  { "type": "array", "items": { "type": "number" } },
+                  {
+                    "type": "object",
+                    "required": ["encoding", "value"],
+                    "properties": {
+                      "model": { "type": "string" },
+                      "dimension": { "type": "integer", "minimum": 1 },
+                      "encoding": { "const": "float32-le-base64" },
+                      "value": { "type": "string" }
+                    }
+                  }
+                ]
+              }
+            },
+            "anyOf": [
+              { "required": ["bbox"] },
+              { "required": ["box"] }
+            ]
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "phase": { "type": "string" }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

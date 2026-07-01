@@ -42,6 +42,7 @@ from services.face_embedder import InsightFaceEmbedder
 from services.face_frame_standardization_service import FaceFrameStandardizationService
 from services.face_recognition_service import FaceRecognitionService
 from services.image_decode_service import ImageDecodeService
+from services.native_face_processor_service import NativeFaceProcessorService
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
 from services.face_match_mutation_service import FaceMatchMutationService
@@ -159,6 +160,7 @@ class ImgDataService:
         self.photos_lookup_cache = PhotosLookupCache()
         self.files = FileHandler(self.config)
         self.image_decoder = ImageDecodeService(self.config)
+        self.native_face_processor = NativeFaceProcessorService(self.config)
         self.metadata_parser = MetadataParser()
         self.name_mappings = NameMappingService()
         self.face_suppressions = FaceSuppressionRepository(self.name_mappings._database)
@@ -7961,7 +7963,7 @@ class ImgDataService:
         )
 
         try:
-            if not self.pipPackagesStatus().get("packages", {}).get("INSIGHTFACE", {}).get("installed"):
+            if not self._faceProcessorAvailable():
                 final_message_key = "face_match:progress_insightface_missing"
                 if save_only:
                     self._writeFaceMatchFindings(
@@ -8007,13 +8009,13 @@ class ImgDataService:
             photos_lookup_cache = PhotosLookupCache()
 
             detector = (
-                InsightFaceEmbedder(
+                self._createFaceEmbedder(
                     model_name=self._configuredInsightFaceModelName(),
                     model_root=self._configuredInsightFaceModelRoot(),
                     max_image_edge=self._recognitionImageMaxEdge(),
                 )
                 if recognize_persons else
-                InsightFaceDetector(
+                self._createFaceDetector(
                     model_name=self._configuredInsightFaceModelName(),
                     model_root=self._configuredInsightFaceModelRoot(),
                 )
@@ -10133,6 +10135,7 @@ class ImgDataService:
 
     def setDebugLogger(self, logger: Optional[Callable[..., None]]) -> None:
         self._debug_logger = logger if callable(logger) else None
+        self.native_face_processor.set_debug_logger(self._debugLog)
 
     def _debugLog(self, event: str, **fields: Any) -> None:
         logger = self._debug_logger
@@ -10151,6 +10154,38 @@ class ImgDataService:
         pip_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
         package_config = pip_packages.get("INSIGHTFACE") if isinstance(pip_packages.get("INSIGHTFACE"), dict) else {}
         return package_config
+
+    def _nativeFaceProcessorStatus(self) -> Dict[str, Any]:
+        return self.native_face_processor.status(
+            model_root=self._configuredInsightFaceModelRoot(),
+            model_name=self._configuredInsightFaceModelName(),
+        )
+
+    def _useNativeFaceProcessor(self) -> bool:
+        return bool(self.native_face_processor.config().get("ENABLED", True))
+
+    def _faceProcessorRuntimeKey(self) -> Tuple[Any, ...]:
+        native_status = self._nativeFaceProcessorStatus()
+        native_backend = str(native_status.get("backend") or "native").strip() or "native"
+        return (
+            native_backend if native_status.get("available") else "native_unavailable",
+            native_status.get("path"),
+            native_status.get("version"),
+            native_status.get("reason"),
+        )
+
+    def _createFaceDetector(self, **kwargs: Any) -> Any:
+        if self._useNativeFaceProcessor():
+            return self.native_face_processor.create_detector(**kwargs)
+        return InsightFaceDetector(**kwargs)
+
+    def _createFaceEmbedder(self, **kwargs: Any) -> Any:
+        if self._useNativeFaceProcessor():
+            return self.native_face_processor.create_embedder(**kwargs)
+        return InsightFaceEmbedder(**kwargs)
+
+    def _faceProcessorAvailable(self) -> bool:
+        return bool(self._nativeFaceProcessorStatus().get("available"))
 
     def _configuredInsightFaceModelRoot(self) -> Path:
         package_config = self._insightFaceConfig()
@@ -10391,13 +10426,19 @@ class ImgDataService:
                 model_root = self._configuredInsightFaceModelRoot()
                 model_status = InsightFaceDetector.available_models(model_root)
                 active_model_name = self._configuredInsightFaceModelName(model_status)
+                native_status = self._nativeFaceProcessorStatus()
                 result[key]["model_root_configured"] = str(configured.get("MODEL_ROOT") or "").strip()
                 result[key]["model_name_configured"] = str(configured.get("MODEL_NAME") or "").strip()
                 result[key]["model_status"] = model_status
                 result[key]["active_model_name"] = active_model_name
+                result[key]["processor_backend"] = str(native_status.get("backend") or "native") if native_status.get("available") else "native_unavailable"
+                result[key]["native_processor_status"] = native_status
                 result[key]["status_blocks"] = self._insightFaceStatusBlocks()
         return {
             "packages": result,
+            "native_processors": {
+                "FACE_PROCESSOR": self._nativeFaceProcessorStatus(),
+            },
             "status_file": str(status_file),
         }
 
@@ -10571,11 +10612,17 @@ class ImgDataService:
         return len(profiles) if isinstance(profiles, list) else 0
 
     def _insightFaceStatusBlocks(self) -> List[Dict[str, Any]]:
+        native_status = self._nativeFaceProcessorStatus()
         return [{
             "key": "generated_face_profiles",
             "label_key": "status:pip_generated_face_profiles",
             "fallback_label": "Generated person profiles",
             "value": self._generatedFaceRecognitionProfilesCount(),
+        }, {
+            "key": "native_face_processor",
+            "label_key": "status:native_face_processor",
+            "fallback_label": "Native face processor",
+            "value": native_status.get("reason") or ("ready" if native_status.get("available") else "unknown"),
         }]
 
     @staticmethod
