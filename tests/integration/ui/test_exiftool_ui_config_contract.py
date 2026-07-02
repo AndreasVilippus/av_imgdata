@@ -91,10 +91,15 @@ def test_native_face_processor_config_is_visible_with_python_fallback():
     assert "setExternalLibrariesNativeProcessorConfigValue" in view
     assert "label_enable_native_face_processor" in view
     assert "label_native_face_processor_path" in view
+    assert "INSIGHTFACE_LICENSE_ACKNOWLEDGED" in view
+    assert "label_acknowledge_insightface_model_license" in view
+    assert "native_face_processor_license_hint" in view
     assert "native_processors" in mixin
+    assert "INSIGHTFACE_LICENSE_ACKNOWLEDGED: false" in mixin
     assert "FALLBACK_TO_PYTHON" not in mixin
     assert '"native_processors"' in config
     assert '"FACE_PROCESSOR"' in config
+    assert '"INSIGHTFACE_LICENSE_ACKNOWLEDGED": False' in config
 
 
 def test_configuration_view_exposes_backend_debug_log_path():

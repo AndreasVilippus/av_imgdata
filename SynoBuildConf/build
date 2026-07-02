@@ -1,8 +1,12 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 make clean_python_artifacts ${MAKE_FLAGS}
 make ${MAKE_FLAGS}
-./tools/build-native-face-processor.sh
+export AV_FACE_PROCESSOR_BACKEND="${AV_FACE_PROCESSOR_BACKEND:-onnxruntime}"
+if ! ./tools/build-native-face-processor.sh; then
+	echo "ERROR: native ONNXRuntime face processor build failed."
+	exit 1
+fi
 echo "Build completed"
 exit 0

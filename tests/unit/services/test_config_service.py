@@ -59,6 +59,9 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
                     "PATH": "/tmp/native-face",
                     "TIMEOUT_SECONDS": 99999,
                     "MAX_IMAGE_BYTES": 1,
+                    "ORT_INTRA_THREADS": 999,
+                    "ORT_GRAPH_OPT_LEVEL": "invalid",
+                    "INSIGHTFACE_LICENSE_ACKNOWLEDGED": 1,
                 },
             },
         })
@@ -69,6 +72,9 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         self.assertEqual(face_processor["PATH"], "/tmp/native-face")
         self.assertEqual(face_processor["TIMEOUT_SECONDS"], 3600)
         self.assertEqual(face_processor["MAX_IMAGE_BYTES"], 1048576)
+        self.assertEqual(face_processor["ORT_INTRA_THREADS"], 64)
+        self.assertEqual(face_processor["ORT_GRAPH_OPT_LEVEL"], "all")
+        self.assertTrue(face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"])
         self.assertNotIn("FALLBACK_TO_PYTHON", face_processor)
 
     def test_readMergedConfig_detects_file_change(self):

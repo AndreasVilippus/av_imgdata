@@ -8,7 +8,7 @@ displayname="ImgData"
 description="Shell- & Python-Tool für Fotodatentransfer"
 maintainer="Andreas Vilippus"
 maintainer_url=""
-arch="noarch"
+arch="$(pkg_get_platform)"
 os_min_ver="7.3-00000"
 
 startable="yes"

@@ -10162,7 +10162,10 @@ class ImgDataService:
         )
 
     def _useNativeFaceProcessor(self) -> bool:
-        return bool(self.native_face_processor.config().get("ENABLED", True))
+        if not bool(self.native_face_processor.config().get("ENABLED", True)):
+            return False
+        native_status = self._nativeFaceProcessorStatus()
+        return bool(native_status.get("hot_path_available")) and str(native_status.get("backend") or "") == "native"
 
     def _faceProcessorRuntimeKey(self) -> Tuple[Any, ...]:
         native_status = self._nativeFaceProcessorStatus()
@@ -10185,7 +10188,8 @@ class ImgDataService:
         return InsightFaceEmbedder(**kwargs)
 
     def _faceProcessorAvailable(self) -> bool:
-        return bool(self._nativeFaceProcessorStatus().get("available"))
+        native_status = self._nativeFaceProcessorStatus()
+        return bool(native_status.get("hot_path_available")) and str(native_status.get("backend") or "") == "native"
 
     def _configuredInsightFaceModelRoot(self) -> Path:
         package_config = self._insightFaceConfig()

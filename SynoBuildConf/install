@@ -28,11 +28,24 @@ create_install() {
 		echo "The native C++ face processor is required for this branch."
 		exit 1
 	fi
+	if strings "$NATIVE_INSTALL/bin/av-imgdata-face-processor" | grep -q 'services.native_face_processor_worker'; then
+		echo "ERROR: native face processor is the python_bridge variant, not the C++ ONNXRuntime variant."
+		echo "Build with AV_FACE_PROCESSOR_BACKEND=onnxruntime and a valid ONNXRUNTIME_ROOT."
+		exit 1
+	fi
+	if ! strings "$NATIVE_INSTALL/bin/av-imgdata-face-processor" | grep -q 'onnxruntime-native'; then
+		echo "ERROR: native face processor does not report the onnxruntime-native backend."
+		exit 1
+	fi
+	if [ ! -e "$NATIVE_INSTALL/lib/libonnxruntime.so" ] && [ -z "$(find "$NATIVE_INSTALL/lib" -maxdepth 1 -name 'libonnxruntime.so*' -print -quit 2>/dev/null)" ]; then
+		echo "ERROR: native face processor libraries missing: libonnxruntime.so*"
+		exit 1
+	fi
 	mkdir -p "$package_tgz_dir/bin"
 	cp -av "$NATIVE_INSTALL/bin/av-imgdata-face-processor" "$package_tgz_dir/bin/"
 	if [ -d "$NATIVE_INSTALL/lib" ]; then
 		mkdir -p "$package_tgz_dir/lib"
-		cp -av "$NATIVE_INSTALL/lib/." "$package_tgz_dir/lib/" || true
+		find "$NATIVE_INSTALL/lib" -maxdepth 1 \( -name 'libonnxruntime.so*' -o -name 'libjpeg.so*' \) -exec cp -av {} "$package_tgz_dir/lib/" \;
 	fi
 	# Fail fast if UI entrypoint didn't get packaged
 	if [ ! -f "$package_tgz_dir/ui/index.cgi" ]; then

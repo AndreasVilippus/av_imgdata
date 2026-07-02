@@ -19,6 +19,28 @@
         "backend": { "type": "string" }
       }
     },
+    "timing_ms": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "total": { "type": "number", "minimum": 0 },
+        "image_decode": { "type": "number", "minimum": 0 },
+        "model_load": { "type": "number", "minimum": 0 },
+        "detector_prepare": { "type": "number", "minimum": 0 },
+        "detector_run": { "type": "number", "minimum": 0 },
+        "detector_decode": { "type": "number", "minimum": 0 },
+        "recognizer_prepare": { "type": "number", "minimum": 0 },
+        "recognizer_run": { "type": "number", "minimum": 0 },
+        "embedding_normalize": { "type": "number", "minimum": 0 },
+        "result_write": { "type": "number", "minimum": 0 },
+        "recognizer_runs": { "type": "integer", "minimum": 0 },
+        "recognized_faces": { "type": "integer", "minimum": 0 },
+        "recognizer_batch_size": { "type": "integer", "minimum": 0 },
+        "recognizer_batched": { "type": "boolean" },
+        "recognizer_batch_fallback": { "type": "boolean" },
+        "reused_models": { "type": "boolean" }
+      }
+    },
     "result": {
       "type": "object",
       "additionalProperties": true,

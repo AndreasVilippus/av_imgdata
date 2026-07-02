@@ -183,6 +183,7 @@ export default {
 						MODEL_NAME: '',
 						TIMEOUT_SECONDS: 120,
 						MAX_IMAGE_BYTES: 67108864,
+						INSIGHTFACE_LICENSE_ACKNOWLEDGED: false,
 					},
 				},
 			};
@@ -292,6 +293,7 @@ export default {
 		setExternalLibrariesNativeProcessorConfigValue(processorKey, key, value) {
 			const nativeProcessors = this.externalLibrariesConfigModel.native_processors || {};
 			const processorConfig = nativeProcessors[processorKey] || {};
+			const wasLicenseAcknowledged = processorKey === 'FACE_PROCESSOR' && key === 'INSIGHTFACE_LICENSE_ACKNOWLEDGED' && Boolean(processorConfig.INSIGHTFACE_LICENSE_ACKNOWLEDGED);
 			this.externalLibrariesConfigModel = {
 				...this.externalLibrariesConfigModel,
 				native_processors: {
@@ -302,6 +304,14 @@ export default {
 					},
 				},
 			};
+			if (processorKey === 'FACE_PROCESSOR' && key === 'INSIGHTFACE_LICENSE_ACKNOWLEDGED' && Boolean(value) && !wasLicenseAcknowledged) {
+				this.showExternalLibrariesRestartPopup(
+					this.$avt(
+						'config:popup_insightface_model_license_warning',
+						'InsightFace can download models with separate non-free license terms. These models may only be used under the applicable InsightFace model license terms. Please review the InsightFace license notes before enabling this feature:\n\nhttps://github.com/deepinsight/insightface#license'
+					)
+				);
+			}
 		},
 		getPipPackageInstallStatusLabel(installStatus) {
 			const status = String(installStatus && installStatus.status || '').trim().toLowerCase();
@@ -495,6 +505,7 @@ export default {
 						MODEL_NAME: String(faceProcessor.MODEL_NAME || defaults.native_processors.FACE_PROCESSOR.MODEL_NAME),
 						TIMEOUT_SECONDS: Math.max(1, Math.min(3600, Number(faceProcessor.TIMEOUT_SECONDS) || defaults.native_processors.FACE_PROCESSOR.TIMEOUT_SECONDS)),
 						MAX_IMAGE_BYTES: Math.max(1048576, Math.min(1073741824, Number(faceProcessor.MAX_IMAGE_BYTES) || defaults.native_processors.FACE_PROCESSOR.MAX_IMAGE_BYTES)),
+						INSIGHTFACE_LICENSE_ACKNOWLEDGED: Boolean(faceProcessor.INSIGHTFACE_LICENSE_ACKNOWLEDGED ?? defaults.native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED),
 					},
 				},
 			};

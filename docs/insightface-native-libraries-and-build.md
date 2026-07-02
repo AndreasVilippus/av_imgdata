@@ -34,10 +34,27 @@ The current branch builds a required package binary:
 target/bin/av-imgdata-face-processor
 ```
 
-The binary is currently a functional package entrypoint with backend
-`python_bridge`. It starts the package Python environment and executes
-`services.native_face_processor_worker`, which uses the existing
-`InsightFaceDetector` and `InsightFaceEmbedder` implementations.
+The binary now has two build modes:
+
+```text
+- python_bridge: diagnostic package/contract bridge only
+- onnxruntime: native C++ inference backend
+```
+
+The `onnxruntime` build reports `backend=native` and implements the first full
+C++ replacement path:
+
+```text
+- package-local ONNXRuntime C API loading
+- JPEG decode through libjpeg/libjpeg-turbo
+- InsightFace/SCRFD detector preprocessing
+- SCRFD ONNX execution and post-processing
+- NMS and normalized face boxes
+- ArcFace-style 5-point face alignment
+- recognition ONNX execution
+- L2-normalized embeddings
+- ProcessorResult JSON output for detect/embed
+```
 
 This state is intentionally different from the old skeleton:
 
@@ -48,8 +65,31 @@ This state is intentionally different from the old skeleton:
 - a skeleton version/probe is treated as unavailable with reason=skeleton_no_inference
 ```
 
-This state is also intentionally not the final pure C++ inference target. A
-pure C++ implementation still needs a linkable inference runtime.
+The remaining gap is not the processor wiring anymore; it is runtime parity
+validation against real Buffalo-L model files and representative images on the
+DSM target.
+
+Measured NAS result for the bridge:
+
+```text
+- status/probe worked and reported backend=python_bridge
+- one embed command returned 4 faces after about 89.4 s
+- two embed commands failed with exit 1 after about 4.9 s and 0.8 s
+- /api/pip_packages_status took about 59 s while probing the bridge
+- stop handling stayed in phase=stopping until the current subprocess returned
+```
+
+Build/status decision from those measurements:
+
+```text
+python_bridge is diagnostic-only. It validates package wiring and contracts, but
+it is not a valid inference backend for the image-processing hot path.
+
+Only a processor reporting backend=native and hot_path_available=true is allowed
+to replace the Python InsightFace/OpenCV/ONNXRuntime stack.
+Status handling must also avoid running the expensive python_bridge model probe;
+the bridge is identified by version and reported as diagnostic-only.
+```
 
 Local Toolkit/wheelhouse check:
 
@@ -65,9 +105,10 @@ Local Toolkit/wheelhouse check:
 Practical consequence:
 
 ```text
-The branch can now run face work through the package binary, but replacing the
-Python bridge with pure C++ inference requires adding/building ONNXRuntime C API
-for the active DSM Toolkit target first.
+The Python bridge must not be used as the production image backend. The
+production candidate is the `onnxruntime` build of
+`av-imgdata-face-processor`, which requires ONNXRuntime C API and libjpeg for
+the active DSM Toolkit target.
 ```
 
 ## Required Native Function Blocks
@@ -100,6 +141,56 @@ The native processor must not own DSM workflow logic.
 | JPEG decode | `libjpeg-turbo` | BSD-style / IJG / zlib-style combination | Yes | Fast, common, good first image format. |
 | Inference | `ONNXRuntime` C API | MIT | Yes, after skeleton | Closest native replacement for current `onnxruntime` Python dependency. |
 | Model I/O and filesystem | C++ stdlib | C++ runtime | Yes | Avoid extra dependencies. |
+
+### Immediate implementation focus
+
+The next useful work is dependency and proof-of-linkage, not more bridge logic:
+
+```text
+1. Provide an ONNXRuntime C API package for the active DSM Toolkit target.
+2. Add CMake detection for onnxruntime_c_api.h and libonnxruntime.so.
+3. Fail the native build if the requested native inference backend cannot link.
+4. Keep python_bridge from being reported as hot_path_available.
+5. Validate native detector/embedder parity with real model files and fixtures.
+```
+
+Do not invest further in process-per-image bridge optimization unless it becomes
+a persistent worker with one-time model loading. Even then, it would still be a
+Python runtime mitigation rather than the desired C++ replacement.
+
+Implemented build switch:
+
+```bash
+AV_FACE_PROCESSOR_BACKEND=onnxruntime \
+ONNXRUNTIME_ROOT=/path/to/onnxruntime-capi \
+JPEG_ROOT=/path/to/sysroot/usr \
+./tools/build-native-face-processor.sh
+```
+
+Expected layout for `ONNXRUNTIME_ROOT`:
+
+```text
+include/onnxruntime_c_api.h
+lib/libonnxruntime.so
+```
+
+Expected layout for `JPEG_ROOT` when the build host does not provide libjpeg
+development files directly:
+
+```text
+include/jpeglib.h
+include/jconfig.h
+include/jmorecfg.h
+lib/libjpeg.so
+```
+
+The ONNXRuntime build installs `libonnxruntime.so*` and `libjpeg.so*` into the
+package `lib/` directory. The processor binary uses `$ORIGIN/../lib` as RPATH,
+so package-local libraries are preferred when they are present.
+
+The package build defaults to `AV_FACE_PROCESSOR_BACKEND=onnxruntime` and fails
+fast if those layouts are missing. `python_bridge` remains available only as an
+explicit diagnostic build mode and is reported as not hot-path capable.
 
 ### Add only when required by fixtures
 

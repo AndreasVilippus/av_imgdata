@@ -364,6 +364,8 @@ class FaceRecognitionService:
             return []
         references: List[Dict[str, Any]] = []
         faces_scanned = 0
+        images_analyzed = 0
+        images_skipped_unchanged = 0
         invalid_items = 0
         unreadable_images_before = len([entry for entry in self._image_quality_issues if entry.get("quality") == "image_unreadable"])
         missing_images_before = len([entry for entry in self._image_quality_issues if entry.get("quality") == "image_missing"])
@@ -441,13 +443,47 @@ class FaceRecognitionService:
                     persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
                     profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
                     faces_scanned=faces_scanned,
+                    images_analyzed=images_analyzed,
+                    images_skipped_unchanged=images_skipped_unchanged,
                     references_count=len(references),
                     **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
                 )
             if options["changed_since_days"] > 0:
                 cutoff = datetime.now(timezone.utc) - timedelta(days=options["changed_since_days"])
                 if datetime.fromtimestamp(Path(image_path).stat().st_mtime, timezone.utc) < cutoff:
+                    images_skipped_unchanged += 1
+                    if context:
+                        self._set_progress(
+                            user_key, str(context.get("action") or self.ACTION_BUILD), options,
+                            running=True, finished=False, phase=str(context.get("phase") or "reading_reference_images"),
+                            message_key=str(context.get("message_key") or "cleanup:recognition_reading_reference_images"),
+                            message=str(context.get("message") or "Reading recognition reference images."),
+                            progress_kind=str(context.get("progress_kind") or "images"), images_scanned=item_index + 1, images_total=len(items),
+                            persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
+                            profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
+                            faces_scanned=faces_scanned,
+                            images_analyzed=images_analyzed,
+                            images_skipped_unchanged=images_skipped_unchanged,
+                            references_count=len(references),
+                            **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
+                        )
                     continue
+            images_analyzed += 1
+            if context:
+                self._set_progress(
+                    user_key, str(context.get("action") or self.ACTION_BUILD), options,
+                    running=True, finished=False, phase=str(context.get("phase") or "reading_reference_images"),
+                    message_key=str(context.get("message_key") or "cleanup:recognition_reading_reference_images"),
+                    message=str(context.get("message") or "Reading recognition reference images."),
+                    progress_kind=str(context.get("progress_kind") or "images"), images_scanned=item_index + 1, images_total=len(items),
+                    persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
+                    profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
+                    faces_scanned=faces_scanned,
+                    images_analyzed=images_analyzed,
+                    images_skipped_unchanged=images_skipped_unchanged,
+                    references_count=len(references),
+                    **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
+                )
             if image_path not in self._image_embedding_cache:
                 try:
                     self._image_embedding_cache[image_path] = embedder.detect_and_embed(Path(image_path))
@@ -516,6 +552,8 @@ class FaceRecognitionService:
                         persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
                         profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
                         faces_scanned=faces_scanned,
+                        images_analyzed=images_analyzed,
+                        images_skipped_unchanged=images_skipped_unchanged,
                         references_count=len(references),
                         **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
                     )
@@ -547,6 +585,8 @@ class FaceRecognitionService:
                         persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
                         profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
                         faces_scanned=faces_scanned,
+                        images_analyzed=images_analyzed,
+                        images_skipped_unchanged=images_skipped_unchanged,
                         references_count=len(references),
                         **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
                     )
@@ -559,6 +599,8 @@ class FaceRecognitionService:
             items_total=len(items),
             invalid_items=invalid_items,
             faces_scanned=faces_scanned,
+            images_analyzed=images_analyzed,
+            images_skipped_unchanged=images_skipped_unchanged,
             references_count=len(references),
             unreadable_images=unreadable_images_after - unreadable_images_before,
             missing_images=missing_images_after - missing_images_before,
@@ -1143,11 +1185,38 @@ class FaceRecognitionService:
     def _finish_stopped_scan(self, user_key: str, action: str, options: Dict[str, Any], entries: List[Dict[str, Any]]) -> None:
         if entries:
             self._write_findings(self._finding_type(action), action, options, entries, user_key=user_key)
+        retained = self._current_progress_counts(user_key, action)
         self._set_progress(
             user_key, action, options, running=False, finished=True, stop_requested=True, phase="stopped",
             message_key="cleanup:progress_stopped", message="Cleanup stopped.",
             findings_count=len(entries),
+            **retained,
         )
+
+    def _current_progress_counts(self, user_key: str, action: str) -> Dict[str, Any]:
+        try:
+            current = self.backend.getCleanupProgress(user_key, action)
+        except Exception:
+            return {}
+        if not isinstance(current, dict):
+            return {}
+        retained: Dict[str, Any] = {}
+        for key in (
+            "progress_kind",
+            "images_scanned",
+            "images_total",
+            "images_analyzed",
+            "images_skipped_unchanged",
+            "faces_scanned",
+            "references_count",
+            "persons_scanned",
+            "persons_total",
+            "profiles_built",
+            "current_name",
+        ):
+            if current.get(key) is not None:
+                retained[key] = current.get(key)
+        return retained
 
     def _finish_review_scan(self, user_key: str, action: str, options: Dict[str, Any], entries: List[Dict[str, Any]]) -> None:
         open_entries = self._open_entries(entries)
@@ -1312,6 +1381,8 @@ class FaceRecognitionService:
             self.backend._buildStatusCounter("profiles", value=int(updates.get("profiles_built") or 0), label_key="cleanup:label_profiles", fallback_label="Person profiles", show_when_zero=True),
             self.backend._buildStatusCounter("findings", value=int(updates.get("findings_count") or 0), label_key="cleanup:label_findings", fallback_label="Findings", show_when_zero=True),
             self.backend._buildStatusCounter("images", value=int(updates.get("images_scanned") or 0), label_key="cleanup:label_images_processed", fallback_label="Images", show_when_zero=False),
+            self.backend._buildStatusCounter("images_analyzed", value=int(updates.get("images_analyzed") or 0), label_key="cleanup:label_images_analyzed", fallback_label="Analyzed images", show_when_zero=False),
+            self.backend._buildStatusCounter("images_skipped_unchanged", value=int(updates.get("images_skipped_unchanged") or 0), label_key="cleanup:label_images_skipped_unchanged", fallback_label="Skipped unchanged images", show_when_zero=False),
         ]
         if action != self.ACTION_BUILD:
             counters.append(self.backend._buildStatusCounter("faces", value=int(updates.get("faces_scanned") or 0), label_key="cleanup:label_faces_processed", fallback_label="Faces", show_when_zero=False))

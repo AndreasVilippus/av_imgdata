@@ -26,7 +26,10 @@
       "MODEL_ROOT": "",
       "MODEL_NAME": "",
       "TIMEOUT_SECONDS": 120,
-      "MAX_IMAGE_BYTES": 67108864
+      "MAX_IMAGE_BYTES": 67108864,
+      "ORT_INTRA_THREADS": 0,
+      "ORT_GRAPH_OPT_LEVEL": "all",
+      "INSIGHTFACE_LICENSE_ACKNOWLEDGED": false
     }
   },
   "files": {
@@ -115,6 +118,7 @@
   "debug": {
     "IO_METRICS_ENABLED": false,
     "BACKEND_DEBUG_ENABLED": false,
+    "BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED": false,
     "BACKEND_DEBUG_LOG_PATH": "",
     "BACKEND_DEBUG_LOG_MAX_BYTES": 1048576,
     "BACKEND_DEBUG_LOG_BACKUPS": 3

@@ -457,6 +457,20 @@
 						<span>{{ vm.$avt('config:label_enable_native_face_processor', 'Use native face processor') }}</span>
 					</label>
 
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving"
+							@change="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'INSIGHTFACE_LICENSE_ACKNOWLEDGED', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_acknowledge_insightface_model_license', 'I have reviewed the InsightFace model license terms') }}</span>
+					</label>
+
+					<div class="config-card-desc">
+						{{ vm.$avt('config:native_face_processor_license_hint', 'The native face processor uses InsightFace-compatible ONNX models. AV ImgData does not ship or download these models automatically; use is only enabled after acknowledging the applicable model license terms.') }}
+					</div>
+
 					<label class="config-field">
 						<span class="config-field-label">{{ vm.$avt('config:label_native_face_processor_path', 'Native processor path') }}</span>
 						<input

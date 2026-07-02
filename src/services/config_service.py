@@ -75,6 +75,9 @@ class ConfigService:
                     "MODEL_NAME": "",
                     "TIMEOUT_SECONDS": 120,
                     "MAX_IMAGE_BYTES": 67108864,
+                    "ORT_INTRA_THREADS": 0,
+                    "ORT_GRAPH_OPT_LEVEL": "all",
+                    "INSIGHTFACE_LICENSE_ACKNOWLEDGED": False,
                 },
             },
             "files": {
@@ -136,6 +139,7 @@ class ConfigService:
             "debug": {
                 "IO_METRICS_ENABLED": False,
                 "BACKEND_DEBUG_ENABLED": False,
+                "BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED": False,
                 "BACKEND_DEBUG_LOG_PATH": "",
                 "BACKEND_DEBUG_LOG_MAX_BYTES": 1048576,
                 "BACKEND_DEBUG_LOG_BACKUPS": 3,
@@ -312,11 +316,23 @@ class ConfigService:
             minimum=1048576,
             maximum=1073741824,
         )
+        face_processor["ORT_INTRA_THREADS"] = cls._clamp_int(
+            face_processor.get("ORT_INTRA_THREADS"),
+            default=0,
+            minimum=0,
+            maximum=64,
+        )
+        graph_opt_level = str(face_processor.get("ORT_GRAPH_OPT_LEVEL") or "all").strip().lower()
+        if graph_opt_level not in {"disable", "basic", "extended", "all"}:
+            graph_opt_level = "all"
+        face_processor["ORT_GRAPH_OPT_LEVEL"] = graph_opt_level
+        face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"] = bool(face_processor.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False))
         native_processors["FACE_PROCESSOR"] = face_processor
         config["native_processors"] = native_processors
 
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}
         debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED"))
+        debug["BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED"] = bool(debug.get("BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED"))
         debug["IO_METRICS_ENABLED"] = bool(debug.get("IO_METRICS_ENABLED"))
         debug["BACKEND_DEBUG_LOG_MAX_BYTES"] = cls._clamp_int(
             debug.get("BACKEND_DEBUG_LOG_MAX_BYTES"),
