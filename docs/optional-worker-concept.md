@@ -31,9 +31,7 @@ docs/insightface-native-processor-replacement.md
 docs/insightface-native-libraries-and-build.md
 ```
 
-These documents define the native replacement direction for the optional `InsightFace` / `OpenCV` / `ONNXRuntime` Python wheelhouse block.
-
-The current build reality is:
+Current build reality:
 
 ```text
 - Toolkit exists on a Linux build machine.
@@ -45,6 +43,62 @@ The current build reality is:
 
 - Current mandatory DSM platform is one selected Toolkit target.
 - Additional DSM platforms are optional and additive.
+```
+
+## Current Implementation Status
+
+The current C++ component can already serve as a **ProcessorCore** and as a **local long-running subprocess worker**.
+
+It is not yet a complete **external DSM worker**.
+
+### Already present
+
+```text
+processors/native/face_processor/
+  CMakeLists.txt
+  src/main.cpp
+
+tools/build-native-face-processor.sh
+
+src/services/native_face_processor_service.py
+src/services/native_face_processor_worker.py
+
+processor_contract/
+  README.md
+  schemas/face-native-job-input.schema.json
+  schemas/face-native-result.schema.json
+```
+
+The native processor exposes this command surface:
+
+```text
+av-imgdata-face-processor version
+av-imgdata-face-processor probe --model-root <path> --model-name <name>
+av-imgdata-face-processor detect --input <job-input.json> --output <processor-result.json> --workdir <dir>
+av-imgdata-face-processor embed --input <job-input.json> --output <processor-result.json> --workdir <dir>
+av-imgdata-face-processor worker
+av-imgdata-face-processor self-test --model-root <path> --model-name <name>
+```
+
+The `worker` subcommand is a local stdin/stdout request loop. It is intended to keep model state warm across multiple image requests.
+
+It is not a network worker and does not talk to DSM by itself.
+
+### Not present yet
+
+```text
+- external worker runtime project
+- DSM Worker API implementation
+- worker registration endpoint
+- worker heartbeat endpoint
+- job polling endpoint
+- Variant B file download endpoint for workers
+- result upload endpoint for workers
+- external worker config format
+- external worker packaging for Windows/Linux/macOS/Docker
+- worker capability registration based on av-imgdata-face-processor probe/version
+- remote JobInput translation from DSM asset references to local worker files
+- worker-side ProcessorResult schema validation
 ```
 
 ## Architecture Summary
@@ -61,15 +115,25 @@ Web UI
   = browser client for display, configuration, progress, logs
 
 Native C/C++ processors
-  = package-shipped local processor executables
+  = bounded package-shipped processor executables
   = built by Synology Toolkit for the selected DSM platform
   = no compiler or toolchain required on NAS
+  = no DSM authority logic
+
+Local native subprocess worker
+  = av-imgdata-face-processor worker
+  = local stdin/stdout loop
+  = optimizes repeated local processing by reusing loaded models
+  = not a DSM external worker
 
 Optional external worker
   = external execution host
   = uses DSM Worker API
+  = downloads inputs through DSM API
+  = executes processor binaries/modules locally
+  = uploads results back to DSM
   = may use the same ProcessorContract
-  = may use the same or platform-equivalent processor binaries
+  = may use a platform-equivalent av-imgdata-face-processor binary
 
 ProcessorContract
   = language-neutral anti-duplication boundary
@@ -77,7 +141,7 @@ ProcessorContract
 
 The worker is not a second backend. It is only an execution target for jobs created and owned by DSM.
 
-Native C/C++ processors are not workflow owners. They are bounded execution modules that read contract input and write contract output.
+Native C/C++ processors are not workflow owners. They read contract input and write contract output.
 
 ## Execution Targets
 
@@ -96,7 +160,7 @@ Target selection rules:
 1. DSM creates and owns the job.
 2. DSM checks configured execution preference.
 3. DSM checks local native processor availability.
-4. DSM checks worker availability and capabilities.
+4. DSM checks registered worker availability and capabilities.
 5. DSM selects one execution target.
 6. DSM validates ProcessorResult before committing any result.
 ```
@@ -109,43 +173,68 @@ Recommended first priority order:
 3. Existing local backend implementation as fallback where still available
 ```
 
-The final priority order must remain configurable because small NAS systems may prefer remote workers, while stronger NAS systems may benefit from local native processors.
+The priority order must remain configurable because weak NAS systems may prefer remote workers, while stronger NAS systems may benefit from local native processors.
 
-## Runtime Scope On DSM
+## Local Subprocess Worker Versus External Worker
 
-### Allowed on DSM
+These two concepts must stay separate.
 
-The DSM package may rely on:
-
-```text
-- POSIX shell for DSM package lifecycle scripts
-- existing backend runtime only if declared as official Synology dependency or packaged with the SPK
-- browser JavaScript for Web UI
-- package-shipped native C/C++ binaries for the selected Synology architecture
-- package-local shared libraries required by those binaries
-- explicit external tools when configurable, status-visible, and license-aware
-```
-
-C/C++ components are acceptable for NAS packages when built during the Toolkit build and shipped as package artifacts.
-
-The package must not require a C/C++ compiler or development toolchain on the NAS.
-
-### Not assumed on DSM
-
-The DSM package must not assume these are installed on the NAS:
+### Local subprocess worker
 
 ```text
-- Go runtime
-- Rust toolchain or Rust compiler
-- C/C++ compiler or build toolchain
-- modern Java runtime unless declared as official package dependency
-- .NET runtime
-- Ruby runtime
-- user-managed Python venv
-- user-installed Node.js runtime for backend execution
+DSM Backend
+  -> NativeFaceProcessorService
+  -> av-imgdata-face-processor worker
+  -> stdin/stdout JSON request loop
+  -> local file paths
+  -> local result JSON
 ```
 
-These technologies may still be used outside DSM to build artifacts, but they must not become manual NAS prerequisites.
+Properties:
+
+```text
+- runs on the same machine as DSM backend
+- receives local temp file paths
+- does not register with DSM
+- does not call DSM APIs
+- does not download or upload files
+- reuses loaded models between requests
+- is an optimization of LocalNativeProcessorAdapter
+```
+
+### External worker
+
+```text
+External Worker Runtime
+  -> DSM Worker API client
+  -> registration
+  -> heartbeat
+  -> job polling
+  -> Variant B file download
+  -> local temp workspace
+  -> av-imgdata-face-processor detect/embed or worker mode
+  -> ProcessorResult validation
+  -> result upload
+```
+
+Properties:
+
+```text
+- runs outside DSM, e.g. Windows, Linux, Docker, cloud host
+- must authenticate to DSM
+- must download inputs through DSM API
+- must create local job-input.json with worker-local image_path
+- must execute a processor locally
+- must upload result back to DSM
+- must not own final DSM writes
+```
+
+Rule:
+
+```text
+av-imgdata-face-processor is reusable by an external worker as ProcessorCore.
+It is not itself the external worker runtime.
+```
 
 ## Recommended Repository Structure
 
@@ -153,22 +242,27 @@ Use one monorepo while the processor contract, DSM backend, worker, and native p
 
 ```text
 av_imgdata/
-  src/                         # existing DSM backend
+  src/
     api/
+      worker_routes.py
+      job_routes.py
+      native_processor_routes.py
     services/
-    models/
-    parser/
-    handler/
+      job_service.py
+      job_dispatcher.py
+      worker_registry_service.py
+      worker_auth_service.py
+      worker_file_transfer_service.py
+      processor_result_validator.py
+      native_processor_status_service.py
+      native_face_processor_service.py
     processors/
       local_processor_adapter.py
       local_native_processor_adapter.py
       remote_worker_processor_adapter.py
       processor_contract_loader.py
 
-  ui/                          # browser UI
-    src/
-
-  worker/                      # optional external worker subproject
+  worker/
     cmd/
       av-imgdata-worker/
     internal/
@@ -188,7 +282,7 @@ av_imgdata/
     tests/
     README.md
 
-  processor_contract/           # language-neutral contract
+  processor_contract/
     schemas/
       job.schema.json
       job-input.schema.json
@@ -198,17 +292,15 @@ av_imgdata/
       worker-capabilities.schema.json
       worker-registration.schema.json
       native-processor-status.schema.json
-      face-native-detect-input.schema.json
-      face-native-detect-result.schema.json
-      face-native-embed-input.schema.json
-      face-native-embed-result.schema.json
+      face-native-job-input.schema.json
+      face-native-result.schema.json
     examples/
     fixtures/
     openapi/
       worker-api.openapi.yaml
     README.md
 
-  processors/                   # reusable processor implementations / executables
+  processors/
     native/
       face_processor/
         CMakeLists.txt
@@ -217,21 +309,21 @@ av_imgdata/
         tests/
         fixtures/
         third_party/
-    python/                     # only with official/package-managed runtime
+    python/
     README.md
 
-  native_deps/                  # pinned native dependency sources/cache
+  native_deps/
     sources/
     patches/
     licenses/
 
-  package/                      # DSM package assets
+  package/
     INFO
     scripts/
     conf/
     ui/
-    bin/                        # built native binaries copied into SPK
-    lib/                        # package-local shared libraries copied into SPK
+    bin/
+    lib/
     THIRD_PARTY_NOTICES/
 
   tests/
@@ -252,8 +344,35 @@ av_imgdata/
 
   docs/
   SynoBuildConf/
-  .github/workflows/
 ```
+
+## Runtime Scope On DSM
+
+Allowed on DSM:
+
+```text
+- POSIX shell for DSM package lifecycle scripts
+- existing backend runtime only if declared as official Synology dependency or packaged with the SPK
+- browser JavaScript for Web UI
+- package-shipped native C/C++ binaries for the selected Synology architecture
+- package-local shared libraries required by those binaries
+- explicit external tools when configurable, status-visible, and license-aware
+```
+
+Not assumed on DSM:
+
+```text
+- Go runtime
+- Rust toolchain or Rust compiler
+- C/C++ compiler or build toolchain
+- modern Java runtime unless declared as official package dependency
+- .NET runtime
+- Ruby runtime
+- user-managed Python venv
+- user-installed Node.js runtime for backend execution
+```
+
+C/C++ components are acceptable for NAS packages when built during the Toolkit build and shipped as package artifacts.
 
 ## DSM Package Ownership
 
@@ -278,42 +397,9 @@ The DSM backend remains responsible for:
 - local fallback execution
 ```
 
-Recommended modules:
-
-```text
-src/services/job_service.py
-src/services/job_dispatcher.py
-src/services/worker_registry_service.py
-src/services/worker_auth_service.py
-src/services/worker_file_transfer_service.py
-src/services/processor_result_validator.py
-src/services/native_processor_status_service.py
-src/services/native_face_processor_service.py
-
-src/api/worker_routes.py
-src/api/job_routes.py
-src/api/native_processor_routes.py
-
-src/models/job.py
-src/models/worker.py
-src/models/processor_result.py
-src/models/native_processor_status.py
-
-src/processors/local_processor_adapter.py
-src/processors/local_native_processor_adapter.py
-src/processors/remote_worker_processor_adapter.py
-src/processors/processor_contract_loader.py
-```
-
 ## Native C/C++ Processor Ownership
 
 Native C/C++ processor binaries own only bounded processing.
-
-Example first binary:
-
-```text
-package/bin/av-imgdata-face-processor
-```
 
 Allowed responsibilities:
 
@@ -328,13 +414,19 @@ Allowed responsibilities:
 - face embedding model execution
 - structured ProcessorResult JSON output
 - structured ProcessorError JSON output
+- local stdin/stdout worker loop for model reuse
 ```
 
 Forbidden responsibilities:
 
 ```text
 - DSM authorization
+- DSM API calls
 - Synology Photos API calls
+- worker registration
+- heartbeat
+- job polling
+- DSM file download/upload
 - person creation
 - face assignment
 - metadata writes
@@ -351,26 +443,26 @@ Forbidden responsibilities:
 The external worker owns:
 
 ```text
-- DSM worker API client
+- DSM Worker API client
 - registration request
 - heartbeat loop
 - job polling loop
 - API file download
-- API result upload
+- result upload
 - local temp workspace
-- process execution wrapper
-- optional local processor binaries or modules
-- worker-local logs
+- processor execution wrapper
+- optional local processor binary lifecycle
+- local worker logs
 - service/daemon mode
 - CLI commands
 ```
 
-The worker may use the same `ProcessorContract` and may execute a platform-equivalent `av-imgdata-face-processor` binary.
+The worker may use a platform-equivalent `av-imgdata-face-processor` binary.
 
 The worker must not own:
 
 ```text
-- DSM authorization
+- DSM authorization rules
 - Synology Photos session bootstrap
 - final write decisions
 - authoritative status aggregation
@@ -398,8 +490,6 @@ It defines:
 - deterministic fixtures and expected result shapes
 ```
 
-No Python, C++, worker, or DSM model may become the contract authority.
-
 Required native face job types:
 
 ```text
@@ -408,28 +498,48 @@ face_native_embed
 face_native_probe
 ```
 
-Required general processor result fields:
+Current native face input schema supports:
 
-```json
-{
-  "contract_version": "1.0",
-  "job_id": "string",
-  "type": "string",
-  "status": "completed|failed",
-  "processor": {
-    "name": "string",
-    "version": "string",
-    "backend": "string"
-  },
-  "result": {},
-  "warnings": [],
-  "error": null
-}
+```text
+contract_version
+job_id
+type: face_native_detect | face_native_embed
+input.image_path
+input.source_id
+options.model_root
+options.model_name
+options.min_confidence
+options.max_faces
+options.det_size
+options.normalize_coordinates
 ```
+
+Current native face result schema supports:
+
+```text
+contract_version
+job_id
+type
+status: completed | failed
+processor.name
+processor.version
+processor.backend
+timing_ms
+result.faces
+bbox or normalized box
+embedding as float array or float32-le-base64
+error.code
+error.message
+error.retryable
+error.phase
+warnings
+```
+
+No Python, C++, worker, or DSM model may become the contract authority.
 
 ## ProcessorCore Strategy
 
-`ProcessorCore` is now an execution boundary, not one specific language.
+`ProcessorCore` is an execution boundary, not one specific language.
 
 Supported forms:
 
@@ -448,6 +558,18 @@ av-imgdata-face-processor detect \
   --workdir /tmp/av-imgdata-job-123
 ```
 
+Preferred warm-process boundary:
+
+```text
+av-imgdata-face-processor worker
+
+stdin line:
+  {"request_id":"...","command":"embed","input":"job-input.json","output":"processor-result.json"}
+
+stdout line:
+  {"request_id":"...","returncode":0}
+```
+
 Both local and remote execution must produce the same `ProcessorResult` shape.
 
 ## Native Face Processor Build Policy
@@ -460,104 +582,111 @@ Canonical command from Toolkit root:
 source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
 ```
 
-The build wrapper should remain the only normal package build entrypoint.
-
 Native build integration:
 
 ```text
 1. tools/build-package.sh runs existing checks.
 2. tools/build-package.sh runs Python tests.
-3. If native face build is enabled, dependency cache and licenses are validated.
-4. tools/build-package.sh forwards options to pkgscripts-ng/PkgCreate.py.
-5. SynoBuildConf/build calls native build scripts inside the selected Toolkit platform environment.
-6. C/C++ processor and package-local libraries are built for SYNO_PLATFORM.
-7. SynoBuildConf/install copies binary, libraries, and third-party notices into the SPK.
-8. result_spk/ receives the final SPK.
+3. tools/build-package.sh forwards options to pkgscripts-ng/PkgCreate.py.
+4. SynoBuildConf/build calls tools/build-native-face-processor.sh.
+5. C/C++ processor and package-local libraries are built for SYNO_PLATFORM.
+6. SynoBuildConf/install copies binary and libraries into SPK.
+7. result_spk/ receives the final SPK.
+```
+
+Build dependencies for ONNXRuntime backend:
+
+```text
+- ONNXRUNTIME_ROOT with include/onnxruntime_c_api.h and lib/libonnxruntime.so
+- JPEG_ROOT with include/jpeglib.h and lib/libjpeg.so
+- optional HEIF_ROOT with include/libheif/heif.h
 ```
 
 Recommended build flags:
 
 ```text
-AV_IMGDATA_NATIVE_FACE=0|1
-AV_IMGDATA_NATIVE_FACE_ONNX=0|1
-AV_IMGDATA_NATIVE_FACE_OPENCV=0|1
-AV_IMGDATA_NATIVE_FACE_DEPS=reuse|build
+AV_FACE_PROCESSOR_BACKEND=onnxruntime | python_bridge
+AV_IMGDATA_NATIVE_STRIP=0|1
+ONNXRUNTIME_ROOT=/path/to/onnxruntime
+JPEG_ROOT=/path/to/jpeg-root
+HEIF_ROOT=/path/to/heif-root
 ```
 
-Initial defaults:
+Production branch rule:
 
 ```text
-AV_IMGDATA_NATIVE_FACE=0
-AV_IMGDATA_NATIVE_FACE_ONNX=0
-AV_IMGDATA_NATIVE_FACE_OPENCV=0
+The SPK must contain the ONNXRuntime-native variant, not the python_bridge variant.
 ```
 
-After skeleton proof:
+## External Worker Build And Packaging Policy
+
+DSM Toolkit builds DSM artifacts only. It does not solve external worker packaging.
+
+External worker packaging must be separate from the SPK build.
+
+Required output families:
 
 ```text
-AV_IMGDATA_NATIVE_FACE=1
-AV_IMGDATA_NATIVE_FACE_ONNX=0
-AV_IMGDATA_NATIVE_FACE_OPENCV=0
+worker/build/windows/
+  av-imgdata-worker.exe
+  av-imgdata-face-processor.exe
+  onnxruntime.dll
+  jpeg/libjpeg runtime files
+  config example
+  models directory placeholder
+
+worker/build/linux/
+  av-imgdata-worker
+  av-imgdata-face-processor
+  libonnxruntime.so*
+  libjpeg.so*
+  config example
+  models directory placeholder
+
+worker/build/macos/
+  av-imgdata-worker
+  av-imgdata-face-processor
+  dylibs if supported later
+
+worker/build/docker/
+  Dockerfile
+  av-imgdata-worker
+  av-imgdata-face-processor
+  required shared libraries
 ```
 
-After inference proof:
+External worker packages must include:
 
 ```text
-AV_IMGDATA_NATIVE_FACE=1
-AV_IMGDATA_NATIVE_FACE_ONNX=1
-AV_IMGDATA_NATIVE_FACE_OPENCV=0
+- worker runtime binary
+- av-imgdata-face-processor binary for that platform
+- required native libraries
+- third-party notices
+- example config
+- model directory placeholder
+- service install/uninstall helper where applicable
 ```
 
-Full OpenCV should remain off unless fixture parity proves it is required.
-
-## Native Dependency Policy
-
-Preferred first native stack:
+The external worker must probe the processor at startup:
 
 ```text
-- C++17
-- nlohmann/json or equivalent small JSON parser
-- libjpeg-turbo
-- ONNXRuntime C API for real model execution
+av-imgdata-face-processor version
+av-imgdata-face-processor probe --model-root <worker-model-root> --model-name <model-name>
 ```
 
-Optional later:
-
-```text
-- libpng + zlib
-- minimal OpenCV C++ modules
-```
-
-Avoid initially:
-
-```text
-- full OpenCV
-- HEIF/HEIC codec stack
-- Exiv2
-- custom ONNX inference implementation
-```
-
-License policy:
-
-```text
-- keep native stack permissive where possible
-- include THIRD_PARTY_NOTICES/native-face-processor.md
-- record static and dynamic linkage
-- treat models separately from code dependencies
-- do not include GPL/LGPL/patent-sensitive codec stacks without separate review
-```
+Only after a successful probe may it report `face_native_detect` or `face_native_embed` to DSM.
 
 ## Platform Policy
 
 The current wheelhouse is already platform-specific. The native processor follows the same policy.
 
-Required first platform:
+Required first DSM platform:
 
 ```text
 current Toolkit target, e.g. DSM 7.3 / geminilake
 ```
 
-Optional later platforms:
+Optional later DSM platforms:
 
 ```text
 other x86_64 platform families
@@ -565,40 +694,147 @@ arm64 platform families
 older ARM platforms only if package support explicitly requires them
 ```
 
+External worker platforms are separate from DSM platforms:
+
+```text
+Windows x86_64
+Linux x86_64
+Linux arm64
+Docker linux/amd64
+Docker linux/arm64
+macOS later only if needed
+```
+
 Unsupported platform behavior:
 
 ```text
-- package still starts
+- DSM package still starts
 - native face processor capability is reported as unavailable for platform
 - external worker may still be used if configured
 - Python wheelhouse path may remain optional during migration
 ```
 
-## File Transfer Decision: Variant B Only
+## Worker API Required For External Use
+
+External workers require DSM-side API endpoints.
+
+Minimum endpoints:
+
+```text
+POST /api/worker/register
+POST /api/worker/heartbeat
+GET  /api/worker/jobs/next
+POST /api/worker/jobs/{job_id}/status
+POST /api/worker/jobs/{job_id}/result
+POST /api/worker/jobs/{job_id}/log
+GET  /api/worker/jobs/{job_id}/input/{asset_id}
+PUT  /api/worker/jobs/{job_id}/output/{asset_id}
+```
+
+Endpoint ownership:
+
+```text
+worker_routes.py
+  - request validation only
+  - auth/token check
+  - call services
+  - return DTOs
+
+worker_registry_service.py
+  - worker identity
+  - capabilities
+  - last_seen
+  - version/protocol validation
+
+worker_file_transfer_service.py
+  - safe file lookup
+  - streaming download
+  - temporary upload staging
+  - hash validation
+  - size validation
+
+job_dispatcher.py
+  - compatible job selection
+  - assignment state
+  - timeout/cancel handling
+
+processor_result_validator.py
+  - validate result schema
+  - reject unsupported fields if required
+  - normalize worker/native errors
+```
+
+## Variant B File Transfer For External Workers
 
 The optional worker uses Variant B: DSM provides files through its own API.
 
-The worker does not require SMB, NFS, WebDAV, or direct access to DSM shares in version 1.
+External workers must not require SMB, NFS, WebDAV, or direct access to DSM shares in version 1.
+
+Remote execution flow:
 
 ```text
 1. UI starts an operation.
 2. DSM creates a job.
-3. DSM selects local backend, local native, or remote worker target.
-4. If remote worker is selected, worker pulls the compatible job.
-5. Worker downloads input through DSM API.
-6. Worker processes the file locally.
-7. Worker uploads result through DSM API.
-8. DSM validates ProcessorResult.
-9. DSM commits or records result through DSM-owned logic.
-10. DSM updates runtime/job status.
-11. UI displays status.
+3. DSM selects remote_worker target.
+4. Worker polls next compatible job.
+5. DSM returns a job with asset references, not raw NAS paths.
+6. Worker downloads input through DSM API.
+7. Worker writes input file into local temp workspace.
+8. Worker creates job-input.json with worker-local image_path.
+9. Worker runs av-imgdata-face-processor detect/embed or worker mode.
+10. Worker validates processor-result.json.
+11. Worker uploads result to DSM.
+12. DSM validates ProcessorResult again.
+13. DSM commits or records result through DSM-owned logic.
+14. DSM updates runtime/job status.
+15. UI displays status.
 ```
 
-Variant B endpoints:
+Worker-facing job payload should not expose direct DSM paths as required execution input.
 
-```text
-GET /api/worker/jobs/{job_id}/input/{asset_id}
-PUT /api/worker/jobs/{job_id}/output/{asset_id}
+Recommended DSM job payload for workers:
+
+```json
+{
+  "contract_version": "1.0",
+  "job_id": "job-123",
+  "type": "face_native_embed",
+  "asset": {
+    "asset_id": "asset-456",
+    "filename": "image.jpg",
+    "size": 1234567,
+    "sha256": "optional"
+  },
+  "options": {
+    "model_name": "buffalo_l",
+    "min_confidence": 0.5,
+    "max_faces": 0,
+    "det_size": [640, 640],
+    "normalize_coordinates": true
+  }
+}
+```
+
+Worker-local ProcessorInput:
+
+```json
+{
+  "contract_version": "1.0",
+  "job_id": "job-123",
+  "type": "face_native_embed",
+  "input": {
+    "image_path": "/var/tmp/av-imgdata-worker/job-123/input.jpg",
+    "source_id": "asset-456"
+  },
+  "options": {
+    "model_root": "/opt/av-imgdata-worker/models",
+    "model_name": "buffalo_l",
+    "min_confidence": 0.5,
+    "max_faces": 0,
+    "det_size": [640, 640],
+    "normalize_coordinates": true
+  }
+}
 ```
 
 Required file API behavior:
@@ -607,13 +843,13 @@ Required file API behavior:
 - streaming download
 - streaming upload
 - file size validation
-- content hash validation
+- content hash validation when provided
 - temporary staging before final commit
 - abandoned temp cleanup
 - resumable upload only if measurements show need
 ```
 
-Required rule:
+Required memory rule:
 
 ```text
 Never load full job input or output files into memory in DSM or in the worker unless the file type is explicitly small and bounded.
@@ -634,53 +870,145 @@ Worker -> DSM: result upload
 
 The pull model is preferred because workers can run behind NAT, on Windows desktops, on laptops, in Docker, or in cloud environments without inbound DSM connections.
 
-## Capability Model
+## Worker Capability Model
 
 Capabilities must distinguish local native processors from external workers.
 
-Example native capability status:
+Example local native capability status:
 
 ```json
 {
-  "capability": "face_native_detect",
+  "capability": "face_native_embed",
   "target": "local_native",
   "available": true,
   "platform": "geminilake",
   "binary": "bin/av-imgdata-face-processor",
-  "processor_version": "0.1.0",
-  "backend": "onnxruntime-capi",
+  "processor_version": "av-imgdata-face-processor 0.5.0-onnxruntime-native-heif",
+  "backend": "native",
   "model_status": "ready"
 }
 ```
 
-Example worker capability payload:
+Example worker registration payload:
 
 ```json
 {
   "contract_version": "1.0",
-  "worker_id": "win-gpu-01",
+  "worker_id": "worker-01",
   "name": "Windows GPU Worker",
   "platform": "windows",
   "arch": "amd64",
   "version": "0.1.0",
   "max_parallel_jobs": 2,
   "capabilities": [
-    "file_analysis",
-    "metadata_scan",
-    "preview_generation",
-    "hash_file",
     "face_native_detect",
     "face_native_embed"
+  ],
+  "processors": [
+    {
+      "name": "av-imgdata-face-processor",
+      "version": "av-imgdata-face-processor 0.5.0-onnxruntime-native-heif",
+      "backend": "native",
+      "commands": ["detect", "embed", "worker", "probe", "version"],
+      "model_name": "buffalo_l",
+      "model_status": "ready"
+    }
   ],
   "features": {
     "api_file_transfer": true,
     "share_file_transfer": false,
-    "native_face_processor": true
+    "native_face_processor": true,
+    "warm_processor_worker": true
   }
 }
 ```
 
 DSM should assign jobs only to compatible targets.
+
+## External Worker Runtime Responsibilities
+
+A minimal external worker must implement:
+
+```text
+worker configure
+worker register
+worker start
+worker status
+worker test-connection
+worker install-service
+worker uninstall-service
+```
+
+Runtime loop:
+
+```text
+1. read config
+2. validate DSM URL and token
+3. probe local av-imgdata-face-processor
+4. register capabilities
+5. heartbeat periodically
+6. poll next compatible job
+7. download input asset
+8. create local ProcessorInput
+9. execute processor
+10. validate ProcessorResult
+11. upload result
+12. cleanup temp workspace
+13. report structured status/logs
+```
+
+Processor execution options:
+
+```text
+Option A: one subprocess per job
+  av-imgdata-face-processor embed --input ... --output ... --workdir ...
+
+Option B: warm processor process
+  av-imgdata-face-processor worker
+  stdin/stdout JSON requests
+```
+
+Recommendation:
+
+```text
+Use Option B for face_native_detect and face_native_embed when multiple jobs use the same model.
+Use Option A for simple diagnostics, isolated failures, or first implementation.
+```
+
+## Remote Worker Configuration Example
+
+```yaml
+server:
+  url: "https://dsm.local:5001"
+  token: "REPLACE_WITH_WORKER_TOKEN"
+
+worker:
+  id: "worker-01"
+  name: "worker-01"
+  max_parallel_jobs: 2
+  temp_dir: "/var/tmp/av-imgdata-worker"
+
+processor:
+  path: "/opt/av-imgdata-worker/bin/av-imgdata-face-processor"
+  mode: "warm_worker"
+  timeout_seconds: 120
+
+models:
+  root: "/opt/av-imgdata-worker/models"
+  face_model: "buffalo_l"
+
+files:
+  mode: "api"
+  verify_sha256: true
+
+capabilities:
+  - "face_native_detect"
+  - "face_native_embed"
+
+logging:
+  level: "info"
+  file: "worker.log"
+```
 
 ## DSM-Compatible Component Matrix
 
@@ -690,22 +1018,19 @@ DSM should assign jobs only to compatible targets.
 | DSM API routes | Existing backend runtime, official dependency, or packaged runtime | Keep routes thin. |
 | Job dispatcher | Existing backend runtime, official dependency, or packaged runtime | Selects backend/native/worker target. |
 | Worker registration API | Existing backend runtime | DSM owns worker identity and token validation. |
-| Native processor status | Existing backend runtime invoking package binary | Version/probe/self-test only. |
 | Variant B file streaming endpoints | Existing backend runtime with streaming I/O | Must not load full files into memory. |
 | Status payload builder | Existing backend runtime | DSM remains UI status source of truth. |
 | Runtime state and job persistence | Existing backend runtime / SQLite-backed services | Worker and native binary do not persist authoritative state. |
-| Local backend ProcessorCore | Existing backend modules | Good fallback and migration bridge. |
+| Local backend ProcessorCore | Existing backend modules | Fallback and migration bridge. |
 | Local native ProcessorCore | C/C++ binary shipped in SPK | Best for bounded NAS-local hot paths. |
+| Local native subprocess worker | C/C++ binary `worker` subcommand | Local model reuse optimization. |
+| Remote worker runtime | External binary/service | Owns DSM API client and remote processing loop. |
 | Remote worker ProcessorCore | Worker-owned binary/module | Uses same ProcessorContract. |
-| Hashing hot path | C/C++ native binary or existing backend runtime | Native candidate after measurement. |
 | Image/face processor | C/C++ native binary | Primary C++ component. |
-| ExifTool integration | Existing backend adapter or packaged external tool | Explicit and status-visible. |
 | Web UI | Browser JavaScript | No NAS backend runtime dependency. |
 | Contract tests | Existing test stack outside runtime package | Validate schemas and equivalence. |
 
 ## Target Selection Strategy
-
-Target selection should be explicit and debuggable.
 
 Configuration example:
 
@@ -730,7 +1055,7 @@ remote_worker
 local_backend
 ```
 
-`auto` selection order should be configurable later. Initial order:
+Initial `auto` order:
 
 ```text
 1. local_native if ready and platform-supported
@@ -763,18 +1088,6 @@ Required by all execution targets:
 - metadata normalization rules for processor outputs
 - validation rules for processor results before commit
 - deterministic test fixtures for each supported job type
-```
-
-Implementation may differ, but output contract must not.
-
-Usually shared as fixtures and contract first:
-
-```text
-- face detection input/result
-- face embedding input/result
-- metadata parsing result shape
-- hash generation result shape
-- preview generation result shape
 ```
 
 DSM-owned only:
@@ -814,7 +1127,7 @@ UI/API request
      -> RemoteWorkerProcessorAdapter
         -> DSM Worker API
         -> external worker
-        -> worker processor
+        -> worker-local av-imgdata-face-processor
         -> ProcessorResult
   -> DSM validates result
   -> DSM commits result or records findings
@@ -843,7 +1156,9 @@ Required tests:
 ```text
 - local backend and local native output match schema
 - local native and worker-style output match schema
-- Python InsightFace path and native C++ face processor match fixture expectations within tolerance
+- external worker job payload converts to native ProcessorInput correctly
+- worker result validates against face-native-result.schema.json before upload
+- DSM validates worker result again before final commit
 - same error condition produces same structured error category
 - progress events are accepted but UI status is built by DSM
 - worker/native result cannot bypass DSM validation
@@ -864,40 +1179,24 @@ Native face fixture set:
 - image with EXIF orientation if supported by native path
 ```
 
+Remote worker fixture set:
+
+```text
+- asset download succeeds
+- asset download hash mismatch
+- model probe fails
+- processor returns failed ProcessorResult
+- worker loses heartbeat during job
+- result upload fails
+- DSM rejects invalid ProcessorResult
+```
+
 Numeric tolerance examples:
 
 ```text
 box coordinate tolerance: <= 0.01 normalized units
 landmark tolerance: <= 0.01 normalized units
 embedding cosine similarity: >= 0.995 against reference output
-```
-
-## Client-Side Components
-
-Browser client candidates:
-
-```text
-- table rendering
-- sorting of already-loaded data
-- filtering of already-loaded data
-- simple form validation
-- progress display
-- log display
-- worker registration/configuration forms
-- native processor status display
-- result preview for small bounded payloads
-```
-
-The browser client must not own:
-
-```text
-- DSM file authorization
-- secret handling
-- final write decisions
-- long-running processing
-- mutation workflow ownership
-- worker token generation
-- processor target selection authority
 ```
 
 ## Security Requirements
@@ -910,7 +1209,7 @@ Required controls:
 - explicit allowed job types
 - protocol version check
 - capability whitelist
-- input path/reference validation on DSM side
+- input asset/reference validation on DSM side
 - output validation before final commit
 - processor subprocess timeout
 - bounded temp workdir
@@ -918,9 +1217,12 @@ Required controls:
 - no arbitrary command job type
 - minimal filesystem permissions
 - structured error responses without leaking secrets
+- worker token authentication
+- token rotation support
+- TLS/HTTPS support
 ```
 
-Allowed job types must be explicit:
+Allowed job types:
 
 ```text
 file_analysis
@@ -940,54 +1242,38 @@ eval
 remote_script
 ```
 
-## Configuration Example
+## Client-Side Components
 
-DSM local native processor config:
+Browser client candidates:
 
-```json
-{
-  "native_processors": {
-    "FACE_PROCESSOR": {
-      "ENABLED": false,
-      "PATH": "bin/av-imgdata-face-processor",
-      "MODEL_ROOT": "",
-      "MODEL_NAME": "",
-      "TIMEOUT_SECONDS": 120,
-      "MAX_IMAGE_BYTES": 67108864
-    }
-  }
-}
+```text
+- table rendering
+- sorting of already-loaded data
+- filtering of already-loaded data
+- simple form validation
+- progress display
+- log display
+- worker registration/configuration forms
+- native processor status display
+- remote worker status display
+- result preview for small bounded payloads
 ```
 
-Worker example:
+The browser client must not own:
 
-```yaml
-server:
-  url: "https://dsm.local:5001"
-  token: "REPLACE_WITH_WORKER_TOKEN"
-
-worker:
-  name: "worker-01"
-  max_parallel_jobs: 2
-  temp_dir: "/var/tmp/av-imgdata-worker"
-
-files:
-  mode: "api"
-
-capabilities:
-  - "file_analysis"
-  - "metadata_scan"
-  - "preview_generation"
-  - "hash_file"
-  - "face_native_detect"
-  - "face_native_embed"
+```text
+- DSM file authorization
+- secret handling
+- final write decisions
+- long-running processing
+- mutation workflow ownership
+- worker token generation
+- processor target selection authority
 ```
 
 ## Implementation Phases
 
 ### Phase 1: Contract and target model
-
-Status: Open.
 
 Tasks:
 
@@ -995,6 +1281,7 @@ Tasks:
 - add target selection model: local_backend, local_native, remote_worker
 - add ProcessorContract schemas for native face detection/embedding
 - add native processor status schema
+- add worker registration/capability schemas
 - add fixture definitions and expected result shapes
 ```
 
@@ -1006,153 +1293,124 @@ Acceptance criteria:
 - no workflow depends on one implementation language
 ```
 
-### Phase 2: Local job abstraction
-
-Status: Open.
+### Phase 2: Local native processor integration
 
 Tasks:
 
 ```text
-- identify long-running processing paths
-- define job persistence
-- add status values
-- add LocalBackendProcessorAdapter
-- add LocalNativeProcessorAdapter skeleton
-- route existing local processing through processor boundary
+- keep av-imgdata-face-processor as bounded ProcessorCore
+- use detect/embed CLI boundary
+- use worker subcommand for local model reuse
+- validate ProcessorResult in DSM
+- expose local native status in UI
 ```
 
 Acceptance criteria:
 
 ```text
-- current local behavior still works without native processor or worker
-- UI-facing behavior does not regress
-- job status can be queried independently of processing implementation
-```
-
-### Phase 3: Native C++ processor skeleton
-
-Status: Open.
-
-Tasks:
-
-```text
-- add processors/native/face_processor skeleton
-- implement version/probe/self-test
-- integrate with tools/build-package.sh / SynoBuildConf
-- package binary into SPK for current platform
-- add THIRD_PARTY_NOTICES
-```
-
-Acceptance criteria:
-
-```text
-- SPK contains bin/av-imgdata-face-processor for supported platform
-- binary runs on target DSM
-- version command works
-- self-test works without model
-- no NAS-side compiler/toolchain is required
-```
-
-### Phase 4: Native image and inference implementation
-
-Status: Open.
-
-Tasks:
-
-```text
-- add JPEG decode/preprocess first
-- add ONNXRuntime C API integration
-- add detector model execution
-- add embedding model execution if required
-- add structured errors
-```
-
-Acceptance criteria:
-
-```text
-- native output validates against ProcessorContract
-- corrupt input produces structured error
-- model missing does not block package startup
-- no full OpenCV dependency unless explicitly justified by fixtures
-```
-
-### Phase 5: Local native integration
-
-Status: Open.
-
-Tasks:
-
-```text
-- add NativeFaceProcessorService
-- add native processor status endpoint
-- add UI status display
-- add target selection for face jobs
-- validate ProcessorResult before DSM commit
-```
-
-Acceptance criteria:
-
-```text
-- user can see native processor readiness
+- current local behavior still works without external worker
 - local native target can run a bounded job
 - DSM remains final authority for findings/writes/status
 ```
 
-### Phase 6: Worker runtime skeleton
-
-Status: Open.
+### Phase 3: DSM Worker API
 
 Tasks:
 
 ```text
-- create worker subproject
-- implement configuration loading
-- implement registration
+- implement worker registration
 - implement heartbeat
 - implement job polling
-- implement API file download/upload
-- implement structured logging
-- add ability to execute contract-compatible processor binaries/modules
+- implement worker status/log endpoint
+- implement Variant B input download
+- implement result upload
+- add token validation
+- add worker capability persistence
 ```
 
 Acceptance criteria:
 
 ```text
-- worker registers and heartbeats
-- worker can pull a test job
-- worker can download/upload through Variant B
-- worker reports capabilities including native-equivalent face capabilities when available
+- external worker can register
+- external worker can heartbeat
+- external worker can receive no-job response
+- DSM rejects unauthorized worker requests
 ```
 
-### Phase 7: First real remote job
-
-Status: Open.
+### Phase 4: External worker runtime skeleton
 
 Tasks:
 
 ```text
-- implement one bounded job type
-- run it locally and remotely through the same ProcessorContract
-- validate result before DSM commit
-- show job target in status/debug information
+- create worker/ project
+- implement config loader
+- implement DSM API client
+- implement processor probe
+- implement capability registration
+- implement heartbeat loop
+- implement job polling loop
+- implement temp workspace management
 ```
 
 Acceptance criteria:
 
 ```text
-- local native and worker execution produce equivalent ProcessorResult
-- failed worker jobs show actionable errors
-- DSM remains authority for final result handling
+- worker starts outside DSM
+- worker registers capabilities based on av-imgdata-face-processor probe/version
+- worker remains alive and heartbeats
 ```
 
-### Phase 8: Performance hardening
+### Phase 5: External worker file and processor execution
 
-Status: Deferred until measured.
+Tasks:
+
+```text
+- download input asset through DSM API
+- write local ProcessorInput
+- run av-imgdata-face-processor detect/embed
+- support warm worker mode
+- validate ProcessorResult locally
+- upload result to DSM
+- cleanup temp workspace
+```
+
+Acceptance criteria:
+
+```text
+- remote face_native_detect runs end-to-end
+- remote face_native_embed runs end-to-end
+- DSM validates result before commit
+- failed worker jobs show actionable errors
+```
+
+### Phase 6: External worker packaging
+
+Tasks:
+
+```text
+- create Windows package layout
+- create Linux package layout
+- create Docker package layout
+- include av-imgdata-face-processor and libraries
+- include third-party notices
+- include example config and service helpers
+```
+
+Acceptance criteria:
+
+```text
+- worker package runs on at least one non-DSM Linux host
+- worker can probe processor and register with DSM
+- packaging does not depend on DSM Toolkit
+```
+
+### Phase 7: Performance hardening
 
 Tasks:
 
 ```text
 - measure local backend vs local native vs remote worker time
+- measure model-load savings from warm worker mode
 - measure DSM API transfer throughput
 - measure native processor CPU/RAM use on NAS
 - add chunked/resumable upload only if large files require it
@@ -1174,14 +1432,29 @@ Version 1 should include:
 ```text
 - monorepo structure with worker/, processor_contract/, processors/native/
 - DSM package limited to official/package-managed runtimes and shipped native binaries
-- local native C++ processor skeleton for current Toolkit platform
-- ProcessorContract schemas for native face processor status and results
-- pull-model worker concept
-- Variant B API file transfer only
+- local native C++ processor for current Toolkit platform
+- local native subprocess worker mode for repeated local jobs
+- ProcessorContract schemas for native face processor input/result
 - target model: local_backend, local_native, remote_worker
 - structured job status
-- local-vs-native and native-vs-worker contract tests
+- local-vs-native contract tests
+- native-vs-worker-shape contract tests
 - local fallback in DSM
+```
+
+External worker Version 1 should include:
+
+```text
+- worker runtime skeleton
+- registration
+- heartbeat
+- job polling
+- Variant B file download
+- local ProcessorInput generation
+- av-imgdata-face-processor execution
+- ProcessorResult validation
+- result upload
+- Linux package first
 ```
 
 Version 1 should not include:
@@ -1207,6 +1480,7 @@ Expected benefits:
 ```text
 - DSM package remains responsive during heavy operations
 - local C++ processor can reduce NAS-local Python/OpenCV/InsightFace overhead
+- local worker subcommand can reuse loaded models
 - startup no longer needs runtime pip install for native-supported platform after migration
 - remote worker remains available for weak NAS systems or GPU/stronger hosts
 - same ProcessorContract keeps local and remote behavior comparable
@@ -1218,7 +1492,8 @@ Expected limits:
 - local NAS CPU remains limited compared with desktop/cloud workers
 - ONNXRuntime and model inference may still be expensive on NAS
 - remote processing still pays DSM API transfer cost
-- platform-specific native binaries require Toolkit build and runtime validation
+- platform-specific native binaries require build and runtime validation
+- external worker packaging is separate from DSM Toolkit packaging
 ```
 
 Measure these before claiming speedups:
@@ -1226,7 +1501,9 @@ Measure these before claiming speedups:
 ```text
 local backend processing time
 vs.
-local native processor time
+local native one-shot processor time
+vs.
+local native warm-worker processor time
 vs.
 DSM API transfer time + remote worker processing time + result upload time
 ```
@@ -1240,11 +1517,13 @@ DSM package = controller and file authority
 DSM runtimes = shell, official/package-managed backend runtime, browser JS, shipped native binaries
 C++ components = bounded package-shipped ProcessorCore executables built by Toolkit
 Native face processor = first local C++ processor candidate
-Worker = optional external execution host, not a second backend
+Local native worker mode = stdin/stdout optimization, not external DSM worker
+External worker = separate runtime that uses DSM Worker API and may execute av-imgdata-face-processor
 Worker runtime language = external-platform decision, not NAS runtime requirement
 File transfer = Variant B through DSM API only
 ProcessorContract = anti-duplication boundary
 Local backend, local native, and remote worker execution = same job/result/progress schema
 No manual NAS-side compiler/toolchain/runtime setup
 Additional DSM platforms = optional and additive
+External worker platforms = packaged separately from DSM Toolkit
 ```
