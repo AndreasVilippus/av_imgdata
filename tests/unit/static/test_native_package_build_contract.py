@@ -4,7 +4,6 @@ from pathlib import Path
 def test_synology_build_uses_onnxruntime_native_face_processor():
     build_script = Path("SynoBuildConf/build").read_text(encoding="utf-8")
 
-    assert 'AV_FACE_PROCESSOR_BACKEND="${AV_FACE_PROCESSOR_BACKEND:-onnxruntime}"' in build_script
     assert "./tools/build-native-face-processor.sh" in build_script
     assert "native ONNXRuntime face processor build failed" in build_script
 
@@ -34,10 +33,9 @@ def test_native_face_processor_release_build_strips_binary_by_default():
     assert "native binary remains unstripped" in build_script
 
 
-def test_synology_install_rejects_python_bridge_face_processor():
+def test_synology_install_requires_native_face_processor_libraries():
     install_script = Path("SynoBuildConf/install").read_text(encoding="utf-8")
 
-    assert "services.native_face_processor_worker" in install_script
     assert "onnxruntime-native" in install_script
     assert "libonnxruntime.so" in install_script
     assert "libjpeg.so" in install_script

@@ -64,24 +64,28 @@ def test_exiftool_persistent_config_is_visible_and_normalized():
     assert "EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS: 30" in mixin
 
 
-def test_pip_packages_ui_can_load_select_install_and_reinstall_wheelhouse_packages():
+def test_insightface_ui_uses_native_status_without_wheelhouse_install_controls():
     view = Path("ui/src/views/ExternalLibrariesView.vue").read_text(encoding="utf-8")
     mixin = Path("ui/src/mixins/externalLibrariesMixin.js").read_text(encoding="utf-8")
     api = Path("src/api/imgdata_api.py").read_text(encoding="utf-8")
     client = Path("ui/src/services/dsm-api-client.js").read_text(encoding="utf-8")
 
-    assert "vm.loadPipWheelhousePackages" in view
-    assert "vm.selectedPipWheelhousePackageName" in view
-    assert "vm.installSelectedPipWheelhousePackage(false)" in view
-    assert "vm.installSelectedPipWheelhousePackage(true)" in view
-    assert "/api/pip_wheelhouse_packages" in mixin
-    assert "/api/pip_wheelhouse_package_install" in mixin
-    assert "@router.post(\"/pip_wheelhouse_packages\")" in api
-    assert "@router.post(\"/pip_wheelhouse_package_install\")" in api
-    assert "pip_wheelhouse_package_install: 900000" in client
+    assert "vm.fetchInsightFaceStatus" in view
+    assert "/api/insightface_status" in mixin
+    assert "@router.post(\"/insightface_status\")" in api
+    assert "insightface_status: 120000" in client
+    for removed in (
+        "loadPipWheelhousePackages",
+        "selectedPipWheelhousePackageName",
+        "installSelectedPipWheelhousePackage",
+        "pip_wheelhouse",
+        "pip_packages",
+    ):
+        assert removed not in view
+        assert removed not in mixin
 
 
-def test_native_face_processor_config_is_visible_with_python_fallback():
+def test_native_face_processor_config_is_visible_without_python_fallback():
     view = Path("ui/src/views/ExternalLibrariesView.vue").read_text(encoding="utf-8")
     mixin = Path("ui/src/mixins/externalLibrariesMixin.js").read_text(encoding="utf-8")
     config = Path("src/services/config_service.py").read_text(encoding="utf-8")

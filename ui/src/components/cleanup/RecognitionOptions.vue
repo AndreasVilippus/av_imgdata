@@ -61,31 +61,6 @@
 			</label>
 		</div>
 
-		<div v-if="vm.recognitionOptions.operation_mode !== 'findings'" class="cleanup-options-section">
-			<div class="config-field-label">{{ vm.$avt('cleanup:recognition_advanced_title', 'Advanced scoring') }}</div>
-			<div class="sm-form-grid">
-				<label v-if="isSuggestionScan" class="sm-form-field">
-					<span class="sm-form-label">{{ vm.$avt('cleanup:recognition_safe_score', 'Safe match score') }}</span>
-					<input :value="vm.recognitionOptions.safe_score" type="number" min="0" max="1" step="0.01" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateRecognitionOption('safe_score', Number($event.target.value))" />
-				</label>
-				<label v-if="isSuggestionScan" class="sm-form-field">
-					<span class="sm-form-label">{{ vm.$avt('cleanup:recognition_review_score', 'Review match score') }}</span>
-					<input :value="vm.recognitionOptions.review_score" type="number" min="0" max="1" step="0.01" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateRecognitionOption('review_score', Number($event.target.value))" />
-				</label>
-				<label v-if="isSuggestionScan" class="sm-form-field">
-					<span class="sm-form-label">{{ vm.$avt('cleanup:recognition_min_margin', 'Minimum score margin') }}</span>
-					<input :value="vm.recognitionOptions.min_margin" type="number" min="0" max="1" step="0.01" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateRecognitionOption('min_margin', Number($event.target.value))" />
-				</label>
-				<label v-if="isOutlierScan" class="sm-form-field">
-					<span class="sm-form-label">{{ vm.$avt('cleanup:recognition_outlier_threshold', 'Outlier similarity threshold') }}</span>
-					<input :value="vm.recognitionOptions.outlier_similarity_threshold" type="number" min="0" max="1" step="0.01" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateRecognitionOption('outlier_similarity_threshold', Number($event.target.value))" />
-				</label>
-				<label class="sm-form-field">
-					<span class="sm-form-label">{{ vm.$avt('cleanup:face_frames_det_threshold', 'Minimum detection confidence') }}</span>
-					<input :value="vm.recognitionOptions.det_thresh" type="number" min="0" max="1" step="0.05" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateRecognitionOption('det_thresh', Number($event.target.value))" />
-				</label>
-			</div>
-		</div>
 	</section>
 </template>
 

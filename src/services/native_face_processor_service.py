@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
-from services.face_embedder import InsightFaceEmbedder
 from services.image_decode_service import ImageDecodeService
 
 
@@ -102,19 +101,11 @@ class NativeFaceProcessorService:
         configured = str(self.config().get("MODEL_ROOT") or "").strip()
         if configured:
             return Path(configured).expanduser().resolve()
-        return Path(fallback).expanduser().resolve() if fallback else InsightFaceDetector.resolved_model_root(None)
+        return Path(fallback).expanduser().resolve() if fallback else Path(os.path.expanduser("~/.insightface")).resolve()
 
     def model_name(self, fallback: str = "") -> str:
         configured = str(self.config().get("MODEL_NAME") or "").strip()
         return configured or str(fallback or "").strip()
-
-    def _python_bridge_debug_enabled(self) -> bool:
-        try:
-            root = self.config_service.readMergedConfig()
-        except Exception:
-            return False
-        debug = root.get("debug") if isinstance(root.get("debug"), dict) else {}
-        return bool(debug.get("BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED", False))
 
     def _insightface_license_acknowledged(self) -> bool:
         return bool(self.config().get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False))
@@ -155,8 +146,6 @@ class NativeFaceProcessorService:
         version_lower = result["version"].lower()
         if "skeleton" in version_lower:
             result["backend"] = "skeleton"
-        elif "python-bridge" in version_lower or "python_bridge" in version_lower:
-            result["backend"] = "python_bridge"
         elif "onnxruntime-smoke" in version_lower or "onnxruntime_smoke" in version_lower:
             result["backend"] = "onnxruntime_smoke"
         else:
@@ -165,24 +154,6 @@ class NativeFaceProcessorService:
         probe_name = self.model_name(model_name)
         result["model_root"] = str(probe_root)
         result["model_name"] = probe_name
-        if result.get("backend") == "python_bridge":
-            if not self._python_bridge_debug_enabled():
-                result["inference_available"] = False
-                result["hot_path_available"] = False
-                result["reason"] = "python_bridge_disabled"
-                result["last_error"] = (
-                    "python bridge is disabled by default and only enabled when BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED is true"
-                )
-                return result
-            result["inference_available"] = False
-            result["hot_path_available"] = False
-            result["reason"] = "python_bridge_diagnostic_only"
-            result["probe_skipped"] = "python_bridge_status_probe_disabled"
-            result["last_error"] = (
-                "python bridge starts Python/InsightFace per image and is too slow for production inference; "
-                "a native C++ inference backend is required"
-            )
-            return result
         if result.get("backend") == "skeleton":
             result["inference_available"] = False
             result["hot_path_available"] = False
@@ -203,27 +174,8 @@ class NativeFaceProcessorService:
                 result["heif_decoder_available"] = False
             if "skeleton" in probe_output:
                 result["backend"] = "skeleton"
-            elif "python-bridge" in probe_output or "python_bridge" in probe_output:
-                result["backend"] = "python_bridge"
             elif "onnxruntime-smoke" in probe_output or "onnxruntime_smoke" in probe_output:
                 result["backend"] = "onnxruntime_smoke"
-        if result.get("backend") == "python_bridge":
-            if not self._python_bridge_debug_enabled():
-                result["inference_available"] = False
-                result["hot_path_available"] = False
-                result["reason"] = "python_bridge_disabled"
-                result["last_error"] = (
-                    "python bridge is disabled by default and only enabled when BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED is true"
-                )
-                return result
-            result["inference_available"] = False
-            result["hot_path_available"] = False
-            result["reason"] = "python_bridge_diagnostic_only"
-            result["last_error"] = (
-                "python bridge starts Python/InsightFace per image and is too slow for production inference; "
-                "a native C++ inference backend is required"
-            )
-            return result
         if result.get("backend") == "onnxruntime_smoke":
             result["inference_available"] = False
             result["hot_path_available"] = False
@@ -503,28 +455,28 @@ class NativeFaceProcessorService:
                 process.stdin.write(json.dumps(request, ensure_ascii=False, sort_keys=True) + "\n")
                 process.stdin.flush()
             except (BrokenPipeError, OSError) as exc:
-                self._debug_log("native_face_processor_worker_unavailable", reason=f"write_failed:{exc}")
+                self._debug_log("native_face_processor_persistent_unavailable", reason=f"write_failed:{exc}")
                 self._stop_worker_locked()
                 return None
             ready, _, _ = select.select([process.stdout], [], [], timeout)
             if not ready:
-                self._debug_log("native_face_processor_worker_timeout", command=command, timeout_seconds=timeout)
+                self._debug_log("native_face_processor_persistent_timeout", command=command, timeout_seconds=timeout)
                 self._stop_worker_locked()
                 raise subprocess.TimeoutExpired([str(worker_key[0]), "worker"], timeout)
             line = process.stdout.readline()
             if not line:
                 returncode = process.poll()
-                self._debug_log("native_face_processor_worker_unavailable", reason=f"closed:{returncode}")
+                self._debug_log("native_face_processor_persistent_unavailable", reason=f"closed:{returncode}")
                 self._stop_worker_locked()
                 return None
             try:
                 response = json.loads(line)
             except Exception as exc:
-                self._debug_log("native_face_processor_worker_unavailable", reason=f"invalid_response:{exc}", output=line[-500:])
+                self._debug_log("native_face_processor_persistent_unavailable", reason=f"invalid_response:{exc}", output=line[-500:])
                 self._stop_worker_locked()
                 return None
             if str(response.get("request_id") or "") != request_id:
-                self._debug_log("native_face_processor_worker_unavailable", reason="request_id_mismatch", output=line[-500:])
+                self._debug_log("native_face_processor_persistent_unavailable", reason="request_id_mismatch", output=line[-500:])
                 self._stop_worker_locked()
                 return None
             return subprocess.CompletedProcess(
@@ -550,12 +502,12 @@ class NativeFaceProcessorService:
                 env=self._processor_env(),
             )
         except Exception as exc:
-            self._debug_log("native_face_processor_worker_unavailable", reason=f"start_failed:{type(exc).__name__}: {exc}")
+            self._debug_log("native_face_processor_persistent_unavailable", reason=f"start_failed:{type(exc).__name__}: {exc}")
             self._worker_process = None
             self._worker_key = None
             return None
         self._worker_key = worker_key
-        self._debug_log("native_face_processor_worker_started", executable=executable, **self._ort_environment_config())
+        self._debug_log("native_face_processor_persistent_started", executable=executable, **self._ort_environment_config())
         return self._worker_process
 
     def _stop_worker_locked(self) -> None:
@@ -718,7 +670,15 @@ class NativeFaceEmbedder(NativeFaceDetector):
 
     @staticmethod
     def _iou(left: Dict[str, Any], right: Dict[str, Any]) -> float:
-        return InsightFaceEmbedder._iou(left, right)
+        x1 = max(float(left["x1"]), float(right["x1"]))
+        y1 = max(float(left["y1"]), float(right["y1"]))
+        x2 = min(float(left["x2"]), float(right["x2"]))
+        y2 = min(float(left["y2"]), float(right["y2"]))
+        intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        left_area = max(0.0, float(left["x2"]) - float(left["x1"])) * max(0.0, float(left["y2"]) - float(left["y1"]))
+        right_area = max(0.0, float(right["x2"]) - float(right["x1"])) * max(0.0, float(right["y2"]) - float(right["y1"]))
+        union = left_area + right_area - intersection
+        return intersection / union if union > 0 else 0.0
 
     def embed_matched_face(
         self,

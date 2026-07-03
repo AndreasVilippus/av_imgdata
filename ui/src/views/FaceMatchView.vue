@@ -15,7 +15,7 @@
 							<option value="recognition_analyze_unknown_faces" :disabled="!vm.hasInsightFaceForFaceMatch">{{ vm.$avt('face_match:action_recognition_unknown_faces', 'recognize unknown faces with InsightFace') }}</option>
 						</select>
 					<div v-if="!vm.hasInsightFaceForFaceMatch" class="config-card-desc">
-						{{ vm.$avt('face_match:hint_insightface_unavailable', 'InsightFace search becomes available after the optional InsightFace package is installed.') }}
+						{{ vm.faceMatchInsightFaceUnavailableMessage }}
 					</div>
 					<div class="face-match-action-buttons">
 						<v-button @click="vm.handlePrimaryFaceMatchButton" :disabled="vm.faceMatchActionLocked" style="width: 160px;">

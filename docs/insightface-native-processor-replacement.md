@@ -52,41 +52,34 @@ Implemented in the current branch:
 - package build creates and installs bin/av-imgdata-face-processor
 - the backend calls that binary through NativeFaceProcessorService
 - the binary is no longer a no-op skeleton
-- python_bridge is retained only as a diagnostic/contract bridge
 - ONNXRuntime build mode exposes backend=native
 - native detect/embed execute C++ JPEG decode, SCRFD detector inference/post-processing and ArcFace embedding inference
 - native processor start/finish/failure events are written to the backend debug logger
 ```
 
-Observed on NAS after installing the branch package:
+Observed on NAS before the native backend became the hot path:
 
 ```text
-- /api/pip_packages_status reported processor_backend=python_bridge
-- the package binary was present and executable at /volume1/@appstore/AV_ImgData/bin/av-imgdata-face-processor
-- the version was av-imgdata-face-processor 0.2.0-python-bridge
-- probe succeeded for /volume1/@appdata/AV_ImgData/insightface_models/buffalo_l
-- debug log contained native_face_processor_run_start for embed jobs
-- one embed job through python_bridge took 89379.64 ms and returned 4 faces
+- process-per-image Python/InsightFace execution took about 89 s for one embed job with 4 faces
 - failed embed attempts returned after about 4948 ms and 824 ms with exit 1 and no stderr/stdout detail
 - a HEIC image required the preview fallback path through pillow-heif
-- /api/pip_packages_status took about 59 s while probing the bridge
 - stop requests remained in phase=stopping until the current embed subprocess returned
 ```
 
 Conclusion from the measured run:
 
 ```text
-The package-shipped binary path is functionally wired, but python_bridge is not
-acceptable as the production image-processing backend. It starts Python,
-InsightFace and ONNXRuntime inside a separate subprocess per image. That makes
-the hot path too slow and delays stop handling while a subprocess is running.
+Process-per-image Python execution is not acceptable as the production
+image-processing backend. It starts Python, InsightFace and ONNXRuntime inside a
+separate subprocess per image. That makes the hot path too slow and delays stop
+handling while a subprocess is running.
 ```
 
 Updated measured performance after the C++ ONNXRuntime backend became the hot
 path on NAS:
 
 ```text
-python_bridge without real C++ backend:
+process-per-image Python baseline:
 - 2 completed embed jobs
 - 8 faces total
 - median 104633 ms per image
@@ -110,8 +103,8 @@ C++ native with persistent worker started:
 Conclusion from the updated run:
 
 ```text
-The C++ backend is now the functional replacement for python_bridge and removes
-the previous 89-120 s per-image Python bridge behavior.
+The C++ backend is now the functional replacement and removes the previous
+89-120 s per-image Python behavior.
 
 The persistent worker is started and functional, but the measured median per
 image is still essentially equal to the previous native one-shot runs. The next
@@ -172,14 +165,11 @@ attempt.
 Current branch policy:
 
 ```text
-python_bridge is a diagnostic/contract bridge only.
-It proves packaging, command dispatch, status reporting and JSON contracts.
-It must not be treated as completed native inference.
 Only backend=native with hot_path_available=true may be used as the C++ image
-processing path.
+processing path. The native processor is a required ONNXRuntime/C++ binary, not
+a selectable bridge mode.
 ```
 
-This branch therefore no longer treats `python_bridge` as the replacement path.
 The remaining completion gate is real-model parity and NAS runtime validation
 for the C++ ONNXRuntime backend.
 
@@ -189,7 +179,7 @@ Updated implementation fact:
 - the C++ ONNXRuntime backend now compiles locally as av-imgdata-face-processor 0.5.0-onnxruntime-native-heif
 - the binary links package-local libonnxruntime through $ORIGIN/../lib
 - missing model files are reported by probe before image processing starts
-- detect/embed no longer use the Python bridge in ONNXRuntime build mode
+- detect/embed use the native ONNXRuntime backend
 - local parity validation is still pending because no real buffalo_l ONNX model files were present in the workspace
 ```
 
@@ -262,7 +252,7 @@ The native processor does not write to DSM metadata, Synology Photos, config, ru
 | Replacing InsightFace Python orchestration | Medium | Feasible if exact model inputs/outputs and normalization are defined. |
 | Replacing ONNXRuntime with custom inference code | Low | Not sensible. A real inference runtime is still required. |
 | Building ONNXRuntime C/C++ for the current Toolkit target | Medium | Feasible enough for proof-of-concept; must be verified in the existing Toolkit environment. |
-| Using `python_bridge` for production image processing | Low | Measured as too slow: one image embed took about 89 s and stop had to wait for subprocess completion. |
+| Using process-per-image Python execution for production image processing | Low | Measured as too slow: one image embed took about 89 s and stop had to wait for subprocess completion. |
 | Building ONNXRuntime C/C++ for all DSM platforms | Medium to Low | Optional later. High effort and must be proven per platform. |
 | Guaranteeing identical numeric output across architectures | Medium to Low | Must allow tolerances for floating-point differences. |
 | Supporting current package-level behavior on the current target | Medium | Feasible if the processor contract is defined first and optional status behavior is preserved. |
@@ -272,8 +262,7 @@ Conclusion:
 ```text
 The replacement is sensible if implemented first for the already supported Toolkit target.
 Multi-platform support must remain optional and additive.
-The process-per-image Python bridge is not a valid replacement target; it is only
-useful as a temporary contract and packaging probe.
+Process-per-image Python execution is not a valid replacement target.
 ```
 
 ## C++ Migration Milestones
@@ -282,12 +271,11 @@ Based on the measured NAS run, continue the C++ transition in this order:
 
 ```text
 1. Keep av-imgdata-face-processor as the required package binary and contract endpoint.
-2. Keep python_bridge only for version/probe/diagnostic validation, not for hot image processing.
-3. Add a real inference runtime distribution for the active DSM target:
+2. Add a real inference runtime distribution for the active DSM target:
    - preferred: ONNXRuntime C API headers and libonnxruntime.so
    - alternative only if ONNXRuntime is not buildable: ncnn/MNN/OpenCV DNN with model conversion proof
-4. Implement C++ JSON input/output and error contracts against processor_contract/.
-5. Implement image loading for JPEG first with libjpeg-turbo.
+3. Implement C++ JSON input/output and error contracts against processor_contract/.
+4. Implement image loading for JPEG first with libjpeg-turbo.
 6. Maintain the implemented SCRFD detector ONNX runner and post-processing.
 7. Maintain the implemented ArcFace/InsightFace embedding ONNX runner and normalization.
 8. Add parity fixtures comparing C++ output with the existing Python InsightFace path using tolerances.

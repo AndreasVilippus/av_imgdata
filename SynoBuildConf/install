@@ -28,11 +28,6 @@ create_install() {
 		echo "The native C++ face processor is required for this branch."
 		exit 1
 	fi
-	if strings "$NATIVE_INSTALL/bin/av-imgdata-face-processor" | grep -q 'services.native_face_processor_worker'; then
-		echo "ERROR: native face processor is the python_bridge variant, not the C++ ONNXRuntime variant."
-		echo "Build with AV_FACE_PROCESSOR_BACKEND=onnxruntime and a valid ONNXRUNTIME_ROOT."
-		exit 1
-	fi
 	if ! strings "$NATIVE_INSTALL/bin/av-imgdata-face-processor" | grep -q 'onnxruntime-native'; then
 		echo "ERROR: native face processor does not report the onnxruntime-native backend."
 		exit 1

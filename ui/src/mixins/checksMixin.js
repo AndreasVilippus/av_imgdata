@@ -7,6 +7,7 @@ export default {
 			checksChangedSinceDays: 0,
 			checksAutoApplySuggestedNames: false,
 			checksAutoApplySuggestedDuplicates: false,
+			checksInsightFaceAutoSelectSafe: false,
 			checksLoading: false,
 			checksStartRequestInFlight: false,
 			checksStopRequestInFlight: false,
@@ -57,7 +58,10 @@ export default {
 		},
 		isChecksReviewActive() {
 			return !!(
-				this.isChecksScanRunning
+				(this.isInsightFaceAssignmentCheck && this.cleanupLoading)
+				|| (this.isInsightFaceAssignmentCheck && this.recognitionFindingsLoading)
+				|| (this.isInsightFaceAssignmentCheck && this.recognitionDecisionLoading)
+				|| this.isChecksScanRunning
 				|| this.isChecksFindingsActionRunning
 				|| this.checksStartRequestInFlight
 				|| (this.selectedChecksAction === 'findings' && this.checksLoading)
@@ -73,6 +77,14 @@ export default {
 			);
 		},
 		checksPrimaryButtonLabel() {
+			if (this.isInsightFaceAssignmentCheck) {
+				if (this.cleanupLoading) {
+					return this.$avt('checks:button_stop', 'Stop');
+				}
+				if (this.selectedChecksAction === 'findings') {
+					return this.$avt('checks:action_findings', 'Process saved findings list');
+				}
+			}
 			if (this.isChecksReviewActive || this.isChecksReviewStopping) {
 				return this.$avt('checks:button_stop', 'Stop');
 			}
@@ -116,9 +128,15 @@ export default {
 		hasChecksStoredFindings() {
 			return this.checksStoredFindingsCount > 0;
 		},
+		isInsightFaceAssignmentCheck() {
+			return String(this.selectedChecksType || '').trim().toLowerCase() === 'recognition_check_person_assignments';
+		},
 	},
 	watch: {
 		selectedChecksAction(nextAction) {
+			if (this.isInsightFaceAssignmentCheck) {
+				this.syncInsightFaceAssignmentRecognitionOptions();
+			}
 			if (nextAction !== 'scan') {
 				this.checksSaveOnly = false;
 			}
@@ -128,6 +146,9 @@ export default {
 			}
 		},
 		selectedChecksType() {
+			if (this.isInsightFaceAssignmentCheck) {
+				this.syncInsightFaceAssignmentRecognitionOptions();
+			}
 			this.checksProgressRequestId += 1;
 			if (!this.checksLoading && !this.checksSessionSyncing) {
 				this.resetChecksUiState();
@@ -159,6 +180,33 @@ export default {
 			this.checksFindingsActionRunning = false;
 			this.checksSkipNameMappingConfirm = false;
 			this.resetChecksDuplicateAssignmentState();
+		},
+		syncInsightFaceAssignmentRecognitionOptions() {
+			if (!this.isInsightFaceAssignmentCheck) {
+				return;
+			}
+			let operationMode = 'immediate';
+			if (this.selectedChecksAction === 'findings') {
+				operationMode = 'findings';
+			} else if (this.checksSaveOnly) {
+				operationMode = 'save_only';
+			}
+			this.recognitionOptions = {
+				...this.recognitionOptions,
+				operation_mode: operationMode,
+				selection_mode: this.checksInsightFaceAutoSelectSafe ? 'safe_only' : 'review_all',
+				changed_since_days: Math.max(0, Number(this.checksChangedSinceDays) || 0),
+			};
+		},
+		async startInsightFaceAssignmentCheck() {
+			this.syncInsightFaceAssignmentRecognitionOptions();
+			this.cleanupRuntimeAction = 'recognition_check_person_assignments';
+			this.checksStatusMessage = this.$avt('checks:status_loading', 'Loading checks...');
+			if (this.cleanupLoading) {
+				await this.stopCleanupRun({ actionOverride: 'recognition_check_person_assignments' });
+				return;
+			}
+			await this.startCleanupRun({ actionOverride: 'recognition_check_person_assignments' });
 		},
 		async fetchChecksFindingsStatus() {
 			try {
@@ -1228,11 +1276,18 @@ export default {
 				return null;
 			}
 			if (this.isChecksReviewActive) {
+				if (this.isInsightFaceAssignmentCheck) {
+					return this.startInsightFaceAssignmentCheck();
+				}
 				return this.stopChecksReview();
 			}
 			this.checksStopRequested = false;
 			this.checksStopRequestInFlight = false;
 
+			if (this.isInsightFaceAssignmentCheck) {
+				await this.startInsightFaceAssignmentCheck();
+				return;
+			}
 			if (this.isChecksScanRunning) {
 				await this.stopChecksScan();
 				return;

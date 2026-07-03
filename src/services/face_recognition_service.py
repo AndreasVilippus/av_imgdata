@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from services.bbox_normalizer import from_photos, to_bbox_dict
-from services.face_embedder import InsightFaceEmbedder
+from services.face_detector import FaceDetectorUnavailable
 
 
 class FaceRecognitionService:
@@ -25,7 +25,7 @@ class FaceRecognitionService:
 
     def __init__(self, backend: Any):
         self.backend = backend
-        self._embedder: Optional[InsightFaceEmbedder] = None
+        self._embedder: Optional[Any] = None
         self._embedder_key = None
         self._image_embedding_cache: Dict[str, List[Dict[str, Any]]] = {}
         self._image_quality_issues: List[Dict[str, Any]] = []
@@ -149,7 +149,7 @@ class FaceRecognitionService:
         except Exception:
             return False
 
-    def _prepared_embedder(self, options: Dict[str, Any]) -> InsightFaceEmbedder:
+    def _prepared_embedder(self, options: Dict[str, Any]) -> Any:
         key = (
             self.backend._faceProcessorRuntimeKey() if hasattr(self.backend, "_faceProcessorRuntimeKey") else ("python",),
             self.backend._configuredInsightFaceModelName(),
@@ -179,12 +179,9 @@ class FaceRecognitionService:
             min_height_ratio=key[7],
         )
         create_embedder = getattr(self.backend, "_createFaceEmbedder", None)
+        if not callable(create_embedder):
+            raise FaceDetectorUnavailable("native face processor is required")
         embedder = create_embedder(
-            model_name=key[1], model_root=self.backend._configuredInsightFaceModelRoot(),
-            det_size=key[3], det_thresh=key[4], max_num=key[5],
-            min_width_ratio=key[6], min_height_ratio=key[7],
-            max_image_edge=self._recognition_image_max_edge(),
-        ) if callable(create_embedder) else InsightFaceEmbedder(
             model_name=key[1], model_root=self.backend._configuredInsightFaceModelRoot(),
             det_size=key[3], det_thresh=key[4], max_num=key[5],
             min_width_ratio=key[6], min_height_ratio=key[7],
@@ -349,7 +346,7 @@ class FaceRecognitionService:
             return preview, "exiftool"
         return None, ""
 
-    def _person_references(self, *, user_key: str, cookies: Dict[str, str], base_url: str, shared_folder: str, person: Dict[str, Any], embedder: InsightFaceEmbedder, options: Dict[str, Any], folder_cache: Dict[int, str], progress_context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    def _person_references(self, *, user_key: str, cookies: Dict[str, str], base_url: str, shared_folder: str, person: Dict[str, Any], embedder: Any, options: Dict[str, Any], folder_cache: Dict[int, str], progress_context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         context = dict(progress_context) if isinstance(progress_context, dict) else {}
         action = str(context.get("action") or self.ACTION_BUILD)
         try:

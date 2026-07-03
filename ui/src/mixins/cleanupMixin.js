@@ -50,12 +50,7 @@ export default {
 				exclude_outliers: true,
 				rebuild_all: false,
 				changed_since_days: 30,
-				safe_score: 0.55,
-				review_score: 0.45,
-				min_margin: 0.08,
-				outlier_similarity_threshold: 0.35,
 				det_size: [640, 640],
-				det_thresh: 0.5,
 				max_num: 0,
 				min_width_ratio: 0.015,
 				min_height_ratio: 0.015,
@@ -100,6 +95,9 @@ export default {
 				return this.selectedFaceMatchingAction === 'recognition_analyze_unknown_faces';
 			},
 			selectedRecognitionAction() {
+				if (this.selectedChecksType === 'recognition_check_person_assignments') {
+					return 'recognition_check_person_assignments';
+				}
 				return this.faceMatchRecognitionActionSelected
 					? 'recognition_analyze_unknown_faces'
 					: this.activeCleanupAction;

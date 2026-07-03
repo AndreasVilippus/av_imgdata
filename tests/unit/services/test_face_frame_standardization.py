@@ -122,12 +122,13 @@ def test_prepared_detector_is_reused_for_identical_options():
     detector = Mock()
     options = service.normalize_options({})
 
-    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector) as detector_class:
-        first = service._prepared_detector(options)
-        second = service._prepared_detector(options)
+    backend._createFaceDetector = Mock(return_value=detector)
+
+    first = service._prepared_detector(options)
+    second = service._prepared_detector(options)
 
     assert first is second
-    detector_class.assert_called_once()
+    backend._createFaceDetector.assert_called_once()
     detector.prepare.assert_called_once()
 
 
@@ -175,8 +176,8 @@ def test_preview_run_keeps_required_finding_fields_in_active_run_state():
     detector = Mock()
     detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
 
-    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        service._run(
+    backend._createFaceDetector = Mock(return_value=detector)
+    service._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
@@ -226,8 +227,8 @@ def test_save_only_run_writes_persisted_findings_list():
     detector = Mock()
     detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
 
-    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        FaceFrameStandardizationService(backend)._run(
+    backend._createFaceDetector = Mock(return_value=detector)
+    FaceFrameStandardizationService(backend)._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
@@ -281,8 +282,8 @@ def test_review_all_mode_does_not_preselect_safe_findings():
     detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
 
     service = FaceFrameStandardizationService(backend)
-    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        service._run(
+    backend._createFaceDetector = Mock(return_value=detector)
+    service._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
@@ -328,8 +329,8 @@ def test_standardization_passes_configured_thresholds_to_match_decision():
     detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
 
     service = FaceFrameStandardizationService(backend)
-    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector), \
-            patch("services.face_frame_standardization_service.match_decision", return_value="review") as decision:
+    backend._createFaceDetector = Mock(return_value=detector)
+    with patch("services.face_frame_standardization_service.match_decision", return_value="review") as decision:
         service._run(
             user_key="user",
             cookies={},
@@ -388,8 +389,8 @@ def test_immediate_mode_resumes_after_previous_review_path():
 
     service = FaceFrameStandardizationService(backend)
     service._write_active_findings("user", previous)
-    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        service._run(
+    backend._createFaceDetector = Mock(return_value=detector)
+    service._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
@@ -447,9 +448,9 @@ def test_immediate_mode_explicit_start_ignores_previous_partial_findings():
     detector = Mock()
     detector.detect.return_value = []
 
-    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        service = FaceFrameStandardizationService(backend)
-        service._run(
+    backend._createFaceDetector = Mock(return_value=detector)
+    service = FaceFrameStandardizationService(backend)
+    service._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
@@ -608,8 +609,8 @@ def test_safe_mode_automatically_applies_safe_metadata_findings():
     detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
 
     service = FaceFrameStandardizationService(backend)
-    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        service._run(
+    backend._createFaceDetector = Mock(return_value=detector)
+    service._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
@@ -696,8 +697,8 @@ def test_safe_mode_recalculates_open_selections_from_previous_manual_run():
 
     service = FaceFrameStandardizationService(backend)
     service._write_active_findings("user", previous)
-    with patch("services.face_frame_standardization_service.InsightFaceDetector"):
-        service._run(
+    backend._createFaceDetector = Mock(return_value=Mock())
+    service._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",
@@ -839,8 +840,8 @@ def test_save_only_start_ignores_persisted_findings_without_explicit_resume():
     detector = Mock()
     detector.detect.return_value = [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}]
 
-    with patch("services.face_frame_standardization_service.InsightFaceDetector", return_value=detector):
-        FaceFrameStandardizationService(backend)._run(
+    backend._createFaceDetector = Mock(return_value=detector)
+    FaceFrameStandardizationService(backend)._run(
             user_key="user",
             cookies={},
             base_url="http://example.test",

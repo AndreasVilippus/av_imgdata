@@ -86,7 +86,7 @@ def test_only_runtime_progress_polling_opts_into_overlap_skipping():
     for marker in [
         "getStatus({ auto: true })",
         "fetchExiftoolStatus()",
-        "fetchPipPackagesStatus()",
+        "fetchInsightFaceStatus()",
         "loadExternalLibrariesConfig()",
     ]:
         assert marker in source

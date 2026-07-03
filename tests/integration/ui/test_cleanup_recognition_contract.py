@@ -3,6 +3,8 @@ from pathlib import Path
 
 def test_cleanup_exposes_recognition_actions_and_standard_options():
     view = Path("ui/src/views/CleanupView.vue").read_text(encoding="utf-8")
+    checks_view = Path("ui/src/views/ChecksView.vue").read_text(encoding="utf-8")
+    checks_options = Path("ui/src/components/checks/InsightFaceAssignmentOptions.vue").read_text(encoding="utf-8")
     face_match_view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
     options = Path("ui/src/components/cleanup/RecognitionOptions.vue").read_text(encoding="utf-8")
     mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
@@ -11,13 +13,24 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     for action in (
         "recognition_build_profiles",
         "recognition_check_reference_outliers",
-        "recognition_check_person_assignments",
     ):
         assert f'value="{action}"' in view
         assert f"'{action}'" in mixin
+    assert 'value="recognition_check_person_assignments"' not in view
+    assert 'value="recognition_check_person_assignments"' in checks_view
+    assert "InsightFaceAssignmentOptions: () => import" in checks_view
+    assert "InsightFaceAssignmentReview: () => import" in checks_view
+    assert "checksInsightFaceAutoSelectSafe" in checks_options
+    assert "checksChangedSinceDays" in checks_options
     assert 'value="recognition_analyze_unknown_faces"' not in view
     assert 'value="search_missing_faces_insightface"' in face_match_view
     assert 'value="recognition_analyze_unknown_faces"' in face_match_view
+    assert "faceMatchInsightFaceNativeProcessorStatus()" in face_match_mixin
+    assert "nativeProcessors.FACE_PROCESSOR" in face_match_mixin
+    assert "nativeStatus.hot_path_available === true" in face_match_mixin
+    assert "nativeStatus.available === true" in face_match_mixin
+    assert "return !!(nativeStatus && nativeStatus.hot_path_available === true && nativeStatus.available === true);" in face_match_mixin
+    assert "faceMatchInsightFaceUnavailableMessage" in face_match_view
     assert "faceMatchRecognizeMissingInsightFacePersons" in face_match_view
     assert "faceMatchSkipUnknownInsightFacePersons" in face_match_view
     assert "skip_unknown_persons:" in face_match_mixin
@@ -35,6 +48,7 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
         assert f'value="{mode}"' in options
     assert "sm-form-select" in options
     assert "sm-form-input sm-form-number-input" in options
+    assert "cleanup:recognition_advanced_title" not in options
     assert "recognitionOptions" in mixin
     assert "...this.recognitionOptions" in mixin
     assert "resume_existing: !!options.resumeExisting" in mixin

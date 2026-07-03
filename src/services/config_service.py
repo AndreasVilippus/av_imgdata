@@ -55,18 +55,6 @@ class ConfigService:
                 "FILE_MATCH_SOURCE_SCOPE": "both",
                 "PERSON_SORT_ORDER": "id_desc",
             },
-            "pip_packages": {
-                "INSIGHTFACE": {
-                    "ENABLED": False,
-                    "INSTALL_ON_START": False,
-                    "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
-                    "WHEELHOUSE_ENABLED": True,
-                    "WHEELHOUSE_MANIFEST_URL": "https://github.com/AndreasVilippus/av_imgdata-wheelhouse/releases/download/dsm7-x86_64-python38-2026.06.22/wheelhouse-manifest.json",
-                    "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
-                    "MODEL_ROOT": "",
-                    "MODEL_NAME": "",
-                },
-            },
             "native_processors": {
                 "FACE_PROCESSOR": {
                     "ENABLED": True,
@@ -133,13 +121,17 @@ class ConfigService:
                     "NAME_CONFLICT_OVERLAP_THRESHOLD": 0.75,
                     "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": True,
                     "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": 0.05,
+                    "RECOGNITION_SAFE_SCORE": 0.55,
+                    "RECOGNITION_REVIEW_SCORE": 0.45,
+                    "RECOGNITION_MIN_MARGIN": 0.08,
+                    "RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD": 0.35,
+                    "RECOGNITION_DET_THRESH": 0.5,
                     "SINGLE_SOURCE_OF_TRUTH": "",
                 },
             },
             "debug": {
                 "IO_METRICS_ENABLED": False,
                 "BACKEND_DEBUG_ENABLED": False,
-                "BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED": False,
                 "BACKEND_DEBUG_LOG_PATH": "",
                 "BACKEND_DEBUG_LOG_MAX_BYTES": 1048576,
                 "BACKEND_DEBUG_LOG_BACKUPS": 3,
@@ -197,30 +189,6 @@ class ConfigService:
         self._merged_config_cache = None
         self._merged_config_cache_signature = None
         return True
-
-    def ensureInstallOnStartConfig(self) -> bool:
-        config = self.readConfig()
-        if not isinstance(config, dict):
-            return False
-        pip_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
-        insightface = pip_packages.get("INSIGHTFACE") if isinstance(pip_packages.get("INSIGHTFACE"), dict) else {}
-        if not bool(insightface.get("INSTALL_ON_START", False)):
-            return False
-
-        defaults = self.defaultConfig()["pip_packages"]["INSIGHTFACE"]
-        changed = False
-        for key in ("WHEELHOUSE_ENABLED", "WHEELHOUSE_MANIFEST_URL", "WHEELHOUSE_TARGET", "REQUIREMENTS_FILE"):
-            default_value = defaults.get(key)
-            if insightface.get(key) != default_value:
-                insightface[key] = default_value
-                changed = True
-
-        if not changed:
-            return False
-
-        pip_packages["INSIGHTFACE"] = insightface
-        config["pip_packages"] = pip_packages
-        return self.writeConfig(config)
 
     @classmethod
     def normalizeConfig(cls, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -332,7 +300,6 @@ class ConfigService:
 
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}
         debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED"))
-        debug["BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED"] = bool(debug.get("BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED"))
         debug["IO_METRICS_ENABLED"] = bool(debug.get("IO_METRICS_ENABLED"))
         debug["BACKEND_DEBUG_LOG_MAX_BYTES"] = cls._clamp_int(
             debug.get("BACKEND_DEBUG_LOG_MAX_BYTES"),
@@ -362,6 +329,19 @@ class ConfigService:
                 maximum=1.0,
             )
             checks["NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"] = bool(checks.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"))
+            for key, default in (
+                ("RECOGNITION_SAFE_SCORE", 0.55),
+                ("RECOGNITION_REVIEW_SCORE", 0.45),
+                ("RECOGNITION_MIN_MARGIN", 0.08),
+                ("RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD", 0.35),
+                ("RECOGNITION_DET_THRESH", 0.5),
+            ):
+                checks[key] = cls._clamp_float(
+                    checks.get(key),
+                    default=default,
+                    minimum=0.0,
+                    maximum=1.0,
+                )
 
     @staticmethod
     def _clamp_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:

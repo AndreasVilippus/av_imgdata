@@ -6,8 +6,8 @@ export default {
 			fileAnalysisProgress: {},
 			fileAnalysisProgressTimer: null,
 			fileAnalysisProgressRequestId: 0,
-			statusPipPackagesStatus: {},
-			statusPipPackagesLoading: false,
+			statusInsightFaceStatus: {},
+			statusInsightFaceLoading: false,
 			persons: {
 				total: 0,
 				known: 0,
@@ -46,7 +46,7 @@ export default {
 		this.getStatus({ auto: true });
 		this.fetchFileAnalysisProgress();
 		this.fetchExiftoolStatus();
-		this.fetchStatusPipPackagesStatus();
+		this.fetchStatusInsightFaceStatus();
 	},
 	beforeDestroy() {
 		this.stopFileAnalysisProgressPolling();
@@ -103,42 +103,42 @@ export default {
 				this.output = `Error: ${err.message}`;
 			}
 		},
-		async fetchStatusPipPackagesStatus() {
-			this.statusPipPackagesLoading = true;
+		async fetchStatusInsightFaceStatus() {
+			this.statusInsightFaceLoading = true;
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
-				this.statusPipPackagesStatus = this.getResponseData(data);
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/insightface_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
+				this.statusInsightFaceStatus = this.getResponseData(data);
 			} catch (err) {
-				this.statusPipPackagesStatus = {
+				this.statusInsightFaceStatus = {
 					error: err && err.message ? err.message : String(err || ''),
 				};
 			} finally {
-				this.statusPipPackagesLoading = false;
+				this.statusInsightFaceLoading = false;
 			}
 		},
-		getStatusPipPackageEntries() {
-			const root = this.statusPipPackagesStatus && typeof this.statusPipPackagesStatus === 'object'
-				? this.statusPipPackagesStatus
+		getStatusInsightFaceEntries() {
+			const root = this.statusInsightFaceStatus && typeof this.statusInsightFaceStatus === 'object'
+				? this.statusInsightFaceStatus
 				: {};
-			const packages = root.packages && typeof root.packages === 'object' ? root.packages : {};
-			return Object.entries(packages)
+			const insightFace = root.insightface && typeof root.insightface === 'object' ? { INSIGHTFACE: root.insightface } : {};
+			return Object.entries(insightFace)
 				.map(([key, value]) => ({
 					key,
 					...(value && typeof value === 'object' ? value : {}),
 				}))
 				.sort((left, right) => String(left.label || left.key).localeCompare(String(right.label || right.key)));
 		},
-		getStatusPipPackageStatusBlocks(packageStatus) {
+		getStatusInsightFaceStatusBlocks(packageStatus) {
 			return packageStatus && Array.isArray(packageStatus.status_blocks)
 				? packageStatus.status_blocks.filter((block) => block && typeof block === 'object')
 				: [];
 		},
-		getStatusPipPackageStatusBlockLabel(block) {
+		getStatusInsightFaceStatusBlockLabel(block) {
 			const labelKey = String(block && block.label_key || '').trim();
 			const fallback = String(block && (block.fallback_label || block.key) || '').trim();
 			return labelKey ? this.$avt(labelKey, fallback) : fallback;
 		},
-		getStatusPipPackageStatusBlockValue(block) {
+		getStatusInsightFaceStatusBlockValue(block) {
 			const value = block && Object.prototype.hasOwnProperty.call(block, 'value') ? block.value : '';
 			const text = String(value ?? '').trim();
 			return text || this.$avt('status:not_available', 'Not available');

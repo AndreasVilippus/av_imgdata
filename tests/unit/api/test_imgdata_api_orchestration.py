@@ -194,48 +194,20 @@ def test_status_routes_run_blocking_service_calls_off_event_loop(monkeypatch):
     monkeypatch.setattr(imgdata_api.IMGDATA, "status_persons", Mock(return_value={"known": 1, "total": 2}))
     monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": "/volume1/photo"}))
     monkeypatch.setattr(imgdata_api.IMGDATA, "exiftool_status", Mock(return_value={"installed": True, "available": True}))
-    monkeypatch.setattr(imgdata_api.IMGDATA, "pipPackagesStatus", Mock(return_value={"packages": []}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "insightFaceStatus", Mock(return_value={"insightface": {"enabled": True}}))
 
     status_payload = _run(imgdata_api.status(object()))
     exiftool_payload = _run(imgdata_api.exiftool_status(object()))
-    packages_payload = _run(imgdata_api.pip_packages_status(object()))
+    insightface_payload = _run(imgdata_api.insightface_status(object()))
 
     assert status_payload["success"] is True
     assert exiftool_payload["success"] is True
-    assert packages_payload["success"] is True
+    assert insightface_payload["success"] is True
     assert len(calls) == 4
     imgdata_api.IMGDATA.status_persons.assert_called_once()
     imgdata_api.IMGDATA.status_system.assert_called_once()
     imgdata_api.IMGDATA.exiftool_status.assert_called_once()
-    imgdata_api.IMGDATA.pipPackagesStatus.assert_called_once()
-
-
-def test_pip_wheelhouse_routes_run_blocking_service_calls_off_event_loop(monkeypatch):
-    async def request_body(_request):
-        return {
-            "package_key": "INSIGHTFACE",
-            "package_name": "insightface",
-            "reinstall": True,
-        }
-
-    calls = _install_backend_call_recorder(monkeypatch)
-    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
-    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
-    monkeypatch.setattr(imgdata_api.IMGDATA, "pipWheelhousePackages", Mock(return_value={"packages": []}))
-    monkeypatch.setattr(imgdata_api.IMGDATA, "installPipWheelhousePackage", Mock(return_value={"success": True, "message": "ok"}))
-
-    packages_payload = _run(imgdata_api.pip_wheelhouse_packages(object()))
-    install_payload = _run(imgdata_api.pip_wheelhouse_package_install(object()))
-
-    assert packages_payload["success"] is True
-    assert install_payload["success"] is True
-    assert len(calls) == 2
-    imgdata_api.IMGDATA.pipWheelhousePackages.assert_called_once_with(package_key="INSIGHTFACE")
-    imgdata_api.IMGDATA.installPipWheelhousePackage.assert_called_once_with(
-        package_key="INSIGHTFACE",
-        package_name="insightface",
-        reinstall=True,
-    )
+    imgdata_api.IMGDATA.insightFaceStatus.assert_called_once()
 
 
 def test_progress_and_findings_routes_run_blocking_service_calls_off_event_loop(monkeypatch):

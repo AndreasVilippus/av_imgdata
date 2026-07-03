@@ -720,55 +720,15 @@ async def exiftool_status(request: Request):
     }
 
 
-@router.post("/pip_packages_status")
-async def pip_packages_status(request: Request):
+@router.post("/insightface_status")
+async def insightface_status(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
     return {
         "success": True,
-        "data": await _run_backend_call(lambda: IMGDATA.pipPackagesStatus()),
-    }
-
-
-@router.post("/pip_wheelhouse_packages")
-async def pip_wheelhouse_packages(request: Request):
-    session_ctx, error_response = await _prepare_session_request(request)
-    if error_response:
-        return error_response
-
-    body = await _read_request_body(request)
-    try:
-        data = await _run_backend_call(lambda: IMGDATA.pipWheelhousePackages(
-            package_key=str(body.get("package_key") or "INSIGHTFACE"),
-        ))
-    except Exception as exc:
-        return JSONResponse(_operation_exception_response(exc, message="pip_wheelhouse_packages_failed"))
-    return {
-        "success": True,
-        "data": data,
-    }
-
-
-@router.post("/pip_wheelhouse_package_install")
-async def pip_wheelhouse_package_install(request: Request):
-    session_ctx, error_response = await _prepare_session_request(request)
-    if error_response:
-        return error_response
-
-    body = await _read_request_body(request)
-    try:
-        data = await _run_backend_call(lambda: IMGDATA.installPipWheelhousePackage(
-            package_key=str(body.get("package_key") or "INSIGHTFACE"),
-            package_name=str(body.get("package_name") or ""),
-            reinstall=bool(body.get("reinstall")),
-        ))
-    except Exception as exc:
-        return JSONResponse(_operation_exception_response(exc, message="pip_wheelhouse_package_install_failed"))
-    return {
-        "success": True,
-        "data": data,
+        "data": await _run_backend_call(lambda: IMGDATA.insightFaceStatus()),
     }
 
 

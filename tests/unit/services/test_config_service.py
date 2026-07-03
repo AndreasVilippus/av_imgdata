@@ -133,7 +133,10 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         self.assertIsNone(service._merged_config_cache)
         self.assertIsNone(service._merged_config_cache_signature)
 
-    def test_ensureInstallOnStartConfig_updates_wheelhouse_defaults_when_enabled(self):
+    def test_default_config_no_longer_contains_python_insightface_pip_packages(self):
+        self.assertNotIn("pip_packages", ConfigService.defaultConfig())
+
+    def test_legacy_pip_packages_config_is_not_merged_back(self):
         service = ConfigService(str(self.config_file))
         service.writeConfig({
             "pip_packages": {
@@ -147,37 +150,9 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
             },
         })
 
-        updated = service.ensureInstallOnStartConfig()
-        self.assertTrue(updated)
+        merged = service.readMergedConfig()
 
-        stored = json.loads(self.config_file.read_text(encoding="utf-8"))
-        insightface = stored["pip_packages"]["INSIGHTFACE"]
-        self.assertEqual(
-            insightface["WHEELHOUSE_MANIFEST_URL"],
-            ConfigService.defaultConfig()["pip_packages"]["INSIGHTFACE"]["WHEELHOUSE_MANIFEST_URL"],
-        )
-        self.assertEqual(
-            insightface["WHEELHOUSE_TARGET"],
-            ConfigService.defaultConfig()["pip_packages"]["INSIGHTFACE"]["WHEELHOUSE_TARGET"],
-        )
-        self.assertTrue(insightface["WHEELHOUSE_ENABLED"])
-
-    def test_ensureInstallOnStartConfig_keeps_config_when_disabled(self):
-        service = ConfigService(str(self.config_file))
-        service.writeConfig({
-            "pip_packages": {
-                "INSIGHTFACE": {
-                    "INSTALL_ON_START": False,
-                    "WHEELHOUSE_ENABLED": False,
-                    "WHEELHOUSE_MANIFEST_URL": "https://example.invalid/releases/download/dsm7-x86_64-python38/wheelhouse-manifest.json",
-                    "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
-                    "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
-                },
-            },
-        })
-
-        updated = service.ensureInstallOnStartConfig()
-        self.assertFalse(updated)
+        self.assertNotIn("pip_packages", merged)
 
     def test_writeChecksIgnoreList_invalidates_cache(self):
         """

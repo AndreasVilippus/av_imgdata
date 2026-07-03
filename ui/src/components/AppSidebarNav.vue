@@ -64,12 +64,11 @@
 			{{ $avt('nav:exiftool', 'ExifTool') }}
 		</button>
 		<button
-			class="sm-nav-item"
-			:class="{ active: selectedOption === 'external_libraries_pip_packages' }"
-			@click="$emit('select', 'external_libraries_pip_packages')"
+			class="sm-nav-item sm-nav-sub-item"
+			:class="{ active: selectedOption === 'external_libraries_insightface' }"
+			@click="$emit('select', 'external_libraries_insightface')"
 		>
-			<ModulesIcon class="sm-nav-icon" />
-			{{ $avt('nav:pip_packages', 'pip packages') }}
+			{{ $avt('nav:insightface', 'InsightFace') }}
 		</button>
 	</aside>
 </template>
@@ -80,7 +79,6 @@ import CleanupIcon from './icons/CleanupIcon.vue';
 import ConfigIcon from './icons/ConfigIcon.vue';
 import ExternalLibrariesIcon from './icons/ExternalLibrariesIcon.vue';
 import FaceMatchIcon from './icons/FaceMatchIcon.vue';
-import ModulesIcon from './icons/ModulesIcon.vue';
 import StatusIcon from './icons/StatusIcon.vue';
 
 export default {
@@ -91,7 +89,6 @@ export default {
 		ConfigIcon,
 		ExternalLibrariesIcon,
 		FaceMatchIcon,
-		ModulesIcon,
 		StatusIcon,
 	},
 	props: {

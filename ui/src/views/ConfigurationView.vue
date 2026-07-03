@@ -204,6 +204,33 @@
 						<span>{{ $avt('config:label_check_name_conflicts_include_photos', 'Include Photos person names') }}</span>
 					</label>
 
+					<div class="sm-section-title">{{ $avt('config:recognition_assignment_scoring_title', 'InsightFace person assignment scoring') }}</div>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('cleanup:recognition_safe_score', 'Safe match score') }}</span>
+						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_SAFE_SCORE" type="number" min="0" max="1" step="0.01" class="config-input" :disabled="saving" />
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('cleanup:recognition_review_score', 'Review match score') }}</span>
+						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_REVIEW_SCORE" type="number" min="0" max="1" step="0.01" class="config-input" :disabled="saving" />
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('cleanup:recognition_min_margin', 'Minimum score margin') }}</span>
+						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_MIN_MARGIN" type="number" min="0" max="1" step="0.01" class="config-input" :disabled="saving" />
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('cleanup:recognition_outlier_threshold', 'Outlier similarity threshold') }}</span>
+						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD" type="number" min="0" max="1" step="0.01" class="config-input" :disabled="saving" />
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('cleanup:face_frames_det_threshold', 'Minimum detection confidence') }}</span>
+						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_DET_THRESH" type="number" min="0" max="1" step="0.05" class="config-input" :disabled="saving" />
+					</label>
+
 				</div>
 			</section>
 
@@ -423,6 +450,11 @@ export default {
 						NAME_CONFLICT_OVERLAP_THRESHOLD: 0.75,
 						NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH: true,
 						NAME_CONFLICT_MIN_BEST_MATCH_MARGIN: 0.05,
+						RECOGNITION_SAFE_SCORE: 0.55,
+						RECOGNITION_REVIEW_SCORE: 0.45,
+						RECOGNITION_MIN_MARGIN: 0.08,
+						RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD: 0.35,
+						RECOGNITION_DET_THRESH: 0.5,
 						SINGLE_SOURCE_OF_TRUTH: '',
 					},
 				},
@@ -625,6 +657,11 @@ export default {
 							1,
 							defaults.analysis.CHECKS.NAME_CONFLICT_MIN_BEST_MATCH_MARGIN
 						),
+						RECOGNITION_SAFE_SCORE: this.clampNumber(checks.RECOGNITION_SAFE_SCORE, 0, 1, defaults.analysis.CHECKS.RECOGNITION_SAFE_SCORE),
+						RECOGNITION_REVIEW_SCORE: this.clampNumber(checks.RECOGNITION_REVIEW_SCORE, 0, 1, defaults.analysis.CHECKS.RECOGNITION_REVIEW_SCORE),
+						RECOGNITION_MIN_MARGIN: this.clampNumber(checks.RECOGNITION_MIN_MARGIN, 0, 1, defaults.analysis.CHECKS.RECOGNITION_MIN_MARGIN),
+						RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD: this.clampNumber(checks.RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD, 0, 1, defaults.analysis.CHECKS.RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD),
+						RECOGNITION_DET_THRESH: this.clampNumber(checks.RECOGNITION_DET_THRESH, 0, 1, defaults.analysis.CHECKS.RECOGNITION_DET_THRESH),
 						SINGLE_SOURCE_OF_TRUTH: this.normalizeChecksSingleSourceOfTruth(
 							checks.SINGLE_SOURCE_OF_TRUTH,
 							defaults.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH

@@ -34,10 +34,9 @@ The current branch builds a required package binary:
 target/bin/av-imgdata-face-processor
 ```
 
-The binary now has two build modes:
+The binary now has one production build mode:
 
 ```text
-- python_bridge: diagnostic package/contract bridge only
 - onnxruntime: native C++ inference backend
 ```
 
@@ -60,8 +59,6 @@ This state is intentionally different from the old skeleton:
 
 ```text
 - the skeleton returned completed jobs with faces=[]
-- the bridge executes the real existing detector/embedder path
-- status reports backend=python_bridge
 - a skeleton version/probe is treated as unavailable with reason=skeleton_no_inference
 ```
 
@@ -69,26 +66,19 @@ The remaining gap is not the processor wiring anymore; it is runtime parity
 validation against real Buffalo-L model files and representative images on the
 DSM target.
 
-Measured NAS result for the bridge:
+Measured NAS baseline before native inference:
 
 ```text
-- status/probe worked and reported backend=python_bridge
-- one embed command returned 4 faces after about 89.4 s
+- one process-per-image Python embed command returned 4 faces after about 89.4 s
 - two embed commands failed with exit 1 after about 4.9 s and 0.8 s
-- /api/pip_packages_status took about 59 s while probing the bridge
 - stop handling stayed in phase=stopping until the current subprocess returned
 ```
 
 Build/status decision from those measurements:
 
 ```text
-python_bridge is diagnostic-only. It validates package wiring and contracts, but
-it is not a valid inference backend for the image-processing hot path.
-
 Only a processor reporting backend=native and hot_path_available=true is allowed
 to replace the Python InsightFace/OpenCV/ONNXRuntime stack.
-Status handling must also avoid running the expensive python_bridge model probe;
-the bridge is identified by version and reported as diagnostic-only.
 ```
 
 Local Toolkit/wheelhouse check:
@@ -144,24 +134,21 @@ The native processor must not own DSM workflow logic.
 
 ### Immediate implementation focus
 
-The next useful work is dependency and proof-of-linkage, not more bridge logic:
+The next useful work is dependency and proof-of-linkage:
 
 ```text
 1. Provide an ONNXRuntime C API package for the active DSM Toolkit target.
 2. Add CMake detection for onnxruntime_c_api.h and libonnxruntime.so.
 3. Fail the native build if the requested native inference backend cannot link.
-4. Keep python_bridge from being reported as hot_path_available.
-5. Validate native detector/embedder parity with real model files and fixtures.
+4. Validate native detector/embedder parity with real model files and fixtures.
 ```
 
-Do not invest further in process-per-image bridge optimization unless it becomes
-a persistent worker with one-time model loading. Even then, it would still be a
-Python runtime mitigation rather than the desired C++ replacement.
+Do not invest further in process-per-image Python optimization. It would still
+be a Python runtime mitigation rather than the desired C++ replacement.
 
 Implemented build switch:
 
 ```bash
-AV_FACE_PROCESSOR_BACKEND=onnxruntime \
 ONNXRUNTIME_ROOT=/path/to/onnxruntime-capi \
 JPEG_ROOT=/path/to/sysroot/usr \
 ./tools/build-native-face-processor.sh
@@ -188,9 +175,7 @@ The ONNXRuntime build installs `libonnxruntime.so*` and `libjpeg.so*` into the
 package `lib/` directory. The processor binary uses `$ORIGIN/../lib` as RPATH,
 so package-local libraries are preferred when they are present.
 
-The package build defaults to `AV_FACE_PROCESSOR_BACKEND=onnxruntime` and fails
-fast if those layouts are missing. `python_bridge` remains available only as an
-explicit diagnostic build mode and is reported as not hot-path capable.
+The package build fails fast if those layouts are missing.
 
 ### Add only when required by fixtures
 

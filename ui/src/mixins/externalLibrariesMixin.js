@@ -10,13 +10,8 @@ export default {
 			exiftoolInstalling: false,
 			exiftoolRemoving: false,
 			exiftoolExtensionsLoading: false,
-			pipPackagesStatus: {},
-			pipPackagesStatusLoading: false,
-			pipWheelhousePackages: [],
-			pipWheelhousePackagesLoading: false,
-			selectedPipWheelhousePackageName: '',
-			pipWheelhousePackageInstalling: false,
-			pipWheelhousePackageReinstalling: false,
+			insightFaceStatus: {},
+			insightFaceStatusLoading: false,
 			insightFaceModelDeleting: '',
 		};
 	},
@@ -77,15 +72,15 @@ export default {
 		canConfigureExiftoolExtensions() {
 			return this.isExiftoolEnabled;
 		},
-		insightFacePipPackageStatus() {
-			const packages = this.pipPackagesStatus && typeof this.pipPackagesStatus.packages === 'object'
-				? this.pipPackagesStatus.packages
+		insightFaceRuntimeStatus() {
+			const status = this.insightFaceStatus && typeof this.insightFaceStatus === 'object'
+				? this.insightFaceStatus
 				: {};
-			return packages.INSIGHTFACE && typeof packages.INSIGHTFACE === 'object' ? packages.INSIGHTFACE : {};
+			return status.insightface && typeof status.insightface === 'object' ? status.insightface : {};
 		},
 		insightFaceModelStatus() {
-			const status = this.insightFacePipPackageStatus && typeof this.insightFacePipPackageStatus.model_status === 'object'
-				? this.insightFacePipPackageStatus.model_status
+			const status = this.insightFaceRuntimeStatus && typeof this.insightFaceRuntimeStatus.model_status === 'object'
+				? this.insightFaceRuntimeStatus.model_status
 				: {};
 			return {
 				root: String(status.root || ''),
@@ -94,17 +89,13 @@ export default {
 			};
 		},
 		insightFaceActiveModelName() {
-			return String(this.insightFacePipPackageStatus.active_model_name || '').trim();
+			return String(this.insightFaceRuntimeStatus.active_model_name || '').trim();
 		},
 		insightFaceInstalledModelNames() {
 			return this.insightFaceModelStatus.models
 				.map((modelStatus) => String(modelStatus && modelStatus.name || '').trim())
 				.filter((name, index, names) => name && names.indexOf(name) === index)
 				.sort((left, right) => left.localeCompare(right));
-		},
-		selectedPipWheelhousePackageStatus() {
-			const selected = String(this.selectedPipWheelhousePackageName || '').trim().toLowerCase();
-			return this.pipWheelhousePackages.find((item) => String(item && item.name || '').trim().toLowerCase() === selected) || {};
 		},
 	},
 	methods: {
@@ -143,6 +134,11 @@ export default {
 						DIMENSION_ISSUES: true,
 						NAME_CONFLICTS: true,
 						NAME_CONFLICTS_INCLUDE_PHOTOS: true,
+						RECOGNITION_SAFE_SCORE: 0.55,
+						RECOGNITION_REVIEW_SCORE: 0.45,
+						RECOGNITION_MIN_MARGIN: 0.08,
+						RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD: 0.35,
+						RECOGNITION_DET_THRESH: 0.5,
 						SINGLE_SOURCE_OF_TRUTH: '',
 					},
 				},
@@ -162,18 +158,6 @@ export default {
 				face_match: {
 					FILE_MATCH_SOURCE_SCOPE: 'both',
 					PERSON_SORT_ORDER: 'id_desc',
-				},
-				pip_packages: {
-					INSIGHTFACE: {
-						ENABLED: false,
-						INSTALL_ON_START: true,
-						REQUIREMENTS_FILE: 'requirements-optional-insightface.txt',
-						WHEELHOUSE_ENABLED: true,
-						WHEELHOUSE_MANIFEST_URL: '',
-						WHEELHOUSE_TARGET: '',
-						MODEL_ROOT: '',
-						MODEL_NAME: '',
-					},
 				},
 				native_processors: {
 					FACE_PROCESSOR: {
@@ -243,6 +227,13 @@ export default {
 				&& metadataLocations.includes(parts[2])
 			) ? normalized : fallback;
 		},
+		clampExternalLibrariesNumber(value, min, max, fallback) {
+			const numeric = Number(value);
+			if (!Number.isFinite(numeric)) {
+				return fallback;
+			}
+			return Math.max(min, Math.min(max, numeric));
+		},
 		formatExternalLibrariesImageExtensionsMultiline(value) {
 			return this.normalizeExternalLibrariesImageExtensions(value, []).join(',\n');
 		},
@@ -267,29 +258,6 @@ export default {
 				},
 			};
 		},
-		setExternalLibrariesPipPackageConfigValue(packageKey, key, value) {
-			const pipPackages = this.externalLibrariesConfigModel.pip_packages || {};
-			const packageConfig = pipPackages[packageKey] || {};
-			const wasInsightFaceEnabled = packageKey === 'INSIGHTFACE' && key === 'ENABLED' && Boolean(packageConfig.ENABLED);
-			this.externalLibrariesConfigModel = {
-				...this.externalLibrariesConfigModel,
-				pip_packages: {
-					...pipPackages,
-					[packageKey]: {
-						...packageConfig,
-						[key]: value,
-					},
-				},
-			};
-			if (packageKey === 'INSIGHTFACE' && key === 'ENABLED' && Boolean(value) && !wasInsightFaceEnabled) {
-				this.showExternalLibrariesRestartPopup(
-					this.$avt(
-						'config:popup_insightface_model_license_warning',
-						'InsightFace can download models with separate non-free license terms. These models may only be used under the applicable InsightFace model license terms. Please review the InsightFace license notes before enabling this feature:\n\nhttps://github.com/deepinsight/insightface#license'
-					)
-				);
-			}
-		},
 		setExternalLibrariesNativeProcessorConfigValue(processorKey, key, value) {
 			const nativeProcessors = this.externalLibrariesConfigModel.native_processors || {};
 			const processorConfig = nativeProcessors[processorKey] || {};
@@ -313,32 +281,6 @@ export default {
 				);
 			}
 		},
-		getPipPackageInstallStatusLabel(installStatus) {
-			const status = String(installStatus && installStatus.status || '').trim().toLowerCase();
-			if (!status) {
-				return this.$avt('status:not_available', 'Not available');
-			}
-			if (status === 'success') {
-				return this.$avt('config:pip_install_status_success', 'Last installation completed.');
-			}
-			if (status === 'failed') {
-				return this.$avt('config:pip_install_status_failed', 'Last installation failed.');
-			}
-			return status;
-		},
-		getPipPackageModuleStatusLabel(moduleStatus) {
-			if (!moduleStatus || typeof moduleStatus !== 'object') {
-				return this.$avt('status:not_available', 'Not available');
-			}
-			if (moduleStatus.installed) {
-				return moduleStatus.version || this.$avt('status:installed', 'Installed');
-			}
-			const importError = String(moduleStatus.import_error || '').trim();
-			if (importError) {
-				return `${this.$avt('status:not_installed', 'Not installed')}: ${importError}`;
-			}
-			return this.$avt('status:not_installed', 'Not installed');
-		},
 		getInsightFaceModelStatusLabel(modelStatus) {
 			if (!modelStatus || typeof modelStatus !== 'object') {
 				return this.$avt('status:not_available', 'Not available');
@@ -354,15 +296,6 @@ export default {
 			if (text) {
 				window.alert(text);
 			}
-		},
-		externalLibrariesPipPackagesRequireRestart(previousConfig, nextConfig) {
-			const previousPackages = previousConfig && previousConfig.pip_packages && typeof previousConfig.pip_packages === 'object'
-				? previousConfig.pip_packages
-				: {};
-			const nextPackages = nextConfig && nextConfig.pip_packages && typeof nextConfig.pip_packages === 'object'
-				? nextConfig.pip_packages
-				: {};
-			return JSON.stringify(previousPackages) !== JSON.stringify(nextPackages);
 		},
 		setExiftoolImageExtensionsInput(value) {
 			this.exiftoolImageExtensionsInput = String(value || '');
@@ -380,8 +313,6 @@ export default {
 			const reviewIgnoreLists = (review.CHECKS_IGNORE_LISTS && typeof review.CHECKS_IGNORE_LISTS === 'object' && !Array.isArray(review.CHECKS_IGNORE_LISTS)) ? review.CHECKS_IGNORE_LISTS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
-			const pipPackages = (root.pip_packages && typeof root.pip_packages === 'object' && !Array.isArray(root.pip_packages)) ? root.pip_packages : {};
-			const insightFace = (pipPackages.INSIGHTFACE && typeof pipPackages.INSIGHTFACE === 'object' && !Array.isArray(pipPackages.INSIGHTFACE)) ? pipPackages.INSIGHTFACE : {};
 			const nativeProcessors = (root.native_processors && typeof root.native_processors === 'object' && !Array.isArray(root.native_processors)) ? root.native_processors : {};
 			const faceProcessor = (nativeProcessors.FACE_PROCESSOR && typeof nativeProcessors.FACE_PROCESSOR === 'object' && !Array.isArray(nativeProcessors.FACE_PROCESSOR)) ? nativeProcessors.FACE_PROCESSOR : {};
 
@@ -436,6 +367,11 @@ export default {
 						DIMENSION_ISSUES: Boolean(checks.DIMENSION_ISSUES ?? defaults.analysis.CHECKS.DIMENSION_ISSUES),
 						NAME_CONFLICTS: Boolean(checks.NAME_CONFLICTS ?? defaults.analysis.CHECKS.NAME_CONFLICTS),
 						NAME_CONFLICTS_INCLUDE_PHOTOS: Boolean(checks.NAME_CONFLICTS_INCLUDE_PHOTOS ?? defaults.analysis.CHECKS.NAME_CONFLICTS_INCLUDE_PHOTOS),
+						RECOGNITION_SAFE_SCORE: this.clampExternalLibrariesNumber(checks.RECOGNITION_SAFE_SCORE, 0, 1, defaults.analysis.CHECKS.RECOGNITION_SAFE_SCORE),
+						RECOGNITION_REVIEW_SCORE: this.clampExternalLibrariesNumber(checks.RECOGNITION_REVIEW_SCORE, 0, 1, defaults.analysis.CHECKS.RECOGNITION_REVIEW_SCORE),
+						RECOGNITION_MIN_MARGIN: this.clampExternalLibrariesNumber(checks.RECOGNITION_MIN_MARGIN, 0, 1, defaults.analysis.CHECKS.RECOGNITION_MIN_MARGIN),
+						RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD: this.clampExternalLibrariesNumber(checks.RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD, 0, 1, defaults.analysis.CHECKS.RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD),
+						RECOGNITION_DET_THRESH: this.clampExternalLibrariesNumber(checks.RECOGNITION_DET_THRESH, 0, 1, defaults.analysis.CHECKS.RECOGNITION_DET_THRESH),
 						SINGLE_SOURCE_OF_TRUTH: this.normalizeExternalLibrariesChecksSingleSourceOfTruth(
 							checks.SINGLE_SOURCE_OF_TRUTH,
 							defaults.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH
@@ -481,20 +417,6 @@ export default {
 						? String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase()
 						: defaults.face_match.PERSON_SORT_ORDER,
 				},
-				pip_packages: {
-					...pipPackages,
-					INSIGHTFACE: {
-						...insightFace,
-						ENABLED: Boolean(insightFace.ENABLED ?? defaults.pip_packages.INSIGHTFACE.ENABLED),
-						INSTALL_ON_START: Boolean(insightFace.INSTALL_ON_START ?? defaults.pip_packages.INSIGHTFACE.INSTALL_ON_START),
-						REQUIREMENTS_FILE: String(insightFace.REQUIREMENTS_FILE || defaults.pip_packages.INSIGHTFACE.REQUIREMENTS_FILE),
-						WHEELHOUSE_ENABLED: true,
-						WHEELHOUSE_MANIFEST_URL: String(insightFace.WHEELHOUSE_MANIFEST_URL || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_MANIFEST_URL),
-						WHEELHOUSE_TARGET: String(insightFace.WHEELHOUSE_TARGET || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_TARGET),
-						MODEL_ROOT: String(insightFace.MODEL_ROOT || defaults.pip_packages.INSIGHTFACE.MODEL_ROOT),
-						MODEL_NAME: String(insightFace.MODEL_NAME || defaults.pip_packages.INSIGHTFACE.MODEL_NAME),
-					},
-				},
 				native_processors: {
 					...nativeProcessors,
 					FACE_PROCESSOR: {
@@ -531,12 +453,7 @@ export default {
 					IMAGE_EXTENSIONS_NATIVE_ONLY: defaults.files.IMAGE_EXTENSIONS_NATIVE_ONLY,
 					EXIFTOOL_IMAGE_EXTENSIONS: defaults.files.EXIFTOOL_IMAGE_EXTENSIONS,
 				},
-				pip_packages: {
-					...this.externalLibrariesConfigModel.pip_packages,
-					INSIGHTFACE: {
-						...defaults.pip_packages.INSIGHTFACE,
-					},
-				},
+				native_processors: defaults.native_processors,
 			});
 			this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 			this.externalLibrariesMessage = this.$avt('config:output_defaults_applied', 'Default values loaded into the editor.');
@@ -550,78 +467,22 @@ export default {
 				this.externalLibrariesConfigModel = this.normalizeExternalLibrariesConfig(data && data.data && data.data.config);
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
-				await this.fetchPipPackagesStatus();
-				if (this.selectedOption === 'external_libraries_pip_packages') {
-					await this.loadPipWheelhousePackages();
-				}
+				await this.fetchInsightFaceStatus();
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
 				this.externalLibrariesLoading = false;
 			}
 		},
-		async fetchPipPackagesStatus() {
-			this.pipPackagesStatusLoading = true;
+		async fetchInsightFaceStatus() {
+			this.insightFaceStatusLoading = true;
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
-				this.pipPackagesStatus = this.getResponseData(data);
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/insightface_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
+				this.insightFaceStatus = this.getResponseData(data);
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
-				this.pipPackagesStatusLoading = false;
-			}
-		},
-		async loadPipWheelhousePackages() {
-			this.pipWheelhousePackagesLoading = true;
-			this.externalLibrariesMessage = '';
-			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_wheelhouse_packages', {
-					package_key: 'INSIGHTFACE',
-				}, { resume: false, requireSynoToken: false });
-				const payload = this.getResponseData(data);
-				this.pipWheelhousePackages = Array.isArray(payload.packages) ? payload.packages : [];
-				if (!this.selectedPipWheelhousePackageName && this.pipWheelhousePackages.length) {
-					this.selectedPipWheelhousePackageName = String(this.pipWheelhousePackages[0].name || '');
-				}
-				if (this.selectedPipWheelhousePackageName && !this.selectedPipWheelhousePackageStatus.name) {
-					this.selectedPipWheelhousePackageName = this.pipWheelhousePackages.length ? String(this.pipWheelhousePackages[0].name || '') : '';
-				}
-			} catch (err) {
-				this.pipWheelhousePackages = [];
-				this.externalLibrariesMessage = `Error: ${err.message}`;
-			} finally {
-				this.pipWheelhousePackagesLoading = false;
-			}
-		},
-		setSelectedPipWheelhousePackageName(value) {
-			this.selectedPipWheelhousePackageName = String(value || '').trim();
-		},
-		async installSelectedPipWheelhousePackage(reinstall = false) {
-			const packageName = String(this.selectedPipWheelhousePackageName || '').trim();
-			if (!packageName || this.pipWheelhousePackageInstalling || this.pipWheelhousePackageReinstalling) {
-				return;
-			}
-			if (reinstall) {
-				this.pipWheelhousePackageReinstalling = true;
-			} else {
-				this.pipWheelhousePackageInstalling = true;
-			}
-			this.externalLibrariesMessage = '';
-			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_wheelhouse_package_install', {
-					package_key: 'INSIGHTFACE',
-					package_name: packageName,
-					reinstall: !!reinstall,
-				}, { resume: false, requireSynoToken: false, timeoutMs: 900000 });
-				const payload = this.getResponseData(data);
-				this.externalLibrariesMessage = payload.message || this.$avt('config:message_pip_package_installed', 'pip package installation finished.');
-				await this.fetchPipPackagesStatus();
-				await this.loadPipWheelhousePackages();
-			} catch (err) {
-				this.externalLibrariesMessage = `Error: ${err.message}`;
-			} finally {
-				this.pipWheelhousePackageInstalling = false;
-				this.pipWheelhousePackageReinstalling = false;
+				this.insightFaceStatusLoading = false;
 			}
 		},
 		async deleteInsightFaceModel(modelName) {
@@ -636,7 +497,7 @@ export default {
 					model_name: normalizedName,
 				});
 				this.externalLibrariesMessage = this.$avt('config:message_insightface_model_deleted', 'InsightFace model removed.');
-				await this.fetchPipPackagesStatus();
+				await this.fetchInsightFaceStatus();
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
@@ -647,7 +508,6 @@ export default {
 			this.externalLibrariesSaving = true;
 			this.externalLibrariesMessage = '';
 			try {
-				const previousNormalized = this.normalizeExternalLibrariesConfig(this.externalLibrariesConfigModel);
 				const payloadConfig = {
 					...this.externalLibrariesConfigModel,
 					files: {
@@ -661,16 +521,8 @@ export default {
 				this.externalLibrariesConfigModel = this.normalizeExternalLibrariesConfig(data && data.data && data.data.config);
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
-				await this.fetchPipPackagesStatus();
+				await this.fetchInsightFaceStatus();
 				this.externalLibrariesMessage = this.$avt('config:message_saved', 'Configuration saved.');
-				if (this.externalLibrariesPipPackagesRequireRestart(previousNormalized, this.externalLibrariesConfigModel)) {
-					this.showExternalLibrariesRestartPopup(
-						this.$avt(
-							'config:popup_restart_required_pip_packages',
-							'The package must be restarted so changed optional pip packages can be installed or updated.'
-						)
-					);
-				}
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {

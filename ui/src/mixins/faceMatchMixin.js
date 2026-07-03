@@ -72,7 +72,39 @@ export default {
 			return ['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(this.selectedFaceMatchingAction);
 		},
 		hasInsightFaceForFaceMatch() {
-			return !!(this.insightFacePipPackageStatus && this.insightFacePipPackageStatus.installed);
+			const nativeStatus = this.faceMatchInsightFaceNativeProcessorStatus;
+			return !!(nativeStatus && nativeStatus.hot_path_available === true && nativeStatus.available === true);
+		},
+		faceMatchInsightFaceNativeProcessorStatus() {
+			const insightFaceStatus = this.insightFaceStatus && typeof this.insightFaceStatus === 'object'
+				? this.insightFaceStatus
+				: {};
+			const nativeProcessors = insightFaceStatus.native_processors && typeof insightFaceStatus.native_processors === 'object'
+				? insightFaceStatus.native_processors
+				: {};
+			if (nativeProcessors.FACE_PROCESSOR && typeof nativeProcessors.FACE_PROCESSOR === 'object') {
+				return nativeProcessors.FACE_PROCESSOR;
+			}
+			const runtimeStatus = this.insightFaceRuntimeStatus && typeof this.insightFaceRuntimeStatus === 'object'
+				? this.insightFaceRuntimeStatus
+				: {};
+			return runtimeStatus.native_processor_status && typeof runtimeStatus.native_processor_status === 'object'
+				? runtimeStatus.native_processor_status
+				: {};
+		},
+		faceMatchInsightFaceUnavailableMessage() {
+			const nativeStatus = this.faceMatchInsightFaceNativeProcessorStatus;
+			const reason = String(nativeStatus && nativeStatus.reason || '').trim();
+			if (reason === 'insightface_license_not_acknowledged') {
+				return this.$avt(
+					'face_match:hint_insightface_license_missing',
+					'InsightFace actions become available after the InsightFace model license terms have been acknowledged in the native processor configuration.'
+				);
+			}
+			return this.$avt(
+				'face_match:hint_insightface_unavailable',
+				'InsightFace actions become available when the native face processor is ready.'
+			);
 		},
 		faceMatchReviewingStoredFindings() {
 			return this.faceMatchUseStoredFindings || this.selectedFaceMatchingAction === 'load_photo_face_match_findings';
@@ -695,14 +727,14 @@ export default {
 		},
 			async refreshFaceMatchSessionState() {
 				const findingsStatusPromise = this.fetchFaceMatchFindingsStatus();
-				const pipPackagesPromise = typeof this.fetchPipPackagesStatus === 'function'
-					? this.fetchPipPackagesStatus()
+				const insightFaceStatusPromise = typeof this.fetchInsightFaceStatus === 'function'
+					? this.fetchInsightFaceStatus()
 					: Promise.resolve();
 				const progressPromise = this.fetchFaceMatchingProgress({ applyRunningState: false });
 				await findingsStatusPromise;
 				const progress = await progressPromise;
 				if (this.isFaceMatchFindingsReviewActive() && this.getFaceMatchProgressMode(progress) === 'scan') {
-					await pipPackagesPromise;
+					await insightFaceStatusPromise;
 					return;
 				}
 				if (progress && typeof progress === 'object' && Object.keys(progress).length) {
@@ -711,11 +743,11 @@ export default {
 				if (progress.running) {
 					this.faceMatchLoading = true;
 					this.startFaceMatchProgressPolling();
-					await pipPackagesPromise;
+					await insightFaceStatusPromise;
 					return;
 				}
 				this.faceMatchLoading = false;
-				await pipPackagesPromise;
+				await insightFaceStatusPromise;
 			},
 		isFaceMatchFindingsReviewActive() {
 			return !!(
@@ -2022,7 +2054,7 @@ export default {
 				this.faceMatchProgress = {
 					...(this.faceMatchProgress || {}),
 					message_key: 'face_match:progress_insightface_missing',
-					message: this.$avt('face_match:progress_insightface_missing', 'InsightFace is not installed.'),
+					message: this.faceMatchInsightFaceUnavailableMessage,
 				};
 				this.faceMatchResult = null;
 				this.resetFaceMatchSelectionState();

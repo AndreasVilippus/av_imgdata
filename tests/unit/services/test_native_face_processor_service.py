@@ -68,26 +68,6 @@ raise SystemExit(2)
     path.chmod(0o755)
 
 
-def _write_bridge_processor(path: Path) -> None:
-    path.write_text(
-        """#!/usr/bin/env python3
-import sys
-
-args = sys.argv[1:]
-cmd = args[0] if args else ""
-if cmd == "version":
-    print("av-imgdata-face-processor 0.2.0-python-bridge")
-    raise SystemExit(0)
-if cmd == "probe":
-    print("bridge probe should not run during status")
-    raise SystemExit(99)
-raise SystemExit(2)
-""",
-        encoding="utf-8",
-    )
-    path.chmod(0o755)
-
-
 def _write_onnxruntime_smoke_processor(path: Path) -> None:
     path.write_text(
         """#!/usr/bin/env python3
@@ -387,7 +367,7 @@ def test_native_face_processor_reuses_persistent_worker(tmp_path):
     assert embedder.detect_and_embed(image) == []
     assert embedder.detect_and_embed(image) == []
 
-    started = [fields for event, fields in events if event == "native_face_processor_worker_started"]
+    started = [fields for event, fields in events if event == "native_face_processor_persistent_started"]
     assert len(started) == 1
     assert len([event for event, _fields in events if event == "native_face_processor_run_finished"]) == 2
     finished = [fields for event, fields in events if event == "native_face_processor_run_finished"]
@@ -428,72 +408,11 @@ def test_native_face_processor_passes_onnxruntime_environment_config(tmp_path):
     assert service.create_embedder(model_name="fallback").detect_and_embed(image) == []
 
     starts = [fields for event, fields in events if event == "native_face_processor_run_start"]
-    workers = [fields for event, fields in events if event == "native_face_processor_worker_started"]
+    workers = [fields for event, fields in events if event == "native_face_processor_persistent_started"]
     assert starts[-1]["AV_IMGDATA_ORT_INTRA_THREADS"] == "2"
     assert starts[-1]["AV_IMGDATA_ORT_GRAPH_OPT_LEVEL"] == "extended"
     assert workers[-1]["AV_IMGDATA_ORT_INTRA_THREADS"] == "2"
     assert workers[-1]["AV_IMGDATA_ORT_GRAPH_OPT_LEVEL"] == "extended"
-
-
-def test_native_face_processor_status_reports_python_bridge_disabled_without_debug_enabled(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
-    _write_bridge_processor(processor)
-    config_path = tmp_path / "config.json"
-    config = ConfigService(str(config_path))
-    config.writeConfig({
-        "native_processors": {
-            "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
-                "MODEL_ROOT": str(tmp_path / "models"),
-                "MODEL_NAME": "buffalo_l",
-                "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
-            },
-        },
-    })
-    service = NativeFaceProcessorService(config, package_root=tmp_path)
-
-    status = service.status()
-
-    assert status["available"] is False
-    assert status["reason"] == "python_bridge_disabled"
-    assert status["backend"] == "python_bridge"
-    assert status["inference_available"] is False
-    assert status["hot_path_available"] is False
-    assert "disabled by default" in status["last_error"]
-
-
-def test_native_face_processor_status_reports_python_bridge_as_diagnostic_only_with_debug_enabled(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
-    _write_bridge_processor(processor)
-    config_path = tmp_path / "config.json"
-    config = ConfigService(str(config_path))
-    config.writeConfig({
-        "native_processors": {
-            "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
-                "MODEL_ROOT": str(tmp_path / "models"),
-                "MODEL_NAME": "buffalo_l",
-                "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
-            },
-        },
-        "debug": {
-            "BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED": True,
-        },
-    })
-    service = NativeFaceProcessorService(config, package_root=tmp_path)
-
-    status = service.status()
-
-    assert status["available"] is False
-    assert status["reason"] == "python_bridge_diagnostic_only"
-    assert status["backend"] == "python_bridge"
-    assert status["inference_available"] is False
-    assert status["hot_path_available"] is False
-    assert status["probe_skipped"] == "python_bridge_status_probe_disabled"
-    assert "too slow" in status["last_error"]
-    assert "enabled" not in status["last_error"] or "disabled" not in status["last_error"]
 
 
 def test_native_face_processor_status_reports_onnxruntime_smoke_as_not_complete(tmp_path):

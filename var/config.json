@@ -7,18 +7,6 @@
     "FILE_MATCH_SOURCE_SCOPE": "both",
     "PERSON_SORT_ORDER": "id_desc"
   },
-  "pip_packages": {
-    "INSIGHTFACE": {
-      "ENABLED": false,
-      "INSTALL_ON_START": false,
-      "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
-      "WHEELHOUSE_ENABLED": true,
-      "WHEELHOUSE_MANIFEST_URL": "https://github.com/AndreasVilippus/av_imgdata-wheelhouse/releases/download/dsm7-x86_64-python38-2026.06.22/wheelhouse-manifest.json",
-      "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
-      "MODEL_ROOT": "",
-      "MODEL_NAME": ""
-    }
-  },
   "native_processors": {
     "FACE_PROCESSOR": {
       "ENABLED": true,
@@ -112,13 +100,17 @@
       "NAME_CONFLICT_OVERLAP_THRESHOLD": 0.75,
       "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": true,
       "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": 0.05,
+      "RECOGNITION_SAFE_SCORE": 0.55,
+      "RECOGNITION_REVIEW_SCORE": 0.45,
+      "RECOGNITION_MIN_MARGIN": 0.08,
+      "RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD": 0.35,
+      "RECOGNITION_DET_THRESH": 0.5,
       "SINGLE_SOURCE_OF_TRUTH": ""
     }
   },
   "debug": {
     "IO_METRICS_ENABLED": false,
     "BACKEND_DEBUG_ENABLED": false,
-    "BACKEND_DEBUG_PYTHON_BRIDGE_ENABLED": false,
     "BACKEND_DEBUG_LOG_PATH": "",
     "BACKEND_DEBUG_LOG_MAX_BYTES": 1048576,
     "BACKEND_DEBUG_LOG_BACKUPS": 3

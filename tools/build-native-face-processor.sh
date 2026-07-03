@@ -7,7 +7,6 @@ TOOLKIT_DIR="$(cd "${PROJECT_DIR}/../.." && pwd)"
 BUILD_ROOT="${PROJECT_DIR}/build/native/${PLATFORM}"
 BUILD_DIR="${BUILD_ROOT}/face_processor-build"
 INSTALL_DIR="${BUILD_ROOT}/face_processor-install"
-BACKEND="${AV_FACE_PROCESSOR_BACKEND:-onnxruntime}"
 
 rm -rf "${BUILD_DIR}" "${INSTALL_DIR}"
 
@@ -47,7 +46,7 @@ resolve_onnxruntime_root() {
     fi
   done
 
-  echo "ERROR: ONNXRuntime C API is required for AV_FACE_PROCESSOR_BACKEND=onnxruntime." >&2
+  echo "ERROR: ONNXRuntime C API is required." >&2
   echo "Set ONNXRUNTIME_ROOT to a directory containing include/onnxruntime_c_api.h and lib/libonnxruntime.so." >&2
   exit 1
 }
@@ -84,7 +83,7 @@ resolve_jpeg_root() {
     fi
   done
 
-  echo "ERROR: libjpeg is required for AV_FACE_PROCESSOR_BACKEND=onnxruntime." >&2
+  echo "ERROR: libjpeg is required." >&2
   echo "Set JPEG_ROOT to a sysroot containing include/jpeglib.h and lib/libjpeg.so." >&2
   exit 1
 }
@@ -123,11 +122,9 @@ resolve_heif_root() {
   echo "WARNING: libheif headers not found; native HEIC runtime loader will be disabled." >&2
 }
 
-if [ "${BACKEND}" = "onnxruntime" ]; then
-  resolve_onnxruntime_root
-  resolve_jpeg_root
-  resolve_heif_root
-fi
+resolve_onnxruntime_root
+resolve_jpeg_root
+resolve_heif_root
 
 mkdir -p "${BUILD_DIR}" "${INSTALL_DIR}"
 
@@ -136,7 +133,6 @@ CMAKE_ARGS=(
   "${PROJECT_DIR}/processors/native/face_processor"
   "-DCMAKE_BUILD_TYPE=Release"
   "-DCMAKE_INSTALL_PREFIX=/usr/local/AV_ImgData"
-  "-DAV_FACE_PROCESSOR_BACKEND=${BACKEND}"
 )
 if [ -n "${ONNXRUNTIME_ROOT:-}" ]; then
   CMAKE_ARGS+=("-DONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT}")
@@ -181,11 +177,9 @@ copy_library_family() {
   done
 }
 
-if [ "${BACKEND}" = "onnxruntime" ]; then
-  copy_library_family "${JPEG_ROOT}" "libjpeg.so*"
-fi
+copy_library_family "${JPEG_ROOT}" "libjpeg.so*"
 
-if [ "${BACKEND}" = "onnxruntime" ] && [ -L "${LIB_DIR}/libjpeg.so" ]; then
+if [ -L "${LIB_DIR}/libjpeg.so" ]; then
   JPEG_LINK_TARGET="$(readlink "${LIB_DIR}/libjpeg.so")"
   if [ "${JPEG_LINK_TARGET#/}" != "${JPEG_LINK_TARGET}" ] && [ -e "${JPEG_LINK_TARGET}" ]; then
     JPEG_BASENAME="$(basename "${JPEG_LINK_TARGET}")"

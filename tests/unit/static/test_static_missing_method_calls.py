@@ -11,7 +11,7 @@ UI_ALLOWED_MISSING_THIS_METHODS = {
     "confirmFaceMatchNameMapping",
     "fetchExiftoolStatus",
     "fetchRecognitionFindings",
-    "fetchPipPackagesStatus",
+    "fetchInsightFaceStatus",
     "getErrorMessage",
     "getBackendImagePreviewUrl",
     "getFaceMatchFormatLabel",
