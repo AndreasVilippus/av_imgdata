@@ -732,6 +732,18 @@ async def insightface_status(request: Request):
     }
 
 
+@router.post("/image_backend_status")
+async def image_backend_status(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    return {
+        "success": True,
+        "data": await _run_backend_call(lambda: IMGDATA.imageBackendStatus()),
+    }
+
+
 @router.post("/insightface_model_delete")
 async def insightface_model_delete(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)

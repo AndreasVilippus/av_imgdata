@@ -25,6 +25,7 @@ const ENDPOINT_TIMEOUTS = {
 	exiftool_status: 120000,
 	exiftool_install: 120000,
 	exiftool_remove: 120000,
+	image_backend_status: 120000,
 	insightface_model_delete: 120000,
 	insightface_status: 120000,
 	recognition_findings: 120000,

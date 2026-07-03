@@ -95,6 +95,9 @@ export default {
 				return this.selectedFaceMatchingAction === 'recognition_analyze_unknown_faces';
 			},
 			selectedRecognitionAction() {
+				if (this.cleanupRuntimeAction) {
+					return this.activeCleanupAction;
+				}
 				if (this.selectedChecksType === 'recognition_check_person_assignments') {
 					return 'recognition_check_person_assignments';
 				}

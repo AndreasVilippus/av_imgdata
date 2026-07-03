@@ -10,3 +10,8 @@ The first implemented contract covers the native face processor boundary:
 
 The DSM backend owns workflow, status, persistence and final writes. Native
 processors only read staged inputs and return structured result JSON.
+
+The current native face processor contract includes single-image face
+detection/embedding, multi-image detection/embedding batches, embedding ranking
+and profile vector math. Recognition decisions, thresholds and persistence stay
+in the DSM backend.

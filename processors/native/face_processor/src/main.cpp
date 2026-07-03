@@ -145,6 +145,118 @@ std::string extract_string_after(const std::string& text, const std::string& key
     return "";
 }
 
+std::string extract_array_after(const std::string& text, const std::string& key) {
+    const std::string marker = "\"" + key + "\"";
+    std::size_t pos = text.find(marker);
+    if (pos == std::string::npos) {
+        return "";
+    }
+    pos = text.find('[', pos + marker.size());
+    if (pos == std::string::npos) {
+        return "";
+    }
+    int depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+    for (std::size_t i = pos; i < text.size(); ++i) {
+        const char ch = text[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+        } else if (ch == '[') {
+            ++depth;
+        } else if (ch == ']') {
+            --depth;
+            if (depth == 0) {
+                return text.substr(pos, i - pos + 1);
+            }
+        }
+    }
+    return "";
+}
+
+std::vector<std::string> extract_string_array_after(const std::string& text, const std::string& key) {
+    const std::string block = extract_array_after(text, key);
+    std::vector<std::string> values;
+    bool in_string = false;
+    bool escaped = false;
+    std::ostringstream current;
+    for (std::size_t i = 0; i < block.size(); ++i) {
+        const char ch = block[i];
+        if (!in_string) {
+            if (ch == '"') {
+                in_string = true;
+                current.str("");
+                current.clear();
+            }
+            continue;
+        }
+        if (escaped) {
+            current << ch;
+            escaped = false;
+        } else if (ch == '\\') {
+            escaped = true;
+        } else if (ch == '"') {
+            values.push_back(current.str());
+            in_string = false;
+        } else {
+            current << ch;
+        }
+    }
+    return values;
+}
+
+std::vector<float> parse_float_values(const std::string& text) {
+    std::vector<float> values;
+    const char* cursor = text.c_str();
+    while (*cursor) {
+        char* end = NULL;
+        const double value = std::strtod(cursor, &end);
+        if (end && end != cursor) {
+            values.push_back(static_cast<float>(value));
+            cursor = end;
+        } else {
+            ++cursor;
+        }
+    }
+    return values;
+}
+
+std::vector<std::vector<float> > extract_float_matrix_after(const std::string& text, const std::string& key) {
+    const std::string block = extract_array_after(text, key);
+    std::vector<std::vector<float> > rows;
+    std::size_t pos = 0;
+    while (pos < block.size()) {
+        pos = block.find('[', pos);
+        if (pos == std::string::npos) {
+            break;
+        }
+        if (pos == 0) {
+            ++pos;
+            continue;
+        }
+        std::size_t end = block.find(']', pos + 1);
+        if (end == std::string::npos) {
+            break;
+        }
+        std::vector<float> row = parse_float_values(block.substr(pos + 1, end - pos - 1));
+        if (!row.empty()) {
+            rows.push_back(row);
+        }
+        pos = end + 1;
+    }
+    return rows;
+}
+
 struct OrtHandles {
     const OrtApi* api;
     OrtEnv* env;
@@ -1022,6 +1134,78 @@ void normalize_vector(std::vector<float>* values) {
     }
 }
 
+float vector_similarity(const std::vector<float>& left, const std::vector<float>& right) {
+    const std::size_t size = std::min(left.size(), right.size());
+    double score = 0.0;
+    for (std::size_t i = 0; i < size; ++i) {
+        score += static_cast<double>(left[i]) * static_cast<double>(right[i]);
+    }
+    return static_cast<float>(score);
+}
+
+std::vector<float> centroid_vector(const std::vector<std::vector<float> >& embeddings) {
+    if (embeddings.empty() || embeddings[0].empty()) {
+        return std::vector<float>();
+    }
+    const std::size_t size = embeddings[0].size();
+    std::vector<float> centroid(size, 0.0f);
+    int used = 0;
+    for (std::size_t row = 0; row < embeddings.size(); ++row) {
+        if (embeddings[row].size() != size) {
+            continue;
+        }
+        for (std::size_t col = 0; col < size; ++col) {
+            centroid[col] += embeddings[row][col];
+        }
+        ++used;
+    }
+    if (used <= 0) {
+        return std::vector<float>();
+    }
+    for (std::size_t col = 0; col < size; ++col) {
+        centroid[col] /= static_cast<float>(used);
+    }
+    normalize_vector(&centroid);
+    return centroid;
+}
+
+int medoid_index(const std::vector<std::vector<float> >& embeddings) {
+    if (embeddings.size() <= 1) {
+        return 0;
+    }
+    std::vector<std::vector<float> > normalized = embeddings;
+    for (std::size_t i = 0; i < normalized.size(); ++i) {
+        normalize_vector(&normalized[i]);
+    }
+    int best_index = 0;
+    float best_score = -std::numeric_limits<float>::infinity();
+    for (std::size_t i = 0; i < normalized.size(); ++i) {
+        double total = 0.0;
+        for (std::size_t j = 0; j < normalized.size(); ++j) {
+            total += vector_similarity(normalized[i], normalized[j]);
+        }
+        const float score = static_cast<float>(total / std::max<std::size_t>(1, normalized.size()));
+        if (score > best_score) {
+            best_score = score;
+            best_index = static_cast<int>(i);
+        }
+    }
+    return best_index;
+}
+
+std::string float_array_json(const std::vector<float>& values) {
+    std::ostringstream out;
+    out << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i) {
+            out << ",";
+        }
+        out << values[i];
+    }
+    out << "]";
+    return out.str();
+}
+
 bool assign_recognition_embeddings(const TensorData& embeddings, std::vector<FaceCandidate>* faces, std::string* error) {
     const int face_count = static_cast<int>(faces->size());
     if (face_count <= 0) {
@@ -1129,6 +1313,94 @@ int write_failed_result(const std::string& output, const std::string& job_id, co
         "  \"error\": {\"code\": \"" + json_escape(code) + "\", \"message\": \"" + json_escape(message) + "\", \"retryable\": false, \"phase\": \"inference\"}\n"
         "}\n";
     return write_text(output, result) ? 1 : 3;
+}
+
+int write_rank_result(const std::string& payload, const std::string& output) {
+    const std::string job_id = extract_string_after(payload, "job_id").empty() ? "local" : extract_string_after(payload, "job_id");
+    std::vector<std::vector<float> > targets = extract_float_matrix_after(payload, "target_embeddings");
+    std::vector<std::vector<float> > profiles = extract_float_matrix_after(payload, "profile_embeddings");
+    if (targets.empty() || profiles.empty()) {
+        return write_failed_result(output, job_id, "face_native_rank_embeddings", "invalid_job", "target_embeddings and profile_embeddings are required");
+    }
+    for (std::size_t i = 0; i < targets.size(); ++i) {
+        normalize_vector(&targets[i]);
+    }
+    for (std::size_t i = 0; i < profiles.size(); ++i) {
+        normalize_vector(&profiles[i]);
+    }
+    std::ostringstream ranks;
+    ranks << "[";
+    for (std::size_t target_index = 0; target_index < targets.size(); ++target_index) {
+        int best_index = -1;
+        int second_index = -1;
+        float best_score = -std::numeric_limits<float>::infinity();
+        float second_score = -std::numeric_limits<float>::infinity();
+        for (std::size_t profile_index = 0; profile_index < profiles.size(); ++profile_index) {
+            const float score = vector_similarity(targets[target_index], profiles[profile_index]);
+            if (score > best_score) {
+                second_score = best_score;
+                second_index = best_index;
+                best_score = score;
+                best_index = static_cast<int>(profile_index);
+            } else if (score > second_score) {
+                second_score = score;
+                second_index = static_cast<int>(profile_index);
+            }
+        }
+        if (target_index) {
+            ranks << ",";
+        }
+        if (second_index < 0) {
+            second_score = 0.0f;
+        }
+        ranks << "{\"target_index\":" << target_index
+              << ",\"best_index\":" << best_index
+              << ",\"best_score\":" << best_score
+              << ",\"second_index\":" << second_index
+              << ",\"second_score\":" << second_score
+              << ",\"margin\":" << (best_score - second_score)
+              << "}";
+    }
+    ranks << "]";
+    const std::string result =
+        "{\n"
+        "  \"contract_version\": \"1.0\",\n"
+        "  \"job_id\": \"" + json_escape(job_id) + "\",\n"
+        "  \"type\": \"face_native_rank_embeddings\",\n"
+        "  \"status\": \"completed\",\n"
+        "  \"processor\": {\"name\": \"" + kProcessorName + "\", \"version\": \"" + kVersion + "\", \"backend\": \"" + kBackend + "\"},\n"
+        "  \"result\": {\"ranks\": " + ranks.str() + "}\n"
+        "}\n";
+    return write_text(output, result) ? 0 : 3;
+}
+
+int write_profile_math_result(const std::string& payload, const std::string& output) {
+    const std::string job_id = extract_string_after(payload, "job_id").empty() ? "local" : extract_string_after(payload, "job_id");
+    std::vector<std::vector<float> > embeddings = extract_float_matrix_after(payload, "embeddings");
+    if (embeddings.empty()) {
+        return write_failed_result(output, job_id, "face_native_profile_math", "invalid_job", "embeddings are required");
+    }
+    std::vector<float> centroid = centroid_vector(embeddings);
+    const int medoid = medoid_index(embeddings);
+    double intra = 0.0;
+    if (!centroid.empty()) {
+        for (std::size_t i = 0; i < embeddings.size(); ++i) {
+            std::vector<float> current = embeddings[i];
+            normalize_vector(&current);
+            intra += vector_similarity(current, centroid);
+        }
+        intra /= std::max<std::size_t>(1, embeddings.size());
+    }
+    const std::string result =
+        "{\n"
+        "  \"contract_version\": \"1.0\",\n"
+        "  \"job_id\": \"" + json_escape(job_id) + "\",\n"
+        "  \"type\": \"face_native_profile_math\",\n"
+        "  \"status\": \"completed\",\n"
+        "  \"processor\": {\"name\": \"" + kProcessorName + "\", \"version\": \"" + kVersion + "\", \"backend\": \"" + kBackend + "\"},\n"
+        "  \"result\": {\"centroid_embedding\": " + float_array_json(centroid) + ", \"medoid_index\": " + std::to_string(medoid) + ", \"intra_person_similarity\": " + std::to_string(intra) + "}\n"
+        "}\n";
+    return write_text(output, result) ? 0 : 3;
 }
 
 bool setup_ort(OrtHandles* ort, std::string* error) {
@@ -1336,6 +1608,77 @@ int run_inference_payload(const std::string& payload, const std::string& output,
     return write_result(output, job_id, type, faces, image, command == "embed", timing);
 }
 
+std::string extract_faces_json(const std::string& payload) {
+    return extract_array_after(payload, "faces").empty() ? "[]" : extract_array_after(payload, "faces");
+}
+
+int run_batch_inference_payload(const std::string& payload, const std::string& output, const std::string& command, LoadedModels* models) {
+    const Clock::time_point total_started = Clock::now();
+    const std::string job_id = extract_string_after(payload, "job_id").empty() ? "local" : extract_string_after(payload, "job_id");
+    const std::string type = command == "embed_batch" ? "face_native_embed_batch" : "face_native_detect_batch";
+    std::vector<std::string> image_paths = extract_string_array_after(payload, "image_paths");
+    if (image_paths.empty()) {
+        const std::string image_path = extract_string_after(payload, "image_path");
+        if (!image_path.empty()) {
+            image_paths.push_back(image_path);
+        }
+    }
+    const std::string model_root = extract_string_after(payload, "model_root");
+    const std::string model_name = extract_string_after(payload, "model_name");
+    const float min_score = static_cast<float>(extract_number_after(payload, "min_confidence", 0.5));
+    const int max_faces = extract_int_after(payload, "max_faces", 0);
+    const int det_size = std::max(32, extract_int_after(payload, "det_size", 640));
+    if (image_paths.empty() || model_root.empty() || model_name.empty()) {
+        return write_failed_result(output, job_id, type, "invalid_job", "image_paths, model_root and model_name are required");
+    }
+    std::ostringstream images;
+    images << "[";
+    int failed_count = 0;
+    for (std::size_t i = 0; i < image_paths.size(); ++i) {
+        const std::string item_output = output + "." + std::to_string(i) + ".json";
+        std::ostringstream item_payload;
+        item_payload << "{"
+                     << "\"contract_version\":\"1.0\","
+                     << "\"job_id\":\"" << json_escape(job_id) << "-" << i << "\","
+                     << "\"type\":\"face_native_" << (command == "embed_batch" ? "embed" : "detect") << "\","
+                     << "\"input\":{\"image_path\":\"" << json_escape(image_paths[i]) << "\",\"source_id\":\"" << json_escape(image_paths[i]) << "\"},"
+                     << "\"options\":{\"model_root\":\"" << json_escape(model_root) << "\",\"model_name\":\"" << json_escape(model_name)
+                     << "\",\"min_confidence\":" << min_score << ",\"max_faces\":" << max_faces
+                     << ",\"det_size\":[" << det_size << "," << det_size << "],\"normalize_coordinates\":true}"
+                     << "}";
+        const int returncode = run_inference_payload(item_payload.str(), item_output, command == "embed_batch" ? "embed" : "detect", models);
+        const std::string item_result = read_text(item_output);
+        const bool completed = returncode == 0 && item_result.find("\"status\": \"completed\"") != std::string::npos;
+        if (!completed) {
+            ++failed_count;
+        }
+        if (i) {
+            images << ",";
+        }
+        images << "{\"image_path\":\"" << json_escape(image_paths[i])
+               << "\",\"source_id\":\"" << json_escape(image_paths[i])
+               << "\",\"status\":\"" << (completed ? "completed" : "failed")
+               << "\",\"faces\":" << extract_faces_json(item_result)
+               << "}";
+        unlink(item_output.c_str());
+    }
+    images << "]";
+    const std::string result =
+        "{\n"
+        "  \"contract_version\": \"1.0\",\n"
+        "  \"job_id\": \"" + json_escape(job_id) + "\",\n"
+        "  \"type\": \"" + type + "\",\n"
+        "  \"status\": \"" + std::string(failed_count == static_cast<int>(image_paths.size()) ? "failed" : "completed") + "\",\n"
+        "  \"processor\": {\"name\": \"" + kProcessorName + "\", \"version\": \"" + kVersion + "\", \"backend\": \"" + kBackend + "\"},\n"
+        "  \"timing_ms\": {\"total\": " + std::to_string(elapsed_ms(total_started)) + ", \"batch_size\": " + std::to_string(image_paths.size()) + ", \"failed_images\": " + std::to_string(failed_count) + "},\n"
+        "  \"result\": {\"images\": " + images.str() + "}\n"
+        "}\n";
+    if (!write_text(output, result)) {
+        return 3;
+    }
+    return failed_count == static_cast<int>(image_paths.size()) ? 1 : 0;
+}
+
 int run_inference_job(const std::vector<std::string>& args, const std::string& command) {
     const std::string input = arg_value(args, "--input");
     const std::string output = arg_value(args, "--output");
@@ -1343,7 +1686,17 @@ int run_inference_job(const std::vector<std::string>& args, const std::string& c
         std::cerr << "--input and --output are required\n";
         return 2;
     }
-    return run_inference_payload(read_text(input), output, command, NULL);
+    const std::string payload = read_text(input);
+    if (command == "embed_batch" || command == "detect_batch") {
+        return run_batch_inference_payload(payload, output, command, NULL);
+    }
+    if (command == "rank_embeddings") {
+        return write_rank_result(payload, output);
+    }
+    if (command == "profile_math") {
+        return write_profile_math_result(payload, output);
+    }
+    return run_inference_payload(payload, output, command, NULL);
 }
 
 int run_worker() {
@@ -1360,6 +1713,12 @@ int run_worker() {
         int returncode = 2;
         if ((command == "detect" || command == "embed") && !input.empty() && !output.empty()) {
             returncode = run_inference_payload(read_text(input), output, command, &models);
+        } else if ((command == "detect_batch" || command == "embed_batch") && !input.empty() && !output.empty()) {
+            returncode = run_batch_inference_payload(read_text(input), output, command, &models);
+        } else if (command == "rank_embeddings" && !input.empty() && !output.empty()) {
+            returncode = write_rank_result(read_text(input), output);
+        } else if (command == "profile_math" && !input.empty() && !output.empty()) {
+            returncode = write_profile_math_result(read_text(input), output);
         }
         std::cout << "{\"request_id\":\"" << json_escape(request_id)
                   << "\",\"returncode\":" << returncode << "}" << std::endl;
@@ -1443,7 +1802,7 @@ int run_onnxruntime_backend(int argc, char** argv) {
         args.push_back(argv[i]);
     }
     if (args.empty()) {
-        std::cerr << "usage: av-imgdata-face-processor <version|probe|detect|embed|worker|self-test>\n";
+        std::cerr << "usage: av-imgdata-face-processor <version|probe|detect|embed|detect_batch|embed_batch|rank_embeddings|profile_math|worker|self-test>\n";
         return 2;
     }
 
@@ -1458,7 +1817,10 @@ int run_onnxruntime_backend(int argc, char** argv) {
     if (command == "worker") {
         return run_worker();
     }
-    if (command == "detect" || command == "embed") {
+    if (
+            command == "detect" || command == "embed"
+            || command == "detect_batch" || command == "embed_batch"
+            || command == "rank_embeddings" || command == "profile_math") {
         return run_inference_job(args, command);
     }
     std::cerr << "unknown command: " << command << "\n";

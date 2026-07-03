@@ -9,6 +9,12 @@ from services.config_service import ConfigService
 from services.native_face_processor_service import NativeFaceProcessorService, NativeFaceProcessorUnavailable
 
 
+def _packaged_processor_path(tmp_path: Path) -> Path:
+    path = tmp_path / "bin" / "av-imgdata-face-processor"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _write_fake_processor(path: Path) -> None:
     path.write_text(
         """#!/usr/bin/env python3
@@ -183,6 +189,55 @@ if cmd == "worker":
     for line in sys.stdin:
         request = json.loads(line)
         output = Path(request["output"])
+        if request["command"] == "embed_batch":
+            payload = json.loads(Path(request["input"]).read_text(encoding="utf-8"))
+            output.write_text(json.dumps({
+                "contract_version": "1.0",
+                "job_id": "job-test",
+                "type": "face_native_embed_batch",
+                "status": "completed",
+                "processor": {"name": "fake", "version": "9.9-test", "backend": "worker-test"},
+                "timing_ms": {"total": 10.0, "batch_size": len(payload["input"]["image_paths"])},
+                "result": {
+                    "images": [
+                        {
+                            "image_path": image_path,
+                            "source_id": image_path,
+                            "status": "completed",
+                            "faces": [{
+                                "confidence": 0.91,
+                                "box": {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4, "unit": "normalized"},
+                                "embedding": [0.25, 0.75],
+                            }],
+                        }
+                        for image_path in payload["input"]["image_paths"]
+                    ]
+                },
+            }), encoding="utf-8")
+            print(json.dumps({"request_id": request["request_id"], "returncode": 0}), flush=True)
+            continue
+        if request["command"] == "rank_embeddings":
+            output.write_text(json.dumps({
+                "contract_version": "1.0",
+                "job_id": "rank",
+                "type": "face_native_rank_embeddings",
+                "status": "completed",
+                "processor": {"name": "fake", "version": "9.9-test", "backend": "worker-test"},
+                "result": {"ranks": [{"target_index": 0, "best_index": 1, "best_score": 0.9, "second_index": 0, "second_score": 0.3, "margin": 0.6}]},
+            }), encoding="utf-8")
+            print(json.dumps({"request_id": request["request_id"], "returncode": 0}), flush=True)
+            continue
+        if request["command"] == "profile_math":
+            output.write_text(json.dumps({
+                "contract_version": "1.0",
+                "job_id": "profile-math",
+                "type": "face_native_profile_math",
+                "status": "completed",
+                "processor": {"name": "fake", "version": "9.9-test", "backend": "worker-test"},
+                "result": {"centroid_embedding": [1.0, 0.0], "medoid_index": 1, "intra_person_similarity": 0.95},
+            }), encoding="utf-8")
+            print(json.dumps({"request_id": request["request_id"], "returncode": 0}), flush=True)
+            continue
         output.write_text(json.dumps({
             "contract_version": "1.0",
             "job_id": "job-test",
@@ -217,15 +272,13 @@ raise SystemExit(2)
 
 
 def test_native_face_processor_status_and_embed_contract(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
+    processor = _packaged_processor_path(tmp_path)
     _write_fake_processor(processor)
     config_path = tmp_path / "config.json"
     config = ConfigService(str(config_path))
     config.writeConfig({
         "native_processors": {
             "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
                 "MODEL_ROOT": str(tmp_path / "models"),
                 "MODEL_NAME": "buffalo_l",
                 "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
@@ -259,15 +312,13 @@ def test_native_face_processor_status_and_embed_contract(tmp_path):
 
 
 def test_native_face_processor_logs_structured_result_error_on_nonzero_exit(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
+    processor = _packaged_processor_path(tmp_path)
     _write_failing_processor(processor)
     config_path = tmp_path / "config.json"
     config = ConfigService(str(config_path))
     config.writeConfig({
         "native_processors": {
             "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
                 "MODEL_ROOT": str(tmp_path / "models"),
                 "MODEL_NAME": "buffalo_l",
                 "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
@@ -294,15 +345,13 @@ def test_native_face_processor_logs_structured_result_error_on_nonzero_exit(tmp_
 
 
 def test_native_face_processor_decodes_heic_to_jpeg_before_native_run(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
+    processor = _packaged_processor_path(tmp_path)
     _write_input_echo_processor(processor)
     config_path = tmp_path / "config.json"
     config = ConfigService(str(config_path))
     config.writeConfig({
         "native_processors": {
             "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
                 "MODEL_ROOT": str(tmp_path / "models"),
                 "MODEL_NAME": "buffalo_l",
                 "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
@@ -343,15 +392,13 @@ def test_native_face_processor_decodes_heic_to_jpeg_before_native_run(tmp_path):
 
 
 def test_native_face_processor_reuses_persistent_worker(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
+    processor = _packaged_processor_path(tmp_path)
     _write_worker_processor(processor)
     config_path = tmp_path / "config.json"
     config = ConfigService(str(config_path))
     config.writeConfig({
         "native_processors": {
             "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
                 "MODEL_ROOT": str(tmp_path / "models"),
                 "MODEL_NAME": "buffalo_l",
                 "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
@@ -382,16 +429,43 @@ def test_native_face_processor_reuses_persistent_worker(tmp_path):
     assert finished[-1]["native_reused_models"] is True
 
 
-def test_native_face_processor_passes_onnxruntime_environment_config(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
+def test_native_face_processor_batches_images_and_vector_operations(tmp_path):
+    processor = _packaged_processor_path(tmp_path)
     _write_worker_processor(processor)
     config_path = tmp_path / "config.json"
     config = ConfigService(str(config_path))
     config.writeConfig({
         "native_processors": {
             "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
+                "MODEL_ROOT": str(tmp_path / "models"),
+                "MODEL_NAME": "buffalo_l",
+                "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
+            },
+        },
+    })
+    service = NativeFaceProcessorService(config, package_root=tmp_path)
+    image_a = tmp_path / "a.jpg"
+    image_b = tmp_path / "b.jpg"
+    image_a.write_bytes(b"jpeg")
+    image_b.write_bytes(b"jpeg")
+    embedder = service.create_embedder(model_name="fallback")
+
+    batch = embedder.detect_and_embed_many([image_a, image_b])
+
+    assert sorted(batch.keys()) == [str(image_a), str(image_b)]
+    assert batch[str(image_a)][0]["embedding"] == [0.25, 0.75]
+    assert embedder.rank_embeddings([[1.0, 0.0]], [[1.0, 0.0], [0.0, 1.0]])[0]["best_index"] == 1
+    assert embedder.profile_math([[1.0, 0.0], [0.9, 0.1]])["medoid_index"] == 1
+
+
+def test_native_face_processor_passes_onnxruntime_environment_config(tmp_path):
+    processor = _packaged_processor_path(tmp_path)
+    _write_worker_processor(processor)
+    config_path = tmp_path / "config.json"
+    config = ConfigService(str(config_path))
+    config.writeConfig({
+        "native_processors": {
+            "FACE_PROCESSOR": {
                 "MODEL_ROOT": str(tmp_path / "models"),
                 "MODEL_NAME": "buffalo_l",
                 "ORT_INTRA_THREADS": 2,
@@ -416,15 +490,13 @@ def test_native_face_processor_passes_onnxruntime_environment_config(tmp_path):
 
 
 def test_native_face_processor_status_reports_onnxruntime_smoke_as_not_complete(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
+    processor = _packaged_processor_path(tmp_path)
     _write_onnxruntime_smoke_processor(processor)
     config_path = tmp_path / "config.json"
     config = ConfigService(str(config_path))
     config.writeConfig({
         "native_processors": {
             "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
                 "MODEL_ROOT": str(tmp_path / "models"),
                 "MODEL_NAME": "buffalo_l",
                 "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
@@ -444,15 +516,13 @@ def test_native_face_processor_status_reports_onnxruntime_smoke_as_not_complete(
 
 
 def test_native_face_processor_skeleton_is_not_inference_ready(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
+    processor = _packaged_processor_path(tmp_path)
     _write_skeleton_processor(processor)
     config_path = tmp_path / "config.json"
     config = ConfigService(str(config_path))
     config.writeConfig({
         "native_processors": {
             "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
                 "MODEL_ROOT": str(tmp_path / "models"),
                 "MODEL_NAME": "buffalo_l",
                 "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
@@ -484,15 +554,13 @@ def test_native_face_processor_defaults_to_required_and_reports_missing_binary(t
 
 
 def test_native_face_processor_status_requires_insightface_license_acknowledgement(tmp_path):
-    processor = tmp_path / "av-imgdata-face-processor"
+    processor = _packaged_processor_path(tmp_path)
     _write_fake_processor(processor)
     config_path = tmp_path / "config.json"
     config = ConfigService(str(config_path))
     config.writeConfig({
         "native_processors": {
             "FACE_PROCESSOR": {
-                "ENABLED": True,
-                "PATH": str(processor),
                 "MODEL_ROOT": str(tmp_path / "models"),
                 "MODEL_NAME": "buffalo_l",
                 "INSIGHTFACE_LICENSE_ACKNOWLEDGED": False,

@@ -8,15 +8,44 @@
   "properties": {
     "contract_version": { "const": "1.0" },
     "job_id": { "type": "string", "minLength": 1 },
-    "type": { "enum": ["face_native_detect", "face_native_embed"] },
+    "type": {
+      "enum": [
+        "face_native_detect",
+        "face_native_embed",
+        "face_native_detect_batch",
+        "face_native_embed_batch",
+        "face_native_rank_embeddings",
+        "face_native_profile_math"
+      ]
+    },
     "input": {
       "type": "object",
-      "required": ["image_path"],
       "additionalProperties": true,
       "properties": {
         "image_path": { "type": "string", "minLength": 1 },
+        "image_paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
         "source_id": { "type": "string" }
-      }
+      },
+      "anyOf": [
+        { "required": ["image_path"] },
+        { "required": ["image_paths"] },
+        {}
+      ]
+    },
+    "target_embeddings": {
+      "type": "array",
+      "items": { "type": "array", "items": { "type": "number" } }
+    },
+    "profile_embeddings": {
+      "type": "array",
+      "items": { "type": "array", "items": { "type": "number" } }
+    },
+    "embeddings": {
+      "type": "array",
+      "items": { "type": "array", "items": { "type": "number" } }
     },
     "options": {
       "type": "object",

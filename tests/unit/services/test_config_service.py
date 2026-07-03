@@ -55,8 +55,6 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         service.writeConfig({
             "native_processors": {
                 "FACE_PROCESSOR": {
-                    "ENABLED": True,
-                    "PATH": "/tmp/native-face",
                     "TIMEOUT_SECONDS": 99999,
                     "MAX_IMAGE_BYTES": 1,
                     "ORT_INTRA_THREADS": 999,
@@ -68,14 +66,40 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
 
         face_processor = service.readMergedConfig()["native_processors"]["FACE_PROCESSOR"]
 
-        self.assertTrue(face_processor["ENABLED"])
-        self.assertEqual(face_processor["PATH"], "/tmp/native-face")
         self.assertEqual(face_processor["TIMEOUT_SECONDS"], 3600)
         self.assertEqual(face_processor["MAX_IMAGE_BYTES"], 1048576)
         self.assertEqual(face_processor["ORT_INTRA_THREADS"], 64)
         self.assertEqual(face_processor["ORT_GRAPH_OPT_LEVEL"], "all")
         self.assertTrue(face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"])
+        self.assertNotIn("ENABLED", face_processor)
+        self.assertNotIn("PATH", face_processor)
         self.assertNotIn("FALLBACK_TO_PYTHON", face_processor)
+
+    def test_optional_vips_image_processor_config_defaults_and_normalization(self):
+        service = ConfigService(str(self.config_file))
+        service.writeConfig({
+            "native_processors": {
+                "IMAGE_PROCESSOR_VIPS": {
+                    "ENABLED": 1,
+                    "PREFERRED": 0,
+                    "PATH": "/tmp/native-vips",
+                    "TIMEOUT_SECONDS": 99999,
+                    "MAX_IMAGE_BYTES": 1,
+                    "SUPPORTED_FORMATS": [".JPG", "png", "jpg", ""],
+                    "ALLOW_FALLBACK_TO_DEFAULT": 0,
+                },
+            },
+        })
+
+        image_processor = service.readMergedConfig()["native_processors"]["IMAGE_PROCESSOR_VIPS"]
+
+        self.assertTrue(image_processor["ENABLED"])
+        self.assertFalse(image_processor["PREFERRED"])
+        self.assertEqual(image_processor["PATH"], "/tmp/native-vips")
+        self.assertEqual(image_processor["TIMEOUT_SECONDS"], 3600)
+        self.assertEqual(image_processor["MAX_IMAGE_BYTES"], 1048576)
+        self.assertEqual(image_processor["SUPPORTED_FORMATS"], ["jpg", "png"])
+        self.assertFalse(image_processor["ALLOW_FALLBACK_TO_DEFAULT"])
 
     def test_readMergedConfig_detects_file_change(self):
         """

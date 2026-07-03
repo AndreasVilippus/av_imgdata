@@ -483,7 +483,38 @@ class FaceRecognitionService:
                 )
             if image_path not in self._image_embedding_cache:
                 try:
-                    self._image_embedding_cache[image_path] = embedder.detect_and_embed(Path(image_path))
+                    batch_paths = [image_path]
+                    detect_many = getattr(embedder, "detect_and_embed_many", None)
+                    if callable(detect_many):
+                        cutoff = datetime.now(timezone.utc) - timedelta(days=options["changed_since_days"]) if options["changed_since_days"] > 0 else None
+                        for lookahead in items[item_index + 1:item_index + 8]:
+                            try:
+                                lookahead_id = int(lookahead.get("id"))
+                            except (AttributeError, TypeError, ValueError):
+                                continue
+                            lookahead_path = self._item_path(
+                                user_key=user_key, cookies=cookies, base_url=base_url,
+                                shared_folder=shared_folder, item=lookahead, folder_cache=folder_cache,
+                            )
+                            if not lookahead_path or lookahead_path in self._image_embedding_cache or not Path(lookahead_path).is_file():
+                                continue
+                            if cutoff is not None and datetime.fromtimestamp(Path(lookahead_path).stat().st_mtime, timezone.utc) < cutoff:
+                                continue
+                            batch_paths.append(lookahead_path)
+                        if len(batch_paths) > 1:
+                            batch_result = detect_many([Path(path) for path in batch_paths])
+                            for batch_path in batch_paths:
+                                self._image_embedding_cache[batch_path] = batch_result.get(batch_path, [])
+                            self._debug_log(
+                                "recognition_native_image_batch_cached",
+                                action=action,
+                                images_count=len(batch_paths),
+                                faces_count=sum(len(self._image_embedding_cache.get(path, [])) for path in batch_paths),
+                            )
+                        else:
+                            self._image_embedding_cache[image_path] = embedder.detect_and_embed(Path(image_path))
+                    else:
+                        self._image_embedding_cache[image_path] = embedder.detect_and_embed(Path(image_path))
                 except Exception as direct_error:
                     preview, preview_source = self._extract_reference_preview(image_path)
                     if preview:
@@ -629,6 +660,59 @@ class FaceRecognitionService:
         normalized = [cls._normalize_vector(vector) for vector in embeddings]
         scores = [sum(cls._similarity(current, other) for other in normalized) / len(normalized) for current in normalized]
         return max(range(len(scores)), key=lambda index: scores[index])
+
+    def _profile_math(self, embedder: Any, embeddings: List[List[float]]) -> Dict[str, Any]:
+        native_profile_math = getattr(embedder, "profile_math", None)
+        if callable(native_profile_math):
+            try:
+                result = native_profile_math(embeddings)
+                centroid = result.get("centroid_embedding") if isinstance(result.get("centroid_embedding"), list) else []
+                medoid_index = int(result.get("medoid_index") or 0)
+                return {
+                    "centroid_embedding": [float(value) for value in centroid],
+                    "medoid_index": max(0, min(len(embeddings) - 1, medoid_index)) if embeddings else 0,
+                    "intra_person_similarity": float(result.get("intra_person_similarity") or 0.0),
+                }
+            except Exception as exc:
+                self._debug_log("recognition_native_profile_math_failed", error=f"{type(exc).__name__}: {exc}")
+        centroid = self._centroid(embeddings)
+        medoid_index = self._medoid_index(embeddings)
+        intra_similarity = sum(self._similarity(embedding, centroid) for embedding in embeddings) / len(embeddings) if embeddings else 0.0
+        return {
+            "centroid_embedding": centroid,
+            "medoid_index": medoid_index,
+            "intra_person_similarity": intra_similarity,
+        }
+
+    def _rank_profiles(self, embedder: Any, target_embeddings: List[List[float]], profiles: List[Dict[str, Any]]) -> List[Tuple[float, Dict[str, Any], float, Dict[str, Any], float]]:
+        profile_embeddings = [profile.get("centroid_embedding") or [] for profile in profiles]
+        native_rank = getattr(embedder, "rank_embeddings", None)
+        if callable(native_rank):
+            try:
+                ranks = native_rank(target_embeddings, profile_embeddings)
+                results: List[Tuple[float, Dict[str, Any], float, Dict[str, Any], float]] = []
+                for rank in ranks:
+                    best_index = int(rank.get("best_index") if rank.get("best_index") is not None else -1)
+                    second_index = int(rank.get("second_index") if rank.get("second_index") is not None else -1)
+                    best = profiles[best_index] if 0 <= best_index < len(profiles) else {}
+                    second = profiles[second_index] if 0 <= second_index < len(profiles) else {}
+                    best_score = float(rank.get("best_score") or 0.0)
+                    second_score = float(rank.get("second_score") or 0.0)
+                    results.append((best_score, best, second_score, second, float(rank.get("margin", best_score - second_score))))
+                if len(results) == len(target_embeddings):
+                    return results
+            except Exception as exc:
+                self._debug_log("recognition_native_embedding_rank_failed", error=f"{type(exc).__name__}: {exc}")
+        results = []
+        for target in target_embeddings:
+            scored = sorted(
+                [(self._similarity(target, profile.get("centroid_embedding") or []), profile) for profile in profiles],
+                key=lambda item: item[0], reverse=True,
+            )
+            best_score, best = scored[0] if scored else (0.0, {})
+            second_score, second = scored[1] if len(scored) > 1 else (0.0, {})
+            results.append((best_score, best, second_score, second, best_score - second_score))
+        return results
 
     def _persist_profiles_snapshot(
         self,
@@ -804,9 +888,10 @@ class FaceRecognitionService:
                     min_faces_per_person=options["min_faces_per_person"],
                 )
             if references:
-                centroid = self._centroid(embeddings)
-                medoid = references[self._medoid_index(embeddings)]
-                intra_similarity = sum(self._similarity(embedding, centroid) for embedding in embeddings) / len(embeddings)
+                profile_math = self._profile_math(embedder, embeddings)
+                centroid = profile_math["centroid_embedding"]
+                medoid = references[profile_math["medoid_index"]]
+                intra_similarity = profile_math["intra_person_similarity"]
                 profiles.append({
                     "person_id": person_id, "person_name": person_name, "profile_key": self._model_key(options),
                     "reference_count": len(references), "used_count": len(references), "quality": "good" if len(references) >= options["min_faces_per_person"] else "limited",
@@ -864,6 +949,7 @@ class FaceRecognitionService:
 
     def _build_outliers(self, *, user_key: str, options: Dict[str, Any]) -> None:
         profiles = self.profiles(options).get("profiles", [])
+        embedder = self._prepared_embedder(options)
         previous = self.findings(
             self.ACTION_OUTLIERS,
             user_key=user_key,
@@ -888,16 +974,9 @@ class FaceRecognitionService:
                 similarity = self._similarity(reference.get("embedding") or [], centroid)
                 if similarity >= options["outlier_similarity_threshold"]:
                     continue
-                other_scores = sorted(
-                    [
-                        (self._similarity(reference.get("embedding") or [], other.get("centroid_embedding") or []), other)
-                        for other in profiles
-                        if other.get("person_id") != profile.get("person_id")
-                    ],
-                    key=lambda item: item[0],
-                    reverse=True,
-                )
-                nearest_other_score, nearest_other = other_scores[0] if other_scores else (0.0, {})
+                other_profiles = [other for other in profiles if other.get("person_id") != profile.get("person_id")]
+                rank = self._rank_profiles(embedder, [reference.get("embedding") or []], other_profiles)
+                nearest_other_score, nearest_other = (rank[0][0], rank[0][1]) if rank else (0.0, {})
                 entries.append({
                     "outlier_id": f"out-{reference.get('face_id')}", "image_path": reference.get("image_path"),
                     "person_id": profile.get("person_id"), "person_name": profile.get("person_name"),
@@ -980,15 +1059,10 @@ class FaceRecognitionService:
             for reference in references:
                 if int(reference.get("face_id") or 0) in resolved_face_ids:
                     continue
-                scored = sorted(
-                    [(self._similarity(reference["embedding"], profile.get("centroid_embedding") or []), profile) for profile in profiles],
-                    key=lambda item: item[0], reverse=True,
-                )
-                if not scored:
+                ranked = self._rank_profiles(embedder, [reference["embedding"]], profiles)
+                if not ranked:
                     continue
-                best_score, best = scored[0]
-                second_score, second = scored[1] if len(scored) > 1 else (0.0, {})
-                margin = best_score - second_score
+                best_score, best, second_score, second, margin = ranked[0]
                 decision = "reject"
                 if best_score >= options["safe_score"] and margin >= options["min_margin"]:
                     decision = "accept"
@@ -1125,18 +1199,13 @@ class FaceRecognitionService:
                     face_id = 0
                 if not face_id or face_id in resolved_face_ids:
                     continue
-                scored = sorted(
-                    [(self._similarity(reference["embedding"], profile.get("centroid_embedding") or []), profile) for profile in profiles],
-                    key=lambda item: item[0], reverse=True,
-                )
-                if not scored:
+                ranked = self._rank_profiles(embedder, [reference["embedding"]], profiles)
+                if not ranked:
                     continue
-                best_score, best = scored[0]
+                best_score, best, second_score, second, margin = ranked[0]
                 best_person_id = int(best.get("person_id") or 0)
                 if best_person_id == current_person_id:
                     continue
-                second_score, second = scored[1] if len(scored) > 1 else (0.0, {})
-                margin = best_score - second_score
                 if best_score < options["review_score"] or margin < options["min_margin"]:
                     continue
                 decision = "accept" if best_score >= options["safe_score"] else "review"
@@ -1285,9 +1354,14 @@ class FaceRecognitionService:
             profile["used_count"] = len(remaining)
             profile["quality"] = "good" if len(remaining) >= options["min_faces_per_person"] else "limited"
             embeddings = [reference.get("embedding") or [] for reference in remaining]
-            profile["centroid_embedding"] = self._centroid(embeddings)
+            profile_math = self._profile_math(None, embeddings) if embeddings else {
+                "centroid_embedding": [],
+                "medoid_index": 0,
+                "intra_person_similarity": 0.0,
+            }
+            profile["centroid_embedding"] = profile_math["centroid_embedding"]
             if remaining:
-                medoid = remaining[self._medoid_index(embeddings)]
+                medoid = remaining[profile_math["medoid_index"]]
                 profile["medoid"] = {key: medoid[key] for key in ("face_id", "image_id", "image_path", "bbox")}
             else:
                 profile["medoid"] = {}

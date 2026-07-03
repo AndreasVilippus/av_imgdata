@@ -42,6 +42,19 @@ create_install() {
 		mkdir -p "$package_tgz_dir/lib"
 		find "$NATIVE_INSTALL/lib" -maxdepth 1 \( -name 'libonnxruntime.so*' -o -name 'libjpeg.so*' \) -exec cp -av {} "$package_tgz_dir/lib/" \;
 	fi
+	VIPS_INSTALL="build/native/${SYNO_PLATFORM:-local}/vips-image-processor-install/usr/local/AV_ImgData"
+	if [ "${AV_IMGDATA_WITH_VIPS:-0}" = "1" ]; then
+		if [ ! -x "$VIPS_INSTALL/bin/av-imgdata-image-processor" ]; then
+			echo "ERROR: optional libvips image processor missing: $VIPS_INSTALL/bin/av-imgdata-image-processor"
+			exit 1
+		fi
+		mkdir -p "$package_tgz_dir/bin"
+		cp -av "$VIPS_INSTALL/bin/av-imgdata-image-processor" "$package_tgz_dir/bin/"
+		if [ -d "$VIPS_INSTALL/lib" ]; then
+			mkdir -p "$package_tgz_dir/lib"
+			find "$VIPS_INSTALL/lib" -maxdepth 1 -type f -name '*.so*' -exec cp -av {} "$package_tgz_dir/lib/" \;
+		fi
+	fi
 	# Fail fast if UI entrypoint didn't get packaged
 	if [ ! -f "$package_tgz_dir/ui/index.cgi" ]; then
 		echo "ERROR: ui/index.cgi missing in package staging dir."

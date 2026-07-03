@@ -378,6 +378,35 @@ def test_cleanup_final_backend_progress_releases_loading_runtime():
     assert result == {"loading": False, "events": ["stop"]}
 
 
+def test_cleanup_runtime_action_overrides_face_match_recognition_selection_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              selectedCleanupAction: 'normalize_names',
+              cleanupRuntimeAction: 'normalize_names',
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+            });
+
+            assert.strictEqual(component.faceMatchRecognitionActionSelected, true);
+            assert.strictEqual(component.activeCleanupAction, 'normalize_names');
+            assert.strictEqual(component.selectedRecognitionAction, 'normalize_names');
+            assert.strictEqual(component.isRecognitionCleanupAction, false);
+            console.log(JSON.stringify({
+              selectedRecognitionAction: component.selectedRecognitionAction,
+              isRecognitionCleanupAction: component.isRecognitionCleanupAction,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "selectedRecognitionAction": "normalize_names",
+        "isRecognitionCleanupAction": False,
+    }
+
+
 def test_file_analysis_poll_error_keeps_backend_owned_running_state_runtime():
     result = run_node(
         mixin_runtime_script(

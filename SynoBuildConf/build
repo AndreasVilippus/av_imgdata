@@ -1,11 +1,25 @@
 #!/bin/bash
 set -e
 
-make clean_python_artifacts ${MAKE_FLAGS}
-make ${MAKE_FLAGS}
 if ! ./tools/build-native-face-processor.sh; then
 	echo "ERROR: native ONNXRuntime face processor build failed."
 	exit 1
 fi
+if ! ./tools/smoke-native-face-processor.sh; then
+	echo "ERROR: native ONNXRuntime face processor smoke checks failed."
+	exit 1
+fi
+if ! ./tools/functional-native-face-processor.sh; then
+	echo "ERROR: native ONNXRuntime face processor functional checks failed."
+	exit 1
+fi
+if [ "${AV_IMGDATA_WITH_VIPS:-0}" = "1" ]; then
+	if ! ./tools/build-native-image-processor-vips.sh; then
+		echo "ERROR: optional libvips image processor build failed."
+		exit 1
+	fi
+fi
+make clean_python_artifacts ${MAKE_FLAGS}
+make ${MAKE_FLAGS}
 echo "Build completed"
 exit 0

@@ -57,8 +57,6 @@ class ConfigService:
             },
             "native_processors": {
                 "FACE_PROCESSOR": {
-                    "ENABLED": True,
-                    "PATH": "bin/av-imgdata-face-processor",
                     "MODEL_ROOT": "",
                     "MODEL_NAME": "",
                     "TIMEOUT_SECONDS": 120,
@@ -66,6 +64,15 @@ class ConfigService:
                     "ORT_INTRA_THREADS": 0,
                     "ORT_GRAPH_OPT_LEVEL": "all",
                     "INSIGHTFACE_LICENSE_ACKNOWLEDGED": False,
+                },
+                "IMAGE_PROCESSOR_VIPS": {
+                    "ENABLED": False,
+                    "PREFERRED": True,
+                    "PATH": "bin/av-imgdata-image-processor",
+                    "TIMEOUT_SECONDS": 120,
+                    "MAX_IMAGE_BYTES": 268435456,
+                    "SUPPORTED_FORMATS": ["jpeg", "jpg", "png", "webp", "tiff"],
+                    "ALLOW_FALLBACK_TO_DEFAULT": True,
                 },
             },
             "files": {
@@ -271,7 +278,6 @@ class ConfigService:
 
         native_processors = config.get("native_processors", {}) if isinstance(config.get("native_processors"), dict) else {}
         face_processor = native_processors.get("FACE_PROCESSOR", {}) if isinstance(native_processors.get("FACE_PROCESSOR"), dict) else {}
-        face_processor["ENABLED"] = bool(face_processor.get("ENABLED", False))
         face_processor["TIMEOUT_SECONDS"] = cls._clamp_int(
             face_processor.get("TIMEOUT_SECONDS"),
             default=120,
@@ -296,6 +302,30 @@ class ConfigService:
         face_processor["ORT_GRAPH_OPT_LEVEL"] = graph_opt_level
         face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"] = bool(face_processor.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False))
         native_processors["FACE_PROCESSOR"] = face_processor
+        image_processor_vips = native_processors.get("IMAGE_PROCESSOR_VIPS", {}) if isinstance(native_processors.get("IMAGE_PROCESSOR_VIPS"), dict) else {}
+        image_processor_vips["ENABLED"] = bool(image_processor_vips.get("ENABLED", False))
+        image_processor_vips["PREFERRED"] = bool(image_processor_vips.get("PREFERRED", True))
+        image_processor_vips["PATH"] = str(image_processor_vips.get("PATH") or "bin/av-imgdata-image-processor")
+        image_processor_vips["TIMEOUT_SECONDS"] = cls._clamp_int(
+            image_processor_vips.get("TIMEOUT_SECONDS"),
+            default=120,
+            minimum=1,
+            maximum=3600,
+        )
+        image_processor_vips["MAX_IMAGE_BYTES"] = cls._clamp_int(
+            image_processor_vips.get("MAX_IMAGE_BYTES"),
+            default=268435456,
+            minimum=1048576,
+            maximum=1073741824,
+        )
+        image_processor_vips["SUPPORTED_FORMATS"] = cls._normalizeStringList(
+            image_processor_vips.get("SUPPORTED_FORMATS"),
+            default=["jpeg", "jpg", "png", "webp", "tiff"],
+            lowercase=True,
+            strip_prefix=".",
+        )
+        image_processor_vips["ALLOW_FALLBACK_TO_DEFAULT"] = bool(image_processor_vips.get("ALLOW_FALLBACK_TO_DEFAULT", True))
+        native_processors["IMAGE_PROCESSOR_VIPS"] = image_processor_vips
         config["native_processors"] = native_processors
 
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}

@@ -68,3 +68,73 @@ def test_face_native_result_schema_accepts_box_and_embedding_result():
     }
 
     jsonschema.Draft202012Validator(schema).validate(payload)
+
+
+def test_face_native_job_input_schema_accepts_batch_and_vector_jobs():
+    schema = _load_schema("face-native-job-input.schema.json")
+    validator = jsonschema.Draft202012Validator(schema)
+
+    validator.validate({
+        "contract_version": "1.0",
+        "job_id": "batch-1",
+        "type": "face_native_embed_batch",
+        "input": {"image_paths": ["/tmp/a.jpg", "/tmp/b.jpg"]},
+        "options": {"model_root": "/tmp/models", "model_name": "buffalo_l"},
+    })
+    validator.validate({
+        "contract_version": "1.0",
+        "job_id": "rank-1",
+        "type": "face_native_rank_embeddings",
+        "input": {},
+        "options": {},
+        "target_embeddings": [[1.0, 0.0]],
+        "profile_embeddings": [[1.0, 0.0], [0.0, 1.0]],
+    })
+    validator.validate({
+        "contract_version": "1.0",
+        "job_id": "profile-1",
+        "type": "face_native_profile_math",
+        "input": {},
+        "options": {},
+        "embeddings": [[1.0, 0.0], [0.8, 0.2]],
+    })
+
+
+def test_face_native_result_schema_accepts_batch_and_vector_results():
+    schema = _load_schema("face-native-result.schema.json")
+    validator = jsonschema.Draft202012Validator(schema)
+
+    validator.validate({
+        "contract_version": "1.0",
+        "job_id": "batch-1",
+        "type": "face_native_embed_batch",
+        "status": "completed",
+        "result": {"images": [{"image_path": "/tmp/a.jpg", "status": "completed", "faces": []}]},
+    })
+    validator.validate({
+        "contract_version": "1.0",
+        "job_id": "rank-1",
+        "type": "face_native_rank_embeddings",
+        "status": "completed",
+        "result": {
+            "ranks": [{
+                "target_index": 0,
+                "best_index": 0,
+                "best_score": 0.99,
+                "second_index": 1,
+                "second_score": 0.1,
+                "margin": 0.89,
+            }]
+        },
+    })
+    validator.validate({
+        "contract_version": "1.0",
+        "job_id": "profile-1",
+        "type": "face_native_profile_math",
+        "status": "completed",
+        "result": {
+            "centroid_embedding": [0.99, 0.1],
+            "medoid_index": 0,
+            "intra_person_similarity": 0.98,
+        },
+    })

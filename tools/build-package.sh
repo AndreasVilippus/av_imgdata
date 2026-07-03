@@ -26,6 +26,8 @@ SANITIZE_DIRS=(
 SANITIZE_NATIVE_BUILD_PATTERNS=(
   "build/native/*/face_processor-build"
   "build/native/*/face_processor-install"
+  "build/native/*/vips-image-processor-build"
+  "build/native/*/vips-image-processor-install"
 )
 SANITIZE_BACKUP_ROOT=""
 SANITIZED_DIRS=()

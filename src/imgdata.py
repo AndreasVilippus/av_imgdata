@@ -42,6 +42,7 @@ from services.face_frame_standardization_service import FaceFrameStandardization
 from services.face_recognition_service import FaceRecognitionService
 from services.image_decode_service import ImageDecodeService
 from services.native_face_processor_service import NativeFaceProcessorService
+from services.native_image_processor_vips_service import NativeImageProcessorVipsService
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
 from services.face_match_mutation_service import FaceMatchMutationService
@@ -160,6 +161,7 @@ class ImgDataService:
         self.files = FileHandler(self.config)
         self.image_decoder = ImageDecodeService(self.config)
         self.native_face_processor = NativeFaceProcessorService(self.config)
+        self.native_image_processor_vips = NativeImageProcessorVipsService(self.config)
         self.metadata_parser = MetadataParser()
         self.name_mappings = NameMappingService()
         self.face_suppressions = FaceSuppressionRepository(self.name_mappings._database)
@@ -10177,8 +10179,6 @@ class ImgDataService:
         )
 
     def _useNativeFaceProcessor(self) -> bool:
-        if not bool(self.native_face_processor.config().get("ENABLED", True)):
-            return False
         native_status = self._nativeFaceProcessorStatus()
         return bool(native_status.get("hot_path_available")) and str(native_status.get("backend") or "") == "native"
 
@@ -10364,9 +10364,10 @@ class ImgDataService:
         model_status = InsightFaceDetector.available_models(model_root)
         active_model_name = self._configuredInsightFaceModelName(model_status)
         native_status = self._nativeFaceProcessorStatus()
+        image_vips_status = self._nativeImageProcessorVipsStatus()
         result = {
             "label": "InsightFace",
-            "enabled": bool(configured.get("ENABLED", False)),
+            "enabled": bool(configured.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False)),
             "model_root_configured": str(configured.get("MODEL_ROOT") or "").strip(),
             "model_name_configured": str(configured.get("MODEL_NAME") or "").strip(),
             "model_status": model_status,
@@ -10379,8 +10380,27 @@ class ImgDataService:
             "insightface": result,
             "native_processors": {
                 "FACE_PROCESSOR": native_status,
+                "IMAGE_PROCESSOR_VIPS": image_vips_status,
             },
         }
+
+    def imageBackendStatus(self) -> Dict[str, Any]:
+        return {
+            "image_processors": {
+                "IMAGE_PROCESSOR_VIPS": self._nativeImageProcessorVipsStatus(),
+            },
+        }
+
+    def _nativeImageProcessorVipsStatus(self) -> Dict[str, Any]:
+        try:
+            return self.native_image_processor_vips.status()
+        except Exception as exc:
+            return {
+                "enabled": False,
+                "available": False,
+                "reason": "vips_probe_failed",
+                "last_error": str(exc),
+            }
 
     def _generatedFaceRecognitionProfilesCount(self) -> int:
         try:
@@ -10401,6 +10421,11 @@ class ImgDataService:
             "label_key": "status:native_face_processor",
             "fallback_label": "Native face processor",
             "value": native_status.get("reason") or ("ready" if native_status.get("available") else "unknown"),
+        }, {
+            "key": "image_processor_vips",
+            "label_key": "status:image_processor_vips",
+            "fallback_label": "libvips image backend",
+            "value": self._nativeImageProcessorVipsStatus().get("reason") or "vips_disabled",
         }]
 
     @staticmethod

@@ -8,7 +8,16 @@
   "properties": {
     "contract_version": { "const": "1.0" },
     "job_id": { "type": "string", "minLength": 1 },
-    "type": { "enum": ["face_native_detect", "face_native_embed"] },
+    "type": {
+      "enum": [
+        "face_native_detect",
+        "face_native_embed",
+        "face_native_detect_batch",
+        "face_native_embed_batch",
+        "face_native_rank_embeddings",
+        "face_native_profile_math"
+      ]
+    },
     "status": { "enum": ["completed", "failed"] },
     "processor": {
       "type": "object",
@@ -95,7 +104,42 @@
               { "required": ["box"] }
             ]
           }
-        }
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "image_path": { "type": "string" },
+              "source_id": { "type": "string" },
+              "status": { "enum": ["completed", "failed"] },
+              "faces": { "type": "array" }
+            }
+          }
+        },
+        "ranks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target_index", "best_index", "best_score", "second_index", "second_score", "margin"],
+            "additionalProperties": true,
+            "properties": {
+              "target_index": { "type": "integer", "minimum": 0 },
+              "best_index": { "type": "integer" },
+              "best_score": { "type": "number" },
+              "second_index": { "type": "integer" },
+              "second_score": { "type": "number" },
+              "margin": { "type": "number" }
+            }
+          }
+        },
+        "centroid_embedding": {
+          "type": "array",
+          "items": { "type": "number" }
+        },
+        "medoid_index": { "type": "integer", "minimum": 0 },
+        "intra_person_similarity": { "type": "number" }
       }
     },
     "error": {

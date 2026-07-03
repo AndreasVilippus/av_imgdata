@@ -67,12 +67,40 @@ def test_exiftool_persistent_config_is_visible_and_normalized():
 def test_insightface_ui_uses_native_status_without_wheelhouse_install_controls():
     view = Path("ui/src/views/ExternalLibrariesView.vue").read_text(encoding="utf-8")
     mixin = Path("ui/src/mixins/externalLibrariesMixin.js").read_text(encoding="utf-8")
+    status_mixin = Path("ui/src/mixins/statusMixin.js").read_text(encoding="utf-8")
+    ger = Path("ui/texts/ger/strings").read_text(encoding="utf-8")
+    enu = Path("ui/texts/enu/strings").read_text(encoding="utf-8")
     api = Path("src/api/imgdata_api.py").read_text(encoding="utf-8")
     client = Path("ui/src/services/dsm-api-client.js").read_text(encoding="utf-8")
 
     assert "vm.fetchInsightFaceStatus" in view
+    assert "config:label_native_face_processor_status_detail" in view
+    assert "formatInsightFaceNativeProcessorReason(vm.faceMatchInsightFaceNativeProcessorStatus.reason)" in view
+    assert "formatInsightFaceNativeProcessorReason(reason)" in mixin
+    assert "native_face_processor_reason_license_not_acknowledged" in mixin
+    assert "native_face_processor_reason_probe_failed" in mixin
+    assert "IMAGE_PROCESSOR_VIPS" in view
+    assert "config:label_image_processor_vips" in view
+    assert "formatImageProcessorVipsReason(vm.imageProcessorVipsStatus.reason)" in view
+    assert "formatImageProcessorVipsReason(reason)" in mixin
+    assert "vips_reason_probe_failed" in mixin
+    assert "formatStatusImageProcessorVipsReason(text)" in status_mixin
+    assert "vips_reason_probe_failed" in status_mixin
+    assert "formatStatusInsightFaceNativeProcessorReason(text)" in status_mixin
+    assert "native_face_processor_reason_license_not_acknowledged" in status_mixin
+    assert 'label_native_face_processor_status_detail="Prozessorstatus"' in ger
+    assert 'label_image_processor_vips="libvips-Bildbackend"' in ger
+    assert 'vips_reason_probe_failed="libvips-Bildbackend-Prüfung fehlgeschlagen; Standard-Bildbackend wird verwendet."' in ger
+    assert 'native_face_processor_reason_license_not_acknowledged="InsightFace-Modell-Lizenzbedingungen wurden noch nicht bestätigt."' in ger
+    assert 'label_native_face_processor_status_detail="Processor status"' in enu
+    assert 'label_image_processor_vips="libvips image backend"' in enu
+    assert 'vips_reason_probe_failed="libvips image backend probe failed; default image backend is used."' in enu
+    assert 'native_face_processor_reason_license_not_acknowledged="InsightFace model license terms have not been acknowledged."' in enu
     assert "/api/insightface_status" in mixin
+    assert "/api/image_backend_status" in mixin
     assert "@router.post(\"/insightface_status\")" in api
+    assert "@router.post(\"/image_backend_status\")" in api
+    assert "image_backend_status: 120000" in client
     assert "insightface_status: 120000" in client
     for removed in (
         "loadPipWheelhousePackages",
@@ -93,17 +121,23 @@ def test_native_face_processor_config_is_visible_without_python_fallback():
     assert "native_processors" in view
     assert "FACE_PROCESSOR" in view
     assert "setExternalLibrariesNativeProcessorConfigValue" in view
-    assert "label_enable_native_face_processor" in view
-    assert "label_native_face_processor_path" in view
     assert "INSIGHTFACE_LICENSE_ACKNOWLEDGED" in view
     assert "label_acknowledge_insightface_model_license" in view
     assert "native_face_processor_license_hint" in view
     assert "native_processors" in mixin
     assert "INSIGHTFACE_LICENSE_ACKNOWLEDGED: false" in mixin
+    assert "label_enable_native_face_processor" not in view
+    assert "label_native_face_processor_path" not in view
+    face_mixin_block = mixin.split("FACE_PROCESSOR: {", 1)[1].split("IMAGE_PROCESSOR_VIPS", 1)[0]
+    assert "ENABLED" not in face_mixin_block
+    assert "PATH" not in face_mixin_block
     assert "FALLBACK_TO_PYTHON" not in mixin
     assert '"native_processors"' in config
     assert '"FACE_PROCESSOR"' in config
     assert '"INSIGHTFACE_LICENSE_ACKNOWLEDGED": False' in config
+    face_block = config.split('"FACE_PROCESSOR": {', 1)[1].split('"IMAGE_PROCESSOR_VIPS"', 1)[0]
+    assert '"ENABLED"' not in face_block
+    assert '"PATH"' not in face_block
 
 
 def test_configuration_view_exposes_backend_debug_log_path():

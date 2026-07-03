@@ -63,14 +63,10 @@ class NativeFaceProcessorService:
         return config
 
     def enabled(self) -> bool:
-        return bool(self.config().get("ENABLED", False))
+        return True
 
     def executable_path(self) -> Path:
-        configured = str(self.config().get("PATH") or "bin/av-imgdata-face-processor").strip()
-        path = Path(configured)
-        if path.is_absolute():
-            return path
-        return (self.package_root / path).resolve()
+        return (self.package_root / "bin" / "av-imgdata-face-processor").resolve()
 
     def timeout_seconds(self) -> int:
         try:
@@ -113,17 +109,15 @@ class NativeFaceProcessorService:
     def status(self, *, model_root: Optional[Path] = None, model_name: str = "") -> Dict[str, Any]:
         config = self.config()
         path = self.executable_path()
-        enabled = bool(config.get("ENABLED", False))
+        enabled = True
         result: Dict[str, Any] = {
             "enabled": enabled,
             "path": str(path),
             "present": path.is_file(),
             "executable": os.access(str(path), os.X_OK),
             "available": False,
-            "reason": "disabled" if not enabled else "",
+            "reason": "",
         }
-        if not enabled:
-            return result
         if not self._insightface_license_acknowledged():
             result["reason"] = "insightface_license_not_acknowledged"
             result["last_error"] = (
@@ -306,6 +300,129 @@ class NativeFaceProcessorService:
         )
         return faces
 
+    def run_faces_batch(self, command: str, image_paths: List[Path], options: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+        paths = [Path(path) for path in image_paths]
+        if not paths:
+            return {}
+        executable = self.executable_path()
+        started_at = time.monotonic()
+        command = "embed_batch" if command == "embed" else "detect_batch"
+        self._debug_log(
+            "native_face_processor_batch_start",
+            command=command,
+            images_count=len(paths),
+            executable=str(executable),
+            **self._ort_environment_config(),
+        )
+        with tempfile.TemporaryDirectory(prefix="av-imgdata-native-face-batch-") as tmpdir:
+            workdir = Path(tmpdir)
+            input_path = workdir / "job-input.json"
+            output_path = workdir / "processor-result.json"
+            processor_paths: List[Path] = []
+            for index, image_path in enumerate(paths):
+                image_hash = hashlib.sha256(str(image_path).encode("utf-8", errors="replace")).hexdigest()[:16]
+                decoded_input = self._decode_processor_input(image_path, workdir, image_hash=image_hash, command=command)
+                if decoded_input is not None:
+                    decoded_target = workdir / f"decoded-input-{index}.jpg"
+                    decoded_input.replace(decoded_target)
+                    processor_paths.append(decoded_target)
+                else:
+                    processor_paths.append(image_path)
+            input_path.write_text(
+                json.dumps(
+                    self._batch_job_input(command, processor_paths, options),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            completed = self._run_processor_command(executable, command, input_path, output_path, workdir, self._worker_model_key(options))
+            payload = self._read_result_payload(output_path)
+            if completed.returncode != 0 and payload is None:
+                raise NativeFaceProcessorUnavailable(f"native face processor {command} failed with exit {completed.returncode}")
+        images = self._normalize_batch_images(payload)
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for index, image_path in enumerate(paths):
+            item = images[index] if index < len(images) else {}
+            faces = item.get("faces") if isinstance(item.get("faces"), list) else []
+            result[str(image_path)] = [face for face in (self._normalize_face(face) for face in faces) if face is not None]
+        self._debug_log(
+            "native_face_processor_batch_finished",
+            command=command,
+            images_count=len(paths),
+            duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+            faces_count=sum(len(faces) for faces in result.values()),
+            native_timing_ms=self._payload_timing(payload),
+        )
+        return result
+
+    def rank_embeddings(
+        self,
+        target_embeddings: List[List[float]],
+        profile_embeddings: List[List[float]],
+        options: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        payload = self._run_vector_command(
+            "rank_embeddings",
+            {
+                "contract_version": self.CONTRACT_VERSION,
+                "job_id": "rank",
+                "type": "face_native_rank_embeddings",
+                "target_embeddings": target_embeddings,
+                "profile_embeddings": profile_embeddings,
+            },
+            worker_key=self._worker_model_key(options) if isinstance(options, dict) else None,
+        )
+        result = payload.get("result") if isinstance(payload, dict) and isinstance(payload.get("result"), dict) else {}
+        ranks = result.get("ranks") if isinstance(result.get("ranks"), list) else []
+        return [rank for rank in ranks if isinstance(rank, dict)]
+
+    def profile_math(self, embeddings: List[List[float]], options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = self._run_vector_command(
+            "profile_math",
+            {
+                "contract_version": self.CONTRACT_VERSION,
+                "job_id": "profile-math",
+                "type": "face_native_profile_math",
+                "embeddings": embeddings,
+            },
+            worker_key=self._worker_model_key(options) if isinstance(options, dict) else None,
+        )
+        result = payload.get("result") if isinstance(payload, dict) and isinstance(payload.get("result"), dict) else {}
+        return result if isinstance(result, dict) else {}
+
+    def _run_vector_command(
+        self,
+        command: str,
+        payload: Dict[str, Any],
+        *,
+        worker_key: Optional[Tuple[Any, ...]] = None,
+    ) -> Dict[str, Any]:
+        executable = self.executable_path()
+        with tempfile.TemporaryDirectory(prefix=f"av-imgdata-native-{command}-") as tmpdir:
+            workdir = Path(tmpdir)
+            input_path = workdir / "job-input.json"
+            output_path = workdir / "processor-result.json"
+            input_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            completed = self._run_processor_command(
+                executable,
+                command,
+                input_path,
+                output_path,
+                workdir,
+                worker_key or (str(executable), "vector", tuple(sorted(self._ort_environment_config().items()))),
+            )
+            parsed = self._read_result_payload(output_path)
+            if completed.returncode != 0:
+                native_error = self._payload_error(parsed)
+                raise NativeFaceProcessorUnavailable(
+                    f"native face processor {command} failed with exit {completed.returncode}: "
+                    f"{self._format_native_error(native_error) or (completed.stdout or '').strip()}"
+                )
+            if parsed is None:
+                raise NativeFaceProcessorUnavailable(f"native face processor {command} did not write valid result JSON")
+            return parsed
+
     @staticmethod
     def _payload_error(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if not isinstance(payload, dict):
@@ -322,6 +439,16 @@ class NativeFaceProcessorService:
         if code and message:
             return f"{code}: {message}"
         return message or code
+
+    @staticmethod
+    def _read_result_payload(output_path: Path) -> Optional[Dict[str, Any]]:
+        if not output_path.exists():
+            return None
+        try:
+            parsed = json.loads(output_path.read_text(encoding="utf-8"))
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
 
     @staticmethod
     def _payload_timing(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -545,6 +672,32 @@ class NativeFaceProcessorService:
             },
         }
 
+    def _batch_job_input(self, command: str, image_paths: List[Path], options: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "contract_version": self.CONTRACT_VERSION,
+            "job_id": str(options.get("job_id") or "batch"),
+            "type": f"face_native_{command}",
+            "input": {
+                "image_paths": [str(path) for path in image_paths],
+            },
+            "options": {
+                "model_root": str(options.get("model_root") or ""),
+                "model_name": str(options.get("model_name") or ""),
+                "min_confidence": float(options.get("det_thresh", 0.5)),
+                "max_faces": int(options.get("max_num", 0)),
+                "det_size": list(options.get("det_size") or (640, 640)),
+                "normalize_coordinates": True,
+            },
+        }
+
+    @staticmethod
+    def _normalize_batch_images(payload: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        images = result.get("images") if isinstance(result.get("images"), list) else []
+        return [image for image in images if isinstance(image, dict)]
+
     def _normalize_faces(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(payload, dict):
             raise NativeFaceProcessorUnavailable("native face processor result is not an object")
@@ -659,6 +812,15 @@ class NativeFaceDetector:
 class NativeFaceEmbedder(NativeFaceDetector):
     def detect_and_embed(self, image_path: Path) -> List[Dict[str, Any]]:
         return self.service.run_faces("embed", Path(image_path), self.options)
+
+    def detect_and_embed_many(self, image_paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
+        return self.service.run_faces_batch("embed", [Path(path) for path in image_paths], self.options)
+
+    def rank_embeddings(self, target_embeddings: List[List[float]], profile_embeddings: List[List[float]]) -> List[Dict[str, Any]]:
+        return self.service.rank_embeddings(target_embeddings, profile_embeddings, self.options)
+
+    def profile_math(self, embeddings: List[List[float]]) -> Dict[str, Any]:
+        return self.service.profile_math(embeddings, self.options)
 
     def detect_and_embed_bytes(self, image_bytes: bytes) -> List[Dict[str, Any]]:
         if not image_bytes:

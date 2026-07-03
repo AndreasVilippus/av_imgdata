@@ -73,8 +73,8 @@
 						</div>
 					</div>
 					<div v-if="vm.faceMatchInsightFaceNativeProcessorStatus.reason" class="sm-kv-row">
-						<div class="sm-kv-key">{{ vm.$avt('status:reason', 'Reason') }}</div>
-						<div class="sm-kv-value">{{ vm.faceMatchInsightFaceNativeProcessorStatus.reason }}</div>
+						<div class="sm-kv-key">{{ vm.$avt('config:label_native_face_processor_status_detail', 'Processor status detail') }}</div>
+						<div class="sm-kv-value">{{ vm.formatInsightFaceNativeProcessorReason(vm.faceMatchInsightFaceNativeProcessorStatus.reason) }}</div>
 					</div>
 					<div v-if="vm.insightFaceModelStatus.root" class="sm-kv-row">
 						<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_model_root', 'InsightFace model root') }}</div>
@@ -94,6 +94,22 @@
 							<div class="sm-kv-value">{{ vm.getInsightFaceModelStatusLabel(modelStatus) }}</div>
 						</div>
 					</template>
+				</div>
+			</section>
+
+			<section v-if="isExternalLibrariesInfoView" class="config-card">
+				<div class="sm-section-title">{{ vm.$avt('config:label_image_processor_vips', 'libvips image backend') }}</div>
+				<div class="sm-kv-list">
+					<div class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$avt('status:available', 'Available') }}</div>
+						<div class="sm-kv-value">
+							{{ vm.imageProcessorVipsStatus.available ? vm.$avt('status:yes', 'Yes') : vm.$avt('status:no', 'No') }}
+						</div>
+					</div>
+					<div v-if="vm.imageProcessorVipsStatus.reason" class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$avt('config:label_image_processor_vips_status_detail', 'Image backend status') }}</div>
+						<div class="sm-kv-value">{{ vm.formatImageProcessorVipsReason(vm.imageProcessorVipsStatus.reason) }}</div>
+					</div>
 				</div>
 			</section>
 
@@ -241,6 +257,65 @@
 							</v-button>
 						</div>
 					</label>
+
+					<div class="sm-section-title">{{ vm.$avt('config:label_image_processor_vips', 'libvips image backend') }}</div>
+
+					<div class="sm-kv-list">
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('config:label_image_processor_vips', 'libvips image backend') }}</div>
+							<div class="sm-kv-value">
+								{{ vm.imageProcessorVipsStatus.available ? vm.$avt('status:available', 'Available') : vm.$avt('status:not_available', 'Not available') }}
+							</div>
+						</div>
+						<div v-if="vm.imageProcessorVipsStatus.reason" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('config:label_image_processor_vips_status_detail', 'Image backend status') }}</div>
+							<div class="sm-kv-value">{{ vm.formatImageProcessorVipsReason(vm.imageProcessorVipsStatus.reason) }}</div>
+						</div>
+					</div>
+
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving"
+							@change="vm.setExternalLibrariesNativeProcessorConfigValue('IMAGE_PROCESSOR_VIPS', 'ENABLED', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_enable_image_processor_vips', 'Use optional libvips image backend') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.PREFERRED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED"
+							@change="vm.setExternalLibrariesNativeProcessorConfigValue('IMAGE_PROCESSOR_VIPS', 'PREFERRED', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_prefer_image_processor_vips', 'Prefer libvips when available') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ALLOW_FALLBACK_TO_DEFAULT"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED"
+							@change="vm.setExternalLibrariesNativeProcessorConfigValue('IMAGE_PROCESSOR_VIPS', 'ALLOW_FALLBACK_TO_DEFAULT', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_image_processor_vips_fallback', 'Use default image backend as fallback') }}</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$avt('config:label_image_processor_vips_path', 'libvips image processor path') }}</span>
+						<input
+							:value="vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.PATH"
+							type="text"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED"
+							@input="vm.setExternalLibrariesNativeProcessorConfigValue('IMAGE_PROCESSOR_VIPS', 'PATH', $event.target.value)"
+						/>
+						<span class="config-card-desc">
+							{{ vm.$avt('config:hint_image_processor_vips_path', 'Relative paths are resolved inside the package target directory. The default is bin/av-imgdata-image-processor.') }}
+						</span>
+					</label>
 				</div>
 
 				<div v-if="vm.exiftoolDownloadSourceUrl" class="config-card-desc">
@@ -273,8 +348,8 @@
 							</div>
 						</div>
 						<div v-if="vm.faceMatchInsightFaceNativeProcessorStatus.reason" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:reason', 'Reason') }}</div>
-							<div class="sm-kv-value">{{ vm.faceMatchInsightFaceNativeProcessorStatus.reason }}</div>
+							<div class="sm-kv-key">{{ vm.$avt('config:label_native_face_processor_status_detail', 'Processor status detail') }}</div>
+							<div class="sm-kv-value">{{ vm.formatInsightFaceNativeProcessorReason(vm.faceMatchInsightFaceNativeProcessorStatus.reason) }}</div>
 						</div>
 						<div v-if="vm.insightFaceModelStatus.root" class="sm-kv-row">
 							<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_model_root', 'InsightFace model root') }}</div>
@@ -308,16 +383,6 @@
 
 					<label class="config-checkbox">
 						<input
-							:checked="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.ENABLED"
-							type="checkbox"
-							:disabled="vm.externalLibrariesSaving"
-							@change="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'ENABLED', $event.target.checked)"
-						/>
-						<span>{{ vm.$avt('config:label_enable_native_face_processor', 'Use native face processor') }}</span>
-					</label>
-
-					<label class="config-checkbox">
-						<input
 							:checked="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED"
 							type="checkbox"
 							:disabled="vm.externalLibrariesSaving"
@@ -331,26 +396,12 @@
 					</div>
 
 					<label class="config-field">
-						<span class="config-field-label">{{ vm.$avt('config:label_native_face_processor_path', 'Native processor path') }}</span>
-						<input
-							:value="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.PATH"
-							type="text"
-							class="config-input"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.ENABLED"
-							@input="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'PATH', $event.target.value)"
-						/>
-						<span class="config-card-desc">
-							{{ vm.$avt('config:hint_native_face_processor_path', 'Relative paths are resolved inside the package target directory. The default is bin/av-imgdata-face-processor.') }}
-						</span>
-					</label>
-
-					<label class="config-field">
 						<span class="config-field-label">{{ vm.$avt('config:label_insightface_model_root', 'InsightFace model root') }}</span>
 						<input
 							:value="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.MODEL_ROOT"
 							type="text"
 							class="config-input"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.ENABLED"
+							:disabled="vm.externalLibrariesSaving"
 							@input="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'MODEL_ROOT', $event.target.value)"
 						/>
 						<span class="config-card-desc">
@@ -366,7 +417,7 @@
 							class="config-input"
 							list="insightface-model-options"
 							:placeholder="vm.$avt('config:placeholder_insightface_model_default', 'InsightFace default')"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.ENABLED"
+							:disabled="vm.externalLibrariesSaving"
 							@input="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'MODEL_NAME', $event.target.value)"
 						/>
 						<datalist id="insightface-model-options">

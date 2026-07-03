@@ -852,6 +852,37 @@ Use tolerance:
 
 ## Implementation Phases
 
+## Current Implementation Status
+
+Implemented as first package step:
+
+```text
+- default config block native_processors.IMAGE_PROCESSOR_VIPS
+- runtime config normalization for IMAGE_PROCESSOR_VIPS
+- optional AV_IMGDATA_WITH_VIPS build and install gate
+- standalone processors/native/image_backend_vips skeleton project
+- av-imgdata-image-processor version/probe skeleton commands
+- backend status adapter with disabled/missing/probe-failed/ready states
+- status/config UI labels and readable status translations
+- package sanitize rules for optional vips build artifacts
+- unit/static/UI contract coverage for the optional feature
+```
+
+Not implemented yet:
+
+```text
+- pinned libvips dependency bundle
+- package-local libvips shared libraries and license notices
+- real image-info / thumbnail / normalize-for-face operations
+- preview/thumbnail runtime selection
+- face preprocessing integration through ImagePreprocessSelector
+- HEIC/HEIF libvips proof
+```
+
+The current binary is intentionally a Phase 2 skeleton. Its `probe` command
+returns `vips_probe_failed` with `libvips_not_linked`, so the default image
+backend remains authoritative.
+
 ### Phase 1: Documentation and feature flag
 
 ```text

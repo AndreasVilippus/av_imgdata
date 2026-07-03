@@ -11,6 +11,7 @@ export default {
 			exiftoolRemoving: false,
 			exiftoolExtensionsLoading: false,
 			insightFaceStatus: {},
+			imageBackendStatus: {},
 			insightFaceStatusLoading: false,
 			insightFaceModelDeleting: '',
 		};
@@ -97,6 +98,20 @@ export default {
 				.filter((name, index, names) => name && names.indexOf(name) === index)
 				.sort((left, right) => left.localeCompare(right));
 		},
+		imageProcessorVipsStatus() {
+			const imageProcessors = this.imageBackendStatus && this.imageBackendStatus.image_processors && typeof this.imageBackendStatus.image_processors === 'object'
+				? this.imageBackendStatus.image_processors
+				: {};
+			if (imageProcessors.IMAGE_PROCESSOR_VIPS && typeof imageProcessors.IMAGE_PROCESSOR_VIPS === 'object') {
+				return imageProcessors.IMAGE_PROCESSOR_VIPS;
+			}
+			const nativeProcessors = this.insightFaceStatus && this.insightFaceStatus.native_processors && typeof this.insightFaceStatus.native_processors === 'object'
+				? this.insightFaceStatus.native_processors
+				: {};
+			return nativeProcessors.IMAGE_PROCESSOR_VIPS && typeof nativeProcessors.IMAGE_PROCESSOR_VIPS === 'object'
+				? nativeProcessors.IMAGE_PROCESSOR_VIPS
+				: {};
+		},
 	},
 	methods: {
 		createExternalLibrariesDefaultConfig() {
@@ -161,13 +176,20 @@ export default {
 				},
 				native_processors: {
 					FACE_PROCESSOR: {
-						ENABLED: true,
-						PATH: 'bin/av-imgdata-face-processor',
 						MODEL_ROOT: '',
 						MODEL_NAME: '',
 						TIMEOUT_SECONDS: 120,
 						MAX_IMAGE_BYTES: 67108864,
 						INSIGHTFACE_LICENSE_ACKNOWLEDGED: false,
+					},
+					IMAGE_PROCESSOR_VIPS: {
+						ENABLED: false,
+						PREFERRED: true,
+						PATH: 'bin/av-imgdata-image-processor',
+						TIMEOUT_SECONDS: 120,
+						MAX_IMAGE_BYTES: 268435456,
+						SUPPORTED_FORMATS: ['jpeg', 'jpg', 'png', 'webp', 'tiff'],
+						ALLOW_FALLBACK_TO_DEFAULT: true,
 					},
 				},
 			};
@@ -291,6 +313,44 @@ export default {
 			}
 			return this.$avt('status:not_installed', 'Not installed');
 		},
+		formatInsightFaceNativeProcessorReason(reason) {
+				const normalized = String(reason || '').trim().toLowerCase();
+				const labels = {
+					insightface_license_not_acknowledged: ['status:native_face_processor_reason_license_not_acknowledged', 'InsightFace model license terms have not been acknowledged.'],
+					binary_missing: ['status:native_face_processor_reason_binary_missing', 'Native face processor binary is missing.'],
+				binary_not_executable: ['status:native_face_processor_reason_binary_not_executable', 'Native face processor binary is not executable.'],
+				version_failed: ['status:native_face_processor_reason_version_failed', 'Native face processor version check failed.'],
+				probe_failed: ['status:native_face_processor_reason_probe_failed', 'Native face processor model probe failed.'],
+				skeleton_no_inference: ['status:native_face_processor_reason_skeleton_no_inference', 'Native face processor skeleton does not run inference.'],
+				onnxruntime_smoke_only: ['status:native_face_processor_reason_onnxruntime_smoke_only', 'ONNXRuntime smoke backend is available, but full inference is not ready.'],
+				ready: ['status:native_face_processor_reason_ready', 'Native face processor is ready.'],
+				unknown: ['status:native_face_processor_reason_unknown', 'Native face processor status is unknown.'],
+			};
+			const entry = labels[normalized];
+			if (entry) {
+				return this.$avt(entry[0], entry[1]);
+			}
+			return normalized || this.$avt('status:not_available', 'Not available');
+		},
+		formatImageProcessorVipsReason(reason) {
+			const normalized = String(reason || '').trim().toLowerCase();
+			const labels = {
+				vips_disabled: ['status:vips_reason_disabled', 'libvips image backend is disabled.'],
+				vips_binary_missing: ['status:vips_reason_binary_missing', 'libvips image processor binary is missing.'],
+				vips_binary_not_executable: ['status:vips_reason_binary_not_executable', 'libvips image processor binary is not executable.'],
+				vips_version_failed: ['status:vips_reason_version_failed', 'libvips image processor version check failed.'],
+				vips_probe_failed: ['status:vips_reason_probe_failed', 'libvips image backend probe failed; default image backend is used.'],
+				vips_format_unsupported: ['status:vips_reason_format_unsupported', 'Image format is not supported by the libvips backend.'],
+				vips_ready: ['status:vips_reason_ready', 'libvips image backend is ready.'],
+				vips_failed_fallback_used: ['status:vips_reason_failed_fallback_used', 'libvips failed; default image backend was used.'],
+				vips_failed_no_fallback: ['status:vips_reason_failed_no_fallback', 'libvips failed and fallback is disabled.'],
+			};
+			const entry = labels[normalized];
+			if (entry) {
+				return this.$avt(entry[0], entry[1]);
+			}
+			return normalized || this.$avt('status:not_available', 'Not available');
+		},
 		showExternalLibrariesRestartPopup(message) {
 			const text = String(message || '').trim();
 			if (text) {
@@ -315,6 +375,7 @@ export default {
 			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
 			const nativeProcessors = (root.native_processors && typeof root.native_processors === 'object' && !Array.isArray(root.native_processors)) ? root.native_processors : {};
 			const faceProcessor = (nativeProcessors.FACE_PROCESSOR && typeof nativeProcessors.FACE_PROCESSOR === 'object' && !Array.isArray(nativeProcessors.FACE_PROCESSOR)) ? nativeProcessors.FACE_PROCESSOR : {};
+			const imageProcessorVips = (nativeProcessors.IMAGE_PROCESSOR_VIPS && typeof nativeProcessors.IMAGE_PROCESSOR_VIPS === 'object' && !Array.isArray(nativeProcessors.IMAGE_PROCESSOR_VIPS)) ? nativeProcessors.IMAGE_PROCESSOR_VIPS : {};
 
 			const imageExtensions = this.normalizeExternalLibrariesImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
 			const exiftoolImageExtensions = this.normalizeExternalLibrariesImageExtensions(files.EXIFTOOL_IMAGE_EXTENSIONS, []);
@@ -421,13 +482,21 @@ export default {
 					...nativeProcessors,
 					FACE_PROCESSOR: {
 						...faceProcessor,
-						ENABLED: Boolean(faceProcessor.ENABLED ?? defaults.native_processors.FACE_PROCESSOR.ENABLED),
-						PATH: String(faceProcessor.PATH || defaults.native_processors.FACE_PROCESSOR.PATH),
 						MODEL_ROOT: String(faceProcessor.MODEL_ROOT || defaults.native_processors.FACE_PROCESSOR.MODEL_ROOT),
 						MODEL_NAME: String(faceProcessor.MODEL_NAME || defaults.native_processors.FACE_PROCESSOR.MODEL_NAME),
 						TIMEOUT_SECONDS: Math.max(1, Math.min(3600, Number(faceProcessor.TIMEOUT_SECONDS) || defaults.native_processors.FACE_PROCESSOR.TIMEOUT_SECONDS)),
 						MAX_IMAGE_BYTES: Math.max(1048576, Math.min(1073741824, Number(faceProcessor.MAX_IMAGE_BYTES) || defaults.native_processors.FACE_PROCESSOR.MAX_IMAGE_BYTES)),
 						INSIGHTFACE_LICENSE_ACKNOWLEDGED: Boolean(faceProcessor.INSIGHTFACE_LICENSE_ACKNOWLEDGED ?? defaults.native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED),
+					},
+					IMAGE_PROCESSOR_VIPS: {
+						...imageProcessorVips,
+						ENABLED: Boolean(imageProcessorVips.ENABLED ?? defaults.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED),
+						PREFERRED: Boolean(imageProcessorVips.PREFERRED ?? defaults.native_processors.IMAGE_PROCESSOR_VIPS.PREFERRED),
+						PATH: String(imageProcessorVips.PATH || defaults.native_processors.IMAGE_PROCESSOR_VIPS.PATH),
+						TIMEOUT_SECONDS: Math.max(1, Math.min(3600, Number(imageProcessorVips.TIMEOUT_SECONDS) || defaults.native_processors.IMAGE_PROCESSOR_VIPS.TIMEOUT_SECONDS)),
+						MAX_IMAGE_BYTES: Math.max(1048576, Math.min(1073741824, Number(imageProcessorVips.MAX_IMAGE_BYTES) || defaults.native_processors.IMAGE_PROCESSOR_VIPS.MAX_IMAGE_BYTES)),
+						SUPPORTED_FORMATS: this.normalizeExternalLibrariesImageExtensions(imageProcessorVips.SUPPORTED_FORMATS, defaults.native_processors.IMAGE_PROCESSOR_VIPS.SUPPORTED_FORMATS),
+						ALLOW_FALLBACK_TO_DEFAULT: Boolean(imageProcessorVips.ALLOW_FALLBACK_TO_DEFAULT ?? defaults.native_processors.IMAGE_PROCESSOR_VIPS.ALLOW_FALLBACK_TO_DEFAULT),
 					},
 				},
 			};
@@ -468,10 +537,19 @@ export default {
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
 				await this.fetchInsightFaceStatus();
+				await this.fetchImageBackendStatus();
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
 				this.externalLibrariesLoading = false;
+			}
+		},
+		async fetchImageBackendStatus() {
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/image_backend_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
+				this.imageBackendStatus = this.getResponseData(data);
+			} catch (err) {
+				this.imageBackendStatus = {};
 			}
 		},
 		async fetchInsightFaceStatus() {
@@ -522,6 +600,7 @@ export default {
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
 				await this.fetchInsightFaceStatus();
+				await this.fetchImageBackendStatus();
 				this.externalLibrariesMessage = this.$avt('config:message_saved', 'Configuration saved.');
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
