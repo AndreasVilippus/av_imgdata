@@ -99,6 +99,31 @@ def test_vips_image_processor_skeleton_is_not_available(tmp_path):
     assert "not linked" in status["last_error"]
 
 
+def test_vips_status_logs_skeleton_probe_failure(tmp_path):
+    binary = tmp_path / "bin" / "av-imgdata-image-processor"
+    binary.parent.mkdir(parents=True)
+    _write_vips_skeleton(binary)
+    config = ConfigService(str(tmp_path / "config.json"))
+    config.writeConfig({"native_processors": {"IMAGE_PROCESSOR_VIPS": {"ENABLED": True}}})
+    events = []
+    service = NativeImageProcessorVipsService(
+        config,
+        package_root=tmp_path,
+        debug_logger=lambda event, **fields: events.append((event, fields)),
+    )
+
+    service.status()
+
+    status_events = [fields for event, fields in events if event == "native_image_processor_vips_status"]
+    run_failed_events = [fields for event, fields in events if event == "native_image_processor_vips_run_failed"]
+    assert status_events
+    assert status_events[-1]["reason"] == "vips_probe_failed"
+    assert status_events[-1]["backend"] == "skeleton"
+    assert status_events[-1]["probe_error_code"] == "libvips_not_linked"
+    assert run_failed_events
+    assert run_failed_events[-1]["command"] == "probe"
+
+
 def test_vips_image_processor_ready_probe_reports_formats(tmp_path):
     binary = tmp_path / "bin" / "av-imgdata-image-processor"
     binary.parent.mkdir(parents=True)

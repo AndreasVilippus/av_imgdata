@@ -93,12 +93,15 @@ class NativeImageProcessorVipsService:
             "fallback": "default_image_backend" if bool(config.get("ALLOW_FALLBACK_TO_DEFAULT", True)) else "none",
         }
         if not enabled:
+            self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
             return result
         if not result["present"]:
             result["reason"] = "vips_binary_missing"
+            self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
             return result
         if not result["executable"]:
             result["reason"] = "vips_binary_not_executable"
+            self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
             return result
 
         version = self._run_simple([str(path), "version"])
@@ -106,6 +109,7 @@ class NativeImageProcessorVipsService:
         if not version["ok"]:
             result["reason"] = "vips_version_failed"
             result["last_error"] = version.get("output", "")
+            self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
             return result
         result["version"] = version.get("output", "").strip()
 
@@ -127,16 +131,43 @@ class NativeImageProcessorVipsService:
         if not probe["ok"]:
             result["reason"] = "vips_probe_failed"
             result["last_error"] = probe.get("output", "")
+            self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
             return result
 
         if str(result.get("backend") or "").strip().lower() in {"skeleton", "no-op", "noop"}:
             result["reason"] = "vips_probe_failed"
             result["last_error"] = "libvips image processor skeleton is present but libvips is not linked"
+            self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
             return result
 
         result["available"] = True
         result["reason"] = "vips_ready"
+        self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
         return result
+
+    @staticmethod
+    def _status_debug_fields(status: Dict[str, Any]) -> Dict[str, Any]:
+        fields = {
+            "enabled": bool(status.get("enabled", False)),
+            "available": bool(status.get("available", False)),
+            "present": bool(status.get("present", False)),
+            "executable": bool(status.get("executable", False)),
+            "reason": str(status.get("reason") or ""),
+            "backend": str(status.get("backend") or ""),
+            "path": str(status.get("path") or ""),
+            "version": str(status.get("version") or ""),
+            "fallback": str(status.get("fallback") or ""),
+        }
+        last_error = str(status.get("last_error") or "")
+        if last_error:
+            fields["last_error"] = last_error[-500:]
+        probe = status.get("probe")
+        if isinstance(probe, dict):
+            error = probe.get("error")
+            if isinstance(error, dict):
+                fields["probe_error_code"] = str(error.get("code") or "")
+                fields["probe_error_message"] = str(error.get("message") or "")[-300:]
+        return fields
 
     @staticmethod
     def _parse_json_line(output: str) -> Optional[Dict[str, Any]]:

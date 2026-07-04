@@ -10154,6 +10154,7 @@ class ImgDataService:
     def setDebugLogger(self, logger: Optional[Callable[..., None]]) -> None:
         self._debug_logger = logger if callable(logger) else None
         self.native_face_processor.set_debug_logger(self._debugLog)
+        self.native_image_processor_vips.set_debug_logger(self._debugLog)
 
     def _debugLog(self, event: str, **fields: Any) -> None:
         logger = self._debug_logger

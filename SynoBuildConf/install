@@ -4,6 +4,24 @@ set -e
 PKG_DIR="/tmp/_AV_ImgData_pkg"
 rm -rf "$PKG_DIR"
 mkdir -p "$PKG_DIR"
+INSTALL_SUCCEEDED=0
+
+cleanup_native_build_artifacts() {
+	if [ "$INSTALL_SUCCEEDED" != "1" ]; then
+		echo "Preserving native build artifacts after failed install for diagnostics."
+		return
+	fi
+	local native_root="build/native/${SYNO_PLATFORM:-local}"
+	rm -rf \
+		"$native_root/face_processor-build" \
+		"$native_root/face_processor-install" \
+		"$native_root/deps/source-cache" \
+		"$native_root/libvips-build" \
+		"$native_root/libvips-source" \
+		"$native_root/vips-image-processor-build" \
+		"$native_root/vips-image-processor-install"
+}
+trap cleanup_native_build_artifacts EXIT
 
 # load helper functions
 source /pkgscripts/include/pkg_util.sh
@@ -43,16 +61,20 @@ create_install() {
 		find "$NATIVE_INSTALL/lib" -maxdepth 1 \( -name 'libonnxruntime.so*' -o -name 'libjpeg.so*' \) -exec cp -av {} "$package_tgz_dir/lib/" \;
 	fi
 	VIPS_INSTALL="build/native/${SYNO_PLATFORM:-local}/vips-image-processor-install/usr/local/AV_ImgData"
-	if [ "${AV_IMGDATA_WITH_VIPS:-0}" = "1" ]; then
+	if [ "${AV_IMGDATA_WITH_VIPS:-1}" = "1" ]; then
 		if [ ! -x "$VIPS_INSTALL/bin/av-imgdata-image-processor" ]; then
 			echo "ERROR: optional libvips image processor missing: $VIPS_INSTALL/bin/av-imgdata-image-processor"
 			exit 1
 		fi
 		mkdir -p "$package_tgz_dir/bin"
 		cp -av "$VIPS_INSTALL/bin/av-imgdata-image-processor" "$package_tgz_dir/bin/"
+		if [ ! -e "$VIPS_INSTALL/lib/libvips.so" ] && [ -z "$(find "$VIPS_INSTALL/lib" -maxdepth 1 -name 'libvips.so*' -print -quit 2>/dev/null)" ]; then
+			echo "ERROR: optional libvips image processor libraries missing: libvips.so*"
+			exit 1
+		fi
 		if [ -d "$VIPS_INSTALL/lib" ]; then
 			mkdir -p "$package_tgz_dir/lib"
-			find "$VIPS_INSTALL/lib" -maxdepth 1 -type f -name '*.so*' -exec cp -av {} "$package_tgz_dir/lib/" \;
+			find "$VIPS_INSTALL/lib" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -exec cp -av {} "$package_tgz_dir/lib/" \;
 		fi
 	fi
 	# Fail fast if UI entrypoint didn't get packaged
@@ -86,6 +108,7 @@ create_spk() {
 main() {
 	create_install
 	create_spk
+	INSTALL_SUCCEEDED=1
 }
 
 main "$@"

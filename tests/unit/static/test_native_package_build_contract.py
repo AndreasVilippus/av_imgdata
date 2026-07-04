@@ -71,24 +71,98 @@ def test_native_face_processor_functional_script_checks_real_inference_commands(
     assert "embedding norm outside expected range" in functional_script
 
 
-def test_optional_libvips_image_processor_is_feature_flagged():
+def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     build_script = Path("SynoBuildConf/build").read_text(encoding="utf-8")
     install_script = Path("SynoBuildConf/install").read_text(encoding="utf-8")
     build_vips = Path("tools/build-native-image-processor-vips.sh").read_text(encoding="utf-8")
     cmake = Path("processors/native/image_backend_vips/CMakeLists.txt").read_text(encoding="utf-8")
     source = Path("processors/native/image_backend_vips/src/main.cpp").read_text(encoding="utf-8")
 
-    assert 'AV_IMGDATA_WITH_VIPS:-0' in build_script
+    assert 'AV_IMGDATA_WITH_VIPS:-1' in build_script
     assert "./tools/build-native-image-processor-vips.sh" in build_script
-    assert 'AV_IMGDATA_WITH_VIPS:-0' in install_script
+    assert 'AV_IMGDATA_WITH_VIPS:-1' in install_script
     assert "av-imgdata-image-processor" in install_script
+    assert "libvips.so" in install_script
+    assert "cleanup_native_build_artifacts" in install_script
+    assert "INSTALL_SUCCEEDED=0" in install_script
+    assert "Preserving native build artifacts after failed install for diagnostics." in install_script
+    assert '"$native_root/deps/source-cache"' in install_script
+    assert '"$native_root/libvips-source"' in install_script
+    assert '"$native_root/vips-image-processor-install"' in install_script
+    assert '"$native_root/deps"' not in install_script
     assert "vips-image-processor-install" in build_vips
+    assert "LIBVIPS_VERSION" in build_vips
+    assert "d114d7c132ec5b45f116d654e17bb4af84561e3041183cd4bfd79abfb85cf724" in build_vips
+    assert "curl -fkL" in build_vips
+    assert "sha256sum -c" in build_vips
+    assert "patch_libvips_source" in build_vips
+    assert "has_header_symbol('tiff.h', 'COMPRESSION_WEBP'" in build_vips
+    assert "AV_ImgData package build skips upstream libvips tools" in build_vips
+    assert "AV_ImgData package build skips upstream libvips tests" in build_vips
+    assert "AV_ImgData package build skips upstream libvips fuzzers" in build_vips
+    assert "libvips meson tool/test/fuzz subdirs were not disabled" in build_vips
+    assert "vipsmarshal_h = custom_target" in build_vips
+    assert "glib-genmarshal --prefix=vips --header" in build_vips
+    assert "glib-genmarshal --prefix=vips --body" in build_vips
+    assert "The Synology Toolkit GLib is older than libvips 8.16.1 expects" in build_vips
+    assert "g_utf8_make_valid" in build_vips
+    assert "g_strdup(vips_value_get_save_string" in build_vips
+    assert "#if 0 \\&\\& GLIB_CHECK_VERSION(2, 62, 0)" in build_vips
+    assert "--pragma-once" not in build_vips
+    assert "--include-header" not in build_vips
+    assert "resolve_synology_toolchain_sysroot" in build_vips
+    assert "ToolChainSysRoot" in build_vips
+    assert "jpeglib.h" in build_vips
+    assert "-Dc_args=-I${synology_sysroot}/usr/include" in build_vips
+    assert "-Dc_link_args=-L${synology_sysroot}/usr/lib" in build_vips
+    assert "-Dcpp_args=-I${synology_sysroot}/usr/include" not in build_vips
+    assert "-Dcpp_link_args=-L${synology_sysroot}/usr/lib" not in build_vips
+    assert "patch_libvips_ninja_link_args" in build_vips
+    assert "resolve_synology_library_file" in build_vips
+    assert "/^build .*: (c|cpp)_LINKER/" in build_vips
+    assert 'token ~ /^-Wl,--sysroot=/' in build_vips
+    assert "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--sysroot=${NATIVE_PROCESSOR_SYSROOT}" not in build_vips
+    assert 'token == "-ljpeg"' in build_vips
+    assert 'token == "-lpng16"' in build_vips
+    assert 'token == "-lwebpdemux"' in build_vips
+    assert 'token == "-llcms2"' in build_vips
+    assert 'token == "-lglib-2.0"' not in build_vips
+    assert 'token == "-lgio-2.0"' not in build_vips
+    assert 'token == "-lgobject-2.0"' not in build_vips
+    assert 'libdir "/libglib-2\\\\.0\\\\.so"' in build_vips
+    assert 'libdir "/libgio-2\\\\.0\\\\.so"' in build_vips
+    assert 'libdir "/libgobject-2\\\\.0\\\\.so"' in build_vips
+    assert 'token == "-L" libdir' in build_vips
+    assert "LINK_ARGS = -L" not in build_vips
+    assert "meson setup" in build_vips
+    assert "-Dheif=disabled" in build_vips
+    assert "require_tool strings" in build_vips
+    assert "copy_libvips_runtime_dependencies" in build_vips
+    assert '"libmount.so*"' in build_vips
+    assert '"libblkid.so*"' in build_vips
+    assert '"libuuid.so*"' in build_vips
     assert "-DCMAKE_BUILD_TYPE=Release" in build_vips
     assert "AV_IMGDATA_NATIVE_STRIP:-1" in build_vips
+    assert "libvips image processor is only the skeleton binary" in build_vips
+    assert "libvips_not_linked" in build_vips
+    assert "strings \"${NATIVE_BINARY}\"" in build_vips
+    assert "runtime probe skipped: Toolkit build runtime is older than packaged Synology sysroot libraries" in build_vips
+    assert "GLIBC_[0-9.]+" in build_vips
     assert "add_executable(av-imgdata-image-processor" in cmake
+    assert "pkg_check_modules(VIPS REQUIRED vips)" in cmake
+    assert "find_library(VIPS_SHARED_LIBRARY" in cmake
+    assert "VIPS_DIRECT_RUNTIME_LIBS" in cmake
+    assert 'VIPS_LIB MATCHES "^(glib-2.0|gobject-2.0|gio-2.0)$"' in cmake
+    assert "target_link_libraries(av-imgdata-image-processor PRIVATE ${VIPS_SHARED_LIBRARY} ${VIPS_DIRECT_RUNTIME_LIBS})" in cmake
+    assert "target_link_libraries(av-imgdata-image-processor PRIVATE ${VIPS_LIBRARIES})" not in cmake
+    assert "-Wl,--allow-shlib-undefined" in cmake
     assert "INSTALL_RPATH" in cmake
-    assert "0.1.0-skeleton image-backend-vips" in source
-    assert "libvips_not_linked" in source
+    assert "backend" in source
+    assert "libvips" in source
+    assert "vips_ready" in source
+    assert "vips_image_new_from_file" in source
+    assert "0.1.0-skeleton image-backend-vips" not in source
+    assert "libvips_not_linked" not in source
 
 
 def test_synology_install_requires_native_face_processor_libraries():
@@ -112,6 +186,8 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert "SANITIZE_NATIVE_BUILD_PATTERNS" in build_package
     assert '"build/native/*/face_processor-build"' in build_package
     assert '"build/native/*/face_processor-install"' in build_package
+    assert '"build/native/*/libvips-build"' in build_package
+    assert '"build/native/*/libvips-source"' in build_package
     assert '"build/native/*/vips-image-processor-build"' in build_package
     assert '"build/native/*/vips-image-processor-install"' in build_package
     assert "build/native/*/deps" not in build_package
