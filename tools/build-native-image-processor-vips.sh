@@ -33,6 +33,7 @@ LIBVIPS_URL="${AV_IMGDATA_LIBVIPS_URL:-https://github.com/libvips/libvips/releas
 LIBVIPS_SHA256="${AV_IMGDATA_LIBVIPS_SHA256:-d114d7c132ec5b45f116d654e17bb4af84561e3041183cd4bfd79abfb85cf724}"
 LIBVIPS_SOURCE_PARENT="${BUILD_ROOT}/libvips-source"
 LIBVIPS_SOURCE_DIR="${LIBVIPS_SOURCE_PARENT}/vips-${LIBVIPS_VERSION}"
+LIBVIPS_ORIGINAL_SOURCE_DIR="${LIBVIPS_SOURCE_PARENT}/vips-${LIBVIPS_VERSION}.orig"
 
 rm -rf \
   "${BUILD_DIR}" \
@@ -108,6 +109,8 @@ download_libvips() {
 
   mkdir -p "${LIBVIPS_SOURCE_PARENT}"
   tar -xf "${tarball_path}" -C "${LIBVIPS_SOURCE_PARENT}"
+  rm -rf "${LIBVIPS_ORIGINAL_SOURCE_DIR}"
+  cp -a "${LIBVIPS_SOURCE_DIR}" "${LIBVIPS_ORIGINAL_SOURCE_DIR}"
 }
 
 download_heif_stack() {
@@ -141,6 +144,108 @@ License: LGPL, see libde265.COPYING
 
 The packaged source tarballs are included under sources/.
 EOF
+}
+
+copy_optional_license_file() {
+  local source="$1"
+  local target="$2"
+  if [ -f "${source}" ]; then
+    mkdir -p "$(dirname "${target}")"
+    cp -a "${source}" "${target}"
+  fi
+}
+
+install_libvips_license_files() {
+  local license_dir="${VIPS_PREFIX}/share/licenses/AV_ImgData/libvips"
+  local tarball_path="${SOURCE_CACHE}/${LIBVIPS_TARBALL}"
+  local patch_file="${license_dir}/sources/vips-${LIBVIPS_VERSION}-av-imgdata.patch"
+  mkdir -p "${license_dir}/sources"
+
+  copy_optional_license_file "${LIBVIPS_SOURCE_DIR}/COPYING" "${license_dir}/libvips.COPYING"
+  copy_optional_license_file "${LIBVIPS_SOURCE_DIR}/LICENSE" "${license_dir}/libvips.LICENSE"
+  if [ -f "${tarball_path}" ]; then
+    cp -a "${tarball_path}" "${license_dir}/sources/${LIBVIPS_TARBALL}"
+  fi
+
+  if [ -d "${LIBVIPS_ORIGINAL_SOURCE_DIR}" ] && command -v diff >/dev/null 2>&1; then
+    diff -ruN "${LIBVIPS_ORIGINAL_SOURCE_DIR}" "${LIBVIPS_SOURCE_DIR}" > "${patch_file}" || true
+  else
+    cat > "${patch_file}" <<EOF
+AV_ImgData could not generate an automatic libvips patch diff in this build environment.
+The source modifications are applied by tools/build-native-image-processor-vips.sh.
+EOF
+  fi
+
+  cat > "${license_dir}/README.txt" <<EOF
+AV_ImgData ships libvips as a dynamically linked shared library for the optional native image backend.
+
+libvips ${LIBVIPS_VERSION}
+Source: ${LIBVIPS_URL}
+SHA256: ${LIBVIPS_SHA256}
+License: LGPL-2.1-or-later, see libvips.COPYING
+
+The original source tarball is included under sources/.
+AV_ImgData applies Toolkit compatibility patches during the build; the generated
+patch diff is included as sources/vips-${LIBVIPS_VERSION}-av-imgdata.patch.
+EOF
+}
+
+copy_runtime_dependency_license_files() {
+  local license_dir="${VIPS_PREFIX}/share/licenses/AV_ImgData/runtime-dependencies"
+  local synology_sysroot
+  mkdir -p "${license_dir}/copied"
+
+  synology_sysroot="$(resolve_synology_toolchain_sysroot || true)"
+  if [ -n "${synology_sysroot}" ]; then
+    local license_root
+    local package
+    for license_root in \
+      "${synology_sysroot}/usr/share/licenses" \
+      "${synology_sysroot}/usr/share/doc" \
+      "/usr/share/licenses" \
+      "/usr/share/doc"; do
+      [ -d "${license_root}" ] || continue
+      for package in \
+        glib2 glib libffi pcre expat zlib libpng libtiff libwebp lcms2 xz util-linux libuuid e2fsprogs libjpeg libjpeg-turbo; do
+        if [ -d "${license_root}/${package}" ]; then
+          mkdir -p "${license_dir}/copied/${package}"
+          find "${license_root}/${package}" -maxdepth 2 -type f \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'license.txt' \) -exec cp -a {} "${license_dir}/copied/${package}/" \;
+        fi
+      done
+    done
+  fi
+}
+
+install_runtime_dependency_notice() {
+  local license_dir="${VIPS_PREFIX}/share/licenses/AV_ImgData/runtime-dependencies"
+  local libs_file="${license_dir}/packaged-libraries.txt"
+  mkdir -p "${license_dir}"
+  find "${VIPS_PREFIX}/lib" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -printf '%f\n' 2>/dev/null | sort > "${libs_file}" || true
+
+  cat > "${license_dir}/README.txt" <<EOF
+AV_ImgData ships additional shared runtime libraries required by the native processors.
+The exact packaged library files are listed in packaged-libraries.txt.
+
+Expected native runtime dependency license families:
+- ONNXRuntime: MIT
+- libjpeg/libjpeg-turbo compatible runtime: permissive IJG/BSD/zlib-style terms depending on provider
+- GLib/GObject/GIO/GModule/GThread: LGPL-2.1-or-later
+- libffi: MIT-style
+- PCRE: BSD-style
+- libmount/libblkid/libuuid from util-linux/e2fsprogs: LGPL/BSD-style components depending on provider
+- Expat: MIT
+- libpng: libpng license
+- libtiff: BSD-style
+- libwebp/libwebpmux/libwebpdemux: BSD-style
+- Little CMS/lcms2: MIT
+- zlib: zlib license
+- liblzma/xz: public-domain/LGPL/GPL mix as documented by the provider
+
+When the Synology Toolkit sysroot exposes matching license files under
+usr/share/licenses or usr/share/doc, they are copied into copied/.
+EOF
+
+  copy_runtime_dependency_license_files
 }
 
 build_heif_stack() {
@@ -466,6 +571,7 @@ build_libvips() {
 
   download_libvips
   patch_libvips_source
+  install_libvips_license_files
 
   local synology_sysroot
   local meson_args=(
@@ -621,6 +727,7 @@ copy_libvips_runtime_dependencies() {
     echo "ERROR: libvips runtime library missing from ${VIPS_PREFIX}/lib." >&2
     exit 1
   fi
+  install_runtime_dependency_notice
 }
 
 strip_native_binary() {

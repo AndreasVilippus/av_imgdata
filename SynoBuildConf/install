@@ -61,6 +61,10 @@ create_install() {
 		mkdir -p "$package_tgz_dir/lib"
 		find "$NATIVE_INSTALL/lib" -maxdepth 1 \( -name 'libonnxruntime.so*' -o -name 'libjpeg.so*' \) -exec cp -av {} "$package_tgz_dir/lib/" \;
 	fi
+	if [ -d "$NATIVE_INSTALL/share/licenses" ]; then
+		mkdir -p "$package_tgz_dir/share"
+		cp -av "$NATIVE_INSTALL/share/licenses" "$package_tgz_dir/share/"
+	fi
 	VIPS_INSTALL="build/native/${SYNO_PLATFORM:-local}/vips-image-processor-install/usr/local/AV_ImgData"
 	if [ "${AV_IMGDATA_WITH_VIPS:-1}" = "1" ]; then
 		if [ ! -x "$VIPS_INSTALL/bin/av-imgdata-image-processor" ]; then

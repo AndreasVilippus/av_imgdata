@@ -120,6 +120,13 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "share/licenses/AV_ImgData/heif-stack" in build_vips
     assert "sources/${LIBDE265_TARBALL}" in build_vips
     assert "sources/${LIBHEIF_TARBALL}" in build_vips
+    assert "install_libvips_license_files" in build_vips
+    assert "share/licenses/AV_ImgData/libvips" in build_vips
+    assert "sources/${LIBVIPS_TARBALL}" in build_vips
+    assert "vips-${LIBVIPS_VERSION}-av-imgdata.patch" in build_vips
+    assert "install_runtime_dependency_notice" in build_vips
+    assert "share/licenses/AV_ImgData/runtime-dependencies" in build_vips
+    assert "packaged-libraries.txt" in build_vips
     assert "$VIPS_INSTALL/share/licenses" in install_script
     assert "patch_libvips_source" in build_vips
     assert "has_header_symbol('tiff.h', 'COMPRESSION_WEBP'" in build_vips
@@ -203,6 +210,20 @@ def test_synology_install_requires_native_face_processor_libraries():
     assert "libheif.so" not in install_script
     assert 'cp -av "$NATIVE_INSTALL/lib/."' not in install_script
     assert "find \"$NATIVE_INSTALL/lib\" -maxdepth 1" in install_script
+    assert "$NATIVE_INSTALL/share/licenses" in install_script
+
+
+def test_native_face_processor_packages_third_party_license_notices():
+    build_script = Path("tools/build-native-face-processor.sh").read_text(encoding="utf-8")
+    install_script = Path("SynoBuildConf/install").read_text(encoding="utf-8")
+
+    assert "install_native_face_processor_license_files" in build_script
+    assert "share/licenses/AV_ImgData/native-face-processor" in build_script
+    assert "onnxruntime.LICENSE" in build_script
+    assert "onnxruntime.ThirdPartyNotices.txt" in build_script
+    assert "libjpeg-turbo.LICENSE" in build_script
+    assert "$NATIVE_INSTALL/share/licenses" in install_script
+    assert "$VIPS_INSTALL/share/licenses" in install_script
 
 
 def test_package_wrapper_moves_local_artifacts_before_toolkit_link():

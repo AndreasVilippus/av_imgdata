@@ -11,11 +11,17 @@
 - Delete a metadata face from image XMP via ExifTool from the checks view.
 - Maintain persistent name mappings for recurring metadata name variants.
 - Edit runtime configuration from the package UI.
+- Use a package-shipped native C++ face processor for InsightFace-compatible
+  ONNX detection and embedding.
+- Optionally use the package-shipped native libvips image processor for image
+  information, thumbnail/normalization work, and HEIC/HEIF decoding through the
+  packaged libheif/libde265 stack.
 
 ## Supported Environment
 
 - DSM `7.3` or newer
-- Package architecture: `noarch`
+- Package architecture: target-platform specific, as returned by the Synology
+  toolkit for the selected platform
 - Synology toolkit / `pkgscripts-ng`
 - A prepared build environment for the target platform, for example `geminilake`
 - The latest available Synology Photos package on the target system
@@ -65,6 +71,36 @@ toolkit package build:
 2. run the Python test suite
 3. invoke `pkgscripts-ng/PkgCreate.py` for the `av_imgdata` package with the provided options
 
+During the toolkit build, the package build script also builds and verifies the
+native C++ components:
+
+1. `av-imgdata-face-processor`
+2. native face processor smoke checks
+3. native face processor functional checks when model files are available
+4. `av-imgdata-image-processor` with libvips when `AV_IMGDATA_WITH_VIPS` is not
+   set to `0`
+
+The native face processor is required for the current package. It needs an
+ONNXRuntime C API distribution for the active toolkit target. The build helper
+looks for it in the configured/default native dependency locations, or in
+`ONNXRUNTIME_ROOT`:
+
+```text
+include/onnxruntime_c_api.h
+lib/libonnxruntime.so
+```
+
+The native libvips image processor is built by default and can be disabled for a
+package build with:
+
+```bash
+AV_IMGDATA_WITH_VIPS=0 source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
+```
+
+When enabled, the libvips build includes packaged shared libraries and license
+material for libvips, libheif, and libde265. The package install step fails fast
+if required native binaries or runtime libraries are missing.
+
 The UI build is intentionally executed by the Synology toolkit build chain via
 the package Makefiles. This keeps the tested package build path identical to the
 actual DSM package build path.
@@ -100,6 +136,17 @@ result_spk/
 
 Depending on the toolkit configuration, both a regular package and a
 `_debug.spk` may be generated.
+
+Native build artifacts are created under:
+
+```text
+build/native/<platform>/
+```
+
+The package wrapper temporarily moves local development artifacts such as
+`.test-venv`, `ui/node_modules`, Python caches, and native build directories out
+of the way before it links the source tree into the Synology toolkit build
+environment, then restores them after the build.
 
 ## Runtime Database
 
@@ -186,11 +233,28 @@ Depending on the DSM environment, `SYNOPKG_PKGVAR` may point to another package-
 The currently supported configuration areas include:
 
 - `files.USE_EXIFTOOL`
+- `files.IMAGE_DECODER_ENABLED`
+- `files.IMAGE_DECODER_EXTENSIONS`
+- `files.IMAGE_DECODER_ORDER`
+- `files.IMAGE_DECODER_MAX_EDGE`
+- `files.RECOGNITION_IMAGE_MAX_EDGE`
+- `files.IMAGE_DECODER_TIMEOUT_SECONDS`
 - `files.PATHEXIFTOOL`
 - `metadata.SCHEMAS.ACD`
 - `metadata.SCHEMAS.MICROSOFT`
 - `metadata.SCHEMAS.MWG_REGIONS`
 - `photos.MAX_PHOTOS_PERSONS`
+- `native_processors.FACE_PROCESSOR`
+- `native_processors.IMAGE_PROCESSOR_VIPS`
+
+`native_processors.FACE_PROCESSOR` controls the package-shipped C++ face
+processor, including the InsightFace-compatible ONNX model root/name and status
+cache/timeout settings.
+
+`native_processors.IMAGE_PROCESSOR_VIPS` controls the optional libvips backend.
+It is packaged by default, but the runtime default is `ENABLED: false`. When
+enabled and available, it can be preferred over the default image backend and can
+fall back to the default backend when configured to do so.
 
 Name mappings are stored in the package-local SQLite database:
 
@@ -205,8 +269,11 @@ exactly once.
 
 - [`src/`](./src): backend code
 - [`ui/`](./ui): DSM desktop UI
+- [`processors/native/`](./processors/native): package-shipped C++ processors
+- [`processor_contract/`](./processor_contract): JSON contracts for native jobs/results
 - [`scripts/`](./scripts): Synology package lifecycle scripts
 - [`SynoBuildConf/`](./SynoBuildConf): Synology build instructions
+- [`tools/`](./tools): build, smoke-test, and package helper scripts
 - [`conf/`](./conf): package privilege/resource config
 
 ## Localization

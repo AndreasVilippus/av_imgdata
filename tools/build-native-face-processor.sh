@@ -155,6 +155,44 @@ make -j"$(nproc 2>/dev/null || echo 2)"
 make install DESTDIR="${INSTALL_DIR}"
 
 LIB_DIR="${INSTALL_DIR}/usr/local/AV_ImgData/lib"
+LICENSE_DIR="${INSTALL_DIR}/usr/local/AV_ImgData/share/licenses/AV_ImgData/native-face-processor"
+
+copy_optional_license_file() {
+  local source="$1"
+  local target="$2"
+  if [ -f "${source}" ]; then
+    mkdir -p "$(dirname "${target}")"
+    cp -a "${source}" "${target}"
+  fi
+}
+
+install_native_face_processor_license_files() {
+  mkdir -p "${LICENSE_DIR}"
+  cat > "${LICENSE_DIR}/README.txt" <<EOF
+AV_ImgData ships av-imgdata-face-processor and its native runtime libraries.
+
+Bundled runtime libraries:
+- ONNXRuntime C API from ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT}
+- libjpeg-compatible runtime from JPEG_ROOT=${JPEG_ROOT}
+
+ONNXRuntime is distributed under the MIT license. The copied license files from
+ONNXRUNTIME_ROOT are included in this directory when present.
+
+libjpeg/libjpeg-turbo compatible libraries use permissive IJG/BSD/zlib-style
+terms depending on the target sysroot provider. AV_ImgData copies the shared
+runtime from the selected Synology Toolkit/sysroot JPEG_ROOT and links it
+dynamically.
+EOF
+
+  copy_optional_license_file "${ONNXRUNTIME_ROOT}/LICENSE" "${LICENSE_DIR}/onnxruntime.LICENSE"
+  copy_optional_license_file "${ONNXRUNTIME_ROOT}/ThirdPartyNotices.txt" "${LICENSE_DIR}/onnxruntime.ThirdPartyNotices.txt"
+  copy_optional_license_file "${JPEG_ROOT}/share/licenses/libjpeg-turbo/LICENSE.md" "${LICENSE_DIR}/libjpeg-turbo.LICENSE.md"
+  copy_optional_license_file "${JPEG_ROOT}/share/licenses/libjpeg/LICENSE" "${LICENSE_DIR}/libjpeg.LICENSE"
+  copy_optional_license_file "${JPEG_ROOT}/usr/share/licenses/libjpeg-turbo/LICENSE.md" "${LICENSE_DIR}/libjpeg-turbo.LICENSE.md"
+  copy_optional_license_file "${JPEG_ROOT}/usr/share/licenses/libjpeg/LICENSE" "${LICENSE_DIR}/libjpeg.LICENSE"
+  copy_optional_license_file "/usr/share/licenses/libjpeg-turbo/LICENSE.md" "${LICENSE_DIR}/libjpeg-turbo.LICENSE.md"
+  copy_optional_license_file "/usr/share/licenses/libjpeg/LICENSE" "${LICENSE_DIR}/libjpeg.LICENSE"
+}
 
 copy_library_family() {
   local root="$1"
@@ -178,6 +216,7 @@ copy_library_family() {
 }
 
 copy_library_family "${JPEG_ROOT}" "libjpeg.so*"
+install_native_face_processor_license_files
 
 if [ -L "${LIB_DIR}/libjpeg.so" ]; then
   JPEG_LINK_TARGET="$(readlink "${LIB_DIR}/libjpeg.so")"

@@ -384,9 +384,35 @@ export default {
 				&& !this.faceMatchAuthRequired
 			);
 		},
+		faceMatchRecognitionCleanupActive() {
+			if (!this.faceMatchRecognitionActionSelected) {
+				return false;
+			}
+			if (this.cleanupLoading) {
+				return true;
+			}
+			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+				? this.cleanupProgress
+				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			const phase = String(status.phase || progress.status_phase || '').trim().toLowerCase();
+			return !!(
+				this.faceMatchHasCleanupProgressForAction('recognition_analyze_unknown_faces')
+				&& (
+					progress.active === true
+					|| progress.running === true
+					|| progress.stop_requested === true
+					|| phase === 'preparing'
+					|| phase === 'running'
+					|| phase === 'stopping'
+				)
+			);
+		},
 			faceMatchPrimaryButtonLabel() {
 				if (this.faceMatchRecognitionActionSelected) {
-					if (this.cleanupLoading) {
+					if (this.faceMatchRecognitionCleanupActive) {
 						return this.$avt('cleanup:button_stop', 'Stop');
 					}
 					if (this.faceMatchUseStoredFindings) {
@@ -1886,7 +1912,7 @@ export default {
 				if (this.faceMatchRecognitionActionSelected) {
 					this.syncFaceMatchRecognitionOptions();
 					this.cleanupRuntimeAction = 'recognition_analyze_unknown_faces';
-					if (this.cleanupLoading) {
+					if (this.faceMatchRecognitionCleanupActive) {
 						await this.stopCleanupRun({
 							actionOverride: 'recognition_analyze_unknown_faces',
 							stoppingMessageKey: 'face_match:output_stopping',

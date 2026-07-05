@@ -1607,3 +1607,44 @@ def test_primary_button_stops_recognition_face_match_with_face_match_message_run
     )
 
     assert result["calls"][1]["options"]["stoppingMessageKey"] == "face_match:output_stopping"
+
+
+def test_primary_button_stops_recognition_when_cleanup_progress_is_running_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const calls = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              faceMatchRecognitionActionSelected: true,
+              cleanupLoading: false,
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: true,
+                status: {
+                  phase: 'running',
+                },
+              },
+              syncFaceMatchRecognitionOptions: () => calls.push({ type: 'sync' }),
+              stopCleanupRun: async (options) => calls.push({ type: 'stop-cleanup', options }),
+              startCleanupRun: async () => calls.push({ type: 'start-cleanup' }),
+            });
+
+            assert.strictEqual(component.faceMatchRecognitionCleanupActive, true);
+            assert.strictEqual(component.faceMatchPrimaryButtonLabel, 'Stop');
+
+            await component.handlePrimaryFaceMatchButton();
+
+            assert.deepStrictEqual(calls.map((entry) => entry.type), ['sync', 'stop-cleanup']);
+            assert.strictEqual(calls[1].options.actionOverride, 'recognition_analyze_unknown_faces');
+            console.log(JSON.stringify({
+              label: component.faceMatchPrimaryButtonLabel,
+              calls,
+            }));
+            """
+        )
+    )
+
+    assert result["label"] == "Stop"
+    assert [entry["type"] for entry in result["calls"]] == ["sync", "stop-cleanup"]
