@@ -240,6 +240,149 @@ Rules:
 - Stale runtime status without a live worker must not keep an active stopping message. If FaceMatch has `running: false`, `active: false`, and `stop_requested: false`, a historical `face_match:progress_stopping` message is normalized to `face_match:progress_stopped`.
 - A stored findings review remains visible until the backend replaces, resolves, skips, ignores, or clears the current item.
 
+## Component Readiness Status
+
+Component readiness is not runtime progress. It reports whether package-shipped
+or optional external capabilities can be used before a workflow starts.
+
+Current readiness endpoints:
+
+| Endpoint | Component |
+|---|---|
+| `POST /api/insightface_status` | InsightFace-compatible model store and native face processor |
+| `POST /api/image_backend_status` | optional libvips image backend |
+
+Rules:
+
+- Readiness endpoints may keep compatibility names such as `/api/insightface_status`, but payload labels must distinguish model/license status from native runtime status.
+- Native face processing readiness is owned by `NativeFaceProcessorService` plus the backend status assembly.
+- The production gate for InsightFace-compatible face processing is `native_processors.FACE_PROCESSOR.backend == "native"` and `native_processors.FACE_PROCESSOR.hot_path_available == true`.
+- Python pip package status is not part of production face processor readiness.
+- InsightFace wording is reserved for model compatibility, model storage, and model license context.
+- Native face processor wording is used for C++ binary, inference backend, libraries, probe, and runtime readiness.
+- libvips readiness is a separate optional image backend status and must not make the native face processor ready or unavailable by itself.
+- Readiness status may include the latest diagnostic error, but per-run timing such as `native_timing_ms` belongs in logs or operation results, not in readiness progress.
+
+### Native Face Processor Readiness
+
+`/api/insightface_status` should expose both layers:
+
+```json
+{
+  "insightface": {
+    "label": "InsightFace-compatible models",
+    "model_root_configured": "",
+    "model_name_configured": "",
+    "active_model_name": "buffalo_l",
+    "license_acknowledged": true,
+    "model_status": {}
+  },
+  "native_processors": {
+    "FACE_PROCESSOR": {
+      "label": "Native face processor",
+      "enabled": true,
+      "available": true,
+      "hot_path_available": true,
+      "inference_available": true,
+      "reason": "ready",
+      "backend": "native",
+      "path": "bin/av-imgdata-face-processor",
+      "present": true,
+      "executable": true,
+      "version": "av-imgdata-face-processor ... onnxruntime-native",
+      "model_root": "...",
+      "model_name": "buffalo_l",
+      "heif_decoder_available": false,
+      "probe_result": {},
+      "last_error": ""
+    }
+  },
+  "status_blocks": []
+}
+```
+
+Stable native face processor reasons:
+
+| Reason | Available | Hot path | User action |
+|---|---:|---:|---|
+| `disabled` | false | false | enable processor |
+| `insightface_license_not_acknowledged` | false | false | acknowledge model license |
+| `binary_missing` | false | false | reinstall or rebuild package |
+| `binary_not_executable` | false | false | fix package permissions/build |
+| `version_failed` | false | false | inspect binary/library linkage |
+| `skeleton_no_inference` | false | false | rebuild native backend |
+| `onnxruntime_smoke_only` | false | false | complete native inference backend |
+| `probe_failed` | false | false | install or configure model files |
+| `ready` | true | true | none |
+
+Future-compatible native face processor reasons:
+
+```text
+platform_unsupported
+library_missing
+model_missing
+model_invalid
+timeout
+unexpected_result
+worker_unavailable
+```
+
+### Readiness Status Blocks
+
+Readiness payloads may provide generic `status_blocks` for the Status and
+External Libraries views. The UI renders these blocks as backend-provided facts
+and should not infer readiness from pip package imports.
+
+Recommended keys:
+
+```text
+native_face_processor
+native_face_processor_version
+native_face_processor_backend
+native_face_processor_hot_path
+native_face_processor_model
+native_face_processor_heif_decoder
+native_face_processor_ort_threads
+native_face_processor_ort_graph_opt
+native_face_profiles
+image_processor_vips
+image_processor_vips_backend
+image_processor_vips_formats
+image_processor_vips_fallback
+```
+
+### libvips Image Backend Readiness
+
+`/api/image_backend_status` reports only the optional image backend:
+
+```json
+{
+  "native_processors": {
+    "IMAGE_PROCESSOR_VIPS": {
+      "label": "libvips image backend",
+      "enabled": false,
+      "preferred": true,
+      "available": false,
+      "reason": "vips_disabled",
+      "backend": "libvips",
+      "path": "bin/av-imgdata-image-processor",
+      "formats": {
+        "jpeg": false,
+        "png": false,
+        "webp": false,
+        "tiff": false,
+        "heif": false
+      },
+      "fallback": "default_image_backend"
+    }
+  }
+}
+```
+
+libvips readiness reasons should stay independent from native face processor
+reasons. A libvips failure may affect image decoding only when libvips is the
+selected preprocessing backend for that input and fallback is disabled.
+
 ## Polling Rules
 
 Runtime polling applies to:

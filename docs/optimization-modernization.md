@@ -16,7 +16,8 @@ It is based on the current source state on `main` and on the status rules define
 
 ## Validation Snapshot
 
-Validated against current source on `main`.
+Validated against current source on `main` after the native C++ processor and
+libvips packaging work.
 
 Confirmed implemented or materially started:
 
@@ -31,13 +32,21 @@ Confirmed implemented or materially started:
 - `ui/src/services/backend-error-formatter.js` owns backend error detail and retryability rendering.
 - `src/parser/metadata_parser.py` delegates schema-specific parsing to ACD, Microsoft, and MWG parser modules.
 - `FileAnalysisService` is SQLite-backed and provides persisted findings/runtime-state primitives.
+- `src/services/face_match_findings_service.py` provides SQLite-backed active FaceMatch findings with cheap status reads.
+- `src/services/native_face_processor_service.py` controls the native C++ face processor and native model status.
+- `src/services/native_image_processor_vips_service.py` controls the optional libvips image processor, probe status, runtime execution, and fallback behavior.
+- Native packaging tests cover the face processor, libvips image processor, HEIF stack, runtime dependency copying, source patching, and license notice installation.
+- Runtime/status contract coverage exists for schema version 1 payloads, status counters, cross-operation blocking, UI schema consumption, polling guards, and reconnect behavior.
 
 Confirmed remaining structural issues:
 
 - `src/imgdata.py` still owns too much workflow orchestration: candidate caches, operation start locks, Photos access, metadata reads, findings handling, and mutation flow coordination.
-- `ui/src/App.vue` still contains root-component coordination, while DSM API client behavior and backend error formatting now have dedicated services.
+- `src/api/imgdata_api.py` is still a large adapter surface and still contains mutation response shaping and findings refresh coordination.
+- `ui/src/App.vue` is small, while root-level UI coordination has mostly moved into mixins and service modules.
 - Runtime identity, keyed runtime containers, and the FileAnalysis singleton runtime state are centralized in `RuntimeStateService`.
 - Findings persistence uses a SQLite storage boundary with cheap status reads and indexed entry snapshots.
+- Findings pagination is still not implemented; full entry lists are still materialized for active review flows.
+- Native build and dependency/license packaging logic is shell-heavy and only partly protected by static contract tests.
 
 ## Planning Rules
 
@@ -47,7 +56,7 @@ Confirmed remaining structural issues:
 - Do not add more status/runtime logic directly to `src/imgdata.py`.
 - Do not make API routes workflow owners.
 - Do not optimize Photos cache, matching, image listing, or storage format before the necessary tests and measurement boundaries exist.
-- Do not introduce hidden dependency downloads or license-sensitive assets.
+- Do not introduce hidden dependency downloads, unpinned native assets, or license-sensitive files without explicit packaging and license/source-notice coverage.
 
 ## Evaluation Scale
 
@@ -74,22 +83,22 @@ Confirmed remaining structural issues:
 The next work should follow this sequence. Later items should not start before the gating item above them is protected by tests.
 
 ```text
-A. Runtime/status contract tests
-B. Runtime identity consistency across long-running operations
-C. Save-only findings correctness
-D. Write-lock coverage
-E. Extract workflow orchestration from ImgDataService, one seam at a time
-F. UI root-component service extraction
-G. Findings storage abstraction
-H. Findings pagination and only then storage-format evaluation
+A. Keep runtime/status contract tests green while changing workflows
+B. Keep native processor packaging, status, and license contracts green
+C. Continue slimming API routes and retire compatibility wrappers deliberately
+D. Reduce remaining ImgDataService workflow ownership one seam at a time
+E. Add findings pagination before more large-list performance work
+F. Move package/native lifecycle complexity out of shell where it becomes testable
+G. Profile before any further matching, cache, or listing optimization
 ```
 
 Rationale:
 
-- Runtime/status behavior is already important user-visible behavior. It must be protected before large extraction.
+- Runtime/status behavior is important user-visible behavior. It is now protected by tests and must stay protected before and during extraction.
+- Native C++ and libvips packaging are now release-critical, so package contents and license notices are gating contracts.
 - Findings correctness affects interrupted scans, reconnect, and stored review state. It is more urgent than performance work.
 - `ImgDataService` extraction is necessary, but doing it before contract tests raises regression risk.
-- Storage and pagination work should wait until status and findings semantics are stable.
+- Storage has moved to SQLite-backed repositories; pagination is the remaining large-list storage boundary.
 
 ---
 
@@ -97,7 +106,7 @@ Rationale:
 
 ## 0.1 Strengthen backend status contract tests
 
-Status: Open / highest immediate gate.
+Status: Partial / keep expanding as status flows change.
 
 ### Why this is first
 
@@ -135,7 +144,7 @@ Stability impact: High.
 
 ## 0.2 Strengthen UI/static status contract tests
 
-Status: Open / highest immediate gate.
+Status: Partial / keep expanding as reconnect and action state changes.
 
 ### Required tests
 
@@ -562,40 +571,33 @@ Stability impact: Medium to High.
 
 ## 4.1 Add a findings storage abstraction
 
-Status: Open / only JSON primitives exist.
+Status: Done for current storage boundary; pagination remains separate.
 
-### Problem
+### Current state
 
-`FileAnalysisService` now provides SQLite-backed primitives with separate status and entry storage.
+`FileAnalysisService` provides SQLite-backed Checks findings primitives with separate status and entry storage. `FaceMatchFindingsService` provides SQLite-backed active FaceMatch findings with status-only reads. Repository classes under `src/av_imgdata/db/repositories/` own the table operations.
 
-### Target module
+There is no standalone `findings_storage_service.py`; the implemented boundary is split between the workflow-facing services and SQLite repositories.
 
-Possible module:
-
-```text
-src/services/findings_storage_service.py
-```
-
-JSON remains the first backend.
-
-### Required operations
+### Implemented operations
 
 - read findings status
-- read current entry
-- read page of entries
+- read full entries for current review flows
 - append entries
-- update one entry
-- remove one entry
-- ignore one entry
-- resolve one entry
-- force flush
+- replace persisted entries on terminal write
+- delete findings
 - read runtime state
 - write runtime state
 
+### Still missing
+
+- paginated reads
+- mutation APIs that avoid materializing the full entry list
+- a separate current-entry cursor API
+
 ### Acceptance criteria
 
-- Atomic JSON writes remain used.
-- Existing JSON files remain readable.
+- Existing JSON/runtime files migrate deterministically into SQLite.
 - Status reads do not materialize full findings lists where avoidable.
 - Mutation responses return current status and current item.
 - Invalid state files fail safely.
@@ -632,16 +634,15 @@ Stability impact: Medium to High.
 
 ## 4.3 Evaluate SQLite only behind findings storage abstraction
 
-Status: Deferred.
+Status: Done for active package-local persistence; continue through repositories only.
 
-SQLite can improve large-list storage, but direct migration remains risky.
+SQLite is now the active package-local persistence layer for file analysis state, Checks findings, FaceMatch findings, suppressions, and name mappings. Further storage changes should continue through the existing repository boundary.
 
-Evaluate only after:
+Remaining caution points:
 
-- findings storage abstraction exists
 - status/finding APIs use the abstraction
 - tests define expected behavior
-- large-list performance evidence justifies the change
+- large-list performance evidence is still required before changing review-list access patterns
 
 Candidate tables may include:
 
@@ -657,6 +658,7 @@ ignore_entries(ignore_type, entry_token, payload_json, created_at)
 - Migration is deterministic and idempotent.
 - Failed migration does not delete JSON source data.
 - Package start remains functional without manual DSM repair.
+- New tables remain behind service or repository APIs, not direct route logic.
 
 Speed impact: High for large libraries.
 
@@ -709,11 +711,11 @@ Stability impact: Medium to High.
 
 ## 6.1 Move complex lifecycle shell logic into Python helpers
 
-Status: Open.
+Status: Open / still valid, now broader because native build logic was added.
 
 ### Problem
 
-DSM lifecycle shell scripts must remain, but pip, wheelhouse, manifest, and optional package logic are easier to test in Python.
+DSM lifecycle shell scripts must remain, but pip, wheelhouse, manifest, optional package logic, native binary checks, and native dependency/license packaging are easier to test in Python.
 
 ### Target
 
@@ -733,6 +735,8 @@ scripts/runtime_helper.py
 
 - validate core packages
 - validate optional package config
+- validate native processor binaries
+- validate packaged native runtime libraries and license notices
 - prepare wheelhouse
 - install from manifest
 - validate InsightFace/OpenCV status
@@ -755,7 +759,13 @@ Stability impact: High.
 
 ## 6.2 Improve optional dependency status
 
-Status: Open / not fully proven.
+Status: Partial.
+
+### Current state
+
+Native processor status is materially improved. `NativeFaceProcessorService` reports native face processor readiness, model root/name, model availability, InsightFace license acknowledgement, and cached status. `NativeImageProcessorVipsService` reports libvips backend enablement, binary/probe state, supported loaders, fallback behavior, and cached status. The configuration UI exposes the native processor settings.
+
+Legacy Python optional dependency status is still relevant where pip/wheelhouse/OpenCV fallback paths remain visible.
 
 ### Required status fields
 
@@ -764,10 +774,13 @@ Report optional capability state explicitly:
 - enabled/disabled
 - install-on-start state
 - module import result
-- active model name
-- model root
-- model store status
-- available models
+- native face processor active model name
+- native face processor model root
+- native face processor model store status
+- native face processor available models
+- libvips backend binary/probe state
+- libvips supported input formats/loaders
+- fallback policy
 - wheelhouse state
 - OpenCV conflict state
 - relevant license notice location if available
@@ -824,12 +837,15 @@ Stability impact: Medium.
 
 ## 7.2 Face matching optimization after profiling only
 
-Status: Deferred.
+Status: Partial / native C++ processor implemented; further optimization remains profiling-gated.
 
-Only optimize if profiling shows IoU matching dominates runtime.
+The old Python/pip InsightFace path is no longer the primary target: a native C++ face processor is packaged and wired through `NativeFaceProcessorService`. Further optimization must be based on measurements from the current native subprocess, libvips decode path, and remaining Python orchestration.
 
 Possible improvements:
 
+- batch native processor calls where safe
+- reduce redundant decode and image-copy work
+- use libvips for supported decode paths when probe/config allow it
 - group by image/source
 - coordinate-range prefilter
 - avoid incompatible source comparisons
@@ -837,7 +853,7 @@ Possible improvements:
 
 Acceptance criteria before implementation:
 
-- profiling data shows matching dominates runtime
+- profiling data shows the native processor, decode path, Python orchestration, or matching step dominates runtime
 - fixture tests preserve exact matching results and order
 - no incompatible source comparisons are introduced
 
@@ -879,8 +895,9 @@ Do not prioritize:
 - rewriting face detection in Rust or Go
 - Vue 3 migration without DSM proof
 - hidden dependency or model downloads
+- unpinned native source downloads without license/source packaging
 - broad guessed fallback or retry logic
-- storage migration before storage abstraction exists
+- direct storage changes that bypass the service/repository boundary
 - performance work without profiling, logs, HAR data, or reproduced evidence
 
 ---
@@ -889,8 +906,8 @@ Do not prioritize:
 
 | Order | Work package | Status | Priority | Must precede | Speed impact | Stability impact |
 |---:|---|---|---:|---|---|---|
-| 1 | Backend status contract tests | Open | 0 | runtime extraction | Indirect | High |
-| 2 | UI/static status contract tests | Open | 0 | UI/root extraction | Indirect | High |
+| 1 | Backend status contract tests | Partial | 0 | runtime extraction | Indirect | High |
+| 2 | UI/static status contract tests | Partial | 0 | UI/root extraction | Indirect | High |
 | 3 | Complete runtime identity across all long-running operations | Done | 1 | workflow extraction | Medium | High |
 | 4 | Finish save-only findings persistence and resume correctness | Done | 1 | findings abstraction | Medium | High |
 | 5 | Complete write-lock coverage and tests | Done | 1 | workflow extraction | Low | High |
@@ -900,17 +917,17 @@ Do not prioritize:
 | 9 | Keep API routes thin after service extraction | Partial | 2 | broader backend cleanup | Low | High |
 | 10 | Extract DSM API client from `App.vue` | Done | 3 | UI cleanup | Low to Medium | High |
 | 11 | Extract backend error formatter from `App.vue` | Done | 3 | UI cleanup | Low | Medium to High |
-| 12 | Add findings storage abstraction | Implemented | 4 | pagination/SQLite | Medium | High |
-| 13 | Add findings pagination | Open | 4 | SQLite evaluation | High for large libraries | Medium to High |
+| 12 | Add findings storage abstraction | Done | 4 | pagination | Medium | High |
+| 13 | Add findings pagination | Open | 4 | large-list review optimization | High for large libraries | Medium to High |
 | 14 | Keep metadata parser split stable with tests | Done | 5 | parser changes | Low | Medium to High |
 | 15 | Move lifecycle complexity into Python helper | Open | 6 | optional dependency cleanup | Low to Medium | High |
-| 16 | Improve optional dependency status | Open | 6 | optional model work | Low | High |
+| 16 | Improve optional dependency status | Partial | 6 | optional model work | Low | High |
 | 17 | Improve Photos lookup caching with invalidation proof | Partial | 7 | broader cache/perf work | Medium to High | Medium |
 | 18 | Profile before optimizing matching/listing | Deferred | 7 | matching/listing optimization | Conditional | Medium |
-| 19 | Evaluate SQLite behind abstraction | Implemented | 7 | storage migration | High for large libraries | High |
+| 19 | Evaluate SQLite behind abstraction | Done | 7 | storage migration | High for large libraries | High |
 
 ## Current Decision
 
-The next implementation step is not another broad refactor. The next step is contract coverage.
+The next implementation step is not another broad refactor.
 
-Runtime identity consistency, save-only findings correctness, write-lock coverage, Checks workflow extraction, and FaceMatch workflow extraction are complete. The next step is keeping API routes thin and retiring compatibility wrappers where callers have been migrated.
+Runtime identity consistency, save-only findings correctness, write-lock coverage, Checks workflow extraction, FaceMatch workflow extraction, SQLite-backed findings storage, native C++ face processor packaging, and libvips image backend packaging are complete enough to treat them as protected implementation. The next steps are keeping the contract tests green, keeping API routes thin, retiring compatibility wrappers where callers have been migrated, and adding findings pagination before further storage or large-list performance work.
