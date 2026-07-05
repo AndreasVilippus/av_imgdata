@@ -71,6 +71,7 @@ export default {
 			return !!(
 				this.selectedChecksAction === 'scan'
 				&& this.checksSaveOnly
+				&& this.hasChecksStoredFindings
 				&& !this.isChecksReviewActive
 				&& !this.isChecksReviewStopping
 				&& !this.checksLoading
@@ -198,12 +199,22 @@ export default {
 				changed_since_days: Math.max(0, Number(this.checksChangedSinceDays) || 0),
 			};
 		},
+		updateChecksChangedSinceDays(value) {
+			this.checksChangedSinceDays = Math.max(0, Number(value) || 0);
+		},
+		updateChecksInsightFaceAutoSelectSafe(value) {
+			this.checksInsightFaceAutoSelectSafe = !!value;
+		},
 		async startInsightFaceAssignmentCheck() {
 			this.syncInsightFaceAssignmentRecognitionOptions();
 			this.cleanupRuntimeAction = 'recognition_check_person_assignments';
 			this.checksStatusMessage = this.$avt('checks:status_loading', 'Loading checks...');
 			if (this.cleanupLoading) {
-				await this.stopCleanupRun({ actionOverride: 'recognition_check_person_assignments' });
+				await this.stopCleanupRun({
+					actionOverride: 'recognition_check_person_assignments',
+					stoppingMessageKey: 'checks:progress_stopping',
+					stoppingMessageDefault: 'Stopping checks scan...',
+				});
 				return;
 			}
 			await this.startCleanupRun({ actionOverride: 'recognition_check_person_assignments' });
@@ -329,7 +340,7 @@ export default {
 			return '';
 		},
 		getChecksTypeOptions() {
-			return ['dimension_issues', 'duplicate_faces', 'position_deviations', 'name_conflicts'];
+			return ['dimension_issues', 'duplicate_faces', 'position_deviations', 'name_conflicts', 'recognition_check_person_assignments'];
 		},
 		isChecksMetadataFace(face) {
 			const sourceFormat = String(face && face.source_format || '').trim().toUpperCase();
@@ -897,6 +908,29 @@ export default {
 			);
 		},
 		async refreshChecksSessionState() {
+			const recognitionProgress = await this.fetchCleanupProgress({
+				actionOverride: 'recognition_check_person_assignments',
+			});
+			if (recognitionProgress && recognitionProgress.running) {
+				this.checksSessionSyncing = true;
+				try {
+					if (this.selectedChecksType !== 'recognition_check_person_assignments') {
+						this.selectedChecksType = 'recognition_check_person_assignments';
+					}
+					if (this.selectedChecksAction !== 'scan') {
+						this.selectedChecksAction = 'scan';
+					}
+				} finally {
+					this.checksSessionSyncing = false;
+				}
+				this.cleanupLoading = true;
+				this.cleanupRuntimeAction = 'recognition_check_person_assignments';
+				this.startCleanupProgressPolling();
+				return;
+			}
+			if (this.isInsightFaceAssignmentCheck) {
+				return;
+			}
 			const progress = await this.fetchChecksProgress({
 				applyFinishedState: false,
 				applyRunningState: false,

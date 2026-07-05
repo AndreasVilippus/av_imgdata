@@ -5,9 +5,10 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 class NativeImageProcessorVipsUnavailable(Exception):
@@ -28,6 +29,9 @@ class NativeImageProcessorVipsService:
         self.config_service = config_service
         self.package_root = Path(package_root) if package_root else Path(os.getenv("SYNOPKG_PKGDEST", "/var/packages/AV_ImgData/target"))
         self._debug_logger = debug_logger if callable(debug_logger) else None
+        self._status_lock = threading.Lock()
+        self._status_cache: Optional[Tuple[Tuple[Any, ...], float, Dict[str, Any]]] = None
+        self._status_refreshing = False
 
     def set_debug_logger(self, debug_logger: Optional[Callable[..., None]]) -> None:
         self._debug_logger = debug_logger if callable(debug_logger) else None
@@ -76,13 +80,24 @@ class NativeImageProcessorVipsService:
                 formats.append(text)
         return formats
 
-    def status(self) -> Dict[str, Any]:
-        config = self.config()
+    def status(self, *, force: bool = False, background: bool = False) -> Dict[str, Any]:
+        processor_config = self.config()
         path = self.executable_path()
-        enabled = bool(config.get("ENABLED", False))
+        enabled = bool(processor_config.get("ENABLED", False))
+        cache_key = self._status_cache_key(processor_config, path)
+        if not force:
+            cached = self._cached_status(cache_key)
+            if cached is not None:
+                return cached
+            if background:
+                stale = self._cached_status(cache_key, allow_stale=True)
+                self.refresh_status_background()
+                if stale is not None:
+                    return stale
+                return self._status_pending(processor_config, path)
         result: Dict[str, Any] = {
             "enabled": enabled,
-            "preferred": bool(config.get("PREFERRED", True)),
+            "preferred": bool(processor_config.get("PREFERRED", True)),
             "path": str(path),
             "present": path.is_file(),
             "executable": os.access(str(path), os.X_OK),
@@ -90,19 +105,19 @@ class NativeImageProcessorVipsService:
             "reason": "vips_disabled" if not enabled else "",
             "backend": "libvips",
             "formats": {name: False for name in self.supported_formats()},
-            "fallback": "default_image_backend" if bool(config.get("ALLOW_FALLBACK_TO_DEFAULT", True)) else "none",
+            "fallback": "default_image_backend" if bool(processor_config.get("ALLOW_FALLBACK_TO_DEFAULT", True)) else "none",
         }
         if not enabled:
             self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
-            return result
+            return self._store_status_cache(cache_key, result)
         if not result["present"]:
             result["reason"] = "vips_binary_missing"
             self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
-            return result
+            return self._store_status_cache(cache_key, result)
         if not result["executable"]:
             result["reason"] = "vips_binary_not_executable"
             self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
-            return result
+            return self._store_status_cache(cache_key, result)
 
         version = self._run_simple([str(path), "version"])
         result["version_result"] = version
@@ -110,7 +125,7 @@ class NativeImageProcessorVipsService:
             result["reason"] = "vips_version_failed"
             result["last_error"] = version.get("output", "")
             self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
-            return result
+            return self._store_status_cache(cache_key, result)
         result["version"] = version.get("output", "").strip()
 
         probe = self._run_simple([str(path), "probe"])
@@ -132,18 +147,108 @@ class NativeImageProcessorVipsService:
             result["reason"] = "vips_probe_failed"
             result["last_error"] = probe.get("output", "")
             self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
-            return result
+            return self._store_status_cache(cache_key, result)
 
         if str(result.get("backend") or "").strip().lower() in {"skeleton", "no-op", "noop"}:
             result["reason"] = "vips_probe_failed"
             result["last_error"] = "libvips image processor skeleton is present but libvips is not linked"
             self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
-            return result
+            return self._store_status_cache(cache_key, result)
 
         result["available"] = True
         result["reason"] = "vips_ready"
         self._debug_log("native_image_processor_vips_status", **self._status_debug_fields(result))
+        return self._store_status_cache(cache_key, result)
+
+    def _status_cache_ttl_seconds(self, processor_config: Dict[str, Any]) -> float:
+        try:
+            return max(0.0, min(3600.0, float(processor_config.get("STATUS_CACHE_SECONDS", 60))))
+        except Exception:
+            return 60.0
+
+    def _status_cache_key(self, processor_config: Dict[str, Any], path: Path) -> Tuple[Any, ...]:
+        return (
+            str(path),
+            path.is_file(),
+            os.access(str(path), os.X_OK),
+            self._path_cache_identity(path),
+            bool(processor_config.get("ENABLED", False)),
+            bool(processor_config.get("PREFERRED", True)),
+            bool(processor_config.get("ALLOW_FALLBACK_TO_DEFAULT", True)),
+            tuple(self.supported_formats()),
+            str(processor_config.get("TIMEOUT_SECONDS") or ""),
+            self._status_cache_ttl_seconds(processor_config),
+        )
+
+    @staticmethod
+    def _path_cache_identity(path: Path) -> Tuple[int, int]:
+        try:
+            stat = path.stat()
+        except OSError:
+            return (0, 0)
+        return (int(stat.st_mtime_ns), int(stat.st_size))
+
+    def _cached_status(self, cache_key: Tuple[Any, ...], *, allow_stale: bool = False) -> Optional[Dict[str, Any]]:
+        with self._status_lock:
+            cached = self._status_cache
+            if cached is None:
+                return None
+            cached_key, cached_at, cached_value = cached
+            if cached_key != cache_key:
+                return None
+            ttl = float(cache_key[-1] or 0.0)
+            expired = ttl <= 0 or time.monotonic() - cached_at > ttl
+            if expired and not allow_stale:
+                return None
+            result = dict(cached_value)
+            result["cache_hit"] = not expired
+            result["cache_stale"] = bool(expired)
+            return result
+
+    def _store_status_cache(self, cache_key: Tuple[Any, ...], status: Dict[str, Any]) -> Dict[str, Any]:
+        result = dict(status)
+        result["cache_hit"] = False
+        result["cache_stale"] = False
+        with self._status_lock:
+            self._status_cache = (cache_key, time.monotonic(), dict(result))
         return result
+
+    def _status_pending(self, processor_config: Dict[str, Any], path: Path) -> Dict[str, Any]:
+        enabled = bool(processor_config.get("ENABLED", False))
+        return {
+            "enabled": enabled,
+            "preferred": bool(processor_config.get("PREFERRED", True)),
+            "path": str(path),
+            "present": path.is_file(),
+            "executable": os.access(str(path), os.X_OK),
+            "available": False,
+            "reason": "status_refreshing" if enabled else "vips_disabled",
+            "backend": "libvips",
+            "formats": {name: False for name in self.supported_formats()},
+            "fallback": "default_image_backend" if bool(processor_config.get("ALLOW_FALLBACK_TO_DEFAULT", True)) else "none",
+            "cache_hit": False,
+            "cache_stale": True,
+            "refreshing": True,
+        }
+
+    def refresh_status_background(self) -> bool:
+        with self._status_lock:
+            if self._status_refreshing:
+                return False
+            self._status_refreshing = True
+
+        def refresh() -> None:
+            try:
+                self.status(force=True, background=False)
+            except Exception as exc:
+                self._debug_log("native_image_processor_vips_status_refresh_failed", error_type=type(exc).__name__, error=str(exc))
+            finally:
+                with self._status_lock:
+                    self._status_refreshing = False
+
+        thread = threading.Thread(target=refresh, name="av-imgdata-vips-status-refresh", daemon=True)
+        thread.start()
+        return True
 
     @staticmethod
     def _status_debug_fields(status: Dict[str, Any]) -> Dict[str, Any]:
@@ -415,6 +520,14 @@ class NativeImageProcessorVipsService:
                 parsed = json.loads(output_path.read_text(encoding="utf-8"))
                 if isinstance(parsed, dict):
                     result.update(parsed)
+                    image_output_path = parsed.get("output_path")
+                    if isinstance(image_output_path, str) and image_output_path:
+                        try:
+                            image_path = Path(image_output_path)
+                            if image_path.is_file():
+                                result["image_bytes"] = image_path.read_bytes()
+                        except OSError:
+                            pass
                     return result
             except Exception:
                 pass

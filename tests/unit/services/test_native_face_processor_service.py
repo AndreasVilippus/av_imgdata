@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -311,6 +312,82 @@ def test_native_face_processor_status_and_embed_contract(tmp_path):
     }]
 
 
+def test_native_face_processor_status_uses_short_cache(monkeypatch, tmp_path):
+    processor = _packaged_processor_path(tmp_path)
+    _write_fake_processor(processor)
+    config = ConfigService(str(tmp_path / "config.json"))
+    config.writeConfig({
+        "native_processors": {
+            "FACE_PROCESSOR": {
+                "MODEL_ROOT": str(tmp_path / "models"),
+                "MODEL_NAME": "buffalo_l",
+                "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
+                "STATUS_CACHE_SECONDS": 60,
+            },
+        },
+    })
+    service = NativeFaceProcessorService(config, package_root=tmp_path)
+    calls = []
+    original_run_simple = service._run_simple
+
+    def recorded_run_simple(command):
+        calls.append(command)
+        return original_run_simple(command)
+
+    monkeypatch.setattr(service, "_run_simple", recorded_run_simple)
+
+    first = service.status()
+    second = service.status()
+    forced = service.status(force=True)
+
+    assert first["available"] is True
+    assert first["cache_hit"] is False
+    assert second["available"] is True
+    assert second["cache_hit"] is True
+    assert forced["cache_hit"] is False
+    assert len(calls) == 4
+
+
+def test_native_face_processor_background_status_returns_stale_cache(monkeypatch, tmp_path):
+    processor = _packaged_processor_path(tmp_path)
+    _write_fake_processor(processor)
+    config = ConfigService(str(tmp_path / "config.json"))
+    config.writeConfig({
+        "native_processors": {
+            "FACE_PROCESSOR": {
+                "MODEL_ROOT": str(tmp_path / "models"),
+                "MODEL_NAME": "buffalo_l",
+                "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
+                "STATUS_CACHE_SECONDS": 1,
+            },
+        },
+    })
+    service = NativeFaceProcessorService(config, package_root=tmp_path)
+    first = service.status()
+    cache_key, _, cache_value = service._status_cache
+    service._status_cache = (cache_key, time.monotonic() - 10, cache_value)
+    refresh_calls = []
+
+    monkeypatch.setattr(
+        service,
+        "refresh_status_background",
+        lambda **kwargs: refresh_calls.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_simple",
+        lambda command: (_ for _ in ()).throw(AssertionError("background status must not probe synchronously")),
+    )
+
+    stale = service.status(background=True)
+
+    assert first["available"] is True
+    assert stale["available"] is True
+    assert stale["cache_hit"] is False
+    assert stale["cache_stale"] is True
+    assert refresh_calls == [{"model_root": tmp_path / "models", "model_name": "buffalo_l"}]
+
+
 def test_native_face_processor_logs_structured_result_error_on_nonzero_exit(tmp_path):
     processor = _packaged_processor_path(tmp_path)
     _write_failing_processor(processor)
@@ -389,6 +466,88 @@ def test_native_face_processor_decodes_heic_to_jpeg_before_native_run(tmp_path):
     assert [event for event, _fields in events].index("native_face_processor_input_decoded") < [
         event for event, _fields in events
     ].index("native_face_processor_run_finished")
+
+
+def test_native_face_processor_uses_vips_preferred_formats_before_native_run(tmp_path):
+    processor = _packaged_processor_path(tmp_path)
+    _write_input_echo_processor(processor)
+    config = ConfigService(str(tmp_path / "config.json"))
+    config.writeConfig({
+        "native_processors": {
+            "FACE_PROCESSOR": {
+                "MODEL_ROOT": str(tmp_path / "models"),
+                "MODEL_NAME": "buffalo_l",
+                "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
+            },
+            "IMAGE_PROCESSOR_VIPS": {
+                "ENABLED": True,
+                "PREFERRED": True,
+                "SUPPORTED_FORMATS": ["jpg", "png"],
+            },
+        },
+        "files": {
+            "IMAGE_DECODER_EXTENSIONS": ["heic", "heif"],
+        },
+    })
+    events = []
+    decoder = SimpleNamespace(
+        decode_to_jpeg=lambda image_path: SimpleNamespace(
+            success=True,
+            image_bytes=b"\xff\xd8vips-jpeg\xff\xd9",
+            source="libvips",
+            error="",
+        )
+    )
+    service = NativeFaceProcessorService(
+        config,
+        package_root=tmp_path,
+        debug_logger=lambda event, **fields: events.append((event, fields)),
+        image_decoder=decoder,
+    )
+    image = tmp_path / "image.jpg"
+    image.write_bytes(b"jpeg")
+
+    faces = service.create_embedder(model_name="fallback").detect_and_embed(image)
+
+    assert faces == []
+    decoded_events = [fields for event, fields in events if event == "native_face_processor_input_decoded"]
+    assert decoded_events
+    assert decoded_events[-1]["source"] == "libvips"
+
+
+def test_native_face_processor_blocks_native_fallback_when_vips_fallback_disabled(tmp_path):
+    processor = _packaged_processor_path(tmp_path)
+    _write_input_echo_processor(processor)
+    config = ConfigService(str(tmp_path / "config.json"))
+    config.writeConfig({
+        "native_processors": {
+            "FACE_PROCESSOR": {
+                "MODEL_ROOT": str(tmp_path / "models"),
+                "MODEL_NAME": "buffalo_l",
+                "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
+            },
+            "IMAGE_PROCESSOR_VIPS": {
+                "ENABLED": True,
+                "PREFERRED": True,
+                "ALLOW_FALLBACK_TO_DEFAULT": False,
+                "SUPPORTED_FORMATS": ["jpg"],
+            },
+        },
+    })
+    decoder = SimpleNamespace(
+        decode_to_jpeg=lambda image_path: SimpleNamespace(
+            success=False,
+            image_bytes=b"",
+            source="libvips",
+            error="vips_failed",
+        )
+    )
+    service = NativeFaceProcessorService(config, package_root=tmp_path, image_decoder=decoder)
+    image = tmp_path / "image.jpg"
+    image.write_bytes(b"jpeg")
+
+    with pytest.raises(NativeFaceProcessorUnavailable, match="fallback is disabled"):
+        service.create_embedder(model_name="fallback").detect_and_embed(image)
 
 
 def test_native_face_processor_reuses_persistent_worker(tmp_path):

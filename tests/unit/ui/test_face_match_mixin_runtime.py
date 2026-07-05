@@ -1022,6 +1022,96 @@ def test_live_start_does_not_poll_until_start_response_is_applied_runtime():
     ]
 
 
+def test_auto_assign_known_is_not_supported_for_insightface_actions_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const events = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchAutoAssignKnown: true,
+              fetchFaceMatchFindingsStatus: async () => events.push('findings-status'),
+            });
+
+            assert.strictEqual(component.faceMatchSupportsAutoAssignKnown, true);
+            component.selectedFaceMatchingAction = 'search_missing_faces_insightface';
+            mixin.watch.selectedFaceMatchingAction.call(component, 'search_missing_faces_insightface');
+
+            assert.strictEqual(component.faceMatchSupportsAutoAssignKnown, false);
+            assert.strictEqual(component.faceMatchAutoAssignKnown, false);
+
+            component.selectedFaceMatchingAction = 'recognition_analyze_unknown_faces';
+            assert.strictEqual(component.faceMatchSupportsAutoAssignKnown, false);
+            console.log(JSON.stringify({
+              supports: component.faceMatchSupportsAutoAssignKnown,
+              autoAssign: component.faceMatchAutoAssignKnown,
+              events,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "supports": False,
+        "autoAssign": False,
+        "events": ["findings-status"],
+    }
+
+
+def test_insightface_missing_face_start_never_sends_auto_assign_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let requestBody = null;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_missing_faces_insightface',
+              faceMatchAutoAssignKnown: true,
+              faceMatchRecognizeMissingInsightFacePersons: true,
+              faceMatchSkipUnknownInsightFacePersons: true,
+              insightFaceStatus: {
+                native_processors: {
+                  FACE_PROCESSOR: {
+                    available: true,
+                    hot_path_available: true,
+                  },
+                },
+              },
+              callDsmApi: async (_path, body) => {
+                requestBody = body;
+                return {
+                  success: true,
+                  data: {
+                    face_matches: {
+                      running: true,
+                      action: 'search_missing_faces_insightface',
+                    },
+                  },
+                };
+              },
+              applyFaceMatchingProgress: () => true,
+              fetchFaceMatchFindingsStatus: async () => {},
+              syncFaceMatchTransferredCountFromProgress: () => {},
+              startFaceMatchProgressPolling: () => {},
+              stopFaceMatchProgressPolling: () => {},
+            });
+
+            await component.startFaceMatchingAction();
+
+            assert.strictEqual(requestBody.action, 'search_missing_faces_insightface');
+            assert.strictEqual(requestBody.auto, false);
+            assert.strictEqual(requestBody.recognize_persons, true);
+            assert.strictEqual(requestBody.skip_unknown_persons, true);
+            console.log(JSON.stringify({ requestBody }));
+            """
+        )
+    )
+
+    assert result["requestBody"]["action"] == "search_missing_faces_insightface"
+    assert result["requestBody"]["auto"] is False
+    assert result["requestBody"]["recognize_persons"] is True
+    assert result["requestBody"]["skip_unknown_persons"] is True
+
+
 def test_followup_start_accepts_authoritative_response_with_older_revision_runtime():
     result = run_node(
         face_match_runtime_script(
@@ -1487,3 +1577,33 @@ def test_primary_button_stops_when_backend_progress_is_running_runtime():
     )
 
     assert result == {"events": ["stop"]}
+
+
+def test_primary_button_stops_recognition_face_match_with_face_match_message_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const calls = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              faceMatchRecognitionActionSelected: true,
+              cleanupLoading: true,
+              syncFaceMatchRecognitionOptions: () => calls.push({ type: 'sync' }),
+              stopCleanupRun: async (options) => calls.push({ type: 'stop-cleanup', options }),
+              startCleanupRun: async () => calls.push({ type: 'start-cleanup' }),
+            });
+
+            await component.handlePrimaryFaceMatchButton();
+
+            assert.strictEqual(calls.length, 2);
+            assert.strictEqual(calls[0].type, 'sync');
+            assert.strictEqual(calls[1].type, 'stop-cleanup');
+            assert.strictEqual(calls[1].options.actionOverride, 'recognition_analyze_unknown_faces');
+            assert.strictEqual(calls[1].options.stoppingMessageKey, 'face_match:output_stopping');
+            assert.strictEqual(calls[1].options.stoppingMessageDefault, 'Stopping search...');
+            console.log(JSON.stringify({ calls }));
+            """
+        )
+    )
+
+    assert result["calls"][1]["options"]["stoppingMessageKey"] == "face_match:output_stopping"

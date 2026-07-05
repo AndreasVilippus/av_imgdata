@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from services.config_service import ConfigService
@@ -141,6 +142,76 @@ def test_vips_image_processor_ready_probe_reports_formats(tmp_path):
     assert status["formats"]["webp"] is False
 
 
+def test_vips_image_processor_status_uses_short_cache(monkeypatch, tmp_path):
+    binary = tmp_path / "bin" / "av-imgdata-image-processor"
+    binary.parent.mkdir(parents=True)
+    _write_vips_ready(binary)
+    config = ConfigService(str(tmp_path / "config.json"))
+    config.writeConfig({
+        "native_processors": {
+            "IMAGE_PROCESSOR_VIPS": {
+                "ENABLED": True,
+                "STATUS_CACHE_SECONDS": 60,
+            },
+        },
+    })
+    service = NativeImageProcessorVipsService(config, package_root=tmp_path)
+    calls = []
+    original_run_simple = service._run_simple
+
+    def recorded_run_simple(command):
+        calls.append(command)
+        return original_run_simple(command)
+
+    monkeypatch.setattr(service, "_run_simple", recorded_run_simple)
+
+    first = service.status()
+    second = service.status()
+    forced = service.status(force=True)
+
+    assert first["available"] is True
+    assert first["cache_hit"] is False
+    assert second["available"] is True
+    assert second["cache_hit"] is True
+    assert forced["cache_hit"] is False
+    assert len(calls) == 4
+
+
+def test_vips_image_processor_background_status_returns_stale_cache(monkeypatch, tmp_path):
+    binary = tmp_path / "bin" / "av-imgdata-image-processor"
+    binary.parent.mkdir(parents=True)
+    _write_vips_ready(binary)
+    config = ConfigService(str(tmp_path / "config.json"))
+    config.writeConfig({
+        "native_processors": {
+            "IMAGE_PROCESSOR_VIPS": {
+                "ENABLED": True,
+                "STATUS_CACHE_SECONDS": 1,
+            },
+        },
+    })
+    service = NativeImageProcessorVipsService(config, package_root=tmp_path)
+    first = service.status()
+    cache_key, _, cache_value = service._status_cache
+    service._status_cache = (cache_key, time.monotonic() - 10, cache_value)
+    refresh_calls = []
+
+    monkeypatch.setattr(service, "refresh_status_background", lambda: refresh_calls.append(True) or True)
+    monkeypatch.setattr(
+        service,
+        "_run_simple",
+        lambda command: (_ for _ in ()).throw(AssertionError("background status must not probe synchronously")),
+    )
+
+    stale = service.status(background=True)
+
+    assert first["available"] is True
+    assert stale["available"] is True
+    assert stale["cache_hit"] is False
+    assert stale["cache_stale"] is True
+    assert refresh_calls == [True]
+
+
 def test_vips_process_image_disabled_returns_error(tmp_path):
     """Test that disabled processor returns error."""
     config = ConfigService(str(tmp_path / "config.json"))
@@ -170,6 +241,21 @@ def test_vips_process_image_not_found_returns_error(tmp_path):
     
     assert result["success"] is False
     assert result["error"] == "image_not_found"
+
+
+def test_vips_parse_processor_result_keeps_temporary_output_bytes(tmp_path):
+    output_image = tmp_path / "output.jpeg"
+    output_image.write_bytes(b"\xff\xd8vips-jpeg")
+    result_json = tmp_path / "processor-result.json"
+    result_json.write_text(
+        '{"success": true, "output_path": "' + str(output_image) + '", "output_format": "jpeg"}',
+        encoding="utf-8",
+    )
+
+    result = NativeImageProcessorVipsService._parse_processor_result({"ok": True}, result_json)
+
+    assert result["success"] is True
+    assert result["image_bytes"] == b"\xff\xd8vips-jpeg"
 
 
 def test_vips_resize_image(tmp_path):

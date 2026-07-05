@@ -123,7 +123,10 @@
 					:status-text="vm.getChecksProgressStatusText()"
 				/>
 			</div>
-			<div v-if="vm.isInsightFaceAssignmentCheck" class="face-match-status-message">{{ vm.getCleanupStatusHeadline() }}</div>
+			<div
+				v-if="vm.isInsightFaceAssignmentCheck && Number(vm.getCleanupStatusProgress().total) <= 0 && !vm.isCleanupStatusHeadlineCounterOnly()"
+				class="face-match-status-message"
+			>{{ vm.getCleanupStatusHeadline() }}</div>
 			<div v-else-if="vm.shouldShowChecksStandaloneStatusMessage && vm.getChecksProgressStatusText()" class="face-match-status-message">{{ vm.getChecksProgressStatusText() }}</div>
 			<div v-if="vm.isInsightFaceAssignmentCheck && vm.getCleanupStatusCounters().length" class="face-match-status-stats">
 				<span v-for="counter in vm.getCleanupStatusCounters()" :key="`checks-recognition-counter-${counter.key}`">{{ vm.formatCleanupStatusCounter(counter) }}</span>
@@ -189,14 +192,16 @@
 
 <script>
 import ChecksFacePane from '../components/ChecksFacePane.vue';
+import InsightFaceAssignmentOptions from '../components/checks/InsightFaceAssignmentOptions.vue';
+import InsightFaceAssignmentReview from '../components/cleanup/RecognitionFindingsReview.vue';
 import ProgressOverviewCard from '../components/ProgressOverviewCard.vue';
 
 export default {
 	name: 'ChecksView',
 	components: {
 		ChecksFacePane,
-		InsightFaceAssignmentOptions: () => import('../components/checks/InsightFaceAssignmentOptions.vue'),
-		InsightFaceAssignmentReview: () => import('../components/cleanup/RecognitionFindingsReview.vue'),
+		InsightFaceAssignmentOptions,
+		InsightFaceAssignmentReview,
 		ProgressOverviewCard,
 	},
 	props: {

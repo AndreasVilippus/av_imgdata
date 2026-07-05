@@ -26,6 +26,10 @@ SANITIZE_DIRS=(
 SANITIZE_NATIVE_BUILD_PATTERNS=(
   "build/native/*/face_processor-build"
   "build/native/*/face_processor-install"
+  "build/native/*/libde265-build"
+  "build/native/*/libde265-source"
+  "build/native/*/libheif-build"
+  "build/native/*/libheif-source"
   "build/native/*/libvips-build"
   "build/native/*/libvips-source"
   "build/native/*/vips-image-processor-build"
@@ -88,6 +92,49 @@ sanitize_project_for_toolkit_link() {
   done
 }
 
+pkgcreate_option_value() {
+  local opt="$1"
+  local default_value="$2"
+  shift 2
+  local args=("$@")
+  local i
+
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "${opt}" && $((i + 1)) -lt ${#args[@]} ]]; then
+      printf '%s\n' "${args[$((i + 1))]}"
+      return
+    fi
+  done
+  printf '%s\n' "${default_value}"
+}
+
+cleanup_existing_toolkit_link_target() {
+  local args=("$@")
+  local version
+  local platform
+  local target
+  local error_log
+
+  version="$(pkgcreate_option_value -v 7.3 "${args[@]}")"
+  platform="$(pkgcreate_option_value -p geminilake "${args[@]}")"
+  target="${WORKSPACE_ROOT}/build_env/ds.${platform}-${version}/source/${PACKAGE_NAME}"
+
+  [[ -e "${target}" ]] || return 0
+
+  error_log="$(mktemp)"
+  if ! rm -rf "${target}" 2>"${error_log}"; then
+    local error_text
+    error_text="$(sed -n '1,40p' "${error_log}")"
+    rm -f "${error_log}"
+    fail "Existing Toolkit link target cannot be removed: ${target}
+This usually means the previous build left files owned by another user in the chroot source tree.
+Fix ownership or remove the target outside this script, then rerun the package build.
+First rm errors:
+${error_text}"
+  fi
+  rm -f "${error_log}"
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -129,6 +176,11 @@ PYTHONPATH=src python3 -m pytest tests
 
 log "Temporarily moving local build artifacts out of the Toolkit link tree"
 sanitize_project_for_toolkit_link
+if [[ "$#" -gt 0 ]]; then
+  cleanup_existing_toolkit_link_target "$@"
+else
+  cleanup_existing_toolkit_link_target "${DEFAULT_ARGS[@]}"
+fi
 
 log "Building Synology package"
 cd "${TOOLKIT_ROOT}"

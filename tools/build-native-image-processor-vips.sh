@@ -11,6 +11,22 @@ VIPS_PREFIX="${INSTALL_DIR}/usr/local/AV_ImgData"
 DEPS_ROOT="${BUILD_ROOT}/deps"
 SOURCE_CACHE="${DEPS_ROOT}/source-cache"
 
+LIBDE265_VERSION="${AV_IMGDATA_LIBDE265_VERSION:-1.0.16}"
+LIBDE265_TARBALL="libde265-${LIBDE265_VERSION}.tar.gz"
+LIBDE265_URL="${AV_IMGDATA_LIBDE265_URL:-https://github.com/strukturag/libde265/releases/download/v${LIBDE265_VERSION}/${LIBDE265_TARBALL}}"
+LIBDE265_SHA256="${AV_IMGDATA_LIBDE265_SHA256:-b92beb6b53c346db9a8fae968d686ab706240099cdd5aff87777362d668b0de7}"
+LIBDE265_SOURCE_PARENT="${BUILD_ROOT}/libde265-source"
+LIBDE265_SOURCE_DIR="${LIBDE265_SOURCE_PARENT}/libde265-${LIBDE265_VERSION}"
+LIBDE265_BUILD_DIR="${BUILD_ROOT}/libde265-build"
+
+LIBHEIF_VERSION="${AV_IMGDATA_LIBHEIF_VERSION:-1.12.0}"
+LIBHEIF_TARBALL="libheif-${LIBHEIF_VERSION}.tar.gz"
+LIBHEIF_URL="${AV_IMGDATA_LIBHEIF_URL:-https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/${LIBHEIF_TARBALL}}"
+LIBHEIF_SHA256="${AV_IMGDATA_LIBHEIF_SHA256:-e1ac2abb354fdc8ccdca71363ebad7503ad731c84022cf460837f0839e171718}"
+LIBHEIF_SOURCE_PARENT="${BUILD_ROOT}/libheif-source"
+LIBHEIF_SOURCE_DIR="${LIBHEIF_SOURCE_PARENT}/libheif-${LIBHEIF_VERSION}"
+LIBHEIF_BUILD_DIR="${BUILD_ROOT}/libheif-build"
+
 LIBVIPS_VERSION="${AV_IMGDATA_LIBVIPS_VERSION:-8.16.1}"
 LIBVIPS_TARBALL="vips-${LIBVIPS_VERSION}.tar.xz"
 LIBVIPS_URL="${AV_IMGDATA_LIBVIPS_URL:-https://github.com/libvips/libvips/releases/download/v${LIBVIPS_VERSION}/${LIBVIPS_TARBALL}}"
@@ -18,14 +34,51 @@ LIBVIPS_SHA256="${AV_IMGDATA_LIBVIPS_SHA256:-d114d7c132ec5b45f116d654e17bb4af845
 LIBVIPS_SOURCE_PARENT="${BUILD_ROOT}/libvips-source"
 LIBVIPS_SOURCE_DIR="${LIBVIPS_SOURCE_PARENT}/vips-${LIBVIPS_VERSION}"
 
-rm -rf "${BUILD_DIR}" "${LIBVIPS_BUILD_DIR}" "${INSTALL_DIR}" "${LIBVIPS_SOURCE_PARENT}"
-mkdir -p "${BUILD_DIR}" "${LIBVIPS_BUILD_DIR}" "${INSTALL_DIR}" "${SOURCE_CACHE}"
+rm -rf \
+  "${BUILD_DIR}" \
+  "${LIBDE265_BUILD_DIR}" \
+  "${LIBDE265_SOURCE_PARENT}" \
+  "${LIBHEIF_BUILD_DIR}" \
+  "${LIBHEIF_SOURCE_PARENT}" \
+  "${LIBVIPS_BUILD_DIR}" \
+  "${INSTALL_DIR}" \
+  "${LIBVIPS_SOURCE_PARENT}"
+mkdir -p "${BUILD_DIR}" "${LIBDE265_BUILD_DIR}" "${LIBHEIF_BUILD_DIR}" "${LIBVIPS_BUILD_DIR}" "${INSTALL_DIR}" "${SOURCE_CACHE}"
 
 require_tool() {
   local tool="$1"
   if ! command -v "${tool}" >/dev/null 2>&1; then
     echo "ERROR: required tool not found: ${tool}" >&2
     exit 1
+  fi
+}
+
+download_source_tarball() {
+  local label="$1"
+  local url="$2"
+  local sha256="$3"
+  local tarball_path="$4"
+
+  if [ ! -f "${tarball_path}" ]; then
+    require_tool curl
+    echo "Downloading ${label} from ${url}"
+    if ! curl -fL "${url}" -o "${tarball_path}"; then
+      echo "WARNING: ${label} download failed with default TLS settings; retrying without CA verification." >&2
+      curl -fkL "${url}" -o "${tarball_path}"
+    fi
+  fi
+
+  if ! printf '%s  %s\n' "${sha256}" "${tarball_path}" | sha256sum -c - >/dev/null; then
+    echo "WARNING: cached ${label} source checksum mismatch; downloading again: ${tarball_path}" >&2
+    rm -f "${tarball_path}"
+    if ! curl -fL "${url}" -o "${tarball_path}"; then
+      echo "WARNING: ${label} download failed with default TLS settings; retrying without CA verification." >&2
+      curl -fkL "${url}" -o "${tarball_path}"
+    fi
+    if ! printf '%s  %s\n' "${sha256}" "${tarball_path}" | sha256sum -c - >/dev/null; then
+      echo "ERROR: ${label} source checksum mismatch: ${tarball_path}" >&2
+      exit 1
+    fi
   fi
 }
 
@@ -55,6 +108,111 @@ download_libvips() {
 
   mkdir -p "${LIBVIPS_SOURCE_PARENT}"
   tar -xf "${tarball_path}" -C "${LIBVIPS_SOURCE_PARENT}"
+}
+
+download_heif_stack() {
+  download_source_tarball "libde265 ${LIBDE265_VERSION}" "${LIBDE265_URL}" "${LIBDE265_SHA256}" "${SOURCE_CACHE}/${LIBDE265_TARBALL}"
+  download_source_tarball "libheif ${LIBHEIF_VERSION}" "${LIBHEIF_URL}" "${LIBHEIF_SHA256}" "${SOURCE_CACHE}/${LIBHEIF_TARBALL}"
+
+  mkdir -p "${LIBDE265_SOURCE_PARENT}" "${LIBHEIF_SOURCE_PARENT}"
+  tar -xzf "${SOURCE_CACHE}/${LIBDE265_TARBALL}" -C "${LIBDE265_SOURCE_PARENT}"
+  tar -xzf "${SOURCE_CACHE}/${LIBHEIF_TARBALL}" -C "${LIBHEIF_SOURCE_PARENT}"
+}
+
+install_heif_stack_license_files() {
+  local license_dir="${VIPS_PREFIX}/share/licenses/AV_ImgData/heif-stack"
+  mkdir -p "${license_dir}/sources"
+  cp -a "${LIBDE265_SOURCE_DIR}/COPYING" "${license_dir}/libde265.COPYING"
+  cp -a "${LIBHEIF_SOURCE_DIR}/COPYING" "${license_dir}/libheif.COPYING"
+  cp -a "${SOURCE_CACHE}/${LIBDE265_TARBALL}" "${license_dir}/sources/${LIBDE265_TARBALL}"
+  cp -a "${SOURCE_CACHE}/${LIBHEIF_TARBALL}" "${license_dir}/sources/${LIBHEIF_TARBALL}"
+  cat > "${license_dir}/README.txt" <<EOF
+AV_ImgData ships libheif and libde265 as dynamically linked shared libraries for HEIC decoding.
+
+libheif ${LIBHEIF_VERSION}
+Source: ${LIBHEIF_URL}
+SHA256: ${LIBHEIF_SHA256}
+License: LGPL, see libheif.COPYING
+
+libde265 ${LIBDE265_VERSION}
+Source: ${LIBDE265_URL}
+SHA256: ${LIBDE265_SHA256}
+License: LGPL, see libde265.COPYING
+
+The packaged source tarballs are included under sources/.
+EOF
+}
+
+build_heif_stack() {
+  require_tool cmake
+  require_tool make
+  require_tool pkg-config
+
+  download_heif_stack
+
+  local synology_sysroot
+  local synology_include_dir=""
+  synology_sysroot="$(resolve_synology_toolchain_sysroot || true)"
+  if [ -n "${synology_sysroot}" ]; then
+    synology_include_dir="${synology_sysroot}/usr/include"
+  fi
+
+  echo "Building libde265 ${LIBDE265_VERSION} for HEIC decode support"
+  cmake -S "${LIBDE265_SOURCE_DIR}" -B "${LIBDE265_BUILD_DIR}" \
+    "-DCMAKE_BUILD_TYPE=Release" \
+    "-DCMAKE_INSTALL_PREFIX=${VIPS_PREFIX}" \
+    "-DCMAKE_INSTALL_LIBDIR=lib" \
+    "-DBUILD_SHARED_LIBS=ON" \
+    "-DENABLE_DECODER=OFF" \
+    "-DENABLE_ENCODER=OFF" \
+    "-DENABLE_SDL=OFF"
+  make -C "${LIBDE265_BUILD_DIR}" -j"$(nproc 2>/dev/null || echo 2)"
+  make -C "${LIBDE265_BUILD_DIR}" install
+
+  export PKG_CONFIG_PATH="${VIPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+  export LD_LIBRARY_PATH="${VIPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+  if ! pkg-config --exists libde265; then
+    echo "ERROR: libde265 build did not install libde265.pc." >&2
+    exit 1
+  fi
+
+  echo "Building libheif ${LIBHEIF_VERSION} with libde265 HEIC decoder and without x265 encoder"
+  (
+    cd "${LIBHEIF_SOURCE_DIR}"
+    CPPFLAGS="-I${VIPS_PREFIX}/include${synology_include_dir:+ -I${synology_include_dir}}" \
+    LDFLAGS="-L${VIPS_PREFIX}/lib" \
+    PKG_CONFIG_PATH="${VIPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" \
+    LD_LIBRARY_PATH="${VIPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+    ./configure \
+      "--prefix=${VIPS_PREFIX}" \
+      "--libdir=${VIPS_PREFIX}/lib" \
+      "--enable-shared" \
+      "--disable-static" \
+      "--disable-examples" \
+      "--disable-go" \
+      "--disable-aom" \
+      "--disable-x265" \
+      "--disable-gdk-pixbuf" \
+      "--disable-rav1e"
+  )
+  make -C "${LIBHEIF_SOURCE_DIR}" -j"$(nproc 2>/dev/null || echo 2)"
+  make -C "${LIBHEIF_SOURCE_DIR}" install
+
+  if ! pkg-config --exists libheif; then
+    echo "ERROR: libheif build did not install libheif.pc." >&2
+    exit 1
+  fi
+  if ! grep -Eq '^builtin_h265_decoder=yes$' "${VIPS_PREFIX}/lib/pkgconfig/libheif.pc"; then
+    echo "ERROR: libheif was built without the libde265 HEIC decoder." >&2
+    exit 1
+  fi
+  if grep -Eq '^builtin_h265_encoder=yes$' "${VIPS_PREFIX}/lib/pkgconfig/libheif.pc"; then
+    echo "ERROR: libheif unexpectedly enabled an H.265 encoder; x265/GPL must stay out of this package." >&2
+    exit 1
+  fi
+
+  install_heif_stack_license_files
 }
 
 patch_libvips_source() {
@@ -301,6 +459,11 @@ build_libvips() {
   require_tool pkg-config
   require_tool strings
 
+  if ! pkg-config --exists libheif || ! grep -Eq '^builtin_h265_decoder=yes$' "${VIPS_PREFIX}/lib/pkgconfig/libheif.pc"; then
+    echo "ERROR: libvips HEIC build requires packaged libheif with builtin libde265 decoder." >&2
+    exit 1
+  fi
+
   download_libvips
   patch_libvips_source
 
@@ -323,7 +486,7 @@ build_libvips() {
     "-Dzlib=enabled"
     "-Dlcms=enabled"
     "-Dmagick=disabled"
-    "-Dheif=disabled"
+    "-Dheif=enabled"
     "-Dfftw=disabled"
     "-Dfontconfig=disabled"
     "-Darchive=disabled"
@@ -442,6 +605,8 @@ copy_libvips_runtime_dependencies() {
     "libwebp.so*"
     "libwebpmux.so*"
     "libwebpdemux.so*"
+    "libheif.so*"
+    "libde265.so*"
     "liblcms2.so*"
     "libz.so*"
     "liblzma.so*"
@@ -468,6 +633,7 @@ strip_native_binary() {
   "${strip_tool}" --strip-unneeded "${binary}" || "${strip_tool}" "${binary}" || true
 }
 
+build_heif_stack
 build_libvips
 copy_libvips_runtime_dependencies
 

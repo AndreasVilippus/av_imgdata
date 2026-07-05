@@ -1,3 +1,11 @@
+
+.checks-insightface-options {
+	display: contents;
+}
+.checks-insightface-options .checks-number-field-wide {
+	margin-left: 0;
+}
+
 .sm-shell {
 	--sm-font: Verdana, Arial, sans-serif;
 	--sm-text: #414b55;

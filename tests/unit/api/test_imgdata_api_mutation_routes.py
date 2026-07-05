@@ -209,6 +209,83 @@ def test_face_create_match_validates_person_name_before_service_calls(monkeypatc
     remove.assert_not_called()
 
 
+def test_face_skip_match_removes_photos_face_finding_without_transfer_count(monkeypatch):
+    async def request_body(_request):
+        return {"face_id": "77"}
+
+    remove = Mock(return_value={"removed": True, "remaining_count": 4, "transferred_count": 9})
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingEntry", remove)
+
+    payload = _run(imgdata_api.face_skip_match(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["face_id"] == 77
+    assert payload["data"]["findings_update"] == {"removed": True, "remaining_count": 4, "transferred_count": 9}
+    remove.assert_called_once_with(face_id=77, increment_transferred_count=False)
+
+
+def test_face_skip_match_removes_metadata_finding_without_transfer_count(monkeypatch):
+    metadata_face = {
+        "source_format": "INSIGHTFACE",
+        "x": 0.4,
+        "y": 0.3,
+        "w": 0.2,
+        "h": 0.1,
+    }
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/test.jpg",
+            "metadata_face": metadata_face,
+        }
+
+    remove = Mock(return_value={"removed": True, "remaining_count": 2, "transferred_count": 5})
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", remove)
+
+    payload = _run(imgdata_api.face_skip_match(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["face_id"] is None
+    assert payload["data"]["image_path"] == "photo/test.jpg"
+    assert payload["data"]["findings_update"] == {"removed": True, "remaining_count": 2, "transferred_count": 5}
+    remove.assert_called_once_with(
+        image_path="photo/test.jpg",
+        metadata_face=metadata_face,
+        increment_transferred_count=False,
+    )
+
+
+def test_face_skip_match_requires_face_id_or_metadata_target(monkeypatch):
+    async def request_body(_request):
+        return {"image_path": "photo/test.jpg"}
+
+    remove_face = Mock()
+    remove_metadata = Mock()
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingEntry", remove_face)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", remove_metadata)
+
+    payload = _run(imgdata_api.face_skip_match(object()))
+
+    assert payload == {
+        "success": False,
+        "error": {
+            "code": 400,
+            "message": "invalid_face_skip_match_request",
+        },
+    }
+    remove_face.assert_not_called()
+    remove_metadata.assert_not_called()
+
+
 def test_face_create_metadata_match_creates_metadata_face_person_and_cleans_finding(monkeypatch):
     metadata_face = {
         "name": "Person Target",

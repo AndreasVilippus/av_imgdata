@@ -69,7 +69,10 @@ export default {
 			return ['search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(this.faceMatchCurrentAction);
 		},
 		faceMatchSupportsSaveOnly() {
-			return ['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(this.selectedFaceMatchingAction);
+			return ['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface', 'recognition_analyze_unknown_faces'].includes(this.selectedFaceMatchingAction);
+		},
+		faceMatchSupportsAutoAssignKnown() {
+			return !['search_missing_faces_insightface', 'recognition_analyze_unknown_faces'].includes(this.selectedFaceMatchingAction);
 		},
 		hasInsightFaceForFaceMatch() {
 			const nativeStatus = this.faceMatchInsightFaceNativeProcessorStatus;
@@ -386,7 +389,7 @@ export default {
 					if (this.cleanupLoading) {
 						return this.$avt('cleanup:button_stop', 'Stop');
 					}
-					if (this.recognitionOptions.operation_mode === 'findings') {
+					if (this.faceMatchUseStoredFindings) {
 						return this.$avt('cleanup:face_frames_operation_findings', 'Process saved findings list');
 					}
 					return this.$avt('face_match:button_start', 'Start');
@@ -566,14 +569,29 @@ export default {
 			}
 			return !!this.faceMatchResultSummary.found;
 		},
+		faceMatchCanSkipStoredFinding() {
+			return !!(
+				this.faceMatchReviewingStoredFindings
+				&& this.faceMatchResult
+				&& this.faceMatchResultSummary.found
+			);
+		},
 		},
 		watch: {
 			selectedFaceMatchingAction(nextAction) {
-				if (!['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(nextAction)) {
+				if (!['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface', 'recognition_analyze_unknown_faces'].includes(nextAction)) {
 					this.faceMatchSaveOnly = false;
+				}
+				if (!this.faceMatchSupportsAutoAssignKnown) {
+					this.faceMatchAutoAssignKnown = false;
 				}
 				if (nextAction === 'recognition_analyze_unknown_faces') {
 					this.cleanupRuntimeAction = 'recognition_analyze_unknown_faces';
+					if (!this.faceMatchHasCleanupProgressForAction('recognition_analyze_unknown_faces') && !this.cleanupLoading) {
+						this.cleanupProgress = {};
+						this.cleanupStatusMessage = '';
+					}
+					this.syncFaceMatchRecognitionOptions();
 					this.fetchRecognitionFindings();
 				}
 				if (nextAction !== 'search_missing_faces_insightface') {
@@ -590,7 +608,7 @@ export default {
 			this.fetchFaceMatchFindingsStatus();
 		},
 		faceMatchUseStoredFindings(useStoredFindings) {
-			if (useStoredFindings && !this.hasFaceMatchStoredFindings) {
+			if (useStoredFindings && !this.faceMatchRecognitionActionSelected && !this.hasFaceMatchStoredFindings) {
 				this.faceMatchUseStoredFindings = false;
 				this.resetFaceMatchFindingsReview();
 				return;
@@ -600,11 +618,13 @@ export default {
 			} else {
 				this.resetFaceMatchFindingsReview();
 			}
+			this.syncFaceMatchRecognitionOptions();
 		},
 		faceMatchSaveOnly(saveOnly) {
 			if (saveOnly) {
 				this.faceMatchUseStoredFindings = false;
 			}
+			this.syncFaceMatchRecognitionOptions();
 		},
 	},
 	mounted() {
@@ -624,8 +644,38 @@ export default {
 		this.resolveMetadataNameConfirm(false);
 		this.resolveMetadataFaceDeleteConfirm(false);
 		this.stopFaceMatchProgressPolling();
-	},
+		},
 		methods: {
+			faceMatchHasCleanupProgressForAction(action) {
+				const expectedAction = String(action || '').trim();
+				if (!expectedAction) {
+					return false;
+				}
+				const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+					? this.cleanupProgress
+					: {};
+				const progressAction = String(progress.action || '').trim();
+				if (progressAction) {
+					return progressAction === expectedAction;
+				}
+				const runtimeAction = String(this.cleanupRuntimeAction || '').trim();
+				return !!runtimeAction && runtimeAction === expectedAction;
+			},
+			syncFaceMatchRecognitionOptions() {
+				if (!this.faceMatchRecognitionActionSelected) {
+					return;
+				}
+				let operationMode = 'immediate';
+				if (this.faceMatchUseStoredFindings) {
+					operationMode = 'findings';
+				} else if (this.faceMatchSaveOnly) {
+					operationMode = 'save_only';
+				}
+				this.recognitionOptions = {
+					...this.recognitionOptions,
+					operation_mode: operationMode,
+				};
+			},
 			setFaceMatchSkipUnknownInsightFacePersons(value) {
 				this.faceMatchSkipUnknownInsightFacePersons = !!value;
 			},
@@ -940,6 +990,50 @@ export default {
 			const remainingEntries = this.faceMatchFindingEntries.filter((entry, index) => index !== currentIndex);
 			this.faceMatchFindingEntries = remainingEntries;
 			await this.loadFaceMatchFindingAtIndex(Math.min(currentIndex, remainingEntries.length - 1));
+		},
+		async skipCurrentStoredFaceMatchFinding() {
+			if (this.faceMatchInteractionDisabled || !this.faceMatchCanSkipStoredFinding) {
+				return;
+			}
+			const faceId = this.getCurrentFaceMatchFaceId();
+			const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
+			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
+			if (!faceId && (!metadataFace || !imagePath)) {
+				this.output = this.$avt('face_match:error_missing_finding_to_skip', 'Error: Missing saved finding to skip.');
+				return;
+			}
+			this.faceMatchActionLocked = true;
+			try {
+				this.setFaceMatchMutationPending(
+					'face_match:output_skip_finding_starting',
+					'Skipping saved false detection: {path}',
+					imagePath,
+					this.faceMatchEditableName
+				);
+				const data = await this.callDsmApi(
+					'/webman/3rdparty/AV_ImgData/index.cgi/api/face_skip_match',
+					{
+						face_id: faceId,
+						image_path: imagePath,
+						metadata_face: metadataFace,
+					}
+				);
+				this.output = JSON.stringify(data, null, 2);
+				const root = this.getResponseData(data);
+				const findingsUpdate = root && root.findings_update;
+				if (
+					findingsUpdate
+					&& typeof findingsUpdate === 'object'
+					&& !Number.isFinite(Number(findingsUpdate.transferred_count))
+				) {
+					findingsUpdate.transferred_count = this.faceMatchTransferredCount;
+				}
+				await this.advanceFaceMatchFindingsAfterTransfer(data);
+			} catch (err) {
+				await this.reconcileStoredFaceMatchFindingsAfterMutationError(err);
+			} finally {
+				this.faceMatchActionLocked = false;
+			}
 		},
 			async loadStoredFaceMatchFindings({ refresh = false } = {}) {
 				const autoApplying = !!this.faceMatchAutoAssignKnown;
@@ -1790,9 +1884,14 @@ export default {
 		},
 			async handlePrimaryFaceMatchButton() {
 				if (this.faceMatchRecognitionActionSelected) {
+					this.syncFaceMatchRecognitionOptions();
 					this.cleanupRuntimeAction = 'recognition_analyze_unknown_faces';
 					if (this.cleanupLoading) {
-						await this.stopCleanupRun({ actionOverride: 'recognition_analyze_unknown_faces' });
+						await this.stopCleanupRun({
+							actionOverride: 'recognition_analyze_unknown_faces',
+							stoppingMessageKey: 'face_match:output_stopping',
+							stoppingMessageDefault: 'Stopping search...',
+						});
 						return;
 					}
 					await this.startCleanupRun({ actionOverride: 'recognition_analyze_unknown_faces' });
@@ -2132,7 +2231,7 @@ export default {
 				try {
 					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
 						action: this.selectedFaceMatchingAction,
-						auto: this.faceMatchAutoAssignKnown,
+						auto: this.faceMatchSupportsAutoAssignKnown && this.faceMatchAutoAssignKnown,
 						save_only: this.faceMatchUseStoredFindings ? false : this.faceMatchSaveOnly,
 						recognize_persons: this.selectedFaceMatchingAction === 'search_missing_faces_insightface'
 							&& this.faceMatchRecognizeMissingInsightFacePersons,

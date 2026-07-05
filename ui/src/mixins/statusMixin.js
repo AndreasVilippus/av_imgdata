@@ -106,10 +106,11 @@ export default {
 		async fetchStatusInsightFaceStatus() {
 			this.statusInsightFaceLoading = true;
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/insightface_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/insightface_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 8000 });
 				this.statusInsightFaceStatus = this.getResponseData(data);
 			} catch (err) {
 				this.statusInsightFaceStatus = {
+					...(this.statusInsightFaceStatus && typeof this.statusInsightFaceStatus === 'object' ? this.statusInsightFaceStatus : {}),
 					error: err && err.message ? err.message : String(err || ''),
 				};
 			} finally {
@@ -433,7 +434,7 @@ export default {
 					this.output = 'start synocredential resume flow...';
 				}
 				try {
-					const data = await this.callDsmApi(apiPath, {}, { resume: false, requireSynoToken: false });
+					const data = await this.callDsmApi(apiPath, {}, { resume: false, requireSynoToken: false, timeoutMs: auto ? 8000 : 120000 });
 					if (updatePersons) {
 						this.persons = this.extractPersonsFromPayload(data);
 						this.system = this.extractSystemFromPayload(data);

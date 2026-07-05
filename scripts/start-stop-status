@@ -53,7 +53,7 @@ ensure_core_python_packages() {
         return 1
     fi
 
-    if "${PYTHON}" -c "import fastapi, uvicorn, requests" >> "${LOG_FILE}" 2>&1; then
+    if "${PYTHON}" -c "import fastapi, uvicorn, requests, PIL, pillow_heif" >> "${LOG_FILE}" 2>&1; then
         return 0
     fi
 
@@ -63,7 +63,7 @@ ensure_core_python_packages() {
         return 1
     fi
 
-    if ! "${PYTHON}" -c "import fastapi, uvicorn, requests" >> "${LOG_FILE}" 2>&1; then
+    if ! "${PYTHON}" -c "import fastapi, uvicorn, requests, PIL, pillow_heif" >> "${LOG_FILE}" 2>&1; then
         log "core python package validation failed after install"
         return 1
     fi

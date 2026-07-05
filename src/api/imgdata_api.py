@@ -1272,6 +1272,64 @@ async def face_create_match(request: Request):
     }
 
 
+@router.post("/face_skip_match")
+async def face_skip_match(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    face_id = body.get("face_id")
+    image_path = str(body.get("image_path") or "").strip()
+    metadata_face = body.get("metadata_face")
+
+    parsed_face_id = None
+    if face_id not in (None, ""):
+        try:
+            parsed_face_id = int(face_id)
+        except Exception:
+            return {
+                "success": False,
+                "error": {
+                    "code": 400,
+                    "message": "invalid_face_skip_match_request",
+                },
+            }
+
+    if parsed_face_id is None and (not image_path or not isinstance(metadata_face, dict)):
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_face_skip_match_request",
+            },
+        }
+
+    try:
+        if parsed_face_id is not None:
+            findings_update = IMGDATA.removeFaceMatchFindingEntry(
+                face_id=parsed_face_id,
+                increment_transferred_count=False,
+            )
+        else:
+            findings_update = IMGDATA.removeFaceMatchFindingMetadataEntry(
+                image_path=image_path,
+                metadata_face=metadata_face,
+                increment_transferred_count=False,
+            )
+    except Exception as exc:
+        return _operation_exception_response(exc, message="face_skip_match_failed")
+
+    return {
+        "success": True,
+        "data": {
+            "face_id": parsed_face_id,
+            "image_path": image_path,
+            "findings_update": findings_update,
+        },
+    }
+
+
 @router.post("/face_apply_metadata_match")
 async def face_apply_metadata_match(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)

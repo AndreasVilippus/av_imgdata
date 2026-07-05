@@ -420,36 +420,22 @@ Add build-time feature switch:
 
 ```text
 AV_IMGDATA_WITH_VIPS=0|1
-AV_IMGDATA_VIPS_FORMATS=minimal|photo|photo_heif
 ```
 
 Recommended defaults:
 
 ```text
-AV_IMGDATA_WITH_VIPS=0
-AV_IMGDATA_VIPS_FORMATS=photo
+AV_IMGDATA_WITH_VIPS=1
 ```
 
-Build variants:
+Packaged format scope:
 
 ```text
-minimal:
-  jpeg
-  png
-
-photo:
-  jpeg
-  png
-  webp
-  tiff
-
-photo_heif:
-  jpeg
-  png
-  webp
-  tiff
-  heif/heic
-  avif if available through libheif stack
+jpeg
+png
+webp
+tiff
+heif/heic through decode-only libheif/libde265
 ```
 
 The DSM package must still build when `AV_IMGDATA_WITH_VIPS=0`.
@@ -581,26 +567,31 @@ meson setup build \
   -Dmatio=disabled \
   -Dcfitsio=disabled \
   -Dopenexr=disabled \
-  -Dheif=disabled \
+  -Dheif=enabled \
   -Djpeg=enabled \
   -Dpng=enabled \
   -Dtiff=enabled \
   -Dwebp=enabled
 ```
 
-For `photo_heif` variant:
-
-```bash
--Dheif=enabled
-```
-
-Only enable `heif` after dependency and license review of:
+HEIC/HEIF target state:
 
 ```text
-libheif
-HEVC decoder library if used
-AV1 decoder library if used
-patent-sensitive codec implications
+- build and package libheif dynamically
+- build and package libde265 dynamically as the HEVC decoder
+- do not build or package x265/H.265 encoder support
+- do not enable AV1 codec stacks unless separately reviewed
+- fail the build if libheif.pc does not report builtin_h265_decoder=yes
+- fail the build if libheif.pc reports builtin_h265_encoder=yes
+```
+
+The packaged HEIF stack is decode-only:
+
+```text
+libheif 1.12.0, LGPL, dynamic shared library
+libde265 1.0.16, LGPL, dynamic shared library
+x265 disabled and not shipped
+AV1 stacks disabled and not shipped
 ```
 
 ## Runtime Library Handling
@@ -623,7 +614,15 @@ Target layout:
     libpng.so*
     libwebp.so*
     libtiff.so*
-    libheif.so*                  # only photo_heif
+    libheif.so*
+    libde265.so*
+  share/licenses/AV_ImgData/heif-stack/
+    README.txt
+    libheif.COPYING
+    libde265.COPYING
+    sources/
+      libheif-*.tar.gz
+      libde265-*.tar.gz
   THIRD_PARTY_NOTICES/
     libvips-image-backend.md
 ```
@@ -687,9 +686,12 @@ Low / acceptable:
   libwebp BSD-style
   libtiff BSD-like
 
-Requires separate review:
-  libheif and codec plugins
-  HEVC decoder stack
+Reviewed for decode-only packaging:
+  libheif LGPL with dynamic linking
+  libde265 LGPL with dynamic linking
+
+Requires separate review before enabling:
+  x265 / HEVC encoder stack
   AV1 decoder stack
   ImageMagick/GraphicsMagick delegates
   PDF/SVG/RAW loaders
@@ -715,7 +717,8 @@ Example status:
     "png": true,
     "webp": true,
     "tiff": true,
-    "heif": false
+    "heif": true,
+    "heic": true
   },
   "fallback": "default_image_backend"
 }
@@ -727,7 +730,7 @@ UI labels:
 libvips disabled
 libvips unavailable
 libvips ready
-libvips ready without HEIC/HEIF
+libvips ready with HEIC/HEIF
 libvips failed, default backend used
 ```
 
@@ -827,7 +830,7 @@ Required tests:
 - PNG thumbnail fixture produces expected dimensions
 - WebP fixture only runs when webp format enabled
 - TIFF fixture only runs when tiff format enabled
-- HEIC fixture only runs in photo_heif build
+- HEIC fixture only runs when libheif reports an H.265 decoder
 - corrupt image returns structured error
 - large image does not exceed memory threshold
 - face preprocessing output can be consumed by av-imgdata-face-processor
@@ -967,8 +970,8 @@ Acceptance:
 ### Phase 6: HEIC/HEIF optional proof
 
 ```text
-- review libheif and codec stack licenses
-- build photo_heif variant
+- review libheif and codec stack licenses: done for decode-only libheif/libde265
+- build HEIC/HEIF support: folded into the packaged libvips backend
 - add HEIC/HEIF fixtures
 ```
 
@@ -976,7 +979,8 @@ Acceptance:
 
 ```text
 - HEIC/HEIF probe reports true only when decoder is actually available
-- no patent-sensitive codec is shipped without explicit review
+- x265/H.265 encoder support is not shipped
+- libheif and libde265 license/source artifacts are packaged
 - fallback remains available
 ```
 

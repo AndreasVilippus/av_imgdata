@@ -18,10 +18,16 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
         assert f"'{action}'" in mixin
     assert 'value="recognition_check_person_assignments"' not in view
     assert 'value="recognition_check_person_assignments"' in checks_view
-    assert "InsightFaceAssignmentOptions: () => import" in checks_view
-    assert "InsightFaceAssignmentReview: () => import" in checks_view
+    assert "import InsightFaceAssignmentOptions from '../components/checks/InsightFaceAssignmentOptions.vue';" in checks_view
+    assert "import InsightFaceAssignmentReview from '../components/cleanup/RecognitionFindingsReview.vue';" in checks_view
+    assert "InsightFaceAssignmentOptions: () => import" not in checks_view
+    assert "InsightFaceAssignmentReview: () => import" not in checks_view
     assert "checksInsightFaceAutoSelectSafe" in checks_options
     assert "checksChangedSinceDays" in checks_options
+    assert "updateChecksInsightFaceAutoSelectSafe" in checks_options
+    assert "updateChecksChangedSinceDays" in checks_options
+    assert "min_faces_per_person" in checks_options
+    assert "cleanup:recognition_min_faces" in checks_options
     assert 'value="recognition_analyze_unknown_faces"' not in view
     assert 'value="search_missing_faces_insightface"' in face_match_view
     assert 'value="recognition_analyze_unknown_faces"' in face_match_view
@@ -34,9 +40,27 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     assert "faceMatchRecognizeMissingInsightFacePersons" in face_match_view
     assert "faceMatchSkipUnknownInsightFacePersons" in face_match_view
     assert "skip_unknown_persons:" in face_match_mixin
+    assert 'v-if="vm.faceMatchSupportsAutoAssignKnown"' in face_match_view
+    assert "faceMatchSupportsAutoAssignKnown()" in face_match_mixin
+    assert "auto: this.faceMatchSupportsAutoAssignKnown && this.faceMatchAutoAssignKnown" in face_match_mixin
+    assert "stoppingMessageKey: 'face_match:output_stopping'" in face_match_mixin
     assert "faceMatchRecognitionActionSelected" in face_match_view
+    assert '<RecognitionOptions v-if="vm.faceMatchRecognitionActionSelected"' not in face_match_view
+    assert "import RecognitionOptions" not in face_match_view
+    assert "vm.faceMatchSupportsSaveOnly" in face_match_view
+    assert "vm.faceMatchUseStoredFindings" in face_match_view
+    assert "vm.recognitionOptions.include_hidden_persons" in face_match_view
+    assert "vm.recognitionOptions.selection_mode === 'safe_only'" in face_match_view
+    assert "vm.recognitionOptions.changed_since_days" in face_match_view
+    assert "vm.recognitionOptions.min_faces_per_person" in face_match_view
+    assert "syncFaceMatchRecognitionOptions()" in face_match_mixin
+    assert "operation_mode: operationMode" in face_match_mixin
     assert "getCleanupStatusProgress()" in face_match_view
     assert "getCleanupStatusCounters()" in face_match_view
+    assert ':status-text="vm.getCleanupStatusHeadline()"' in checks_view
+    assert "stoppingMessageKey: 'checks:progress_stopping'" in Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
+    assert 'v-if="vm.isInsightFaceAssignmentCheck && Number(vm.getCleanupStatusProgress().total) <= 0 && !vm.isCleanupStatusHeadlineCounterOnly()"' in checks_view
+    assert "isCleanupStatusHeadlineCounterOnly()" in mixin
     assert "selectedCleanupAction === 'recognition_build_profiles'" not in view
     assert "cleanup-recognition-counter" not in view
     assert ':status-text="vm.getCleanupProgressOverviewStatusText()"' in view
@@ -66,6 +90,46 @@ def test_recognition_actions_do_not_fall_back_to_name_cleanup():
         assert f'"{action}"' in source
     assert "if normalized_action in FaceRecognitionService.ACTIONS:" in source
     assert "self.face_recognition.start(" in source
+
+
+def test_recognition_cleanup_progress_action_is_view_scoped():
+    mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
+    helper_start = mixin.find("\t\tgetCleanupProgressAction()")
+    assert helper_start >= 0
+    helper_end = mixin.find("\n\t\t},", helper_start)
+    assert helper_end > helper_start
+    helper = mixin[helper_start:helper_end]
+
+    assert "activeView === 'checks'" in helper
+    assert "this.isInsightFaceAssignmentCheck" in helper
+    assert "return 'recognition_check_person_assignments'" in helper
+    assert "activeView === 'face_match'" in helper
+    assert "this.faceMatchRecognitionActionSelected" in helper
+    assert "return 'recognition_analyze_unknown_faces'" in helper
+    assert "const runtimeAction = String(this.cleanupRuntimeAction || '').trim();" in helper
+    assert "return runtimeAction;" in helper
+    assert "return String(this.selectedCleanupAction || 'normalize_names')" in helper
+
+    fetch_start = mixin.find("\t\t\tasync fetchCleanupProgress()")
+    if fetch_start < 0:
+        fetch_start = mixin.find("\t\t\tasync fetchCleanupProgress(options = {})")
+    assert fetch_start >= 0
+    fetch_end = mixin.find("\n\t\t\t},", fetch_start)
+    assert fetch_end > fetch_start
+    fetch = mixin[fetch_start:fetch_end]
+    assert "const action = String(options.actionOverride || this.getCleanupProgressAction()).trim();" in fetch
+    assert "this.cleanupRuntimeAction || this.selectedCleanupAction || 'normalize_names'" not in fetch
+
+
+def test_face_match_recognition_status_is_action_scoped():
+    view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+    mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
+
+    assert "isCleanupProgressForAction(action)" in mixin
+    assert "progress.action" in mixin
+    assert "progressAction === expectedAction" in mixin
+    assert "vm.isCleanupProgressForAction('recognition_analyze_unknown_faces')" in view
+    assert "vm.$avt('face_match:status_idle', 'No action running.')" in view
 
 
 def test_recognition_review_uses_persisted_findings_and_apply_endpoints():

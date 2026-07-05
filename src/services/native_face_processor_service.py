@@ -36,13 +36,22 @@ class NativeFaceProcessorService:
         self.config_service = config_service
         self.package_root = Path(package_root) if package_root else Path(os.getenv("SYNOPKG_PKGDEST", "/var/packages/AV_ImgData/target"))
         self._debug_logger = debug_logger if callable(debug_logger) else None
-        self.image_decoder = image_decoder if image_decoder is not None else ImageDecodeService(config_service)
+        self.image_decoder = image_decoder if image_decoder is not None else ImageDecodeService(config_service, debug_logger=self._debug_log)
         self._worker_lock = threading.Lock()
         self._worker_process: Optional[Any] = None
         self._worker_key: Optional[Tuple[Any, ...]] = None
+        self._status_lock = threading.Lock()
+        self._status_cache: Optional[Tuple[Tuple[Any, ...], float, Dict[str, Any]]] = None
+        self._status_refreshing = False
 
     def set_debug_logger(self, debug_logger: Optional[Callable[..., None]]) -> None:
         self._debug_logger = debug_logger if callable(debug_logger) else None
+        decoder = getattr(self, "image_decoder", None)
+        if decoder is not None and hasattr(decoder, "set_debug_logger"):
+            try:
+                decoder.set_debug_logger(self._debug_log)
+            except Exception:
+                pass
 
     def _debug_log(self, event: str, **fields: Any) -> None:
         logger = self._debug_logger
@@ -106,9 +115,29 @@ class NativeFaceProcessorService:
     def _insightface_license_acknowledged(self) -> bool:
         return bool(self.config().get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False))
 
-    def status(self, *, model_root: Optional[Path] = None, model_name: str = "") -> Dict[str, Any]:
-        config = self.config()
+    def status(
+        self,
+        *,
+        model_root: Optional[Path] = None,
+        model_name: str = "",
+        force: bool = False,
+        background: bool = False,
+    ) -> Dict[str, Any]:
+        processor_config = self.config()
         path = self.executable_path()
+        probe_root = self.model_root(model_root)
+        probe_name = self.model_name(model_name)
+        cache_key = self._status_cache_key(processor_config, path, probe_root, probe_name)
+        if not force:
+            cached = self._cached_status(cache_key)
+            if cached is not None:
+                return cached
+            if background:
+                stale = self._cached_status(cache_key, allow_stale=True)
+                self.refresh_status_background(model_root=probe_root, model_name=probe_name)
+                if stale is not None:
+                    return stale
+                return self._status_pending(processor_config, path, probe_root, probe_name)
         enabled = True
         result: Dict[str, Any] = {
             "enabled": enabled,
@@ -123,19 +152,19 @@ class NativeFaceProcessorService:
             result["last_error"] = (
                 "InsightFace model license terms must be acknowledged before the native face processor is used"
             )
-            return result
+            return self._store_status_cache(cache_key, result)
         if not result["present"]:
             result["reason"] = "binary_missing"
-            return result
+            return self._store_status_cache(cache_key, result)
         if not result["executable"]:
             result["reason"] = "binary_not_executable"
-            return result
+            return self._store_status_cache(cache_key, result)
         version = self._run_simple([str(path), "version"])
         result["version_result"] = version
         if not version["ok"]:
             result["reason"] = "version_failed"
             result["last_error"] = version.get("output", "")
-            return result
+            return self._store_status_cache(cache_key, result)
         result["version"] = version.get("output", "").strip()
         version_lower = result["version"].lower()
         if "skeleton" in version_lower:
@@ -144,8 +173,6 @@ class NativeFaceProcessorService:
             result["backend"] = "onnxruntime_smoke"
         else:
             result["backend"] = "native"
-        probe_root = self.model_root(model_root)
-        probe_name = self.model_name(model_name)
         result["model_root"] = str(probe_root)
         result["model_name"] = probe_name
         if result.get("backend") == "skeleton":
@@ -153,14 +180,14 @@ class NativeFaceProcessorService:
             result["hot_path_available"] = False
             result["reason"] = "skeleton_no_inference"
             result["last_error"] = "native face processor skeleton does not run inference"
-            return result
+            return self._store_status_cache(cache_key, result)
         if probe_name:
             probe = self._run_simple([str(path), "probe", "--model-root", str(probe_root), "--model-name", probe_name])
             result["probe_result"] = probe
             if not probe["ok"]:
                 result["reason"] = "probe_failed"
                 result["last_error"] = probe.get("output", "")
-                return result
+                return self._store_status_cache(cache_key, result)
             probe_output = str(probe.get("output") or "").lower()
             if "heif_decoder=available" in probe_output:
                 result["heif_decoder_available"] = True
@@ -178,12 +205,108 @@ class NativeFaceProcessorService:
                 "ONNXRuntime C++ sessions are available, but SCRFD/ArcFace preprocessing and postprocessing "
                 "are not complete yet"
             )
-            return result
+            return self._store_status_cache(cache_key, result)
         result["inference_available"] = True
         result["hot_path_available"] = True
         result["available"] = True
         result["reason"] = "ready"
+        return self._store_status_cache(cache_key, result)
+
+    def _status_cache_ttl_seconds(self, processor_config: Dict[str, Any]) -> float:
+        try:
+            return max(0.0, min(3600.0, float(processor_config.get("STATUS_CACHE_SECONDS", 60))))
+        except Exception:
+            return 60.0
+
+    def _status_cache_key(self, processor_config: Dict[str, Any], path: Path, model_root: Path, model_name: str) -> Tuple[Any, ...]:
+        return (
+            str(path),
+            os.access(str(path), os.X_OK),
+            path.is_file(),
+            self._path_cache_identity(path),
+            str(model_root),
+            str(model_name),
+            bool(processor_config.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False)),
+            str(processor_config.get("MODEL_ROOT") or ""),
+            str(processor_config.get("MODEL_NAME") or ""),
+            str(processor_config.get("TIMEOUT_SECONDS") or ""),
+            tuple(sorted(self._ort_environment_config().items())),
+            self._status_cache_ttl_seconds(processor_config),
+        )
+
+    @staticmethod
+    def _path_cache_identity(path: Path) -> Tuple[int, int]:
+        try:
+            stat = path.stat()
+        except OSError:
+            return (0, 0)
+        return (int(stat.st_mtime_ns), int(stat.st_size))
+
+    def _cached_status(self, cache_key: Tuple[Any, ...], *, allow_stale: bool = False) -> Optional[Dict[str, Any]]:
+        with self._status_lock:
+            cached = self._status_cache
+            if cached is None:
+                return None
+            cached_key, cached_at, cached_value = cached
+            if cached_key != cache_key:
+                return None
+            ttl = float(cache_key[-1] or 0.0)
+            expired = ttl <= 0 or time.monotonic() - cached_at > ttl
+            if expired and not allow_stale:
+                return None
+            result = dict(cached_value)
+            result["cache_hit"] = not expired
+            result["cache_stale"] = bool(expired)
+            return result
+
+    def _store_status_cache(self, cache_key: Tuple[Any, ...], status: Dict[str, Any]) -> Dict[str, Any]:
+        result = dict(status)
+        result["cache_hit"] = False
+        result["cache_stale"] = False
+        with self._status_lock:
+            self._status_cache = (cache_key, time.monotonic(), dict(result))
         return result
+
+    def _status_pending(
+        self,
+        processor_config: Dict[str, Any],
+        path: Path,
+        model_root: Path,
+        model_name: str,
+    ) -> Dict[str, Any]:
+        return {
+            "enabled": True,
+            "path": str(path),
+            "present": path.is_file(),
+            "executable": os.access(str(path), os.X_OK),
+            "available": False,
+            "reason": "status_refreshing",
+            "model_root": str(model_root),
+            "model_name": model_name,
+            "cache_hit": False,
+            "cache_stale": True,
+            "refreshing": True,
+            "license_acknowledged": bool(processor_config.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False)),
+        }
+
+    def refresh_status_background(self, *, model_root: Optional[Path] = None, model_name: str = "") -> bool:
+        with self._status_lock:
+            if self._status_refreshing:
+                return False
+            self._status_refreshing = True
+
+        def refresh() -> None:
+            try:
+                self.status(model_root=model_root, model_name=model_name, force=True, background=False)
+            except Exception as exc:
+                self._debug_log("native_face_processor_status_refresh_failed", error_type=type(exc).__name__, error=str(exc))
+            finally:
+                with self._status_lock:
+                    self._status_refreshing = False
+
+        thread = threading.Thread(target=refresh, name="av-imgdata-face-status-refresh", daemon=True)
+        thread.start()
+        return True
 
     def create_detector(self, **kwargs: Any) -> "NativeFaceDetector":
         return NativeFaceDetector(self, **kwargs)
@@ -493,6 +616,10 @@ class NativeFaceProcessorService:
             )
             return None
         if not getattr(decoded, "success", False) or not getattr(decoded, "image_bytes", b""):
+            if str(getattr(decoded, "source", "") or "") == "libvips" and not self._vips_fallback_allowed():
+                raise NativeFaceProcessorUnavailable(
+                    f"libvips image processor failed and fallback is disabled: {getattr(decoded, 'error', '') or 'vips_decode_failed'}"
+                )
             error = str(getattr(decoded, "error", "") or "")
             if error and error not in {"image_decoder_extension_not_enabled", "image_decoder_disabled"}:
                 self._debug_log(
@@ -528,7 +655,24 @@ class NativeFaceProcessorService:
             text = str(item or "").strip().lower().lstrip(".")
             if text and text not in normalized:
                 normalized.append(text)
+        processors = root.get("native_processors") if isinstance(root.get("native_processors"), dict) else {}
+        vips = processors.get("IMAGE_PROCESSOR_VIPS") if isinstance(processors.get("IMAGE_PROCESSOR_VIPS"), dict) else {}
+        if bool(vips.get("ENABLED", False)) and bool(vips.get("PREFERRED", True)):
+            formats = vips.get("SUPPORTED_FORMATS")
+            for item in (formats if isinstance(formats, list) else ["jpeg", "jpg", "png", "webp", "tiff"]):
+                text = str(item or "").strip().lower().lstrip(".")
+                if text and text not in normalized:
+                    normalized.append(text)
         return normalized or ["heic", "heif"]
+
+    def _vips_fallback_allowed(self) -> bool:
+        try:
+            root = self.config_service.readMergedConfig()
+        except Exception:
+            root = {}
+        processors = root.get("native_processors") if isinstance(root.get("native_processors"), dict) else {}
+        vips = processors.get("IMAGE_PROCESSOR_VIPS") if isinstance(processors.get("IMAGE_PROCESSOR_VIPS"), dict) else {}
+        return bool(vips.get("ALLOW_FALLBACK_TO_DEFAULT", True))
 
     def _worker_model_key(self, options: Dict[str, Any]) -> Tuple[Any, ...]:
         return (

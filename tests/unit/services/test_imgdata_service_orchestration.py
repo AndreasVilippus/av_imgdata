@@ -144,6 +144,50 @@ def test_file_analysis_progress_enrichment_uses_lightweight_findings_status_read
     service.file_analysis.readCheckFindings.assert_not_called()
 
 
+def test_insightface_status_reuses_native_processor_status_for_blocks(tmp_path):
+    service = make_service()
+    service.config._config_path = tmp_path / "config.json"
+    service.native_face_processor.status = Mock(return_value={
+        "available": True,
+        "backend": "native",
+        "hot_path_available": True,
+        "reason": "ready",
+        "path": "/bin/face",
+        "version": "face-test",
+    })
+    service.native_image_processor_vips.status = Mock(return_value={
+        "available": True,
+        "backend": "libvips",
+        "reason": "vips_ready",
+        "path": "/bin/vips",
+        "version": "vips-test",
+    })
+    service.face_recognition.profiles = Mock(return_value={"profiles": [{"id": "profile-1"}]})
+    service.config.readMergedConfig = Mock(return_value={
+        "native_processors": {
+            "FACE_PROCESSOR": {
+                "MODEL_ROOT": str(tmp_path / "models"),
+                "MODEL_NAME": "buffalo_l",
+                "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
+            },
+            "IMAGE_PROCESSOR_VIPS": {"ENABLED": True},
+        },
+    })
+
+    with patch("imgdata.InsightFaceDetector.available_models", return_value={"models": []}):
+        status = service.insightFaceStatus()
+
+    assert status["insightface"]["native_processor_status"]["reason"] == "ready"
+    assert status["insightface"]["status_blocks"][1]["value"] == "ready"
+    assert status["insightface"]["status_blocks"][2]["value"] == "vips_ready"
+    service.native_face_processor.status.assert_called_once_with(
+        model_root=tmp_path / "models",
+        model_name="buffalo_l",
+        background=True,
+    )
+    service.native_image_processor_vips.status.assert_called_once_with(background=True)
+
+
 def test_photo_face_match_assignment_mutation_updates_photos_findings_and_mapping():
     service = make_service()
     calls = []

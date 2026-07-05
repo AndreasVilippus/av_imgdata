@@ -86,15 +86,41 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "cleanup_native_build_artifacts" in install_script
     assert "INSTALL_SUCCEEDED=0" in install_script
     assert "Preserving native build artifacts after failed install for diagnostics." in install_script
+    assert '"$native_root/face_processor-build"' not in install_script
+    assert '"$native_root/face_processor-install"' not in install_script
     assert '"$native_root/deps/source-cache"' in install_script
+    assert '"$native_root/libde265-build"' in install_script
+    assert '"$native_root/libde265-source"' in install_script
+    assert '"$native_root/libheif-build"' in install_script
+    assert '"$native_root/libheif-source"' in install_script
     assert '"$native_root/libvips-source"' in install_script
-    assert '"$native_root/vips-image-processor-install"' in install_script
+    assert '"$native_root/vips-image-processor-install"' not in install_script
     assert '"$native_root/deps"' not in install_script
     assert "vips-image-processor-install" in build_vips
+    assert "LIBDE265_VERSION" in build_vips
+    assert "b92beb6b53c346db9a8fae968d686ab706240099cdd5aff87777362d668b0de7" in build_vips
+    assert "LIBHEIF_VERSION" in build_vips
+    assert "e1ac2abb354fdc8ccdca71363ebad7503ad731c84022cf460837f0839e171718" in build_vips
     assert "LIBVIPS_VERSION" in build_vips
     assert "d114d7c132ec5b45f116d654e17bb4af84561e3041183cd4bfd79abfb85cf724" in build_vips
     assert "curl -fkL" in build_vips
     assert "sha256sum -c" in build_vips
+    assert "build_heif_stack" in build_vips
+    assert "--disable-x265" in build_vips
+    assert "--disable-aom" in build_vips
+    assert "--disable-rav1e" in build_vips
+    assert "--disable-gdk-pixbuf" in build_vips
+    assert "--disable-examples" in build_vips
+    assert 'LDFLAGS="-L${VIPS_PREFIX}/lib"' in build_vips
+    assert 'LDFLAGS="-L${VIPS_PREFIX}/lib${synology_lib_dir' not in build_vips
+    assert "builtin_h265_decoder=yes" in build_vips
+    assert "builtin_h265_encoder=yes" in build_vips
+    assert "x265/GPL must stay out of this package" in build_vips
+    assert "install_heif_stack_license_files" in build_vips
+    assert "share/licenses/AV_ImgData/heif-stack" in build_vips
+    assert "sources/${LIBDE265_TARBALL}" in build_vips
+    assert "sources/${LIBHEIF_TARBALL}" in build_vips
+    assert "$VIPS_INSTALL/share/licenses" in install_script
     assert "patch_libvips_source" in build_vips
     assert "has_header_symbol('tiff.h', 'COMPRESSION_WEBP'" in build_vips
     assert "AV_ImgData package build skips upstream libvips tools" in build_vips
@@ -135,9 +161,12 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert 'token == "-L" libdir' in build_vips
     assert "LINK_ARGS = -L" not in build_vips
     assert "meson setup" in build_vips
-    assert "-Dheif=disabled" in build_vips
+    assert "-Dheif=enabled" in build_vips
+    assert "-Dheif=disabled" not in build_vips
     assert "require_tool strings" in build_vips
     assert "copy_libvips_runtime_dependencies" in build_vips
+    assert '"libheif.so*"' in build_vips
+    assert '"libde265.so*"' in build_vips
     assert '"libmount.so*"' in build_vips
     assert '"libblkid.so*"' in build_vips
     assert '"libuuid.so*"' in build_vips
@@ -184,15 +213,23 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert '".test-venv"' in build_package
     assert '"build"' not in build_package
     assert "SANITIZE_NATIVE_BUILD_PATTERNS" in build_package
+    assert "cleanup_existing_toolkit_link_target" in build_package
+    assert 'target="${WORKSPACE_ROOT}/build_env/ds.${platform}-${version}/source/${PACKAGE_NAME}"' in build_package
+    assert '[[ -e "${target}" ]] || return 0' in build_package
+    assert "Existing Toolkit link target cannot be removed" in build_package
     assert '"build/native/*/face_processor-build"' in build_package
     assert '"build/native/*/face_processor-install"' in build_package
+    assert '"build/native/*/libde265-build"' in build_package
+    assert '"build/native/*/libde265-source"' in build_package
+    assert '"build/native/*/libheif-build"' in build_package
+    assert '"build/native/*/libheif-source"' in build_package
     assert '"build/native/*/libvips-build"' in build_package
     assert '"build/native/*/libvips-source"' in build_package
     assert '"build/native/*/vips-image-processor-build"' in build_package
     assert '"build/native/*/vips-image-processor-install"' in build_package
     assert "build/native/*/deps" not in build_package
     assert '"ui/node_modules"' in build_package
-    assert ".av_imgdata-link-sanitize.XXXXXX" in build_package
+    assert 'mktemp -d "${PACKAGE_ROOT}/../.av_imgdata-link-sanitize.XXXXXX"' in build_package
     assert "sanitize_project_for_toolkit_link" in build_package.split('log "Building Synology package"', 1)[0]
 
 

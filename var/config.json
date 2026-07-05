@@ -12,6 +12,7 @@
       "MODEL_ROOT": "",
       "MODEL_NAME": "",
       "TIMEOUT_SECONDS": 120,
+      "STATUS_CACHE_SECONDS": 60,
       "MAX_IMAGE_BYTES": 67108864,
       "ORT_INTRA_THREADS": 0,
       "ORT_GRAPH_OPT_LEVEL": "all",
@@ -22,6 +23,7 @@
       "PREFERRED": true,
       "PATH": "bin/av-imgdata-image-processor",
       "TIMEOUT_SECONDS": 120,
+      "STATUS_CACHE_SECONDS": 60,
       "MAX_IMAGE_BYTES": 268435456,
       "SUPPORTED_FORMATS": [
         "jpeg",

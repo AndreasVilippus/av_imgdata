@@ -13,3 +13,12 @@ def test_server_log_is_disabled_without_rotation_monitor():
     assert "--no-access-log" in source
     assert "--log-level critical" in source
     assert "start_log_rotation_monitor" not in source
+
+
+def test_start_validation_includes_heic_decoder_modules():
+    source = SCRIPT.read_text(encoding="utf-8")
+    requirements = (Path(__file__).resolve().parents[3] / "src" / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "Pillow" in requirements
+    assert "pillow-heif" in requirements
+    assert "import fastapi, uvicorn, requests, PIL, pillow_heif" in source

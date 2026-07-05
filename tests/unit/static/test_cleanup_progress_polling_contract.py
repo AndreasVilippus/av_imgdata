@@ -4,7 +4,7 @@ from pathlib import Path
 def test_cleanup_progress_reads_backend_status_directly():
     source = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
 
-    assert "async fetchCleanupProgress()" in source
+    assert "async fetchCleanupProgress(options = {})" in source
     assert "return this.runOperationPollRequest(" not in source
     assert "/api/cleanup_progress" in source
     assert "maxErrors" not in source

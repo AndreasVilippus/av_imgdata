@@ -10173,10 +10173,11 @@ class ImgDataService:
         native_processors = config.get("native_processors") if isinstance(config.get("native_processors"), dict) else {}
         return native_processors.get("FACE_PROCESSOR") if isinstance(native_processors.get("FACE_PROCESSOR"), dict) else {}
 
-    def _nativeFaceProcessorStatus(self) -> Dict[str, Any]:
+    def _nativeFaceProcessorStatus(self, *, background: bool = False) -> Dict[str, Any]:
         return self.native_face_processor.status(
             model_root=self._configuredInsightFaceModelRoot(),
             model_name=self._configuredInsightFaceModelName(),
+            background=background,
         )
 
     def _useNativeFaceProcessor(self) -> bool:
@@ -10364,8 +10365,8 @@ class ImgDataService:
         model_root = self._configuredInsightFaceModelRoot()
         model_status = InsightFaceDetector.available_models(model_root)
         active_model_name = self._configuredInsightFaceModelName(model_status)
-        native_status = self._nativeFaceProcessorStatus()
-        image_vips_status = self._nativeImageProcessorVipsStatus()
+        native_status = self._nativeFaceProcessorStatus(background=True)
+        image_vips_status = self._nativeImageProcessorVipsStatus(background=True)
         result = {
             "label": "InsightFace",
             "enabled": bool(configured.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False)),
@@ -10375,7 +10376,10 @@ class ImgDataService:
             "active_model_name": active_model_name,
             "processor_backend": str(native_status.get("backend") or "native") if native_status.get("available") else "native_unavailable",
             "native_processor_status": native_status,
-            "status_blocks": self._insightFaceStatusBlocks(),
+            "status_blocks": self._insightFaceStatusBlocks(
+                native_status=native_status,
+                image_vips_status=image_vips_status,
+            ),
         }
         return {
             "insightface": result,
@@ -10388,13 +10392,13 @@ class ImgDataService:
     def imageBackendStatus(self) -> Dict[str, Any]:
         return {
             "image_processors": {
-                "IMAGE_PROCESSOR_VIPS": self._nativeImageProcessorVipsStatus(),
+                "IMAGE_PROCESSOR_VIPS": self._nativeImageProcessorVipsStatus(background=True),
             },
         }
 
-    def _nativeImageProcessorVipsStatus(self) -> Dict[str, Any]:
+    def _nativeImageProcessorVipsStatus(self, *, background: bool = False) -> Dict[str, Any]:
         try:
-            return self.native_image_processor_vips.status()
+            return self.native_image_processor_vips.status(background=background)
         except Exception as exc:
             return {
                 "enabled": False,
@@ -10403,6 +10407,33 @@ class ImgDataService:
                 "last_error": str(exc),
             }
 
+    def warmNativeProcessorStatus(self) -> Dict[str, bool]:
+        face_started = False
+        image_vips_started = False
+        try:
+            face_started = bool(self.native_face_processor.refresh_status_background(
+                model_root=self._configuredInsightFaceModelRoot(),
+                model_name=self._configuredInsightFaceModelName(),
+            ))
+        except Exception as exc:
+            self._debugLog(
+                "native_face_processor_status_warmup_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+        try:
+            image_vips_started = bool(self.native_image_processor_vips.refresh_status_background())
+        except Exception as exc:
+            self._debugLog(
+                "native_image_processor_vips_status_warmup_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+        return {
+            "face_processor": face_started,
+            "image_processor_vips": image_vips_started,
+        }
+
     def _generatedFaceRecognitionProfilesCount(self) -> int:
         try:
             profiles = self.face_recognition.profiles().get("profiles", [])
@@ -10410,8 +10441,14 @@ class ImgDataService:
             return 0
         return len(profiles) if isinstance(profiles, list) else 0
 
-    def _insightFaceStatusBlocks(self) -> List[Dict[str, Any]]:
-        native_status = self._nativeFaceProcessorStatus()
+    def _insightFaceStatusBlocks(
+        self,
+        *,
+        native_status: Optional[Dict[str, Any]] = None,
+        image_vips_status: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        native_status = native_status if isinstance(native_status, dict) else self._nativeFaceProcessorStatus()
+        image_vips_status = image_vips_status if isinstance(image_vips_status, dict) else self._nativeImageProcessorVipsStatus()
         return [{
             "key": "generated_face_profiles",
             "label_key": "status:pip_generated_face_profiles",
@@ -10426,7 +10463,7 @@ class ImgDataService:
             "key": "image_processor_vips",
             "label_key": "status:image_processor_vips",
             "fallback_label": "libvips image backend",
-            "value": self._nativeImageProcessorVipsStatus().get("reason") or "vips_disabled",
+            "value": image_vips_status.get("reason") or "vips_disabled",
         }]
 
     @staticmethod

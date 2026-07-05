@@ -64,12 +64,14 @@ class ConfigService:
                     "ORT_INTRA_THREADS": 0,
                     "ORT_GRAPH_OPT_LEVEL": "all",
                     "INSIGHTFACE_LICENSE_ACKNOWLEDGED": False,
+                    "STATUS_CACHE_SECONDS": 60,
                 },
                 "IMAGE_PROCESSOR_VIPS": {
                     "ENABLED": False,
                     "PREFERRED": True,
                     "PATH": "bin/av-imgdata-image-processor",
                     "TIMEOUT_SECONDS": 120,
+                    "STATUS_CACHE_SECONDS": 60,
                     "MAX_IMAGE_BYTES": 268435456,
                     "SUPPORTED_FORMATS": ["jpeg", "jpg", "png", "webp", "tiff"],
                     "ALLOW_FALLBACK_TO_DEFAULT": True,
@@ -284,6 +286,12 @@ class ConfigService:
             minimum=1,
             maximum=3600,
         )
+        face_processor["STATUS_CACHE_SECONDS"] = cls._clamp_int(
+            face_processor.get("STATUS_CACHE_SECONDS"),
+            default=60,
+            minimum=0,
+            maximum=3600,
+        )
         face_processor["MAX_IMAGE_BYTES"] = cls._clamp_int(
             face_processor.get("MAX_IMAGE_BYTES"),
             default=67108864,
@@ -310,6 +318,12 @@ class ConfigService:
             image_processor_vips.get("TIMEOUT_SECONDS"),
             default=120,
             minimum=1,
+            maximum=3600,
+        )
+        image_processor_vips["STATUS_CACHE_SECONDS"] = cls._clamp_int(
+            image_processor_vips.get("STATUS_CACHE_SECONDS"),
+            default=60,
+            minimum=0,
             maximum=3600,
         )
         image_processor_vips["MAX_IMAGE_BYTES"] = cls._clamp_int(

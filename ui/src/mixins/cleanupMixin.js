@@ -95,15 +95,23 @@ export default {
 				return this.selectedFaceMatchingAction === 'recognition_analyze_unknown_faces';
 			},
 			selectedRecognitionAction() {
+				const activeView = String(this.selectedOption || '').trim();
+				if (activeView === 'checks' && this.selectedChecksType === 'recognition_check_person_assignments') {
+					return 'recognition_check_person_assignments';
+				}
+				if (activeView === 'face_match' && this.faceMatchRecognitionActionSelected) {
+					return 'recognition_analyze_unknown_faces';
+				}
+				if (activeView === 'cleanup') {
+					return this.activeCleanupAction;
+				}
 				if (this.cleanupRuntimeAction) {
 					return this.activeCleanupAction;
 				}
 				if (this.selectedChecksType === 'recognition_check_person_assignments') {
 					return 'recognition_check_person_assignments';
 				}
-				return this.faceMatchRecognitionActionSelected
-					? 'recognition_analyze_unknown_faces'
-					: this.activeCleanupAction;
+				return this.faceMatchRecognitionActionSelected ? 'recognition_analyze_unknown_faces' : this.activeCleanupAction;
 			},
 			isRecognitionCleanupAction() {
 				return [
@@ -169,7 +177,39 @@ export default {
 	beforeDestroy() {
 		this.stopCleanupProgressPolling();
 	},
-	methods: {
+		methods: {
+		isCleanupProgressForAction(action) {
+			const expectedAction = String(action || '').trim();
+			if (!expectedAction) {
+				return false;
+			}
+			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+				? this.cleanupProgress
+				: {};
+			const progressAction = String(progress.action || '').trim();
+			if (progressAction) {
+				return progressAction === expectedAction;
+			}
+			const runtimeAction = String(this.cleanupRuntimeAction || '').trim();
+			return !!runtimeAction && runtimeAction === expectedAction;
+		},
+		getCleanupProgressAction() {
+			const runtimeAction = String(this.cleanupRuntimeAction || '').trim();
+			if (runtimeAction) {
+				return runtimeAction;
+			}
+			const activeView = String(this.selectedOption || '').trim();
+			if (activeView === 'checks' && this.isInsightFaceAssignmentCheck) {
+				return 'recognition_check_person_assignments';
+			}
+			if (activeView === 'face_match' && this.faceMatchRecognitionActionSelected) {
+				return 'recognition_analyze_unknown_faces';
+			}
+			if (activeView === 'cleanup') {
+				return String(this.selectedCleanupAction || 'normalize_names');
+			}
+			return String(this.selectedCleanupAction || 'normalize_names');
+		},
 		updateRecognitionOption(key, value) {
 			this.recognitionOptions = {
 				...this.recognitionOptions,
@@ -378,6 +418,11 @@ export default {
 			const nextProgress = next && typeof next === 'object' ? next : {};
 			const currentOperationId = String(currentProgress.operation_id || '').trim();
 			const nextOperationId = String(nextProgress.operation_id || '').trim();
+			const currentAction = String(currentProgress.action || '').trim();
+			const nextAction = String(nextProgress.action || '').trim();
+			if (currentAction && nextAction && currentAction !== nextAction && currentProgress.running) {
+				return true;
+			}
 			if (currentOperationId && !nextOperationId) {
 				return true;
 			}
@@ -409,10 +454,10 @@ export default {
 			}
 			return true;
 		},
-			async fetchCleanupProgress() {
+			async fetchCleanupProgress(options = {}) {
 				const requestId = this.cleanupProgressRequestId + 1;
 				this.cleanupProgressRequestId = requestId;
-				const action = String(this.cleanupRuntimeAction || this.selectedCleanupAction || 'normalize_names');
+				const action = String(options.actionOverride || this.getCleanupProgressAction()).trim();
 				try {
 					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
 						action,
@@ -421,10 +466,10 @@ export default {
 						return {};
 					}
 					const progress = this.getResponseData(data);
-					if (progress && Object.keys(progress).length) {
-						this.applyCleanupProgress(progress);
-					}
-					if (!progress.running) {
+					const applied = progress && Object.keys(progress).length
+						? this.applyCleanupProgress(progress)
+						: false;
+					if (!progress.running && applied) {
 						const finishedAction = action;
 						this.cleanupLoading = false;
 						this.stopCleanupProgressPolling();
@@ -805,6 +850,8 @@ export default {
 		},
 			async stopCleanupRun(options = {}) {
 				const action = String(options.actionOverride || this.cleanupRuntimeAction || this.selectedCleanupAction || 'normalize_names');
+				const stoppingMessageKey = String(options.stoppingMessageKey || 'cleanup:progress_stopping');
+				const stoppingMessageDefault = String(options.stoppingMessageDefault || 'Cleanup is stopping...');
 				this.cleanupRuntimeAction = action;
 				try {
 					await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_stop', {
@@ -813,8 +860,8 @@ export default {
 				} catch (err) {
 					// Best effort.
 				}
-				this.cleanupStatusMessage = this.$avt('cleanup:progress_stopping', 'Cleanup is stopping...');
-				await this.fetchCleanupProgress();
+				this.cleanupStatusMessage = this.$avt(stoppingMessageKey, stoppingMessageDefault);
+				await this.fetchCleanupProgress({ actionOverride: action });
 			},
 		getCleanupTargetLabel(target) {
 			const key = String(target || '').trim().toUpperCase();
@@ -856,6 +903,27 @@ export default {
 				return this.$avt('cleanup:progress_checking_file_short', 'Checking file...');
 			}
 			return this.cleanupStatusMessage;
+		},
+		isCleanupStatusHeadlineCounterOnly() {
+			const headline = String(this.getCleanupStatusHeadline() || '').trim();
+			if (!headline) {
+				return false;
+			}
+			const counters = this.getCleanupStatusCounters();
+			if (!counters.length) {
+				return false;
+			}
+			const normalize = (value) => String(value || '')
+				.toLowerCase()
+				.replace(/:/g, '')
+				.replace(/\s+/g, ' ')
+				.trim();
+			const normalizedHeadline = normalize(headline);
+			return counters.some((counter) => {
+				const label = String(counter.label || counter.key || '').trim();
+				const value = Math.max(0, Number(counter.value) || 0);
+				return normalizedHeadline === normalize(`${label} ${value}`);
+			});
 		},
 		getCleanupProgressStatus(kind) {
 			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'

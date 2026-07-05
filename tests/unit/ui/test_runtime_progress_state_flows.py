@@ -232,6 +232,202 @@ def test_checks_final_backend_progress_releases_loading_runtime():
     assert result["events"] == ["apply-progress", "load-item", "stop"]
 
 
+def test_checks_save_only_scan_without_stored_findings_uses_start_label_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/checksMixin.js",
+            """
+            const component = createComponent({
+              selectedChecksAction: 'scan',
+              checksSaveOnly: true,
+              checksFindingsStatus: {
+                recognition_check_person_assignments: { count: 0 },
+              },
+            });
+
+            assert.strictEqual(component.checksCanRestartSavedScan, false);
+            assert.strictEqual(component.checksPrimaryButtonLabel, 'Start');
+            console.log(JSON.stringify({ label: component.checksPrimaryButtonLabel }));
+            """
+        )
+    )
+
+    assert result == {"label": "Start"}
+
+
+def test_checks_save_only_scan_with_stored_findings_uses_restart_label_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/checksMixin.js",
+            """
+            const component = createComponent({
+              selectedChecksAction: 'scan',
+              selectedChecksType: 'recognition_check_person_assignments',
+              checksSaveOnly: true,
+              checksFindingsStatus: {
+                recognition_check_person_assignments: { count: 2 },
+              },
+            });
+
+            assert.strictEqual(component.checksCanRestartSavedScan, true);
+            assert.strictEqual(component.checksPrimaryButtonLabel, 'Restart');
+            console.log(JSON.stringify({ label: component.checksPrimaryButtonLabel }));
+            """
+        )
+    )
+
+    assert result == {"label": "Restart"}
+
+
+def test_cleanup_counter_only_headline_is_detected_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              cleanupStatusMessage: 'Funde 0',
+              cleanupProgress: {
+                status: {
+                  schema_version: 1,
+                  counters: [
+                    {
+                      key: 'findings',
+                      label_key: 'cleanup:label_findings',
+                      fallback_label: 'Funde',
+                      value: 0,
+                      show_when_zero: true,
+                    },
+                  ],
+                },
+              },
+            });
+
+            assert.strictEqual(component.isCleanupStatusHeadlineCounterOnly(), true);
+            component.cleanupStatusMessage = 'Prüfung läuft';
+            assert.strictEqual(component.isCleanupStatusHeadlineCounterOnly(), false);
+            console.log(JSON.stringify({ counterOnly: true }));
+            """
+        )
+    )
+
+    assert result == {"counterOnly": True}
+
+
+def test_cleanup_running_action_rejects_foreign_idle_progress_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              cleanupLoading: true,
+              cleanupRuntimeAction: 'recognition_check_person_assignments',
+              cleanupStatusMessage: 'Reading assigned Photos face images.',
+              cleanupProgress: {
+                action: 'recognition_check_person_assignments',
+                running: true,
+                operation_id: 'cleanup-recognition_check_person_assignments-1',
+                revision: 514,
+                message: 'Reading assigned Photos face images.',
+              },
+            });
+
+            const applied = component.applyCleanupProgress({
+              action: 'normalize_names',
+              operation: 'cleanup',
+              mode: 'scan',
+              phase: 'idle',
+            });
+
+            assert.strictEqual(applied, false);
+            assert.strictEqual(component.cleanupProgress.action, 'recognition_check_person_assignments');
+            assert.strictEqual(component.cleanupProgress.running, true);
+            assert.strictEqual(component.cleanupRuntimeAction, 'recognition_check_person_assignments');
+            console.log(JSON.stringify({ applied, action: component.cleanupProgress.action }));
+            """
+        )
+    )
+
+    assert result == {"applied": False, "action": "recognition_check_person_assignments"}
+
+
+def test_cleanup_progress_action_prefers_runtime_action_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              selectedOption: 'cleanup',
+              selectedCleanupAction: 'normalize_names',
+              cleanupRuntimeAction: 'recognition_check_person_assignments',
+            });
+
+            assert.strictEqual(component.getCleanupProgressAction(), 'recognition_check_person_assignments');
+            console.log(JSON.stringify({ action: component.getCleanupProgressAction() }));
+            """
+        )
+    )
+
+    assert result == {"action": "recognition_check_person_assignments"}
+
+
+def test_checks_reconnect_adopts_running_insightface_assignment_cleanup_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/checksMixin.js",
+            """
+            const events = [];
+            const component = createComponent({
+              selectedChecksType: 'dimension_issues',
+              selectedChecksAction: 'findings',
+              cleanupLoading: false,
+              cleanupRuntimeAction: '',
+              fetchCleanupProgress: async (options) => {
+                events.push(['cleanup-progress', options.actionOverride]);
+                return {
+                  action: 'recognition_check_person_assignments',
+                  running: true,
+                  source_mode: 'scan',
+                  operation_id: 'cleanup-recognition_check_person_assignments-1',
+                };
+              },
+              fetchChecksProgress: async () => {
+                events.push(['checks-progress']);
+                return {};
+              },
+              startCleanupProgressPolling: () => events.push(['cleanup-poll']),
+            });
+
+            await component.refreshChecksSessionState();
+
+            assert.strictEqual(component.selectedChecksType, 'recognition_check_person_assignments');
+            assert.strictEqual(component.selectedChecksAction, 'scan');
+            assert.strictEqual(component.cleanupLoading, true);
+            assert.strictEqual(component.cleanupRuntimeAction, 'recognition_check_person_assignments');
+            assert.deepStrictEqual(events, [
+              ['cleanup-progress', 'recognition_check_person_assignments'],
+              ['cleanup-poll'],
+            ]);
+            console.log(JSON.stringify({
+              type: component.selectedChecksType,
+              action: component.selectedChecksAction,
+              cleanupLoading: component.cleanupLoading,
+              events,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "type": "recognition_check_person_assignments",
+        "action": "scan",
+        "cleanupLoading": True,
+        "events": [
+            ["cleanup-progress", "recognition_check_person_assignments"],
+            ["cleanup-poll"],
+        ],
+    }
+
+
 def test_checks_position_replacement_requires_different_source_formats_runtime():
     result = run_node(
         mixin_runtime_script(
