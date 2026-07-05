@@ -10,6 +10,14 @@ def test_face_match_progress_cards_still_exist():
     assert "faceMatchStatusHeadline" in view
 
 
+def test_face_match_recognition_status_message_is_hidden_when_progress_card_shows_status():
+    view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+
+    assert "vm.isCleanupProgressForAction('recognition_analyze_unknown_faces')" in view
+    assert 'Number(vm.getCleanupStatusProgress().total) <= 0' in view
+    assert ':status-text="vm.getCleanupStatusHeadline()"' in view
+
+
 def test_face_match_progress_visibility_includes_preparing_or_running_state():
     mixin = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
     start = mixin.find("faceMatchHasActiveProgressState()")

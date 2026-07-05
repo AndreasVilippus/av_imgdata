@@ -58,29 +58,23 @@
 			</section>
 
 			<section v-if="isExternalLibrariesInfoView" class="config-card">
-				<div class="sm-section-title">{{ vm.$avt('nav:pip_packages', 'pip packages') }}</div>
+				<div class="sm-section-title">{{ vm.$avt('nav:insightface', 'InsightFace') }}</div>
 				<div class="sm-kv-list">
 					<div class="sm-kv-row">
-						<div class="sm-kv-key">{{ vm.$avt('config:label_pip_package_status', 'InsightFace status') }}</div>
+						<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_status', 'InsightFace status') }}</div>
 						<div class="sm-kv-value">
-							{{ vm.insightFacePipPackageStatus.installed ? vm.$avt('status:installed', 'Installed') : vm.$avt('status:not_installed', 'Not installed') }}
+							{{ vm.insightFaceRuntimeStatus.enabled ? vm.$avt('status:enabled', 'Enabled') : vm.$avt('status:disabled', 'Disabled') }}
 						</div>
 					</div>
 					<div class="sm-kv-row">
-						<div class="sm-kv-key">{{ vm.$avt('config:label_pip_package_enabled', 'Enabled in config') }}</div>
+						<div class="sm-kv-key">{{ vm.$avt('config:label_native_face_processor', 'Native face processor') }}</div>
 						<div class="sm-kv-value">
-							{{ vm.insightFacePipPackageStatus.enabled ? vm.$avt('status:yes', 'Yes') : vm.$avt('status:no', 'No') }}
+							{{ vm.faceMatchInsightFaceNativeProcessorStatus.available ? vm.$avt('status:available', 'Available') : vm.$avt('status:not_available', 'Not available') }}
 						</div>
 					</div>
-					<div class="sm-kv-row">
-						<div class="sm-kv-key">{{ vm.$avt('config:label_pip_last_install_status', 'Last install status') }}</div>
-						<div class="sm-kv-value">
-							{{ vm.getPipPackageInstallStatusLabel(vm.insightFacePipPackageStatus.install_status) }}
-						</div>
-					</div>
-					<div v-if="vm.insightFacePipPackageStatus.install_status && vm.insightFacePipPackageStatus.install_status.message" class="sm-kv-row">
-						<div class="sm-kv-key">{{ vm.$avt('config:label_pip_last_install_message', 'Last install message') }}</div>
-						<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.install_status.message }}</div>
+					<div v-if="vm.faceMatchInsightFaceNativeProcessorStatus.reason" class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$avt('config:label_native_face_processor_status_detail', 'Processor status detail') }}</div>
+						<div class="sm-kv-value">{{ vm.formatInsightFaceNativeProcessorReason(vm.faceMatchInsightFaceNativeProcessorStatus.reason) }}</div>
 					</div>
 					<div v-if="vm.insightFaceModelStatus.root" class="sm-kv-row">
 						<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_model_root', 'InsightFace model root') }}</div>
@@ -89,24 +83,6 @@
 					<div v-if="vm.insightFaceModelStatus.model_store" class="sm-kv-row">
 						<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_model_store', 'InsightFace model store') }}</div>
 						<div class="sm-kv-value">{{ vm.insightFaceModelStatus.model_store }}</div>
-					</div>
-					<template v-if="Array.isArray(vm.insightFacePipPackageStatus.modules)">
-						<div
-							v-for="moduleStatus in vm.insightFacePipPackageStatus.modules"
-							:key="moduleStatus.package"
-							class="sm-kv-row"
-						>
-							<div class="sm-kv-key">{{ moduleStatus.package }}</div>
-							<div class="sm-kv-value">
-								{{ vm.getPipPackageModuleStatusLabel(moduleStatus) }}
-							</div>
-						</div>
-					</template>
-					<div v-if="Array.isArray(vm.insightFacePipPackageStatus.conflicts) && vm.insightFacePipPackageStatus.conflicts.length" class="sm-kv-row">
-						<div class="sm-kv-key">{{ vm.$avt('config:label_pip_conflicts', 'Package conflicts') }}</div>
-						<div class="sm-kv-value">
-							{{ vm.insightFacePipPackageStatus.conflicts.map((item) => `${item.package} ${item.version}`).join(', ') }}
-						</div>
 					</div>
 					<template v-if="Array.isArray(vm.insightFaceModelStatus.models) && vm.insightFaceModelStatus.models.length">
 						<div
@@ -118,6 +94,22 @@
 							<div class="sm-kv-value">{{ vm.getInsightFaceModelStatusLabel(modelStatus) }}</div>
 						</div>
 					</template>
+				</div>
+			</section>
+
+			<section v-if="isExternalLibrariesInfoView" class="config-card">
+				<div class="sm-section-title">{{ vm.$avt('config:label_image_processor_vips', 'libvips image backend') }}</div>
+				<div class="sm-kv-list">
+					<div class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$avt('status:available', 'Available') }}</div>
+						<div class="sm-kv-value">
+							{{ vm.imageProcessorVipsStatus.available ? vm.$avt('status:yes', 'Yes') : vm.$avt('status:no', 'No') }}
+						</div>
+					</div>
+					<div v-if="vm.imageProcessorVipsStatus.reason" class="sm-kv-row">
+						<div class="sm-kv-key">{{ vm.$avt('config:label_image_processor_vips_status_detail', 'Image backend status') }}</div>
+						<div class="sm-kv-value">{{ vm.formatImageProcessorVipsReason(vm.imageProcessorVipsStatus.reason) }}</div>
+					</div>
 				</div>
 			</section>
 
@@ -265,6 +257,65 @@
 							</v-button>
 						</div>
 					</label>
+
+					<div class="sm-section-title">{{ vm.$avt('config:label_image_processor_vips', 'libvips image backend') }}</div>
+
+					<div class="sm-kv-list">
+						<div class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('config:label_image_processor_vips', 'libvips image backend') }}</div>
+							<div class="sm-kv-value">
+								{{ vm.imageProcessorVipsStatus.available ? vm.$avt('status:available', 'Available') : vm.$avt('status:not_available', 'Not available') }}
+							</div>
+						</div>
+						<div v-if="vm.imageProcessorVipsStatus.reason" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('config:label_image_processor_vips_status_detail', 'Image backend status') }}</div>
+							<div class="sm-kv-value">{{ vm.formatImageProcessorVipsReason(vm.imageProcessorVipsStatus.reason) }}</div>
+						</div>
+					</div>
+
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving"
+							@change="vm.setExternalLibrariesNativeProcessorConfigValue('IMAGE_PROCESSOR_VIPS', 'ENABLED', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_enable_image_processor_vips', 'Use optional libvips image backend') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.PREFERRED"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED"
+							@change="vm.setExternalLibrariesNativeProcessorConfigValue('IMAGE_PROCESSOR_VIPS', 'PREFERRED', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_prefer_image_processor_vips', 'Prefer libvips when available') }}</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input
+							:checked="vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ALLOW_FALLBACK_TO_DEFAULT"
+							type="checkbox"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED"
+							@change="vm.setExternalLibrariesNativeProcessorConfigValue('IMAGE_PROCESSOR_VIPS', 'ALLOW_FALLBACK_TO_DEFAULT', $event.target.checked)"
+						/>
+						<span>{{ vm.$avt('config:label_image_processor_vips_fallback', 'Use default image backend as fallback') }}</span>
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ vm.$avt('config:label_image_processor_vips_path', 'libvips image processor path') }}</span>
+						<input
+							:value="vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.PATH"
+							type="text"
+							class="config-input"
+							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED"
+							@input="vm.setExternalLibrariesNativeProcessorConfigValue('IMAGE_PROCESSOR_VIPS', 'PATH', $event.target.value)"
+						/>
+						<span class="config-card-desc">
+							{{ vm.$avt('config:hint_image_processor_vips_path', 'Relative paths are resolved inside the package target directory. The default is bin/av-imgdata-image-processor.') }}
+						</span>
+					</label>
 				</div>
 
 				<div v-if="vm.exiftoolDownloadSourceUrl" class="config-card-desc">
@@ -281,52 +332,24 @@
 				</div>
 			</section>
 
-			<section v-if="isPipPackagesConfigView" class="config-card">
+			<section v-if="isInsightFaceConfigView" class="config-card">
 				<div class="config-form-grid">
-					<div class="config-card-desc">
-						{{ vm.$avt('config:pip_packages_restart_hint', 'Enabled optional pip packages are installed during the next package start. Core packages remain required for startup; optional package installation failures are logged but do not block the package start.') }}
-					</div>
-
 					<div class="sm-kv-list">
 						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_package_status', 'InsightFace status') }}</div>
+							<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_status', 'InsightFace status') }}</div>
 							<div class="sm-kv-value">
-								{{ vm.insightFacePipPackageStatus.installed ? vm.$avt('status:installed', 'Installed') : vm.$avt('status:not_installed', 'Not installed') }}
+								{{ vm.insightFaceRuntimeStatus.enabled ? vm.$avt('status:enabled', 'Enabled') : vm.$avt('status:disabled', 'Disabled') }}
 							</div>
 						</div>
 						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_package_enabled', 'Enabled in config') }}</div>
+							<div class="sm-kv-key">{{ vm.$avt('config:label_native_face_processor', 'Native face processor') }}</div>
 							<div class="sm-kv-value">
-								{{ vm.insightFacePipPackageStatus.enabled ? vm.$avt('status:yes', 'Yes') : vm.$avt('status:no', 'No') }}
+								{{ vm.faceMatchInsightFaceNativeProcessorStatus.available ? vm.$avt('status:available', 'Available') : vm.$avt('status:not_available', 'Not available') }}
 							</div>
 						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_package_requirements', 'Requirements') }}</div>
-							<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.requirements_file || '-' }}</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_wheelhouse_enabled', 'Wheelhouse download') }}</div>
-							<div class="sm-kv-value">
-								{{ vm.insightFacePipPackageStatus.wheelhouse_enabled ? vm.$avt('status:yes', 'Yes') : vm.$avt('status:no', 'No') }}
-							</div>
-						</div>
-						<div v-if="vm.insightFacePipPackageStatus.wheelhouse_manifest_url" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_wheelhouse_manifest_url', 'Wheelhouse manifest URL') }}</div>
-							<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.wheelhouse_manifest_url }}</div>
-						</div>
-						<div v-if="vm.insightFacePipPackageStatus.wheelhouse_target" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_wheelhouse_target', 'Wheelhouse target') }}</div>
-							<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.wheelhouse_target }}</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_last_install_status', 'Last install status') }}</div>
-							<div class="sm-kv-value">
-								{{ vm.getPipPackageInstallStatusLabel(vm.insightFacePipPackageStatus.install_status) }}
-							</div>
-						</div>
-						<div v-if="vm.insightFacePipPackageStatus.install_status && vm.insightFacePipPackageStatus.install_status.message" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_last_install_message', 'Last install message') }}</div>
-							<div class="sm-kv-value">{{ vm.insightFacePipPackageStatus.install_status.message }}</div>
+						<div v-if="vm.faceMatchInsightFaceNativeProcessorStatus.reason" class="sm-kv-row">
+							<div class="sm-kv-key">{{ vm.$avt('config:label_native_face_processor_status_detail', 'Processor status detail') }}</div>
+							<div class="sm-kv-value">{{ vm.formatInsightFaceNativeProcessorReason(vm.faceMatchInsightFaceNativeProcessorStatus.reason) }}</div>
 						</div>
 						<div v-if="vm.insightFaceModelStatus.root" class="sm-kv-row">
 							<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_model_root', 'InsightFace model root') }}</div>
@@ -339,24 +362,6 @@
 						<div v-if="vm.insightFaceActiveModelName" class="sm-kv-row">
 							<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_active_model', 'Active model') }}</div>
 							<div class="sm-kv-value">{{ vm.insightFaceActiveModelName }}</div>
-						</div>
-						<template v-if="Array.isArray(vm.insightFacePipPackageStatus.modules)">
-							<div
-								v-for="moduleStatus in vm.insightFacePipPackageStatus.modules"
-								:key="moduleStatus.package"
-								class="sm-kv-row"
-							>
-								<div class="sm-kv-key">{{ moduleStatus.package }}</div>
-								<div class="sm-kv-value">
-									{{ vm.getPipPackageModuleStatusLabel(moduleStatus) }}
-								</div>
-							</div>
-						</template>
-						<div v-if="Array.isArray(vm.insightFacePipPackageStatus.conflicts) && vm.insightFacePipPackageStatus.conflicts.length" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_conflicts', 'Package conflicts') }}</div>
-							<div class="sm-kv-value">
-								{{ vm.insightFacePipPackageStatus.conflicts.map((item) => `${item.package} ${item.version}`).join(', ') }}
-							</div>
 						</div>
 						<template v-if="Array.isArray(vm.insightFaceModelStatus.models) && vm.insightFaceModelStatus.models.length">
 							<div
@@ -371,130 +376,49 @@
 					</div>
 
 					<div class="config-actions config-actions-right">
-						<v-button @click="vm.fetchPipPackagesStatus" :disabled="vm.pipPackagesStatusLoading" style="width: 220px;">
-							{{ vm.pipPackagesStatusLoading ? vm.$avt('config:button_pip_status_loading', 'Checking pip packages...') : vm.$avt('config:button_pip_status_refresh', 'Refresh package status') }}
-						</v-button>
-					</div>
-
-					<div class="config-card-desc">
-						{{ vm.$avt('config:pip_wheelhouse_package_install_hint', 'Load the configured wheelhouse manifest, select one package from it, and install or reinstall that package. Reinstall downloads the wheelhouse assets again and does not use a local backup.') }}
-					</div>
-
-					<div class="config-actions config-actions-right">
-						<v-button @click="vm.loadPipWheelhousePackages" :disabled="vm.pipWheelhousePackagesLoading || vm.pipWheelhousePackageInstalling || vm.pipWheelhousePackageReinstalling" style="width: 220px;">
-							{{ vm.pipWheelhousePackagesLoading ? vm.$avt('config:button_pip_wheelhouse_loading', 'Loading wheelhouse...') : vm.$avt('config:button_pip_wheelhouse_load', 'Load wheelhouse packages') }}
-						</v-button>
-					</div>
-
-					<label class="config-field">
-						<span class="config-field-label">{{ vm.$avt('config:label_pip_wheelhouse_package', 'Wheelhouse package') }}</span>
-						<select
-							:value="vm.selectedPipWheelhousePackageName"
-							class="config-input"
-							:disabled="vm.externalLibrariesSaving || vm.pipWheelhousePackagesLoading || vm.pipWheelhousePackageInstalling || vm.pipWheelhousePackageReinstalling || !vm.pipWheelhousePackages.length"
-							@change="vm.setSelectedPipWheelhousePackageName($event.target.value)"
-						>
-							<option value="">{{ vm.$avt('config:option_pip_wheelhouse_package_none', 'No package loaded') }}</option>
-							<option
-								v-for="packageInfo in vm.pipWheelhousePackages"
-								:key="`pip-wheelhouse-package-${packageInfo.name}`"
-								:value="packageInfo.name"
-							>
-								{{ packageInfo.name }}{{ packageInfo.installed_version ? ` (${vm.$avt('status:installed', 'Installed')}: ${packageInfo.installed_version})` : '' }}
-							</option>
-						</select>
-					</label>
-
-					<div v-if="vm.selectedPipWheelhousePackageStatus.file" class="sm-kv-list">
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_wheelhouse_file', 'Wheel file') }}</div>
-							<div class="sm-kv-value">{{ vm.selectedPipWheelhousePackageStatus.file }}</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_wheelhouse_size', 'Wheel size') }}</div>
-							<div class="sm-kv-value">{{ Number(vm.selectedPipWheelhousePackageStatus.size) || 0 }}</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_pip_wheelhouse_installed_version', 'Installed version') }}</div>
-							<div class="sm-kv-value">{{ vm.selectedPipWheelhousePackageStatus.installed_version || '-' }}</div>
-						</div>
-					</div>
-
-					<div class="config-actions config-actions-right">
-						<v-button
-							@click="vm.installSelectedPipWheelhousePackage(false)"
-							:disabled="!vm.selectedPipWheelhousePackageName || vm.pipWheelhousePackageInstalling || vm.pipWheelhousePackageReinstalling"
-							style="width: 220px;"
-						>
-							{{ vm.pipWheelhousePackageInstalling ? vm.$avt('config:button_pip_package_installing', 'Installing package...') : vm.$avt('config:button_pip_package_install', 'Install selected package') }}
-						</v-button>
-						<v-button
-							@click="vm.installSelectedPipWheelhousePackage(true)"
-							:disabled="!vm.selectedPipWheelhousePackageName || vm.pipWheelhousePackageInstalling || vm.pipWheelhousePackageReinstalling"
-							style="width: 220px;"
-						>
-							{{ vm.pipWheelhousePackageReinstalling ? vm.$avt('config:button_pip_package_reinstalling', 'Reinstalling package...') : vm.$avt('config:button_pip_package_reinstall', 'Reinstall selected package') }}
+						<v-button @click="vm.fetchInsightFaceStatus" :disabled="vm.insightFaceStatusLoading" style="width: 220px;">
+							{{ vm.insightFaceStatusLoading ? vm.$avt('config:button_insightface_status_loading', 'Checking InsightFace...') : vm.$avt('config:button_insightface_status_refresh', 'Refresh InsightFace status') }}
 						</v-button>
 					</div>
 
 					<label class="config-checkbox">
 						<input
-							:checked="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
+							:checked="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED"
 							type="checkbox"
 							:disabled="vm.externalLibrariesSaving"
-							@change="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'ENABLED', $event.target.checked)"
+							@change="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'INSIGHTFACE_LICENSE_ACKNOWLEDGED', $event.target.checked)"
 						/>
-						<span>{{ vm.$avt('config:label_enable_insightface_package', 'Enable InsightFace component') }}</span>
+						<span>{{ vm.$avt('config:label_acknowledge_insightface_model_license', 'I have reviewed the InsightFace model license terms') }}</span>
 					</label>
 
-					<label class="config-checkbox">
-						<input
-							:checked="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.INSTALL_ON_START"
-							type="checkbox"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
-							@change="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'INSTALL_ON_START', $event.target.checked)"
-						/>
-						<span>{{ vm.$avt('config:label_pip_install_on_start', 'Install or update during package start') }}</span>
-					</label>
+					<div class="config-card-desc">
+						{{ vm.$avt('config:native_face_processor_license_hint', 'The native face processor uses InsightFace-compatible ONNX models. AV ImgData does not ship or download these models automatically; use is only enabled after acknowledging the applicable model license terms.') }}
+					</div>
 
 					<label class="config-field">
-						<span class="config-field-label">{{ vm.$avt('config:label_pip_wheelhouse_manifest_url', 'Wheelhouse manifest URL') }}</span>
+						<span class="config-field-label">{{ vm.$avt('config:label_insightface_model_root', 'InsightFace model root') }}</span>
 						<input
-							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_MANIFEST_URL"
+							:value="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.MODEL_ROOT"
 							type="text"
 							class="config-input"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
-							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'WHEELHOUSE_MANIFEST_URL', $event.target.value)"
+							:disabled="vm.externalLibrariesSaving"
+							@input="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'MODEL_ROOT', $event.target.value)"
 						/>
 						<span class="config-card-desc">
-							{{ vm.$avt('config:hint_pip_wheelhouse_manifest_url', 'Points to the wheelhouse-manifest.json of a compatible release. The manifest is the lock for the wheelhouse install: all wheel files listed there are downloaded, verified via SHA256 and then installed locally without source builds.') }}
-						</span>
-					</label>
-
-					<label class="config-field">
-						<span class="config-field-label">{{ vm.$avt('config:label_pip_wheelhouse_target', 'Wheelhouse target') }}</span>
-						<input
-							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.WHEELHOUSE_TARGET"
-							type="text"
-							class="config-input"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
-							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'WHEELHOUSE_TARGET', $event.target.value)"
-						/>
-						<span class="config-card-desc">
-							{{ vm.$avt('config:hint_pip_wheelhouse_target', 'Must match the manifest target exactly, for example dsm7-x86_64-python38.') }}
+							{{ vm.$avt('config:hint_insightface_model_root', 'Leave empty to use the package default model root.') }}
 						</span>
 					</label>
 
 					<label class="config-field">
 						<span class="config-field-label">{{ vm.$avt('config:label_insightface_selected_model', 'InsightFace model for face search') }}</span>
 						<input
-							:value="vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.MODEL_NAME"
+							:value="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.MODEL_NAME"
 							type="text"
 							class="config-input"
 							list="insightface-model-options"
 							:placeholder="vm.$avt('config:placeholder_insightface_model_default', 'InsightFace default')"
-							:disabled="vm.externalLibrariesSaving || !vm.externalLibrariesConfigModel.pip_packages.INSIGHTFACE.ENABLED"
-							@input="vm.setExternalLibrariesPipPackageConfigValue('INSIGHTFACE', 'MODEL_NAME', $event.target.value)"
+							:disabled="vm.externalLibrariesSaving"
+							@input="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'MODEL_NAME', $event.target.value)"
 						/>
 						<datalist id="insightface-model-options">
 							<option
@@ -509,11 +433,7 @@
 					</label>
 
 					<div class="config-card-desc">
-						{{ vm.$avt('config:pip_packages_insightface_license_hint', 'InsightFace code and model files have separate licensing considerations. No models are shipped or downloaded automatically by AV ImgData.') }}
-					</div>
-
-					<div class="config-card-desc">
-						{{ vm.$avt('config:insightface_model_management_hint', 'Model packages are read from the InsightFace model store. Upload a ZIP package to install a local model, or configure a model name that the installed InsightFace package can resolve itself.') }}
+						{{ vm.$avt('config:insightface_model_management_hint', 'Model packages are read from the InsightFace model store. Configure a model name or place a compatible model in the configured model root.') }}
 					</div>
 
 					<div class="sm-kv-list">
@@ -560,7 +480,7 @@ export default {
 		mode: {
 			type: String,
 			default: 'info',
-			validator: (value) => ['info', 'config', 'pip_packages'].includes(value),
+			validator: (value) => ['info', 'config', 'insightface'].includes(value),
 		},
 		vm: {
 			type: Object,
@@ -574,24 +494,24 @@ export default {
 		isExiftoolConfigView() {
 			return this.mode === 'config';
 		},
-		isPipPackagesConfigView() {
-			return this.mode === 'pip_packages';
+		isInsightFaceConfigView() {
+			return this.mode === 'insightface';
 		},
 		isEditableConfigView() {
-			return this.isExiftoolConfigView || this.isPipPackagesConfigView;
+			return this.isExiftoolConfigView || this.isInsightFaceConfigView;
 		},
 		panelTitle() {
 			if (this.isExiftoolConfigView) {
 				return this.vm.$avt('nav:exiftool', 'ExifTool');
 			}
-			if (this.isPipPackagesConfigView) {
-				return this.vm.$avt('nav:pip_packages', 'pip packages');
+			if (this.isInsightFaceConfigView) {
+				return this.vm.$avt('nav:insightface', 'InsightFace');
 			}
 			return this.vm.$avt('nav:external_libraries', 'External libraries');
 		},
 		panelDescription() {
-			if (this.isPipPackagesConfigView) {
-				return this.vm.$avt('config:section_pip_packages_desc', 'Configure optional Python packages installed into the package venv after an explicit restart.');
+			if (this.isInsightFaceConfigView) {
+				return this.vm.$avt('config:section_insightface_desc', 'Settings for the native InsightFace face processor and model store.');
 			}
 			return this.vm.$avt('config:section_exiftool_desc', 'Settings for optional ExifTool usage when reading embedded XMP metadata.');
 		},

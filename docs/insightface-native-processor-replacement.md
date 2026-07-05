@@ -46,6 +46,158 @@ The design must allow additional platform builds later, but they are not require
 
 ## Current State
 
+Implemented in the current branch:
+
+```text
+- package build creates and installs bin/av-imgdata-face-processor
+- the backend calls that binary through NativeFaceProcessorService
+- the binary is no longer a no-op skeleton
+- ONNXRuntime build mode exposes backend=native
+- native detect/embed execute C++ JPEG decode, SCRFD detector inference/post-processing and ArcFace embedding inference
+- native processor start/finish/failure events are written to the backend debug logger
+```
+
+Observed on NAS before the native backend became the hot path:
+
+```text
+- process-per-image Python/InsightFace execution took about 89 s for one embed job with 4 faces
+- failed embed attempts returned after about 4948 ms and 824 ms with exit 1 and no stderr/stdout detail
+- a HEIC image required the preview fallback path through pillow-heif
+- stop requests remained in phase=stopping until the current embed subprocess returned
+```
+
+Conclusion from the measured run:
+
+```text
+Process-per-image Python execution is not acceptable as the production
+image-processing backend. It starts Python, InsightFace and ONNXRuntime inside a
+separate subprocess per image. That makes the hot path too slow and delays stop
+handling while a subprocess is running.
+```
+
+Updated measured performance after the C++ ONNXRuntime backend became the hot
+path on NAS:
+
+```text
+process-per-image Python baseline:
+- 2 completed embed jobs
+- 8 faces total
+- median 104633 ms per image
+- median 26158 ms per face
+
+C++ native before persistent-worker validation:
+- 14 completed embed jobs
+- 51 faces total
+- median 14043 ms per image
+- median 3919 ms per face
+
+C++ native with persistent worker started:
+- 21 completed embed jobs
+- 90 faces total
+- median 14174 ms per image
+- median 3636 ms per face
+- 0 native run failures in the measured run
+- 6 HEIC inputs decoded through pillow-heif before native processing
+```
+
+Conclusion from the updated run:
+
+```text
+The C++ backend is now the functional replacement and removes the previous
+89-120 s per-image Python behavior.
+
+The persistent worker is started and functional, but the measured median per
+image is still essentially equal to the previous native one-shot runs. The next
+required step is phase-level timing inside the C++ processor instead of relying
+only on the backend wall-clock duration.
+```
+
+Implemented follow-up instrumentation:
+
+```text
+The native result JSON now includes timing_ms with:
+- total
+- image_decode
+- model_load
+- detector_prepare
+- detector_run
+- detector_decode
+- recognizer_prepare
+- recognizer_run
+- embedding_normalize
+- result_write
+- recognizer_runs
+- recognized_faces
+- recognizer_batch_size
+- recognizer_batched
+- recognizer_batch_fallback
+- reused_models
+
+NativeFaceProcessorService copies these values into backend-debug.log fields:
+- native_timing_ms
+- native_total_ms
+- native_image_decode_ms
+- native_model_load_ms
+- native_detector_prepare_ms
+- native_detector_run_ms
+- native_detector_decode_ms
+- native_recognizer_prepare_ms
+- native_recognizer_run_ms
+- native_recognizer_runs
+- native_recognized_faces
+- native_recognizer_batch_size
+- native_recognizer_batched
+- native_recognizer_batch_fallback
+- native_reused_models
+```
+
+Implemented follow-up performance change:
+
+```text
+The C++ embed path now attempts one batched ArcFace recognizer run for all
+detected faces in an image. If the ONNX model/runtime rejects the batched shape,
+the persistent worker records recognizer_batch_fallback=true and continues with
+the previous per-face recognizer loop. In a persistent worker, a rejected batch
+mode is remembered so later images do not repeatedly pay the failed batch
+attempt.
+```
+
+Current branch policy:
+
+```text
+Only backend=native with hot_path_available=true may be used as the C++ image
+processing path. The native processor is a required ONNXRuntime/C++ binary, not
+a selectable bridge mode.
+```
+
+The remaining completion gate is real-model parity and NAS runtime validation
+for the C++ ONNXRuntime backend.
+
+Updated implementation fact:
+
+```text
+- the C++ ONNXRuntime backend now compiles locally as av-imgdata-face-processor 0.5.0-onnxruntime-native-heif
+- the binary links package-local libonnxruntime through $ORIGIN/../lib
+- missing model files are reported by probe before image processing starts
+- detect/embed use the native ONNXRuntime backend
+- local parity validation is still pending because no real buffalo_l ONNX model files were present in the workspace
+```
+
+Verified local dependency gap for a pure C++ implementation:
+
+```text
+- the available onnxruntime package is a Python wheel
+- no onnxruntime_c_api.h was found in the Toolkit/build environment
+- no linkable libonnxruntime.so was found in the Toolkit/build environment
+- the OpenCV wheel provides a Python extension, not usable C++ headers/libs for this processor
+- libjpeg-turbo headers/libs are available in the Toolkit sysroot
+```
+
+Therefore the next pure-native step is to build/package ONNXRuntime C API for
+the active DSM Toolkit target and run parity tests with real model files and
+representative images. The bridge replacement code path exists; it must now be
+validated on the target.
+
 The optional InsightFace block is currently represented as Python package dependencies:
 
 ```text
@@ -100,6 +252,7 @@ The native processor does not write to DSM metadata, Synology Photos, config, ru
 | Replacing InsightFace Python orchestration | Medium | Feasible if exact model inputs/outputs and normalization are defined. |
 | Replacing ONNXRuntime with custom inference code | Low | Not sensible. A real inference runtime is still required. |
 | Building ONNXRuntime C/C++ for the current Toolkit target | Medium | Feasible enough for proof-of-concept; must be verified in the existing Toolkit environment. |
+| Using process-per-image Python execution for production image processing | Low | Measured as too slow: one image embed took about 89 s and stop had to wait for subprocess completion. |
 | Building ONNXRuntime C/C++ for all DSM platforms | Medium to Low | Optional later. High effort and must be proven per platform. |
 | Guaranteeing identical numeric output across architectures | Medium to Low | Must allow tolerances for floating-point differences. |
 | Supporting current package-level behavior on the current target | Medium | Feasible if the processor contract is defined first and optional status behavior is preserved. |
@@ -109,6 +262,116 @@ Conclusion:
 ```text
 The replacement is sensible if implemented first for the already supported Toolkit target.
 Multi-platform support must remain optional and additive.
+Process-per-image Python execution is not a valid replacement target.
+```
+
+## C++ Migration Milestones
+
+Based on the measured NAS run, continue the C++ transition in this order:
+
+```text
+1. Keep av-imgdata-face-processor as the required package binary and contract endpoint.
+2. Add a real inference runtime distribution for the active DSM target:
+   - preferred: ONNXRuntime C API headers and libonnxruntime.so
+   - alternative only if ONNXRuntime is not buildable: ncnn/MNN/OpenCV DNN with model conversion proof
+3. Implement C++ JSON input/output and error contracts against processor_contract/.
+4. Implement image loading for JPEG first with libjpeg-turbo.
+6. Maintain the implemented SCRFD detector ONNX runner and post-processing.
+7. Maintain the implemented ArcFace/InsightFace embedding ONNX runner and normalization.
+8. Add parity fixtures comparing C++ output with the existing Python InsightFace path using tolerances.
+9. Keep backend=native and hot_path_available=true only for the ONNXRuntime build that passes model probe.
+10. Remove runtime dependency on Python InsightFace/OpenCV/ONNXRuntime once parity is proven.
+```
+
+## Further C++ Transfer Candidates
+
+Prioritize transfers only where the current logs or code path show likely
+runtime impact. Keep DSM API calls, status state, persistence and user-visible
+workflow decisions in Python unless measurements prove otherwise.
+
+Highest priority:
+
+```text
+1. Batched ArcFace recognizer inference inside the C++ embed command
+   Current evidence:
+   - newest timing logs show recognizer_run at about 75% of native runtime
+   - recognizer_run scales linearly at roughly 2.7 s per detected face
+   - model_load is effectively gone after the first persistent-worker request
+   Expected value:
+   - replaces N per-face ArcFace ONNXRuntime calls with one [N,3,112,112] call
+   - should reduce multi-face image runtime without changing Python workflow
+   Required proof:
+   - native_recognizer_batched=true
+   - native_recognizer_runs drops to 1 for multi-face images
+   - native_recognizer_run_ms no longer grows roughly linearly with face count
+
+2. ONNXRuntime session tuning
+   Current evidence:
+   - detector_run and recognizer_run dominate native_total_ms
+   - the measured package used one intra-op thread and basic graph optimization
+   Expected value:
+   - target-specific improvement without moving more application logic to C++
+   Required proof:
+   - compare intra-op thread counts and graph optimization levels with the same
+     native timing fields on the NAS
+   Implemented knobs:
+   - native_processors.FACE_PROCESSOR.ORT_INTRA_THREADS
+   - native_processors.FACE_PROCESSOR.ORT_GRAPH_OPT_LEVEL
+   - ORT_INTRA_THREADS=0 leaves thread selection to ONNXRuntime
+   - ORT_GRAPH_OPT_LEVEL supports disable, basic, extended, all
+   - the Python adapter passes these values as AV_IMGDATA_ORT_* environment
+     variables and includes them in native run/worker debug logs
+
+3. Batch embed command for multiple images in one worker request
+   Current evidence:
+   - Python/file orchestration is not the dominant measured runtime after worker
+     reuse, but still exists around every image request
+   Expected value:
+   - lower coordination overhead after recognizer/detector inference is reduced
+   Required proof:
+   - only useful if timing shows native_total_ms is no longer close to backend
+     wall-clock duration
+
+4. Native embedding comparison/ranking
+   Current code evidence:
+   - searchMissingPhotosFacesWithInsightFace compares detected embeddings with
+     recognition profile centroid embeddings in Python loops
+   - face_recognition._similarity is used per target/profile comparison
+   Expected value:
+   - useful when many detected faces are compared against many profiles
+   - avoids repeated Python list iteration over embedding vectors
+   Contract shape:
+   - input: target embeddings + profile ids + profile centroid embeddings
+   - output: sorted top candidates and scores
+   Keep in Python:
+   - threshold policy, person assignment decision, findings persistence
+
+5. Native face-frame geometry batch checks
+   Current code evidence:
+   - face_frame_matcher.frame_metrics and face_frame_standardizer are pure
+     numeric bbox operations
+   Expected value:
+   - low per-item cost, but easy to batch and deterministic
+   Priority:
+   - only after timing proves geometry/matching is a visible share of runtime
+```
+
+Lower priority / not currently justified:
+
+```text
+- Moving Synology Photos API reads or writes to C++:
+  not useful; network/session behavior and DSM auth stay better in Python.
+
+- Moving findings/status persistence to C++:
+  not useful; it would duplicate existing runtime-state rules and make stop and
+  reconnect behavior harder to reason about.
+
+- Replacing ONNXRuntime itself:
+  not sensible; a real inference runtime remains required.
+
+- Rewriting metadata parsing in C++:
+  not justified by the current performance evidence. The bottleneck is still
+  face inference/embedding and image handling, not XMP/MWG parsing.
 ```
 
 ## Minimum Same-Functionality Requirement
@@ -161,7 +424,59 @@ av-imgdata-face-processor version
 av-imgdata-face-processor probe --model-root <path> --model-name <name>
 av-imgdata-face-processor detect --input <job-input.json> --output <processor-result.json> --workdir <dir>
 av-imgdata-face-processor embed --input <job-input.json> --output <processor-result.json> --workdir <dir>
+av-imgdata-face-processor worker
 av-imgdata-face-processor self-test --fixtures <dir>
+```
+
+## Current Execution Plan
+
+Work continues in this order:
+
+```text
+1. Make HEIC usable for native recognition jobs.
+2. Keep the native C++ processor alive as a persistent worker.
+3. Compare measured runtimes against the older HAR/log captures.
+```
+
+Implemented HEIC decision:
+
+```text
+The backend normalizes configured browser/OpenCV-incompatible formats such as
+HEIC/HEIF to a temporary JPEG before starting the native processor.
+
+Reason:
+- DSM/NAS logs showed direct HEIC native calls failing quickly with returncode=1.
+- The existing image decoder/preview fallback could decode the same images.
+- Pre-decoding avoids one failed native subprocess per HEIC image.
+- It keeps the C++ binary free from a hard libheif/libde265 dependency chain.
+```
+
+Implemented persistent worker decision:
+
+```text
+The C++ binary supports a worker command. The process reads one JSON request per
+stdin line and writes one JSON response per stdout line. Model and ONNXRuntime
+sessions are kept in the process and reused across jobs.
+
+The Python adapter first tries this worker mode and falls back to the old
+detect/embed one-shot command when an older binary does not support worker.
+```
+
+Runtime comparison baseline from existing logs:
+
+```text
+Python bridge:
+- observed successful image embeds around 89 s and 120 s
+- stop handling waited for the current subprocess
+
+Native one-shot:
+- observed successful image embeds around 9.35 s to 23.24 s
+- median around 14.88 s in the latest checked run
+- HEIC still paid an additional failed native attempt before fallback
+
+Expected next validation:
+- HEIC should no longer show a fast failed native attempt before a successful fallback.
+- Worker mode should reduce per-image runtime by removing repeated model/session loading.
 ```
 
 Optional later split:
@@ -254,6 +569,24 @@ Result example:
     "version": "0.1.0",
     "backend": "onnxruntime-capi"
   },
+  "timing_ms": {
+    "total": 14.2,
+    "image_decode": 1.1,
+    "model_load": 0.0,
+    "detector_prepare": 1.7,
+    "detector_run": 5.8,
+    "detector_decode": 0.2,
+    "recognizer_prepare": 1.4,
+    "recognizer_run": 3.8,
+    "embedding_normalize": 0.1,
+    "result_write": 0.0,
+    "recognizer_runs": 1,
+    "recognized_faces": 2,
+    "recognizer_batch_size": 2,
+    "recognizer_batched": true,
+    "recognizer_batch_fallback": false,
+    "reused_models": true
+  },
   "result": {
     "faces": [
       {
@@ -310,7 +643,7 @@ Error example:
 Preferred dependency model:
 
 ```text
-- C++17 or C++20
+- C++11-compatible native CLI for DSM toolkit compiler compatibility
 - small JSON library vendored or built as source
 - ONNXRuntime C API if inference is required
 - minimal image decoding/preprocessing dependency set
@@ -384,23 +717,10 @@ Expected wrapper behavior after integration:
 7. result_spk/ contains the final SPK for the requested platform
 ```
 
-The wrapper may optionally expose flags later:
-
-```bash
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake --native-face=on
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake --native-face=off
-```
-
-Default for first implementation:
+Branch decision:
 
 ```text
-native face processor build = off or experimental
-```
-
-After proof:
-
-```text
-native face processor build = on for the currently supported platform
+native face processor build = required for the currently supported platform
 additional platforms = opt-in only
 ```
 
@@ -472,9 +792,7 @@ set -euo pipefail
 
 # existing backend/UI/package build steps stay in place
 
-if [ "${AV_IMGDATA_NATIVE_FACE:-0}" = "1" ]; then
-  ./tools/build-native-face-processor.sh
-fi
+./tools/build-native-face-processor.sh
 
 # existing Makefile/UI/toolkit build path continues here
 ```
@@ -845,8 +1163,8 @@ Do not move these into native code:
 6. Package skeleton into package/bin for the current -p target.
 7. Add image decode/preprocess support for JPEG first.
 8. Add model probe and ONNXRuntime C API integration for the current platform.
-9. Add detector inference and fixture result tests.
-10. Add embedding inference and parity tests against current Python path.
+9. Add detector fixture result tests with real model files.
+10. Add embedding inference parity tests against current Python path.
 11. Add UI status for native processor readiness.
 12. Disable runtime wheelhouse install by default permanently for supported native platform.
 13. Keep wheelhouse or worker path optional for unsupported platforms until parity is proven there.

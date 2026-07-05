@@ -60,7 +60,7 @@ def test_face_match_stored_findings_availability_uses_findings_status_not_runtim
     assert "faceMatchDisplayedFindingsCount" not in has_findings
 
     use_findings_switch = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
-    assert ':disabled="vm.faceMatchLoading || !vm.hasFaceMatchStoredFindings"' in use_findings_switch
+    assert ':disabled="vm.faceMatchLoading || (!vm.faceMatchRecognitionActionSelected && !vm.hasFaceMatchStoredFindings)"' in use_findings_switch
 
 
 def test_face_match_stored_findings_position_accounts_for_removed_entries():
@@ -93,6 +93,24 @@ def test_face_match_findings_transfer_keeps_zero_remaining_count():
     assert "Number.isFinite(Number(findingsUpdate.remaining_count))" in advance
     assert "Math.max(0, Number(findingsUpdate.remaining_count))" in advance
     assert "Number(findingsUpdate.remaining_count) || remainingEntries.length" not in advance
+
+
+def test_face_match_stored_findings_can_skip_false_detection_persistently():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+
+    can_skip = _computed_method(source, "faceMatchCanSkipStoredFinding")
+    assert "faceMatchReviewingStoredFindings" in can_skip
+    assert "faceMatchResultSummary.found" in can_skip
+
+    skip_method = _watch_method(source, "skipCurrentStoredFaceMatchFinding")
+    assert "/api/face_skip_match" in skip_method
+    assert "metadata_face: metadataFace" in skip_method
+    assert "await this.advanceFaceMatchFindingsAfterTransfer(data)" in skip_method
+
+    assert 'v-if="vm.faceMatchCanSkipStoredFinding"' in view
+    assert '@click="vm.skipCurrentStoredFaceMatchFinding"' in view
+    assert "face_match:button_skip_false_detection" in view
 
 
 def test_face_match_live_next_preserves_displayed_progress_as_partial_scan_base():
@@ -174,7 +192,7 @@ def test_checks_restart_button_is_limited_to_saved_scan():
     guard = _computed_method(source, "checksCanRestartSavedScan")
     assert "selectedChecksAction === 'scan'" in guard
     assert "checksSaveOnly" in guard
-    assert "hasChecksStoredFindings" not in guard
+    assert "hasChecksStoredFindings" in guard
     assert "!this.isChecksReviewActive" in guard
     assert "!this.isChecksReviewStopping" in guard
     assert "!this.checksLoading" in guard

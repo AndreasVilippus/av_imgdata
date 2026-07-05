@@ -10,13 +10,9 @@ export default {
 			exiftoolInstalling: false,
 			exiftoolRemoving: false,
 			exiftoolExtensionsLoading: false,
-			pipPackagesStatus: {},
-			pipPackagesStatusLoading: false,
-			pipWheelhousePackages: [],
-			pipWheelhousePackagesLoading: false,
-			selectedPipWheelhousePackageName: '',
-			pipWheelhousePackageInstalling: false,
-			pipWheelhousePackageReinstalling: false,
+			insightFaceStatus: {},
+			imageBackendStatus: {},
+			insightFaceStatusLoading: false,
 			insightFaceModelDeleting: '',
 		};
 	},
@@ -77,15 +73,15 @@ export default {
 		canConfigureExiftoolExtensions() {
 			return this.isExiftoolEnabled;
 		},
-		insightFacePipPackageStatus() {
-			const packages = this.pipPackagesStatus && typeof this.pipPackagesStatus.packages === 'object'
-				? this.pipPackagesStatus.packages
+		insightFaceRuntimeStatus() {
+			const status = this.insightFaceStatus && typeof this.insightFaceStatus === 'object'
+				? this.insightFaceStatus
 				: {};
-			return packages.INSIGHTFACE && typeof packages.INSIGHTFACE === 'object' ? packages.INSIGHTFACE : {};
+			return status.insightface && typeof status.insightface === 'object' ? status.insightface : {};
 		},
 		insightFaceModelStatus() {
-			const status = this.insightFacePipPackageStatus && typeof this.insightFacePipPackageStatus.model_status === 'object'
-				? this.insightFacePipPackageStatus.model_status
+			const status = this.insightFaceRuntimeStatus && typeof this.insightFaceRuntimeStatus.model_status === 'object'
+				? this.insightFaceRuntimeStatus.model_status
 				: {};
 			return {
 				root: String(status.root || ''),
@@ -94,7 +90,7 @@ export default {
 			};
 		},
 		insightFaceActiveModelName() {
-			return String(this.insightFacePipPackageStatus.active_model_name || '').trim();
+			return String(this.insightFaceRuntimeStatus.active_model_name || '').trim();
 		},
 		insightFaceInstalledModelNames() {
 			return this.insightFaceModelStatus.models
@@ -102,9 +98,19 @@ export default {
 				.filter((name, index, names) => name && names.indexOf(name) === index)
 				.sort((left, right) => left.localeCompare(right));
 		},
-		selectedPipWheelhousePackageStatus() {
-			const selected = String(this.selectedPipWheelhousePackageName || '').trim().toLowerCase();
-			return this.pipWheelhousePackages.find((item) => String(item && item.name || '').trim().toLowerCase() === selected) || {};
+		imageProcessorVipsStatus() {
+			const imageProcessors = this.imageBackendStatus && this.imageBackendStatus.image_processors && typeof this.imageBackendStatus.image_processors === 'object'
+				? this.imageBackendStatus.image_processors
+				: {};
+			if (imageProcessors.IMAGE_PROCESSOR_VIPS && typeof imageProcessors.IMAGE_PROCESSOR_VIPS === 'object') {
+				return imageProcessors.IMAGE_PROCESSOR_VIPS;
+			}
+			const nativeProcessors = this.insightFaceStatus && this.insightFaceStatus.native_processors && typeof this.insightFaceStatus.native_processors === 'object'
+				? this.insightFaceStatus.native_processors
+				: {};
+			return nativeProcessors.IMAGE_PROCESSOR_VIPS && typeof nativeProcessors.IMAGE_PROCESSOR_VIPS === 'object'
+				? nativeProcessors.IMAGE_PROCESSOR_VIPS
+				: {};
 		},
 	},
 	methods: {
@@ -143,6 +149,11 @@ export default {
 						DIMENSION_ISSUES: true,
 						NAME_CONFLICTS: true,
 						NAME_CONFLICTS_INCLUDE_PHOTOS: true,
+						RECOGNITION_SAFE_SCORE: 0.55,
+						RECOGNITION_REVIEW_SCORE: 0.45,
+						RECOGNITION_MIN_MARGIN: 0.08,
+						RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD: 0.35,
+						RECOGNITION_DET_THRESH: 0.5,
 						SINGLE_SOURCE_OF_TRUTH: '',
 					},
 				},
@@ -163,16 +174,22 @@ export default {
 					FILE_MATCH_SOURCE_SCOPE: 'both',
 					PERSON_SORT_ORDER: 'id_desc',
 				},
-				pip_packages: {
-					INSIGHTFACE: {
-						ENABLED: false,
-						INSTALL_ON_START: true,
-						REQUIREMENTS_FILE: 'requirements-optional-insightface.txt',
-						WHEELHOUSE_ENABLED: true,
-						WHEELHOUSE_MANIFEST_URL: '',
-						WHEELHOUSE_TARGET: '',
+				native_processors: {
+					FACE_PROCESSOR: {
 						MODEL_ROOT: '',
 						MODEL_NAME: '',
+						TIMEOUT_SECONDS: 120,
+						MAX_IMAGE_BYTES: 67108864,
+						INSIGHTFACE_LICENSE_ACKNOWLEDGED: false,
+					},
+					IMAGE_PROCESSOR_VIPS: {
+						ENABLED: false,
+						PREFERRED: true,
+						PATH: 'bin/av-imgdata-image-processor',
+						TIMEOUT_SECONDS: 120,
+						MAX_IMAGE_BYTES: 268435456,
+						SUPPORTED_FORMATS: ['jpeg', 'jpg', 'png', 'webp', 'tiff'],
+						ALLOW_FALLBACK_TO_DEFAULT: true,
 					},
 				},
 			};
@@ -232,6 +249,13 @@ export default {
 				&& metadataLocations.includes(parts[2])
 			) ? normalized : fallback;
 		},
+		clampExternalLibrariesNumber(value, min, max, fallback) {
+			const numeric = Number(value);
+			if (!Number.isFinite(numeric)) {
+				return fallback;
+			}
+			return Math.max(min, Math.min(max, numeric));
+		},
 		formatExternalLibrariesImageExtensionsMultiline(value) {
 			return this.normalizeExternalLibrariesImageExtensions(value, []).join(',\n');
 		},
@@ -256,21 +280,21 @@ export default {
 				},
 			};
 		},
-		setExternalLibrariesPipPackageConfigValue(packageKey, key, value) {
-			const pipPackages = this.externalLibrariesConfigModel.pip_packages || {};
-			const packageConfig = pipPackages[packageKey] || {};
-			const wasInsightFaceEnabled = packageKey === 'INSIGHTFACE' && key === 'ENABLED' && Boolean(packageConfig.ENABLED);
+		setExternalLibrariesNativeProcessorConfigValue(processorKey, key, value) {
+			const nativeProcessors = this.externalLibrariesConfigModel.native_processors || {};
+			const processorConfig = nativeProcessors[processorKey] || {};
+			const wasLicenseAcknowledged = processorKey === 'FACE_PROCESSOR' && key === 'INSIGHTFACE_LICENSE_ACKNOWLEDGED' && Boolean(processorConfig.INSIGHTFACE_LICENSE_ACKNOWLEDGED);
 			this.externalLibrariesConfigModel = {
 				...this.externalLibrariesConfigModel,
-				pip_packages: {
-					...pipPackages,
-					[packageKey]: {
-						...packageConfig,
+				native_processors: {
+					...nativeProcessors,
+					[processorKey]: {
+						...processorConfig,
 						[key]: value,
 					},
 				},
 			};
-			if (packageKey === 'INSIGHTFACE' && key === 'ENABLED' && Boolean(value) && !wasInsightFaceEnabled) {
+			if (processorKey === 'FACE_PROCESSOR' && key === 'INSIGHTFACE_LICENSE_ACKNOWLEDGED' && Boolean(value) && !wasLicenseAcknowledged) {
 				this.showExternalLibrariesRestartPopup(
 					this.$avt(
 						'config:popup_insightface_model_license_warning',
@@ -278,32 +302,6 @@ export default {
 					)
 				);
 			}
-		},
-		getPipPackageInstallStatusLabel(installStatus) {
-			const status = String(installStatus && installStatus.status || '').trim().toLowerCase();
-			if (!status) {
-				return this.$avt('status:not_available', 'Not available');
-			}
-			if (status === 'success') {
-				return this.$avt('config:pip_install_status_success', 'Last installation completed.');
-			}
-			if (status === 'failed') {
-				return this.$avt('config:pip_install_status_failed', 'Last installation failed.');
-			}
-			return status;
-		},
-		getPipPackageModuleStatusLabel(moduleStatus) {
-			if (!moduleStatus || typeof moduleStatus !== 'object') {
-				return this.$avt('status:not_available', 'Not available');
-			}
-			if (moduleStatus.installed) {
-				return moduleStatus.version || this.$avt('status:installed', 'Installed');
-			}
-			const importError = String(moduleStatus.import_error || '').trim();
-			if (importError) {
-				return `${this.$avt('status:not_installed', 'Not installed')}: ${importError}`;
-			}
-			return this.$avt('status:not_installed', 'Not installed');
 		},
 		getInsightFaceModelStatusLabel(modelStatus) {
 			if (!modelStatus || typeof modelStatus !== 'object') {
@@ -315,20 +313,49 @@ export default {
 			}
 			return this.$avt('status:not_installed', 'Not installed');
 		},
+		formatInsightFaceNativeProcessorReason(reason) {
+				const normalized = String(reason || '').trim().toLowerCase();
+				const labels = {
+					insightface_license_not_acknowledged: ['status:native_face_processor_reason_license_not_acknowledged', 'InsightFace model license terms have not been acknowledged.'],
+					binary_missing: ['status:native_face_processor_reason_binary_missing', 'Native face processor binary is missing.'],
+				binary_not_executable: ['status:native_face_processor_reason_binary_not_executable', 'Native face processor binary is not executable.'],
+				version_failed: ['status:native_face_processor_reason_version_failed', 'Native face processor version check failed.'],
+				probe_failed: ['status:native_face_processor_reason_probe_failed', 'Native face processor model probe failed.'],
+				skeleton_no_inference: ['status:native_face_processor_reason_skeleton_no_inference', 'Native face processor skeleton does not run inference.'],
+				onnxruntime_smoke_only: ['status:native_face_processor_reason_onnxruntime_smoke_only', 'ONNXRuntime smoke backend is available, but full inference is not ready.'],
+				ready: ['status:native_face_processor_reason_ready', 'Native face processor is ready.'],
+				unknown: ['status:native_face_processor_reason_unknown', 'Native face processor status is unknown.'],
+			};
+			const entry = labels[normalized];
+			if (entry) {
+				return this.$avt(entry[0], entry[1]);
+			}
+			return normalized || this.$avt('status:not_available', 'Not available');
+		},
+		formatImageProcessorVipsReason(reason) {
+			const normalized = String(reason || '').trim().toLowerCase();
+			const labels = {
+				vips_disabled: ['status:vips_reason_disabled', 'libvips image backend is disabled.'],
+				vips_binary_missing: ['status:vips_reason_binary_missing', 'libvips image processor binary is missing.'],
+				vips_binary_not_executable: ['status:vips_reason_binary_not_executable', 'libvips image processor binary is not executable.'],
+				vips_version_failed: ['status:vips_reason_version_failed', 'libvips image processor version check failed.'],
+				vips_probe_failed: ['status:vips_reason_probe_failed', 'libvips image backend probe failed; default image backend is used.'],
+				vips_format_unsupported: ['status:vips_reason_format_unsupported', 'Image format is not supported by the libvips backend.'],
+				vips_ready: ['status:vips_reason_ready', 'libvips image backend is ready.'],
+				vips_failed_fallback_used: ['status:vips_reason_failed_fallback_used', 'libvips failed; default image backend was used.'],
+				vips_failed_no_fallback: ['status:vips_reason_failed_no_fallback', 'libvips failed and fallback is disabled.'],
+			};
+			const entry = labels[normalized];
+			if (entry) {
+				return this.$avt(entry[0], entry[1]);
+			}
+			return normalized || this.$avt('status:not_available', 'Not available');
+		},
 		showExternalLibrariesRestartPopup(message) {
 			const text = String(message || '').trim();
 			if (text) {
 				window.alert(text);
 			}
-		},
-		externalLibrariesPipPackagesRequireRestart(previousConfig, nextConfig) {
-			const previousPackages = previousConfig && previousConfig.pip_packages && typeof previousConfig.pip_packages === 'object'
-				? previousConfig.pip_packages
-				: {};
-			const nextPackages = nextConfig && nextConfig.pip_packages && typeof nextConfig.pip_packages === 'object'
-				? nextConfig.pip_packages
-				: {};
-			return JSON.stringify(previousPackages) !== JSON.stringify(nextPackages);
 		},
 		setExiftoolImageExtensionsInput(value) {
 			this.exiftoolImageExtensionsInput = String(value || '');
@@ -346,8 +373,9 @@ export default {
 			const reviewIgnoreLists = (review.CHECKS_IGNORE_LISTS && typeof review.CHECKS_IGNORE_LISTS === 'object' && !Array.isArray(review.CHECKS_IGNORE_LISTS)) ? review.CHECKS_IGNORE_LISTS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
-			const pipPackages = (root.pip_packages && typeof root.pip_packages === 'object' && !Array.isArray(root.pip_packages)) ? root.pip_packages : {};
-			const insightFace = (pipPackages.INSIGHTFACE && typeof pipPackages.INSIGHTFACE === 'object' && !Array.isArray(pipPackages.INSIGHTFACE)) ? pipPackages.INSIGHTFACE : {};
+			const nativeProcessors = (root.native_processors && typeof root.native_processors === 'object' && !Array.isArray(root.native_processors)) ? root.native_processors : {};
+			const faceProcessor = (nativeProcessors.FACE_PROCESSOR && typeof nativeProcessors.FACE_PROCESSOR === 'object' && !Array.isArray(nativeProcessors.FACE_PROCESSOR)) ? nativeProcessors.FACE_PROCESSOR : {};
+			const imageProcessorVips = (nativeProcessors.IMAGE_PROCESSOR_VIPS && typeof nativeProcessors.IMAGE_PROCESSOR_VIPS === 'object' && !Array.isArray(nativeProcessors.IMAGE_PROCESSOR_VIPS)) ? nativeProcessors.IMAGE_PROCESSOR_VIPS : {};
 
 			const imageExtensions = this.normalizeExternalLibrariesImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
 			const exiftoolImageExtensions = this.normalizeExternalLibrariesImageExtensions(files.EXIFTOOL_IMAGE_EXTENSIONS, []);
@@ -400,6 +428,11 @@ export default {
 						DIMENSION_ISSUES: Boolean(checks.DIMENSION_ISSUES ?? defaults.analysis.CHECKS.DIMENSION_ISSUES),
 						NAME_CONFLICTS: Boolean(checks.NAME_CONFLICTS ?? defaults.analysis.CHECKS.NAME_CONFLICTS),
 						NAME_CONFLICTS_INCLUDE_PHOTOS: Boolean(checks.NAME_CONFLICTS_INCLUDE_PHOTOS ?? defaults.analysis.CHECKS.NAME_CONFLICTS_INCLUDE_PHOTOS),
+						RECOGNITION_SAFE_SCORE: this.clampExternalLibrariesNumber(checks.RECOGNITION_SAFE_SCORE, 0, 1, defaults.analysis.CHECKS.RECOGNITION_SAFE_SCORE),
+						RECOGNITION_REVIEW_SCORE: this.clampExternalLibrariesNumber(checks.RECOGNITION_REVIEW_SCORE, 0, 1, defaults.analysis.CHECKS.RECOGNITION_REVIEW_SCORE),
+						RECOGNITION_MIN_MARGIN: this.clampExternalLibrariesNumber(checks.RECOGNITION_MIN_MARGIN, 0, 1, defaults.analysis.CHECKS.RECOGNITION_MIN_MARGIN),
+						RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD: this.clampExternalLibrariesNumber(checks.RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD, 0, 1, defaults.analysis.CHECKS.RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD),
+						RECOGNITION_DET_THRESH: this.clampExternalLibrariesNumber(checks.RECOGNITION_DET_THRESH, 0, 1, defaults.analysis.CHECKS.RECOGNITION_DET_THRESH),
 						SINGLE_SOURCE_OF_TRUTH: this.normalizeExternalLibrariesChecksSingleSourceOfTruth(
 							checks.SINGLE_SOURCE_OF_TRUTH,
 							defaults.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH
@@ -445,18 +478,25 @@ export default {
 						? String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase()
 						: defaults.face_match.PERSON_SORT_ORDER,
 				},
-				pip_packages: {
-					...pipPackages,
-					INSIGHTFACE: {
-						...insightFace,
-						ENABLED: Boolean(insightFace.ENABLED ?? defaults.pip_packages.INSIGHTFACE.ENABLED),
-						INSTALL_ON_START: Boolean(insightFace.INSTALL_ON_START ?? defaults.pip_packages.INSIGHTFACE.INSTALL_ON_START),
-						REQUIREMENTS_FILE: String(insightFace.REQUIREMENTS_FILE || defaults.pip_packages.INSIGHTFACE.REQUIREMENTS_FILE),
-						WHEELHOUSE_ENABLED: true,
-						WHEELHOUSE_MANIFEST_URL: String(insightFace.WHEELHOUSE_MANIFEST_URL || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_MANIFEST_URL),
-						WHEELHOUSE_TARGET: String(insightFace.WHEELHOUSE_TARGET || defaults.pip_packages.INSIGHTFACE.WHEELHOUSE_TARGET),
-						MODEL_ROOT: String(insightFace.MODEL_ROOT || defaults.pip_packages.INSIGHTFACE.MODEL_ROOT),
-						MODEL_NAME: String(insightFace.MODEL_NAME || defaults.pip_packages.INSIGHTFACE.MODEL_NAME),
+				native_processors: {
+					...nativeProcessors,
+					FACE_PROCESSOR: {
+						...faceProcessor,
+						MODEL_ROOT: String(faceProcessor.MODEL_ROOT || defaults.native_processors.FACE_PROCESSOR.MODEL_ROOT),
+						MODEL_NAME: String(faceProcessor.MODEL_NAME || defaults.native_processors.FACE_PROCESSOR.MODEL_NAME),
+						TIMEOUT_SECONDS: Math.max(1, Math.min(3600, Number(faceProcessor.TIMEOUT_SECONDS) || defaults.native_processors.FACE_PROCESSOR.TIMEOUT_SECONDS)),
+						MAX_IMAGE_BYTES: Math.max(1048576, Math.min(1073741824, Number(faceProcessor.MAX_IMAGE_BYTES) || defaults.native_processors.FACE_PROCESSOR.MAX_IMAGE_BYTES)),
+						INSIGHTFACE_LICENSE_ACKNOWLEDGED: Boolean(faceProcessor.INSIGHTFACE_LICENSE_ACKNOWLEDGED ?? defaults.native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED),
+					},
+					IMAGE_PROCESSOR_VIPS: {
+						...imageProcessorVips,
+						ENABLED: Boolean(imageProcessorVips.ENABLED ?? defaults.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED),
+						PREFERRED: Boolean(imageProcessorVips.PREFERRED ?? defaults.native_processors.IMAGE_PROCESSOR_VIPS.PREFERRED),
+						PATH: String(imageProcessorVips.PATH || defaults.native_processors.IMAGE_PROCESSOR_VIPS.PATH),
+						TIMEOUT_SECONDS: Math.max(1, Math.min(3600, Number(imageProcessorVips.TIMEOUT_SECONDS) || defaults.native_processors.IMAGE_PROCESSOR_VIPS.TIMEOUT_SECONDS)),
+						MAX_IMAGE_BYTES: Math.max(1048576, Math.min(1073741824, Number(imageProcessorVips.MAX_IMAGE_BYTES) || defaults.native_processors.IMAGE_PROCESSOR_VIPS.MAX_IMAGE_BYTES)),
+						SUPPORTED_FORMATS: this.normalizeExternalLibrariesImageExtensions(imageProcessorVips.SUPPORTED_FORMATS, defaults.native_processors.IMAGE_PROCESSOR_VIPS.SUPPORTED_FORMATS),
+						ALLOW_FALLBACK_TO_DEFAULT: Boolean(imageProcessorVips.ALLOW_FALLBACK_TO_DEFAULT ?? defaults.native_processors.IMAGE_PROCESSOR_VIPS.ALLOW_FALLBACK_TO_DEFAULT),
 					},
 				},
 			};
@@ -482,12 +522,7 @@ export default {
 					IMAGE_EXTENSIONS_NATIVE_ONLY: defaults.files.IMAGE_EXTENSIONS_NATIVE_ONLY,
 					EXIFTOOL_IMAGE_EXTENSIONS: defaults.files.EXIFTOOL_IMAGE_EXTENSIONS,
 				},
-				pip_packages: {
-					...this.externalLibrariesConfigModel.pip_packages,
-					INSIGHTFACE: {
-						...defaults.pip_packages.INSIGHTFACE,
-					},
-				},
+				native_processors: defaults.native_processors,
 			});
 			this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 			this.externalLibrariesMessage = this.$avt('config:output_defaults_applied', 'Default values loaded into the editor.');
@@ -501,78 +536,31 @@ export default {
 				this.externalLibrariesConfigModel = this.normalizeExternalLibrariesConfig(data && data.data && data.data.config);
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
-				await this.fetchPipPackagesStatus();
-				if (this.selectedOption === 'external_libraries_pip_packages') {
-					await this.loadPipWheelhousePackages();
-				}
+				await this.fetchInsightFaceStatus();
+				await this.fetchImageBackendStatus();
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
 				this.externalLibrariesLoading = false;
 			}
 		},
-		async fetchPipPackagesStatus() {
-			this.pipPackagesStatusLoading = true;
+		async fetchImageBackendStatus() {
 			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_packages_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
-				this.pipPackagesStatus = this.getResponseData(data);
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/image_backend_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
+				this.imageBackendStatus = this.getResponseData(data);
+			} catch (err) {
+				this.imageBackendStatus = {};
+			}
+		},
+		async fetchInsightFaceStatus() {
+			this.insightFaceStatusLoading = true;
+			try {
+				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/insightface_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 120000 });
+				this.insightFaceStatus = this.getResponseData(data);
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
-				this.pipPackagesStatusLoading = false;
-			}
-		},
-		async loadPipWheelhousePackages() {
-			this.pipWheelhousePackagesLoading = true;
-			this.externalLibrariesMessage = '';
-			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_wheelhouse_packages', {
-					package_key: 'INSIGHTFACE',
-				}, { resume: false, requireSynoToken: false });
-				const payload = this.getResponseData(data);
-				this.pipWheelhousePackages = Array.isArray(payload.packages) ? payload.packages : [];
-				if (!this.selectedPipWheelhousePackageName && this.pipWheelhousePackages.length) {
-					this.selectedPipWheelhousePackageName = String(this.pipWheelhousePackages[0].name || '');
-				}
-				if (this.selectedPipWheelhousePackageName && !this.selectedPipWheelhousePackageStatus.name) {
-					this.selectedPipWheelhousePackageName = this.pipWheelhousePackages.length ? String(this.pipWheelhousePackages[0].name || '') : '';
-				}
-			} catch (err) {
-				this.pipWheelhousePackages = [];
-				this.externalLibrariesMessage = `Error: ${err.message}`;
-			} finally {
-				this.pipWheelhousePackagesLoading = false;
-			}
-		},
-		setSelectedPipWheelhousePackageName(value) {
-			this.selectedPipWheelhousePackageName = String(value || '').trim();
-		},
-		async installSelectedPipWheelhousePackage(reinstall = false) {
-			const packageName = String(this.selectedPipWheelhousePackageName || '').trim();
-			if (!packageName || this.pipWheelhousePackageInstalling || this.pipWheelhousePackageReinstalling) {
-				return;
-			}
-			if (reinstall) {
-				this.pipWheelhousePackageReinstalling = true;
-			} else {
-				this.pipWheelhousePackageInstalling = true;
-			}
-			this.externalLibrariesMessage = '';
-			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/pip_wheelhouse_package_install', {
-					package_key: 'INSIGHTFACE',
-					package_name: packageName,
-					reinstall: !!reinstall,
-				}, { resume: false, requireSynoToken: false, timeoutMs: 900000 });
-				const payload = this.getResponseData(data);
-				this.externalLibrariesMessage = payload.message || this.$avt('config:message_pip_package_installed', 'pip package installation finished.');
-				await this.fetchPipPackagesStatus();
-				await this.loadPipWheelhousePackages();
-			} catch (err) {
-				this.externalLibrariesMessage = `Error: ${err.message}`;
-			} finally {
-				this.pipWheelhousePackageInstalling = false;
-				this.pipWheelhousePackageReinstalling = false;
+				this.insightFaceStatusLoading = false;
 			}
 		},
 		async deleteInsightFaceModel(modelName) {
@@ -587,7 +575,7 @@ export default {
 					model_name: normalizedName,
 				});
 				this.externalLibrariesMessage = this.$avt('config:message_insightface_model_deleted', 'InsightFace model removed.');
-				await this.fetchPipPackagesStatus();
+				await this.fetchInsightFaceStatus();
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {
@@ -598,7 +586,6 @@ export default {
 			this.externalLibrariesSaving = true;
 			this.externalLibrariesMessage = '';
 			try {
-				const previousNormalized = this.normalizeExternalLibrariesConfig(this.externalLibrariesConfigModel);
 				const payloadConfig = {
 					...this.externalLibrariesConfigModel,
 					files: {
@@ -612,16 +599,9 @@ export default {
 				this.externalLibrariesConfigModel = this.normalizeExternalLibrariesConfig(data && data.data && data.data.config);
 				this.exiftoolImageExtensionsInput = this.formatExternalLibrariesImageExtensionsMultiline(this.externalLibrariesConfigModel.files.EXIFTOOL_IMAGE_EXTENSIONS);
 				await this.fetchExiftoolStatus();
-				await this.fetchPipPackagesStatus();
+				await this.fetchInsightFaceStatus();
+				await this.fetchImageBackendStatus();
 				this.externalLibrariesMessage = this.$avt('config:message_saved', 'Configuration saved.');
-				if (this.externalLibrariesPipPackagesRequireRestart(previousNormalized, this.externalLibrariesConfigModel)) {
-					this.showExternalLibrariesRestartPopup(
-						this.$avt(
-							'config:popup_restart_required_pip_packages',
-							'The package must be restarted so changed optional pip packages can be installed or updated.'
-						)
-					);
-				}
 			} catch (err) {
 				this.externalLibrariesMessage = `Error: ${err.message}`;
 			} finally {

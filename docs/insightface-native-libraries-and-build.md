@@ -26,6 +26,81 @@ The first implementation targets the currently supported DSM platform only. Addi
 
 The native processor build must not introduce a second mandatory build path.
 
+## Confirmed Implementation State
+
+The current branch builds a required package binary:
+
+```text
+target/bin/av-imgdata-face-processor
+```
+
+The binary now has one production build mode:
+
+```text
+- onnxruntime: native C++ inference backend
+```
+
+The `onnxruntime` build reports `backend=native` and implements the first full
+C++ replacement path:
+
+```text
+- package-local ONNXRuntime C API loading
+- JPEG decode through libjpeg/libjpeg-turbo
+- InsightFace/SCRFD detector preprocessing
+- SCRFD ONNX execution and post-processing
+- NMS and normalized face boxes
+- ArcFace-style 5-point face alignment
+- recognition ONNX execution
+- L2-normalized embeddings
+- ProcessorResult JSON output for detect/embed
+```
+
+This state is intentionally different from the old skeleton:
+
+```text
+- the skeleton returned completed jobs with faces=[]
+- a skeleton version/probe is treated as unavailable with reason=skeleton_no_inference
+```
+
+The remaining gap is not the processor wiring anymore; it is runtime parity
+validation against real Buffalo-L model files and representative images on the
+DSM target.
+
+Measured NAS baseline before native inference:
+
+```text
+- one process-per-image Python embed command returned 4 faces after about 89.4 s
+- two embed commands failed with exit 1 after about 4.9 s and 0.8 s
+- stop handling stayed in phase=stopping until the current subprocess returned
+```
+
+Build/status decision from those measurements:
+
+```text
+Only a processor reporting backend=native and hot_path_available=true is allowed
+to replace the Python InsightFace/OpenCV/ONNXRuntime stack.
+```
+
+Local Toolkit/wheelhouse check:
+
+```text
+- onnxruntime-1.16.3 is present as a Python wheel only
+- the wheel does not provide onnxruntime_c_api.h
+- the wheel does not provide libonnxruntime.so for C++ linkage
+- the Python extension does not expose the needed Ort C API symbols as a stable link target
+- opencv-python-headless is present as a Python wheel only
+- libjpeg-turbo headers/libs are available in the DSM Toolkit sysroot
+```
+
+Practical consequence:
+
+```text
+The Python bridge must not be used as the production image backend. The
+production candidate is the `onnxruntime` build of
+`av-imgdata-face-processor`, which requires ONNXRuntime C API and libjpeg for
+the active DSM Toolkit target.
+```
+
 ## Required Native Function Blocks
 
 Replacing the Python optional stack requires these blocks:
@@ -56,6 +131,51 @@ The native processor must not own DSM workflow logic.
 | JPEG decode | `libjpeg-turbo` | BSD-style / IJG / zlib-style combination | Yes | Fast, common, good first image format. |
 | Inference | `ONNXRuntime` C API | MIT | Yes, after skeleton | Closest native replacement for current `onnxruntime` Python dependency. |
 | Model I/O and filesystem | C++ stdlib | C++ runtime | Yes | Avoid extra dependencies. |
+
+### Immediate implementation focus
+
+The next useful work is dependency and proof-of-linkage:
+
+```text
+1. Provide an ONNXRuntime C API package for the active DSM Toolkit target.
+2. Add CMake detection for onnxruntime_c_api.h and libonnxruntime.so.
+3. Fail the native build if the requested native inference backend cannot link.
+4. Validate native detector/embedder parity with real model files and fixtures.
+```
+
+Do not invest further in process-per-image Python optimization. It would still
+be a Python runtime mitigation rather than the desired C++ replacement.
+
+Implemented build switch:
+
+```bash
+ONNXRUNTIME_ROOT=/path/to/onnxruntime-capi \
+JPEG_ROOT=/path/to/sysroot/usr \
+./tools/build-native-face-processor.sh
+```
+
+Expected layout for `ONNXRUNTIME_ROOT`:
+
+```text
+include/onnxruntime_c_api.h
+lib/libonnxruntime.so
+```
+
+Expected layout for `JPEG_ROOT` when the build host does not provide libjpeg
+development files directly:
+
+```text
+include/jpeglib.h
+include/jconfig.h
+include/jmorecfg.h
+lib/libjpeg.so
+```
+
+The ONNXRuntime build installs `libonnxruntime.so*` and `libjpeg.so*` into the
+package `lib/` directory. The processor binary uses `$ORIGIN/../lib` as RPATH,
+so package-local libraries are preferred when they are present.
+
+The package build fails fast if those layouts are missing.
 
 ### Add only when required by fixtures
 
@@ -327,12 +447,14 @@ Build sequence:
 11. result_spk/ receives the final SPK.
 ```
 
-## Build Flags
+## Build Controls
 
-Add optional environment or wrapper flags:
+The native face processor build is required in this branch. The old
+`AV_IMGDATA_NATIVE_FACE=0|1` switch is not used.
+
+Remaining experimental dependency flags:
 
 ```bash
-AV_IMGDATA_NATIVE_FACE=0|1
 AV_IMGDATA_NATIVE_FACE_DEPS=reuse|build
 AV_IMGDATA_NATIVE_FACE_ONNX=0|1
 AV_IMGDATA_NATIVE_FACE_OPENCV=0|1
@@ -342,27 +464,16 @@ Recommended defaults:
 
 ```text
 Initial phase:
-  AV_IMGDATA_NATIVE_FACE=0
+  native face processor build is not skipped
 
 Skeleton proof phase:
-  AV_IMGDATA_NATIVE_FACE=1
   AV_IMGDATA_NATIVE_FACE_ONNX=0
   AV_IMGDATA_NATIVE_FACE_OPENCV=0
 
 Inference proof phase:
-  AV_IMGDATA_NATIVE_FACE=1
   AV_IMGDATA_NATIVE_FACE_ONNX=1
   AV_IMGDATA_NATIVE_FACE_OPENCV=0
 ```
-
-The wrapper may later expose user-facing flags:
-
-```bash
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake --native-face=on
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake --native-face=off
-```
-
-Internally these map to `AV_IMGDATA_NATIVE_FACE`.
 
 ## Native Dependency Build Stages
 
@@ -488,7 +599,7 @@ Minimum `CMakeLists.txt` expectations:
 cmake_minimum_required(VERSION 3.16)
 project(av_imgdata_face_processor LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(AV_IMGDATA_ENABLE_ONNXRUNTIME "Enable ONNXRuntime backend" OFF)
@@ -530,11 +641,9 @@ set -euo pipefail
 
 # existing build steps remain
 
-if [ "${AV_IMGDATA_NATIVE_FACE:-0}" = "1" ]; then
-  ./tools/native/check-native-deps.sh
-  ./tools/native/build-native-deps.sh
-  ./tools/build-native-face-processor.sh
-fi
+./tools/native/check-native-deps.sh
+./tools/native/build-native-deps.sh
+./tools/build-native-face-processor.sh
 
 # existing UI/package build continues
 ```
@@ -635,7 +744,7 @@ For optional platforms without native artifacts:
 ### Skeleton phase
 
 ```text
-- build-package.sh works with AV_IMGDATA_NATIVE_FACE=1
+- build-package.sh always builds the native face processor
 - SPK contains bin/av-imgdata-face-processor
 - version command works on target DSM
 - self-test without model works on target DSM
@@ -686,7 +795,7 @@ For optional platforms without native artifacts:
 
 ```text
 1. Add native processor skeleton with nlohmann/json only.
-2. Build skeleton through tools/build-package.sh with AV_IMGDATA_NATIVE_FACE=1.
+2. Build skeleton through tools/build-package.sh.
 3. Package binary and notice file.
 4. Add backend status probe.
 5. Add libjpeg-turbo JPEG decode.
@@ -701,7 +810,7 @@ Use this dependency plan for the first native replacement path:
 
 ```text
 Required first:
-  C++17
+  C++11-compatible processor skeleton and CLI
   nlohmann/json or equivalent small JSON parser
   libjpeg-turbo
 

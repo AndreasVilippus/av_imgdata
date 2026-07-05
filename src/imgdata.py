@@ -38,10 +38,11 @@ from services.config_service import ConfigService
 from services.checks_workflow_service import ChecksWorkflowService
 from services.exiftool_service import ExifToolService
 from services.face_detector import FaceDetectorUnavailable, InsightFaceDetector
-from services.face_embedder import InsightFaceEmbedder
 from services.face_frame_standardization_service import FaceFrameStandardizationService
 from services.face_recognition_service import FaceRecognitionService
 from services.image_decode_service import ImageDecodeService
+from services.native_face_processor_service import NativeFaceProcessorService
+from services.native_image_processor_vips_service import NativeImageProcessorVipsService
 from services.face_coordinate_precision import FACE_COORDINATE_DIGITS, FACE_COORDINATE_TOLERANCE, format_face_coordinate, round_face_coordinate
 from services.face_matcher import FaceMatcher, compute
 from services.face_match_mutation_service import FaceMatchMutationService
@@ -159,6 +160,8 @@ class ImgDataService:
         self.photos_lookup_cache = PhotosLookupCache()
         self.files = FileHandler(self.config)
         self.image_decoder = ImageDecodeService(self.config)
+        self.native_face_processor = NativeFaceProcessorService(self.config)
+        self.native_image_processor_vips = NativeImageProcessorVipsService(self.config)
         self.metadata_parser = MetadataParser()
         self.name_mappings = NameMappingService()
         self.face_suppressions = FaceSuppressionRepository(self.name_mappings._database)
@@ -5275,6 +5278,19 @@ class ImgDataService:
             ),
         }
 
+    def _configuredRecognitionCheckOptions(self) -> Dict[str, Any]:
+        checks = self.config.readMergedConfig().get("analysis", {}).get("CHECKS", {})
+        if not isinstance(checks, dict):
+            checks = {}
+        defaults = ConfigService.defaultConfig()["analysis"]["CHECKS"]
+        return {
+            "safe_score": float(checks.get("RECOGNITION_SAFE_SCORE", defaults["RECOGNITION_SAFE_SCORE"])),
+            "review_score": float(checks.get("RECOGNITION_REVIEW_SCORE", defaults["RECOGNITION_REVIEW_SCORE"])),
+            "min_margin": float(checks.get("RECOGNITION_MIN_MARGIN", defaults["RECOGNITION_MIN_MARGIN"])),
+            "outlier_similarity_threshold": float(checks.get("RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD", defaults["RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD"])),
+            "det_thresh": float(checks.get("RECOGNITION_DET_THRESH", defaults["RECOGNITION_DET_THRESH"])),
+        }
+
     def _runFileAnalysis(
         self,
         *,
@@ -7961,7 +7977,7 @@ class ImgDataService:
         )
 
         try:
-            if not self.pipPackagesStatus().get("packages", {}).get("INSIGHTFACE", {}).get("installed"):
+            if not self._faceProcessorAvailable():
                 final_message_key = "face_match:progress_insightface_missing"
                 if save_only:
                     self._writeFaceMatchFindings(
@@ -8007,13 +8023,13 @@ class ImgDataService:
             photos_lookup_cache = PhotosLookupCache()
 
             detector = (
-                InsightFaceEmbedder(
+                self._createFaceEmbedder(
                     model_name=self._configuredInsightFaceModelName(),
                     model_root=self._configuredInsightFaceModelRoot(),
                     max_image_edge=self._recognitionImageMaxEdge(),
                 )
                 if recognize_persons else
-                InsightFaceDetector(
+                self._createFaceDetector(
                     model_name=self._configuredInsightFaceModelName(),
                     model_root=self._configuredInsightFaceModelRoot(),
                 )
@@ -9812,12 +9828,16 @@ class ImgDataService:
                 options=options,
             )
         if normalized_action in FaceRecognitionService.ACTIONS:
+            recognition_options = {
+                **self._configuredRecognitionCheckOptions(),
+                **(options if isinstance(options, dict) else {}),
+            }
             return self.face_recognition.start(
                 user_key=user_key,
                 cookies=cookies,
                 base_url=base_url,
                 action=normalized_action,
-                options=options,
+                options=recognition_options,
             )
 
         self._setCleanupProgressMessage(
@@ -10133,6 +10153,8 @@ class ImgDataService:
 
     def setDebugLogger(self, logger: Optional[Callable[..., None]]) -> None:
         self._debug_logger = logger if callable(logger) else None
+        self.native_face_processor.set_debug_logger(self._debugLog)
+        self.native_image_processor_vips.set_debug_logger(self._debugLog)
 
     def _debugLog(self, event: str, **fields: Any) -> None:
         logger = self._debug_logger
@@ -10148,9 +10170,43 @@ class ImgDataService:
 
     def _insightFaceConfig(self) -> Dict[str, Any]:
         config = self.config.readMergedConfig()
-        pip_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
-        package_config = pip_packages.get("INSIGHTFACE") if isinstance(pip_packages.get("INSIGHTFACE"), dict) else {}
-        return package_config
+        native_processors = config.get("native_processors") if isinstance(config.get("native_processors"), dict) else {}
+        return native_processors.get("FACE_PROCESSOR") if isinstance(native_processors.get("FACE_PROCESSOR"), dict) else {}
+
+    def _nativeFaceProcessorStatus(self, *, background: bool = False) -> Dict[str, Any]:
+        return self.native_face_processor.status(
+            model_root=self._configuredInsightFaceModelRoot(),
+            model_name=self._configuredInsightFaceModelName(),
+            background=background,
+        )
+
+    def _useNativeFaceProcessor(self) -> bool:
+        native_status = self._nativeFaceProcessorStatus()
+        return bool(native_status.get("hot_path_available")) and str(native_status.get("backend") or "") == "native"
+
+    def _faceProcessorRuntimeKey(self) -> Tuple[Any, ...]:
+        native_status = self._nativeFaceProcessorStatus()
+        native_backend = str(native_status.get("backend") or "native").strip() or "native"
+        return (
+            native_backend if native_status.get("available") else "native_unavailable",
+            native_status.get("path"),
+            native_status.get("version"),
+            native_status.get("reason"),
+        )
+
+    def _createFaceDetector(self, **kwargs: Any) -> Any:
+        if self._useNativeFaceProcessor():
+            return self.native_face_processor.create_detector(**kwargs)
+        raise FaceDetectorUnavailable("native face processor is required")
+
+    def _createFaceEmbedder(self, **kwargs: Any) -> Any:
+        if self._useNativeFaceProcessor():
+            return self.native_face_processor.create_embedder(**kwargs)
+        raise FaceDetectorUnavailable("native face processor is required")
+
+    def _faceProcessorAvailable(self) -> bool:
+        native_status = self._nativeFaceProcessorStatus()
+        return bool(native_status.get("hot_path_available")) and str(native_status.get("backend") or "") == "native"
 
     def _configuredInsightFaceModelRoot(self) -> Path:
         package_config = self._insightFaceConfig()
@@ -10304,264 +10360,79 @@ class ImgDataService:
             "model_status": model_status,
         }
 
-    def pipPackagesStatus(self) -> Dict[str, Any]:
-        config = self.config.readMergedConfig()
-        configured_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
-        status_file = self.config._config_path.parent / "pip_packages_status.json"
-        try:
-            install_status_payload = json.loads(status_file.read_text(encoding="utf-8"))
-        except Exception:
-            install_status_payload = {}
-        install_status_packages = (
-            install_status_payload.get("packages")
-            if isinstance(install_status_payload, dict) and isinstance(install_status_payload.get("packages"), dict)
-            else {}
-        )
-        package_specs = {
-            "INSIGHTFACE": {
-                "label": "InsightFace",
-                "requirements_file": "requirements-optional-insightface.txt",
-                "modules": [
-                    {"package": "insightface", "module": "insightface.app"},
-                    {"package": "onnxruntime", "module": "onnxruntime"},
-                    {"package": "opencv-python-headless", "module": "cv2"},
-                    {"package": "Pillow", "module": "PIL.Image"},
-                    {"package": "pillow-heif", "module": "pillow_heif"},
-                ],
-                "conflicts": ["opencv-python", "opencv-contrib-python", "opencv-contrib-python-headless"],
+    def insightFaceStatus(self) -> Dict[str, Any]:
+        configured = self._insightFaceConfig()
+        model_root = self._configuredInsightFaceModelRoot()
+        model_status = InsightFaceDetector.available_models(model_root)
+        active_model_name = self._configuredInsightFaceModelName(model_status)
+        native_status = self._nativeFaceProcessorStatus(background=True)
+        image_vips_status = self._nativeImageProcessorVipsStatus(background=True)
+        result = {
+            "label": "InsightFace",
+            "enabled": bool(configured.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False)),
+            "model_root_configured": str(configured.get("MODEL_ROOT") or "").strip(),
+            "model_name_configured": str(configured.get("MODEL_NAME") or "").strip(),
+            "model_status": model_status,
+            "active_model_name": active_model_name,
+            "processor_backend": str(native_status.get("backend") or "native") if native_status.get("available") else "native_unavailable",
+            "native_processor_status": native_status,
+            "status_blocks": self._insightFaceStatusBlocks(
+                native_status=native_status,
+                image_vips_status=image_vips_status,
+            ),
+        }
+        return {
+            "insightface": result,
+            "native_processors": {
+                "FACE_PROCESSOR": native_status,
+                "IMAGE_PROCESSOR_VIPS": image_vips_status,
             },
         }
-        result: Dict[str, Any] = {}
-        for key, spec in package_specs.items():
-            configured = configured_packages.get(key) if isinstance(configured_packages.get(key), dict) else {}
-            modules: List[Dict[str, Any]] = []
-            installed = True
-            for module_spec in spec["modules"]:
-                package_name = str(module_spec["package"])
-                module_name = str(module_spec["module"])
-                import_error = ""
-                found = False
-                version = ""
-                try:
-                    version = importlib_metadata.version(package_name)
-                except Exception:
-                    version = ""
-                spec_found = False
-                try:
-                    spec_found = importlib.util.find_spec(module_name) is not None
-                except Exception as exc:
-                    import_error = str(exc)
-                if spec_found:
-                    try:
-                        importlib.import_module(module_name)
-                        found = True
-                    except importlib_metadata.PackageNotFoundError:
-                        version = ""
-                    except Exception as exc:
-                        import_error = str(exc)
-                installed = installed and found
-                module_status = {
-                    "package": package_name,
-                    "module": module_name,
-                    "installed": found,
-                    "version": version,
-                }
-                if import_error:
-                    module_status["import_error"] = import_error
-                modules.append(module_status)
-            result[key] = {
-                "label": spec["label"],
-                "enabled": bool(configured.get("ENABLED", False)),
-                "install_on_start": bool(configured.get("INSTALL_ON_START", True)),
-                "requirements_file": str(configured.get("REQUIREMENTS_FILE") or spec["requirements_file"]),
-                "wheelhouse_enabled": True if key == "INSIGHTFACE" else bool(configured.get("WHEELHOUSE_ENABLED", False)),
-                "wheelhouse_manifest_url": str(configured.get("WHEELHOUSE_MANIFEST_URL") or "").strip(),
-                "wheelhouse_target": str(configured.get("WHEELHOUSE_TARGET") or "").strip(),
-                "installed": installed,
-                "install_status": install_status_packages.get(key) if isinstance(install_status_packages.get(key), dict) else {},
-                "modules": modules,
-                "conflicts": [
-                    {"package": package_name, "version": version}
-                    for package_name in spec.get("conflicts", [])
-                    for version in [self._installedPythonPackageVersion(str(package_name))]
-                    if version
-                ],
-            }
-            if key == "INSIGHTFACE":
-                model_root = self._configuredInsightFaceModelRoot()
-                model_status = InsightFaceDetector.available_models(model_root)
-                active_model_name = self._configuredInsightFaceModelName(model_status)
-                result[key]["model_root_configured"] = str(configured.get("MODEL_ROOT") or "").strip()
-                result[key]["model_name_configured"] = str(configured.get("MODEL_NAME") or "").strip()
-                result[key]["model_status"] = model_status
-                result[key]["active_model_name"] = active_model_name
-                result[key]["status_blocks"] = self._insightFaceStatusBlocks()
+
+    def imageBackendStatus(self) -> Dict[str, Any]:
         return {
-            "packages": result,
-            "status_file": str(status_file),
+            "image_processors": {
+                "IMAGE_PROCESSOR_VIPS": self._nativeImageProcessorVipsStatus(background=True),
+            },
         }
 
-    def pipWheelhousePackages(self, *, package_key: str = "INSIGHTFACE") -> Dict[str, Any]:
-        package_key = self._normalizePipPackageKey(package_key)
-        spec = self._pipPackageRuntimeSpec(package_key)
-        manifest = self._downloadAndValidatePipWheelhouseManifest(spec)
-        packages = []
-        for entry in manifest.get("packages", []):
-            if not isinstance(entry, dict):
-                continue
-            package_name = str(entry.get("name") or "").strip()
-            if not package_name:
-                continue
-            installed_version = self._installedPythonPackageVersion(package_name)
-            packages.append({
-                "name": package_name,
-                "file": str(entry.get("file") or "").strip(),
-                "sha256": str(entry.get("sha256") or "").strip(),
-                "size": int(entry.get("size") or 0),
-                "installed": bool(installed_version),
-                "installed_version": installed_version,
-            })
-        packages.sort(key=lambda item: item["name"])
-        return {
-            "package_key": package_key,
-            "manifest_url": spec["manifest_url"],
-            "target": spec["target"],
-            "requirements_file": spec["requirements_file"],
-            "packages": packages,
-        }
-
-    def installPipWheelhousePackage(self, *, package_key: str = "INSIGHTFACE", package_name: str, reinstall: bool = False) -> Dict[str, Any]:
-        package_key = self._normalizePipPackageKey(package_key)
-        selected_name = self._normalizePipPackageName(package_name)
-        if not selected_name:
-            raise ValueError("pip_package_name_required")
-        spec = self._pipPackageRuntimeSpec(package_key)
-        manifest = self._downloadAndValidatePipWheelhouseManifest(spec)
-        package_entries = [
-            entry for entry in manifest.get("packages", [])
-            if isinstance(entry, dict) and self._normalizePipPackageName(entry.get("name")) == selected_name
-        ]
-        if not package_entries:
-            raise ValueError("pip_package_not_in_wheelhouse")
-
-        package_var = self.config._config_path.parent
-        package_var.mkdir(parents=True, exist_ok=True)
-        output_path = package_var / f"pip_manual_install_{package_key}_{selected_name}.log"
-        pip_command = [sys.executable, "-m", "pip", "install", "--only-binary=:all:", "--no-index"]
-        if reinstall:
-            pip_command.append("--force-reinstall")
-
-        with tempfile.TemporaryDirectory(prefix=f"pip_{package_key}_{selected_name}_", dir=str(package_var)) as tmpdir:
-            wheel_dir = Path(tmpdir)
-            self._downloadPipWheelhouseAssets(manifest, spec["manifest_url"], wheel_dir)
-            command = [*pip_command, "--find-links", str(wheel_dir), selected_name]
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=900)
-            output = str(result.stdout or "")
-            output_path.write_text(output, encoding="utf-8")
-
-        status = "success" if result.returncode == 0 else "failed"
-        message = "pip install completed" if result.returncode == 0 else (output[-900:].replace("\n", " ").strip() or "pip install failed")
-        self._writePipPackageInstallStatus(package_key, spec["requirements_file"], status, message)
-        return {
-            "package_key": package_key,
-            "package_name": selected_name,
-            "reinstall": bool(reinstall),
-            "status": status,
-            "success": result.returncode == 0,
-            "returncode": result.returncode,
-            "message": message,
-            "output_path": str(output_path),
-        }
-
-    @staticmethod
-    def _normalizePipPackageName(value: Any) -> str:
-        return str(value or "").strip().lower().replace("_", "-")
-
-    @staticmethod
-    def _normalizePipPackageKey(value: Any) -> str:
-        normalized = str(value or "INSIGHTFACE").strip().upper()
-        if normalized not in {"INSIGHTFACE"}:
-            raise ValueError("unsupported_pip_package")
-        return normalized
-
-    def _pipPackageRuntimeSpec(self, package_key: str) -> Dict[str, str]:
-        package_key = self._normalizePipPackageKey(package_key)
-        config = self.config.readMergedConfig()
-        configured_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
-        configured = configured_packages.get(package_key) if isinstance(configured_packages.get(package_key), dict) else {}
-        default_requirements = "requirements-optional-insightface.txt"
-        manifest_url = str(configured.get("WHEELHOUSE_MANIFEST_URL") or "").strip()
-        target = str(configured.get("WHEELHOUSE_TARGET") or "").strip()
-        requirements_file = str(configured.get("REQUIREMENTS_FILE") or default_requirements).strip()
-        if not manifest_url:
-            raise ValueError("pip_wheelhouse_manifest_url_missing")
-        if not target:
-            raise ValueError("pip_wheelhouse_target_missing")
-        if not requirements_file or "/" in requirements_file or "\\" in requirements_file:
-            raise ValueError("pip_requirements_file_invalid")
-        return {
-            "package_key": package_key,
-            "manifest_url": manifest_url,
-            "target": target,
-            "requirements_file": requirements_file,
-        }
-
-    def _downloadAndValidatePipWheelhouseManifest(self, spec: Dict[str, str]) -> Dict[str, Any]:
-        with urllib.request.urlopen(spec["manifest_url"], timeout=60) as response:
-            manifest_bytes = response.read()
-        manifest = json.loads(manifest_bytes.decode("utf-8"))
-        if not isinstance(manifest, dict):
-            raise ValueError("pip_wheelhouse_manifest_invalid")
-        if str(manifest.get("target") or "").strip() != spec["target"]:
-            raise ValueError("pip_wheelhouse_target_mismatch")
-        manifest_requirements = str(manifest.get("requirements_file") or "").strip()
-        compatible_requirements = {spec["requirements_file"]}
-        if spec["package_key"] == "INSIGHTFACE":
-            compatible_requirements.add("requirements-runtime-insightface.txt")
-        if manifest_requirements not in compatible_requirements:
-            raise ValueError("pip_wheelhouse_requirements_mismatch")
-        packages = manifest.get("packages")
-        if not isinstance(packages, list) or not packages:
-            raise ValueError("pip_wheelhouse_manifest_packages_missing")
-        return manifest
-
-    @staticmethod
-    def _downloadPipWheelhouseAssets(manifest: Dict[str, Any], manifest_url: str, target_dir: Path) -> None:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        base_url = manifest_url.rsplit("/", 1)[0].rstrip("/")
-        for entry in manifest.get("packages", []):
-            if not isinstance(entry, dict):
-                raise ValueError("pip_wheelhouse_package_invalid")
-            filename = str(entry.get("file") or "").strip()
-            expected_hash = str(entry.get("sha256") or "").strip().lower()
-            if not filename or not expected_hash:
-                raise ValueError("pip_wheelhouse_package_incomplete")
-            destination = target_dir / filename
-            with urllib.request.urlopen(f"{base_url}/{filename}", timeout=180) as response:
-                destination.write_bytes(response.read())
-            digest = hashlib.sha256(destination.read_bytes()).hexdigest()
-            if digest != expected_hash:
-                raise ValueError("pip_wheelhouse_package_hash_mismatch")
-
-    def _writePipPackageInstallStatus(self, package_key: str, requirements_file: str, status: str, message: str) -> None:
-        status_path = self.config._config_path.parent / "pip_packages_status.json"
+    def _nativeImageProcessorVipsStatus(self, *, background: bool = False) -> Dict[str, Any]:
         try:
-            payload = json.loads(status_path.read_text(encoding="utf-8"))
-        except Exception:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        packages = payload.get("packages") if isinstance(payload.get("packages"), dict) else {}
-        packages[package_key] = {
-            "status": status,
-            "success": status == "success",
-            "requirements_file": requirements_file,
-            "message": message,
-            "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+            return self.native_image_processor_vips.status(background=background)
+        except Exception as exc:
+            return {
+                "enabled": False,
+                "available": False,
+                "reason": "vips_probe_failed",
+                "last_error": str(exc),
+            }
+
+    def warmNativeProcessorStatus(self) -> Dict[str, bool]:
+        face_started = False
+        image_vips_started = False
+        try:
+            face_started = bool(self.native_face_processor.refresh_status_background(
+                model_root=self._configuredInsightFaceModelRoot(),
+                model_name=self._configuredInsightFaceModelName(),
+            ))
+        except Exception as exc:
+            self._debugLog(
+                "native_face_processor_status_warmup_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+        try:
+            image_vips_started = bool(self.native_image_processor_vips.refresh_status_background())
+        except Exception as exc:
+            self._debugLog(
+                "native_image_processor_vips_status_warmup_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+        return {
+            "face_processor": face_started,
+            "image_processor_vips": image_vips_started,
         }
-        payload["packages"] = packages
-        status_path.parent.mkdir(parents=True, exist_ok=True)
-        status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     def _generatedFaceRecognitionProfilesCount(self) -> int:
         try:
@@ -10570,12 +10441,29 @@ class ImgDataService:
             return 0
         return len(profiles) if isinstance(profiles, list) else 0
 
-    def _insightFaceStatusBlocks(self) -> List[Dict[str, Any]]:
+    def _insightFaceStatusBlocks(
+        self,
+        *,
+        native_status: Optional[Dict[str, Any]] = None,
+        image_vips_status: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        native_status = native_status if isinstance(native_status, dict) else self._nativeFaceProcessorStatus()
+        image_vips_status = image_vips_status if isinstance(image_vips_status, dict) else self._nativeImageProcessorVipsStatus()
         return [{
             "key": "generated_face_profiles",
             "label_key": "status:pip_generated_face_profiles",
             "fallback_label": "Generated person profiles",
             "value": self._generatedFaceRecognitionProfilesCount(),
+        }, {
+            "key": "native_face_processor",
+            "label_key": "status:native_face_processor",
+            "fallback_label": "Native face processor",
+            "value": native_status.get("reason") or ("ready" if native_status.get("available") else "unknown"),
+        }, {
+            "key": "image_processor_vips",
+            "label_key": "status:image_processor_vips",
+            "fallback_label": "libvips image backend",
+            "value": image_vips_status.get("reason") or "vips_disabled",
         }]
 
     @staticmethod

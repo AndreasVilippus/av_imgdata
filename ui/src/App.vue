@@ -13,7 +13,7 @@
 						<configuration-view v-if="selectedOption === 'configuration'" />
 						<external-libraries-view v-if="selectedOption === 'external_libraries'" :vm="this" mode="info" />
 						<external-libraries-view v-if="selectedOption === 'external_libraries_exiftool'" :vm="this" mode="config" />
-						<external-libraries-view v-if="selectedOption === 'external_libraries_pip_packages'" :vm="this" mode="pip_packages" />
+						<external-libraries-view v-if="selectedOption === 'external_libraries_insightface'" :vm="this" mode="insightface" />
 						<database-lists-view v-if="selectedOption === 'database_lists'" :vm="this" />
 					</main>
 				</div>
@@ -92,7 +92,7 @@ export default {
 			if (selectedOption === 'cleanup') {
 				this.refreshCleanupSessionState();
 			}
-			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool' || selectedOption === 'external_libraries_pip_packages') {
+			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool' || selectedOption === 'external_libraries_insightface') {
 				this.loadExternalLibrariesConfig();
 			}
 			if (selectedOption === 'database_lists') {

@@ -5,11 +5,12 @@ from services.image_decode_service import ImageDecodeService
 
 
 class _Config:
-    def __init__(self, files):
+    def __init__(self, files, native_processors=None):
         self.files = files
+        self.native_processors = native_processors or {}
 
     def readMergedConfig(self):
-        return {"files": self.files}
+        return {"files": self.files, "native_processors": self.native_processors}
 
 
 def test_decoder_ignores_extensions_outside_config(tmp_path):
@@ -59,6 +60,138 @@ def test_pillow_heif_decoder_returns_jpeg_bytes(monkeypatch, tmp_path):
     assert result.source == "pillow-heif"
     assert result.image_bytes == b"\xff\xd8jpeg"
     assert registered == [True]
+
+
+def test_vips_preferred_decoder_runs_before_configured_fallback(tmp_path):
+    image_path = tmp_path / "image.jpg"
+    image_path.write_bytes(b"jpeg")
+    calls = []
+
+    class _VipsProcessor:
+        def status(self):
+            return {"available": True, "formats": {"jpeg": True}}
+
+        def process_image(self, path, operation, options, output_format):
+            calls.append((path, operation, options, output_format))
+            return {"success": True, "image_bytes": b"\xff\xd8vips-jpeg"}
+
+    service = ImageDecodeService(
+        _Config(
+            {
+                "IMAGE_DECODER_ENABLED": True,
+                "IMAGE_DECODER_EXTENSIONS": ["heic"],
+                "IMAGE_DECODER_ORDER": ["pillow-heif"],
+                "IMAGE_DECODER_MAX_EDGE": 1024,
+            },
+            native_processors={
+                "IMAGE_PROCESSOR_VIPS": {
+                    "ENABLED": True,
+                    "PREFERRED": True,
+                    "ALLOW_FALLBACK_TO_DEFAULT": True,
+                },
+            },
+        ),
+        vips_processor=_VipsProcessor(),
+    )
+
+    result = service.decode_to_jpeg(str(image_path))
+
+    assert result.success is True
+    assert result.source == "libvips"
+    assert result.image_bytes == b"\xff\xd8vips-jpeg"
+    assert calls == [(image_path, "resize", {"quality": 95, "width": 1024, "height": 1024, "maintain_aspect": True}, "jpeg")]
+
+
+def test_vips_preferred_decoder_skips_heic_when_probe_reports_no_heif(monkeypatch, tmp_path):
+    image_path = tmp_path / "image.heic"
+    image_path.write_bytes(b"heic")
+    registered = []
+
+    class _VipsProcessor:
+        def status(self):
+            return {"available": True, "formats": {"jpeg": True, "heic": False, "heif": False}}
+
+        def process_image(self, *_args, **_kwargs):
+            raise AssertionError("HEIC must not be sent to libvips when probe reports no HEIF loader")
+
+    class _Image:
+        mode = "RGB"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def thumbnail(self, *_args, **_kwargs):
+            pass
+
+        def save(self, output, **_kwargs):
+            output.write(b"\xff\xd8pillow-heif")
+
+    fake_image_module = SimpleNamespace(open=lambda _path: _Image())
+    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=fake_image_module))
+    monkeypatch.setitem(sys.modules, "pillow_heif", SimpleNamespace(register_heif_opener=lambda: registered.append(True)))
+    service = ImageDecodeService(
+        _Config(
+            {
+                "IMAGE_DECODER_ENABLED": True,
+                "IMAGE_DECODER_EXTENSIONS": ["heic"],
+                "IMAGE_DECODER_ORDER": ["pillow-heif"],
+            },
+            native_processors={
+                "IMAGE_PROCESSOR_VIPS": {
+                    "ENABLED": True,
+                    "PREFERRED": True,
+                    "ALLOW_FALLBACK_TO_DEFAULT": True,
+                },
+            },
+        ),
+        vips_processor=_VipsProcessor(),
+    )
+
+    result = service.decode_to_jpeg(str(image_path))
+
+    assert result.success is True
+    assert result.source == "pillow-heif"
+    assert result.image_bytes == b"\xff\xd8pillow-heif"
+    assert registered == [True]
+
+
+def test_vips_preferred_decoder_blocks_fallback_when_configured(tmp_path):
+    image_path = tmp_path / "image.heic"
+    image_path.write_bytes(b"heic")
+
+    class _VipsProcessor:
+        def status(self):
+            return {"available": True, "formats": {"heic": True, "heif": True}}
+
+        def process_image(self, *_args, **_kwargs):
+            return {"success": False, "error": "vips_failed"}
+
+    service = ImageDecodeService(
+        _Config(
+            {
+                "IMAGE_DECODER_ENABLED": True,
+                "IMAGE_DECODER_EXTENSIONS": ["heic"],
+                "IMAGE_DECODER_ORDER": ["pillow-heif"],
+            },
+            native_processors={
+                "IMAGE_PROCESSOR_VIPS": {
+                    "ENABLED": True,
+                    "PREFERRED": True,
+                    "ALLOW_FALLBACK_TO_DEFAULT": False,
+                },
+            },
+        ),
+        vips_processor=_VipsProcessor(),
+    )
+
+    result = service.decode_to_jpeg(str(image_path))
+
+    assert result.success is False
+    assert result.source == "libvips"
+    assert result.error == "libvips:vips_failed"
 
 
 def test_pillow_heif_decoder_limits_image_edge(monkeypatch, tmp_path):

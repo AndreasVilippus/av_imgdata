@@ -10,7 +10,6 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath("src"))
 
 from api.session_manager import SessionManager
-import imgdata as imgdata_module
 from imgdata import ImgDataService
 from services.config_service import ConfigService
 
@@ -82,13 +81,13 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
                     "center": {"x": 0.2, "y": 0.35},
                 }]
 
-        self.service.pipPackagesStatus = lambda: {"packages": {"INSIGHTFACE": {"installed": True}}}
         self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
         self.service.files.listImageFiles = lambda base_path: ["/volume1/photo/tests/image.jpg"]
         self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 123, "name": "image.jpg"}
         self.service.photos.list_faceFotoTeamItems = lambda **kwargs: []
 
-        with patch.object(imgdata_module, "InsightFaceDetector", FakeDetector):
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceDetector", return_value=FakeDetector()):
             result = self.service.searchMissingPhotosFacesWithInsightFace(
                 user_key="user",
                 cookies={},
@@ -126,7 +125,6 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
                     "embedding": [1.0, 0.0],
                 }]
 
-        self.service.pipPackagesStatus = lambda: {"packages": {"INSIGHTFACE": {"installed": True}}}
         self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
         self.service.files.listImageFiles = lambda base_path: ["/volume1/photo/tests/image.jpg"]
         self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 123, "name": "image.jpg"}
@@ -140,7 +138,8 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
             }]
         }
 
-        with patch.object(imgdata_module, "InsightFaceEmbedder", FakeEmbedder):
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceEmbedder", return_value=FakeEmbedder()):
             result = self.service.searchMissingPhotosFacesWithInsightFace(
                 user_key="user",
                 cookies={},
@@ -173,7 +172,6 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
                     "embedding": [0.0, 1.0],
                 }]
 
-        self.service.pipPackagesStatus = lambda: {"packages": {"INSIGHTFACE": {"installed": True}}}
         self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
         self.service.files.listImageFiles = lambda base_path: ["/volume1/photo/tests/image.jpg"]
         self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 123, "name": "image.jpg"}
@@ -187,7 +185,8 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
             }]
         }
 
-        with patch.object(imgdata_module, "InsightFaceEmbedder", FakeEmbedder):
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceEmbedder", return_value=FakeEmbedder()):
             result = self.service.searchMissingPhotosFacesWithInsightFace(
                 user_key="user",
                 cookies={},
@@ -230,13 +229,13 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
                 raise AssertionError("file list should be reused from cache")
             return paths
 
-        self.service.pipPackagesStatus = lambda: {"packages": {"INSIGHTFACE": {"installed": True}}}
         self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
         self.service.files.listImageFiles = list_image_files
         self.service.photos.findFotoTeamItemByPath = lambda image_path, **kwargs: {"id": 1 if image_path.endswith("first.jpg") else 2}
         self.service.photos.list_faceFotoTeamItems = lambda **kwargs: []
 
-        with patch.object(imgdata_module, "InsightFaceDetector", FakeDetector):
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceDetector", return_value=FakeDetector()):
             first = self.service.searchMissingPhotosFacesWithInsightFace(
                 user_key="user",
                 cookies={},

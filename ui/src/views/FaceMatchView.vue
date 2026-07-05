@@ -15,7 +15,7 @@
 							<option value="recognition_analyze_unknown_faces" :disabled="!vm.hasInsightFaceForFaceMatch">{{ vm.$avt('face_match:action_recognition_unknown_faces', 'recognize unknown faces with InsightFace') }}</option>
 						</select>
 					<div v-if="!vm.hasInsightFaceForFaceMatch" class="config-card-desc">
-						{{ vm.$avt('face_match:hint_insightface_unavailable', 'InsightFace search becomes available after the optional InsightFace package is installed.') }}
+						{{ vm.faceMatchInsightFaceUnavailableMessage }}
 					</div>
 					<div class="face-match-action-buttons">
 						<v-button @click="vm.handlePrimaryFaceMatchButton" :disabled="vm.faceMatchActionLocked" style="width: 160px;">
@@ -29,13 +29,21 @@
 						>
 							{{ vm.$avt('face_match:button_next', 'Next') }}
 						</v-button>
+						<v-button
+							v-if="vm.faceMatchCanSkipStoredFinding"
+							@click="vm.skipCurrentStoredFaceMatchFinding"
+							:disabled="vm.faceMatchInteractionDisabled"
+							style="width: 190px;"
+						>
+							{{ vm.$avt('face_match:button_skip_false_detection', 'Skip false detection') }}
+						</v-button>
 					</div>
 					<label class="face-match-switch" :title="vm.$avt('face_match:hint_face_only', 'Only the face crop is shown in the preview windows.')">
 						<input v-model="vm.faceMatchPreviewMode" type="checkbox" true-value="face" false-value="photo" />
 						<span class="face-match-switch-slider"></span>
 						<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_face_only', 'Show face only') }}</span>
 					</label>
-					<label class="face-match-switch" :title="vm.$avt('face_match:hint_auto_assign', 'If a person with that name exists, the face is assigned automatically.')">
+					<label v-if="vm.faceMatchSupportsAutoAssignKnown" class="face-match-switch" :title="vm.$avt('face_match:hint_auto_assign', 'If a person with that name exists, the face is assigned automatically.')">
 						<input v-model="vm.faceMatchAutoAssignKnown" type="checkbox" :disabled="vm.faceMatchLoading" />
 						<span class="face-match-switch-slider"></span>
 						<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_auto_assign', 'Assign all known') }}</span>
@@ -49,6 +57,40 @@
 							<span class="face-match-switch-slider"></span>
 							<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_save_only', 'Save matches only') }}</span>
 						</label>
+							<label
+								v-if="vm.faceMatchRecognitionActionSelected"
+								class="face-match-switch"
+								:title="vm.$avt('checks:hint_insightface_include_hidden_persons', 'Hidden Photos persons are included when building assignment candidates.')"
+							>
+								<input :checked="vm.recognitionOptions.include_hidden_persons" type="checkbox" :disabled="vm.cleanupLoading || vm.faceMatchUseStoredFindings" @change="vm.updateRecognitionOption('include_hidden_persons', $event.target.checked)" />
+								<span class="face-match-switch-slider"></span>
+								<span class="face-match-switch-label">{{ vm.$avt('cleanup:recognition_include_hidden', 'Include hidden persons') }}</span>
+							</label>
+							<label
+								v-if="vm.faceMatchRecognitionActionSelected"
+								class="face-match-switch"
+								:title="vm.$avt('checks:hint_insightface_safe_assignment', 'Safe assignment suggestions are preselected automatically; uncertain findings remain for manual review.')"
+							>
+								<input :checked="vm.recognitionOptions.selection_mode === 'safe_only'" type="checkbox" :disabled="vm.cleanupLoading || vm.faceMatchUseStoredFindings" @change="vm.updateRecognitionOption('selection_mode', $event.target.checked ? 'safe_only' : 'review_all')" />
+								<span class="face-match-switch-slider"></span>
+								<span class="face-match-switch-label">{{ vm.$avt('cleanup:recognition_selection_safe', 'Select safe suggestions automatically') }}</span>
+							</label>
+							<label
+								v-if="vm.faceMatchRecognitionActionSelected"
+								class="checks-number-field"
+								:title="vm.$avt('checks:hint_changed_since_days', 'Only images whose file or sidecar changed within the selected number of days are checked. 0 checks all images.')"
+							>
+								<span class="face-match-switch-label">{{ vm.$avt('checks:label_changed_since_days', 'Changed in days') }}</span>
+								<input :value="vm.recognitionOptions.changed_since_days" type="number" min="0" step="1" class="checks-number-input" :disabled="vm.cleanupLoading || vm.faceMatchUseStoredFindings" @input="vm.updateRecognitionOption('changed_since_days', Number($event.target.value))" />
+							</label>
+							<label
+								v-if="vm.faceMatchRecognitionActionSelected"
+								class="checks-number-field checks-number-field-wide"
+								:title="vm.$avt('cleanup:recognition_min_faces', 'Minimum reference faces per person')"
+							>
+								<span class="face-match-switch-label">{{ vm.$avt('cleanup:recognition_min_faces', 'Minimum reference faces per person') }}</span>
+								<input :value="vm.recognitionOptions.min_faces_per_person" type="number" min="2" step="1" class="checks-number-input" :disabled="vm.cleanupLoading || vm.faceMatchUseStoredFindings" @input="vm.updateRecognitionOption('min_faces_per_person', Number($event.target.value))" />
+							</label>
 							<label
 								v-if="vm.selectedFaceMatchingAction === 'search_missing_faces_insightface'"
 								class="face-match-switch"
@@ -71,7 +113,7 @@
 							class="face-match-switch"
 							:title="vm.$avt('face_match:hint_use_findings', 'Load saved matches instead of starting a new search.')"
 					>
-						<input v-model="vm.faceMatchUseStoredFindings" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasFaceMatchStoredFindings" />
+						<input v-model="vm.faceMatchUseStoredFindings" type="checkbox" :disabled="vm.faceMatchLoading || (!vm.faceMatchRecognitionActionSelected && !vm.hasFaceMatchStoredFindings)" />
 						<span class="face-match-switch-slider"></span>
 						<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_use_findings', 'Use match list') }}</span>
 					</label>
@@ -85,9 +127,10 @@
 									{{ vm.$avt('face_match:card_running', 'Running') }}
 								</div>
 							</div>
-							<div v-if="vm.faceMatchRecognitionActionSelected" class="face-match-status-message">{{ vm.getCleanupStatusHeadline() }}</div>
+							<div v-if="vm.faceMatchRecognitionActionSelected && vm.isCleanupProgressForAction('recognition_analyze_unknown_faces') && Number(vm.getCleanupStatusProgress().total) <= 0" class="face-match-status-message">{{ vm.getCleanupStatusHeadline() }}</div>
+							<div v-else-if="vm.faceMatchRecognitionActionSelected" class="face-match-status-message">{{ vm.$avt('face_match:status_idle', 'No action running.') }}</div>
 							<div v-else-if="!vm.faceMatchShowStoredFindingsProgress && !vm.faceMatchShowPersonsProgress && !vm.faceMatchShowFileProgress" class="face-match-status-message">{{ vm.faceMatchStatusMessage }}</div>
-							<div v-if="vm.faceMatchRecognitionActionSelected && Number(vm.getCleanupStatusProgress().total) > 0" class="sm-status-progress">
+							<div v-if="vm.faceMatchRecognitionActionSelected && vm.isCleanupProgressForAction('recognition_analyze_unknown_faces') && Number(vm.getCleanupStatusProgress().total) > 0" class="sm-status-progress">
 								<ProgressOverviewCard
 									:title="vm.getCleanupStatusProgressTitle()"
 									:count="Number(vm.getCleanupStatusProgress().total) || 0"
@@ -98,7 +141,7 @@
 									:status-text="vm.getCleanupStatusHeadline()"
 								/>
 							</div>
-							<div v-if="vm.faceMatchRecognitionActionSelected && vm.getCleanupStatusCounters().length" class="face-match-status-stats">
+							<div v-if="vm.faceMatchRecognitionActionSelected && vm.isCleanupProgressForAction('recognition_analyze_unknown_faces') && vm.getCleanupStatusCounters().length" class="face-match-status-stats">
 								<span v-for="counter in vm.getCleanupStatusCounters()" :key="`face-match-recognition-counter-${counter.key}`">{{ vm.formatCleanupStatusCounter(counter) }}</span>
 							</div>
 						<div v-if="vm.faceMatchShowStoredFindingsProgress" class="sm-status-progress">
@@ -187,7 +230,6 @@
 				</div>
 			</div>
 			</section>
-			<RecognitionOptions v-if="vm.faceMatchRecognitionActionSelected" :vm="vm" />
 			<RecognitionFindingsReview v-if="vm.faceMatchRecognitionActionSelected" :vm="vm" />
 			<section v-if="!vm.faceMatchRecognitionActionSelected" class="panel face-match-split-panel">
 			<div class="face-match-image-context">
@@ -297,14 +339,12 @@
 
 <script>
 import ProgressOverviewCard from '../components/ProgressOverviewCard.vue';
-import RecognitionOptions from '../components/cleanup/RecognitionOptions.vue';
 import RecognitionFindingsReview from '../components/cleanup/RecognitionFindingsReview.vue';
 
 export default {
 	name: 'FaceMatchView',
 	components: {
 		ProgressOverviewCard,
-		RecognitionOptions,
 		RecognitionFindingsReview,
 	},
 	props: {

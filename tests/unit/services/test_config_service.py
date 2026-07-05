@@ -50,6 +50,57 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
 
         self.assertFalse(photos["REINDEX_MISSING_ITEMS"])
 
+    def test_native_face_processor_config_defaults_and_normalization(self):
+        service = ConfigService(str(self.config_file))
+        service.writeConfig({
+            "native_processors": {
+                "FACE_PROCESSOR": {
+                    "TIMEOUT_SECONDS": 99999,
+                    "MAX_IMAGE_BYTES": 1,
+                    "ORT_INTRA_THREADS": 999,
+                    "ORT_GRAPH_OPT_LEVEL": "invalid",
+                    "INSIGHTFACE_LICENSE_ACKNOWLEDGED": 1,
+                },
+            },
+        })
+
+        face_processor = service.readMergedConfig()["native_processors"]["FACE_PROCESSOR"]
+
+        self.assertEqual(face_processor["TIMEOUT_SECONDS"], 3600)
+        self.assertEqual(face_processor["MAX_IMAGE_BYTES"], 1048576)
+        self.assertEqual(face_processor["ORT_INTRA_THREADS"], 64)
+        self.assertEqual(face_processor["ORT_GRAPH_OPT_LEVEL"], "all")
+        self.assertTrue(face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"])
+        self.assertNotIn("ENABLED", face_processor)
+        self.assertNotIn("PATH", face_processor)
+        self.assertNotIn("FALLBACK_TO_PYTHON", face_processor)
+
+    def test_optional_vips_image_processor_config_defaults_and_normalization(self):
+        service = ConfigService(str(self.config_file))
+        service.writeConfig({
+            "native_processors": {
+                "IMAGE_PROCESSOR_VIPS": {
+                    "ENABLED": 1,
+                    "PREFERRED": 0,
+                    "PATH": "/tmp/native-vips",
+                    "TIMEOUT_SECONDS": 99999,
+                    "MAX_IMAGE_BYTES": 1,
+                    "SUPPORTED_FORMATS": [".JPG", "png", "jpg", ""],
+                    "ALLOW_FALLBACK_TO_DEFAULT": 0,
+                },
+            },
+        })
+
+        image_processor = service.readMergedConfig()["native_processors"]["IMAGE_PROCESSOR_VIPS"]
+
+        self.assertTrue(image_processor["ENABLED"])
+        self.assertFalse(image_processor["PREFERRED"])
+        self.assertEqual(image_processor["PATH"], "/tmp/native-vips")
+        self.assertEqual(image_processor["TIMEOUT_SECONDS"], 3600)
+        self.assertEqual(image_processor["MAX_IMAGE_BYTES"], 1048576)
+        self.assertEqual(image_processor["SUPPORTED_FORMATS"], ["jpg", "png"])
+        self.assertFalse(image_processor["ALLOW_FALLBACK_TO_DEFAULT"])
+
     def test_readMergedConfig_detects_file_change(self):
         """
         Test: Wenn config.json sich ändert,
@@ -106,7 +157,10 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         self.assertIsNone(service._merged_config_cache)
         self.assertIsNone(service._merged_config_cache_signature)
 
-    def test_ensureInstallOnStartConfig_updates_wheelhouse_defaults_when_enabled(self):
+    def test_default_config_no_longer_contains_python_insightface_pip_packages(self):
+        self.assertNotIn("pip_packages", ConfigService.defaultConfig())
+
+    def test_legacy_pip_packages_config_is_not_merged_back(self):
         service = ConfigService(str(self.config_file))
         service.writeConfig({
             "pip_packages": {
@@ -120,37 +174,9 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
             },
         })
 
-        updated = service.ensureInstallOnStartConfig()
-        self.assertTrue(updated)
+        merged = service.readMergedConfig()
 
-        stored = json.loads(self.config_file.read_text(encoding="utf-8"))
-        insightface = stored["pip_packages"]["INSIGHTFACE"]
-        self.assertEqual(
-            insightface["WHEELHOUSE_MANIFEST_URL"],
-            ConfigService.defaultConfig()["pip_packages"]["INSIGHTFACE"]["WHEELHOUSE_MANIFEST_URL"],
-        )
-        self.assertEqual(
-            insightface["WHEELHOUSE_TARGET"],
-            ConfigService.defaultConfig()["pip_packages"]["INSIGHTFACE"]["WHEELHOUSE_TARGET"],
-        )
-        self.assertTrue(insightface["WHEELHOUSE_ENABLED"])
-
-    def test_ensureInstallOnStartConfig_keeps_config_when_disabled(self):
-        service = ConfigService(str(self.config_file))
-        service.writeConfig({
-            "pip_packages": {
-                "INSIGHTFACE": {
-                    "INSTALL_ON_START": False,
-                    "WHEELHOUSE_ENABLED": False,
-                    "WHEELHOUSE_MANIFEST_URL": "https://example.invalid/releases/download/dsm7-x86_64-python38/wheelhouse-manifest.json",
-                    "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
-                    "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
-                },
-            },
-        })
-
-        updated = service.ensureInstallOnStartConfig()
-        self.assertFalse(updated)
+        self.assertNotIn("pip_packages", merged)
 
     def test_writeChecksIgnoreList_invalidates_cache(self):
         """

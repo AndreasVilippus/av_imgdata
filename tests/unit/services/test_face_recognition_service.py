@@ -1,3 +1,4 @@
+import os
 from types import SimpleNamespace
 
 import services.face_recognition_service as face_recognition_module
@@ -560,14 +561,62 @@ def test_person_reference_scan_reports_image_counter_progress_without_current_fi
     _user_key, update = progress_updates[-1]
     assert update["images_scanned"] == 1
     assert update["images_total"] == 1
+    assert update["images_analyzed"] == 1
+    assert update["images_skipped_unchanged"] == 0
     assert update["faces_scanned"] == 1
     assert "current_path" not in update
     assert "current_name" not in update
     assert update["status"]["progress"]["kind"] == "images"
     counter_values = {counter["key"]: counter["value"] for counter in update["status"]["counters"]}
     assert counter_values["images"] == 1
+    assert counter_values["images_analyzed"] == 1
+    assert counter_values["images_skipped_unchanged"] == 0
     assert "faces" not in counter_values
     assert counter_values["references"] == 1
+
+
+def test_person_reference_scan_separates_list_progress_from_changed_date_skip(tmp_path):
+    service, _findings = _service()
+    image_path = tmp_path / "old.jpg"
+    image_path.write_bytes(b"jpeg")
+    os.utime(image_path, (946684800, 946684800))
+    progress_updates = []
+    service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: None)
+    service.backend._debugLog = lambda *_args, **_kwargs: None
+    service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [{"id": 10, "folder_id": 20, "filename": "old.jpg"}]
+    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda **_kwargs: [])
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+    service._item_path = lambda **_kwargs: str(image_path)
+    embedder = SimpleNamespace(
+        detect_and_embed=lambda _path: (_ for _ in ()).throw(AssertionError("unchanged image should not be analyzed")),
+        _iou=lambda _left, _right: 0.0,
+    )
+
+    references = service._person_references(
+        user_key="u", cookies={}, base_url="https://dsm", shared_folder=str(tmp_path),
+        person={"id": 1, "name": "Ada"}, embedder=embedder,
+        options=service.normalize_options({"changed_since_days": 1}), folder_cache={},
+        progress_context={
+            "action": service.ACTION_ASSIGNMENT,
+            "phase": "reading_assigned_images",
+            "persons_scanned": 0,
+            "persons_total": 1,
+        },
+    )
+
+    assert references == []
+    _user_key, update = progress_updates[-1]
+    assert update["images_scanned"] == 1
+    assert update["images_analyzed"] == 0
+    assert update["images_skipped_unchanged"] == 1
+    assert update["faces_scanned"] == 0
+    counter_values = {counter["key"]: counter["value"] for counter in update["status"]["counters"]}
+    assert counter_values["images"] == 1
+    assert counter_values["images_analyzed"] == 0
+    assert counter_values["images_skipped_unchanged"] == 1
 
 
 def test_person_reference_scan_logs_loaded_items_and_summary(tmp_path):

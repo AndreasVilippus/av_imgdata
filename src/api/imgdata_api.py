@@ -720,55 +720,27 @@ async def exiftool_status(request: Request):
     }
 
 
-@router.post("/pip_packages_status")
-async def pip_packages_status(request: Request):
+@router.post("/insightface_status")
+async def insightface_status(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
     return {
         "success": True,
-        "data": await _run_backend_call(lambda: IMGDATA.pipPackagesStatus()),
+        "data": await _run_backend_call(lambda: IMGDATA.insightFaceStatus()),
     }
 
 
-@router.post("/pip_wheelhouse_packages")
-async def pip_wheelhouse_packages(request: Request):
+@router.post("/image_backend_status")
+async def image_backend_status(request: Request):
     session_ctx, error_response = await _prepare_session_request(request)
     if error_response:
         return error_response
 
-    body = await _read_request_body(request)
-    try:
-        data = await _run_backend_call(lambda: IMGDATA.pipWheelhousePackages(
-            package_key=str(body.get("package_key") or "INSIGHTFACE"),
-        ))
-    except Exception as exc:
-        return JSONResponse(_operation_exception_response(exc, message="pip_wheelhouse_packages_failed"))
     return {
         "success": True,
-        "data": data,
-    }
-
-
-@router.post("/pip_wheelhouse_package_install")
-async def pip_wheelhouse_package_install(request: Request):
-    session_ctx, error_response = await _prepare_session_request(request)
-    if error_response:
-        return error_response
-
-    body = await _read_request_body(request)
-    try:
-        data = await _run_backend_call(lambda: IMGDATA.installPipWheelhousePackage(
-            package_key=str(body.get("package_key") or "INSIGHTFACE"),
-            package_name=str(body.get("package_name") or ""),
-            reinstall=bool(body.get("reinstall")),
-        ))
-    except Exception as exc:
-        return JSONResponse(_operation_exception_response(exc, message="pip_wheelhouse_package_install_failed"))
-    return {
-        "success": True,
-        "data": data,
+        "data": await _run_backend_call(lambda: IMGDATA.imageBackendStatus()),
     }
 
 
@@ -1297,6 +1269,64 @@ async def face_create_match(request: Request):
     return {
         "success": True,
         "data": data,
+    }
+
+
+@router.post("/face_skip_match")
+async def face_skip_match(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    body = await _read_request_body(request)
+    face_id = body.get("face_id")
+    image_path = str(body.get("image_path") or "").strip()
+    metadata_face = body.get("metadata_face")
+
+    parsed_face_id = None
+    if face_id not in (None, ""):
+        try:
+            parsed_face_id = int(face_id)
+        except Exception:
+            return {
+                "success": False,
+                "error": {
+                    "code": 400,
+                    "message": "invalid_face_skip_match_request",
+                },
+            }
+
+    if parsed_face_id is None and (not image_path or not isinstance(metadata_face, dict)):
+        return {
+            "success": False,
+            "error": {
+                "code": 400,
+                "message": "invalid_face_skip_match_request",
+            },
+        }
+
+    try:
+        if parsed_face_id is not None:
+            findings_update = IMGDATA.removeFaceMatchFindingEntry(
+                face_id=parsed_face_id,
+                increment_transferred_count=False,
+            )
+        else:
+            findings_update = IMGDATA.removeFaceMatchFindingMetadataEntry(
+                image_path=image_path,
+                metadata_face=metadata_face,
+                increment_transferred_count=False,
+            )
+    except Exception as exc:
+        return _operation_exception_response(exc, message="face_skip_match_failed")
+
+    return {
+        "success": True,
+        "data": {
+            "face_id": parsed_face_id,
+            "image_path": image_path,
+            "findings_update": findings_update,
+        },
     }
 
 

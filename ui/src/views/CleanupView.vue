@@ -10,9 +10,8 @@
 					<select v-model="vm.selectedCleanupAction" class="face-match-select" :disabled="vm.cleanupLoading">
 						<option value="normalize_names">{{ vm.$avt('cleanup:action_normalize_names', 'Adjust names by reference list') }}</option>
 							<option value="standardize_face_frames">{{ vm.$avt('cleanup:action_standardize_face_frames', 'Standardize face frames') }}</option>
-								<option value="recognition_build_profiles">{{ vm.$avt('cleanup:action_recognition_build_profiles', 'Build person profiles') }}</option>
+							<option value="recognition_build_profiles">{{ vm.$avt('cleanup:action_recognition_build_profiles', 'Build person profiles') }}</option>
 							<option value="recognition_check_reference_outliers">{{ vm.$avt('cleanup:action_recognition_check_outliers', 'Review recognition reference faces') }}</option>
-							<option value="recognition_check_person_assignments">{{ vm.$avt('cleanup:action_recognition_check_assignments', 'Check person assignments with InsightFace') }}</option>
 						</select>
 				</div>
 				<div v-if="vm.selectedCleanupAction === 'normalize_names'" class="checks-actions-row checks-actions-row-switches">

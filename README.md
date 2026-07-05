@@ -51,7 +51,8 @@ toolkit/
     └── av_imgdata/
 ```
 
-Use the package build wrapper from the toolkit root:
+Use the package build wrapper from the toolkit root. It now enables package
+collection by default, so generated SPKs are copied into `result_spk/`.
 
 ```bash
 source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
@@ -73,7 +74,10 @@ the package build fails.
 
 Arguments passed to `build-package.sh` are forwarded to `PkgCreate.py` as options.
 The package name is always appended by the wrapper as `av_imgdata`, so do not pass
-`-c av_imgdata` yourself. For example:
+`-c av_imgdata` yourself. The wrapper also adds `-c` by default when no options are
+passed, to collect generated SPKs into `result_spk/`.
+
+For example:
 
 ```bash
 source/av_imgdata/tools/build-package.sh -v 7.3 -p apollolake

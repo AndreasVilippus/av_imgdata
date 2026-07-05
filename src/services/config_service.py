@@ -55,16 +55,26 @@ class ConfigService:
                 "FILE_MATCH_SOURCE_SCOPE": "both",
                 "PERSON_SORT_ORDER": "id_desc",
             },
-            "pip_packages": {
-                "INSIGHTFACE": {
-                    "ENABLED": False,
-                    "INSTALL_ON_START": False,
-                    "REQUIREMENTS_FILE": "requirements-optional-insightface.txt",
-                    "WHEELHOUSE_ENABLED": True,
-                    "WHEELHOUSE_MANIFEST_URL": "https://github.com/AndreasVilippus/av_imgdata-wheelhouse/releases/download/dsm7-x86_64-python38-2026.06.22/wheelhouse-manifest.json",
-                    "WHEELHOUSE_TARGET": "dsm7-x86_64-python38",
+            "native_processors": {
+                "FACE_PROCESSOR": {
                     "MODEL_ROOT": "",
                     "MODEL_NAME": "",
+                    "TIMEOUT_SECONDS": 120,
+                    "MAX_IMAGE_BYTES": 67108864,
+                    "ORT_INTRA_THREADS": 0,
+                    "ORT_GRAPH_OPT_LEVEL": "all",
+                    "INSIGHTFACE_LICENSE_ACKNOWLEDGED": False,
+                    "STATUS_CACHE_SECONDS": 60,
+                },
+                "IMAGE_PROCESSOR_VIPS": {
+                    "ENABLED": False,
+                    "PREFERRED": True,
+                    "PATH": "bin/av-imgdata-image-processor",
+                    "TIMEOUT_SECONDS": 120,
+                    "STATUS_CACHE_SECONDS": 60,
+                    "MAX_IMAGE_BYTES": 268435456,
+                    "SUPPORTED_FORMATS": ["jpeg", "jpg", "png", "webp", "tiff"],
+                    "ALLOW_FALLBACK_TO_DEFAULT": True,
                 },
             },
             "files": {
@@ -120,6 +130,11 @@ class ConfigService:
                     "NAME_CONFLICT_OVERLAP_THRESHOLD": 0.75,
                     "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": True,
                     "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": 0.05,
+                    "RECOGNITION_SAFE_SCORE": 0.55,
+                    "RECOGNITION_REVIEW_SCORE": 0.45,
+                    "RECOGNITION_MIN_MARGIN": 0.08,
+                    "RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD": 0.35,
+                    "RECOGNITION_DET_THRESH": 0.5,
                     "SINGLE_SOURCE_OF_TRUTH": "",
                 },
             },
@@ -183,30 +198,6 @@ class ConfigService:
         self._merged_config_cache = None
         self._merged_config_cache_signature = None
         return True
-
-    def ensureInstallOnStartConfig(self) -> bool:
-        config = self.readConfig()
-        if not isinstance(config, dict):
-            return False
-        pip_packages = config.get("pip_packages") if isinstance(config.get("pip_packages"), dict) else {}
-        insightface = pip_packages.get("INSIGHTFACE") if isinstance(pip_packages.get("INSIGHTFACE"), dict) else {}
-        if not bool(insightface.get("INSTALL_ON_START", False)):
-            return False
-
-        defaults = self.defaultConfig()["pip_packages"]["INSIGHTFACE"]
-        changed = False
-        for key in ("WHEELHOUSE_ENABLED", "WHEELHOUSE_MANIFEST_URL", "WHEELHOUSE_TARGET", "REQUIREMENTS_FILE"):
-            default_value = defaults.get(key)
-            if insightface.get(key) != default_value:
-                insightface[key] = default_value
-                changed = True
-
-        if not changed:
-            return False
-
-        pip_packages["INSIGHTFACE"] = insightface
-        config["pip_packages"] = pip_packages
-        return self.writeConfig(config)
 
     @classmethod
     def normalizeConfig(cls, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -287,6 +278,70 @@ class ConfigService:
         photos = config.get("photos", {}) if isinstance(config.get("photos"), dict) else {}
         photos["REINDEX_MISSING_ITEMS"] = bool(photos.get("REINDEX_MISSING_ITEMS", False))
 
+        native_processors = config.get("native_processors", {}) if isinstance(config.get("native_processors"), dict) else {}
+        face_processor = native_processors.get("FACE_PROCESSOR", {}) if isinstance(native_processors.get("FACE_PROCESSOR"), dict) else {}
+        face_processor["TIMEOUT_SECONDS"] = cls._clamp_int(
+            face_processor.get("TIMEOUT_SECONDS"),
+            default=120,
+            minimum=1,
+            maximum=3600,
+        )
+        face_processor["STATUS_CACHE_SECONDS"] = cls._clamp_int(
+            face_processor.get("STATUS_CACHE_SECONDS"),
+            default=60,
+            minimum=0,
+            maximum=3600,
+        )
+        face_processor["MAX_IMAGE_BYTES"] = cls._clamp_int(
+            face_processor.get("MAX_IMAGE_BYTES"),
+            default=67108864,
+            minimum=1048576,
+            maximum=1073741824,
+        )
+        face_processor["ORT_INTRA_THREADS"] = cls._clamp_int(
+            face_processor.get("ORT_INTRA_THREADS"),
+            default=0,
+            minimum=0,
+            maximum=64,
+        )
+        graph_opt_level = str(face_processor.get("ORT_GRAPH_OPT_LEVEL") or "all").strip().lower()
+        if graph_opt_level not in {"disable", "basic", "extended", "all"}:
+            graph_opt_level = "all"
+        face_processor["ORT_GRAPH_OPT_LEVEL"] = graph_opt_level
+        face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"] = bool(face_processor.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False))
+        native_processors["FACE_PROCESSOR"] = face_processor
+        image_processor_vips = native_processors.get("IMAGE_PROCESSOR_VIPS", {}) if isinstance(native_processors.get("IMAGE_PROCESSOR_VIPS"), dict) else {}
+        image_processor_vips["ENABLED"] = bool(image_processor_vips.get("ENABLED", False))
+        image_processor_vips["PREFERRED"] = bool(image_processor_vips.get("PREFERRED", True))
+        image_processor_vips["PATH"] = str(image_processor_vips.get("PATH") or "bin/av-imgdata-image-processor")
+        image_processor_vips["TIMEOUT_SECONDS"] = cls._clamp_int(
+            image_processor_vips.get("TIMEOUT_SECONDS"),
+            default=120,
+            minimum=1,
+            maximum=3600,
+        )
+        image_processor_vips["STATUS_CACHE_SECONDS"] = cls._clamp_int(
+            image_processor_vips.get("STATUS_CACHE_SECONDS"),
+            default=60,
+            minimum=0,
+            maximum=3600,
+        )
+        image_processor_vips["MAX_IMAGE_BYTES"] = cls._clamp_int(
+            image_processor_vips.get("MAX_IMAGE_BYTES"),
+            default=268435456,
+            minimum=1048576,
+            maximum=1073741824,
+        )
+        image_processor_vips["SUPPORTED_FORMATS"] = cls._normalizeStringList(
+            image_processor_vips.get("SUPPORTED_FORMATS"),
+            default=["jpeg", "jpg", "png", "webp", "tiff"],
+            lowercase=True,
+            strip_prefix=".",
+        )
+        image_processor_vips["ALLOW_FALLBACK_TO_DEFAULT"] = bool(image_processor_vips.get("ALLOW_FALLBACK_TO_DEFAULT", True))
+        native_processors["IMAGE_PROCESSOR_VIPS"] = image_processor_vips
+        config["native_processors"] = native_processors
+
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}
         debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED"))
         debug["IO_METRICS_ENABLED"] = bool(debug.get("IO_METRICS_ENABLED"))
@@ -318,6 +373,19 @@ class ConfigService:
                 maximum=1.0,
             )
             checks["NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"] = bool(checks.get("NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH"))
+            for key, default in (
+                ("RECOGNITION_SAFE_SCORE", 0.55),
+                ("RECOGNITION_REVIEW_SCORE", 0.45),
+                ("RECOGNITION_MIN_MARGIN", 0.08),
+                ("RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD", 0.35),
+                ("RECOGNITION_DET_THRESH", 0.5),
+            ):
+                checks[key] = cls._clamp_float(
+                    checks.get(key),
+                    default=default,
+                    minimum=0.0,
+                    maximum=1.0,
+                )
 
     @staticmethod
     def _clamp_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:

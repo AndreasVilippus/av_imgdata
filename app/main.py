@@ -24,7 +24,21 @@ SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from api.imgdata_api import backend_debug_log, is_backend_debug_enabled, router as imgdata_router  # noqa: E402
+from api.imgdata_api import IMGDATA, backend_debug_log, is_backend_debug_enabled, router as imgdata_router  # noqa: E402
+
+
+@app.on_event("startup")
+async def warm_native_processor_status():
+    try:
+        result = IMGDATA.warmNativeProcessorStatus()
+        backend_debug_log("native_processor_status_warmup_start", **result)
+    except Exception as exc:
+        backend_debug_log(
+            "native_processor_status_warmup_exception",
+            error_type=type(exc).__name__,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+        )
 
 
 @app.middleware("http")

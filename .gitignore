@@ -1,5 +1,7 @@
 /.vscode
 /dev/
+/build/
+/.test-venv/
 /ui/node_modules/
 __pycache__/
 *.pyc

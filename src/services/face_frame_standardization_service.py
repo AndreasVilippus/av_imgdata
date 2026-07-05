@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 from handler.photos_handler import PhotosLookupCache
 from models.bbox import BoundingBox
 from services.bbox_normalizer import to_bbox_dict, to_xywh
-from services.face_detector import InsightFaceDetector
+from services.face_detector import FaceDetectorUnavailable
 from services.face_frame_matcher import frame_metrics, match_decision
 from services.face_frame_standardizer import build_target_frame, normalize_profile, normalize_strategy
 
@@ -442,9 +442,10 @@ class FaceFrameStandardizationService:
         raw = f"{path}\0{source_format}\0{source_index}".encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
 
-    def _prepared_detector(self, options: Dict[str, Any]) -> InsightFaceDetector:
+    def _prepared_detector(self, options: Dict[str, Any]) -> Any:
         backend = self.backend
         detector_key = (
+            backend._faceProcessorRuntimeKey() if hasattr(backend, "_faceProcessorRuntimeKey") else ("python",),
             backend._configuredInsightFaceModelName(),
             str(backend._configuredInsightFaceModelRoot()),
             tuple(options["det_size"]),
@@ -456,10 +457,13 @@ class FaceFrameStandardizationService:
         )
         if self._detector is not None and self._detector_key == detector_key:
             return self._detector
-        detector = InsightFaceDetector(
-            model_name=detector_key[0],
+        create_detector = getattr(backend, "_createFaceDetector", None)
+        if not callable(create_detector):
+            raise FaceDetectorUnavailable("native face processor is required")
+        detector = create_detector(
+            model_name=detector_key[1],
             model_root=backend._configuredInsightFaceModelRoot(),
-            det_size=detector_key[2],
+            det_size=detector_key[3],
             det_thresh=options["det_thresh"],
             max_num=options["max_num"],
             min_width_ratio=options["min_width_ratio"],

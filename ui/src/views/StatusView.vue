@@ -131,18 +131,18 @@
 			</div>
 		</section>
 		<section class="panel">
-			<div class="sm-section-title sm-section-title-block">{{ vm.$avt('status:pip_packages_title', 'pip packages') }}</div>
-			<div v-if="vm.statusPipPackagesLoading" class="sm-overview-person-loading">
+			<div class="sm-section-title sm-section-title-block">{{ vm.$avt('status:insightface_title', 'InsightFace') }}</div>
+			<div v-if="vm.statusInsightFaceLoading" class="sm-overview-person-loading">
 				<span class="sm-loader"></span>
 				{{ vm.$avt('status:loading', 'Loading data...') }}
 			</div>
-			<div v-else-if="vm.statusPipPackagesStatus && vm.statusPipPackagesStatus.error" class="sm-files-warning">
-				{{ vm.statusPipPackagesStatus.error }}
+			<div v-else-if="vm.statusInsightFaceStatus && vm.statusInsightFaceStatus.error" class="sm-files-warning">
+				{{ vm.statusInsightFaceStatus.error }}
 			</div>
 			<div v-else class="sm-system-grid">
 				<div
-					v-for="packageStatus in vm.getStatusPipPackageEntries()"
-					:key="`pip-package-${packageStatus.key}`"
+					v-for="packageStatus in vm.getStatusInsightFaceEntries()"
+					:key="`insightface-${packageStatus.key}`"
 					class="sm-status-card"
 				>
 					<div class="sm-status-head">
@@ -150,19 +150,19 @@
 					</div>
 					<div class="sm-kv-list sm-kv-list-compact">
 						<div
-							v-for="statusBlock in vm.getStatusPipPackageStatusBlocks(packageStatus)"
-							:key="`pip-package-${packageStatus.key}-status-${statusBlock.key}`"
+							v-for="statusBlock in vm.getStatusInsightFaceStatusBlocks(packageStatus)"
+							:key="`insightface-${packageStatus.key}-status-${statusBlock.key}`"
 							class="sm-kv-row"
 						>
-							<div class="sm-kv-key">{{ vm.getStatusPipPackageStatusBlockLabel(statusBlock) }}</div>
-							<div class="sm-kv-value">{{ vm.getStatusPipPackageStatusBlockValue(statusBlock) }}</div>
+							<div class="sm-kv-key">{{ vm.getStatusInsightFaceStatusBlockLabel(statusBlock) }}</div>
+							<div class="sm-kv-value">{{ vm.getStatusInsightFaceStatusBlockValue(statusBlock) }}</div>
 						</div>
 					</div>
 				</div>
-				<div v-if="!vm.getStatusPipPackageEntries().length" class="sm-status-card">
+				<div v-if="!vm.getStatusInsightFaceEntries().length" class="sm-status-card">
 					<div class="sm-kv-list sm-kv-list-compact">
 						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('status:pip_packages_title', 'pip packages') }}</div>
+							<div class="sm-kv-key">{{ vm.$avt('status:insightface_title', 'InsightFace') }}</div>
 							<div class="sm-kv-value">{{ vm.$avt('status:not_available', 'Not available') }}</div>
 						</div>
 					</div>

@@ -13,7 +13,7 @@ def test_checks_changed_since_days_input_is_only_visible_for_scan():
     assert label_end > label_start
     block = view[label_start:label_end]
 
-    assert 'v-if="vm.selectedChecksAction === \'scan\'"' in block
+    assert 'v-if="vm.selectedChecksAction === \'scan\' && !vm.isInsightFaceAssignmentCheck"' in block
     assert 'class="checks-number-field"' in block
     assert "v-model.number=\"vm.checksChangedSinceDays\"" in block
     assert 'class="checks-number-input"' in block
