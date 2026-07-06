@@ -3,6 +3,7 @@ import os
 import sys
 import unittest
 from copy import deepcopy
+from unittest.mock import Mock
 
 sys.path.insert(0, os.path.abspath("src"))
 
@@ -89,6 +90,34 @@ class PhotosHandlerSortTests(unittest.TestCase):
         self.assertEqual(status["hidden_unknown"], 1)
         self.assertEqual(session_manager.get_calls[0]["params"]["show_hidden"], "false")
         self.assertEqual(session_manager.get_calls[1]["params"]["show_hidden"], "true")
+
+    def test_person_status_background_returns_pending_without_synology_calls(self):
+        session_manager = DummySessionManager()
+        handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))
+        handler.refresh_person_status_background = Mock(return_value=True)
+
+        status = handler.person_status(user_key="user", cookies={}, base_url="https://example.test", background=True)
+
+        self.assertEqual(status["total"], 0)
+        self.assertTrue(status["cache_stale"])
+        self.assertTrue(status["refreshing"])
+        self.assertEqual(session_manager.get_calls, [])
+        handler.refresh_person_status_background.assert_called_once()
+
+    def test_person_status_uses_cache_without_refreshing(self):
+        session_manager = DummySessionManager(get_payloads=[
+            {"success": True, "data": {"list": [{"id": 1, "name": "Visible"}]}},
+            {"success": True, "data": {"list": [{"id": 1, "name": "Visible"}]}},
+        ])
+        handler = PhotosHandler(session_manager=session_manager, config_service=DummyConfigService("id_desc"))
+
+        first = handler.person_status(user_key="user", cookies={}, base_url="https://example.test", force=True)
+        second = handler.person_status(user_key="user", cookies={}, base_url="https://example.test", background=True)
+
+        self.assertEqual(first["total"], 1)
+        self.assertEqual(second["total"], 1)
+        self.assertTrue(second["cache_hit"])
+        self.assertEqual(len(session_manager.get_calls), 2)
 
     def test_add_face_to_item_posts_expected_payload(self):
         session_manager = DummySessionManager(post_payloads=[{"success": True, "data": {"list": [{"face_id": 99, "face_id_temp": "42-0"}]}}])

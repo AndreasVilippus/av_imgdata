@@ -50,16 +50,19 @@ def test_file_analysis_ui_has_schema_status_helpers_before_rendering_progress():
     assert "vm.getFileAnalysisStatusCounters()" in view
 
 
-def test_status_view_places_system_before_files_and_insightface_below_files():
+def test_status_view_keeps_external_library_status_out_of_general_status():
     view = Path("ui/src/views/StatusView.vue").read_text(encoding="utf-8")
+    external_libraries = Path("ui/src/views/ExternalLibrariesView.vue").read_text(encoding="utf-8")
 
     system_pos = view.index("status:system_title")
     files_pos = view.index("status:files_title")
-    insightface_pos = view.index("status:insightface_title")
 
-    assert system_pos < files_pos < insightface_pos
-    assert "vm.getStatusInsightFaceStatusBlocks(packageStatus)" in view
-    assert "vm.getStatusInsightFaceStatusBlockLabel(statusBlock)" in view
+    assert system_pos < files_pos
+    assert "status:insightface_title" not in view
+    assert "vm.getStatusInsightFaceStatusBlocks(packageStatus)" not in view
+    assert "vm.getStatusInsightFaceStatusBlockLabel(statusBlock)" not in view
+    assert "vm.formatInsightFaceNativeProcessorReason" in external_libraries
+    assert "vm.formatImageProcessorVipsReason" in external_libraries
     assert "status:pip_package_status" not in view
     assert "status:pip_package_no_status_blocks" not in view
     assert "vm.getStatusPipPackageInstallStatusLabel(packageStatus)" not in view

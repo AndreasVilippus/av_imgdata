@@ -1058,16 +1058,17 @@ def test_auto_assign_known_is_not_supported_for_insightface_actions_runtime():
     }
 
 
-def test_insightface_missing_face_start_never_sends_auto_assign_runtime():
+def test_insightface_missing_face_start_sends_auto_only_for_safe_apply_runtime():
     result = run_node(
         face_match_runtime_script(
             """
             let requestBody = null;
             const component = createComponent({
               selectedFaceMatchingAction: 'search_missing_faces_insightface',
-              faceMatchAutoAssignKnown: true,
-              faceMatchRecognizeMissingInsightFacePersons: true,
-              faceMatchSkipUnknownInsightFacePersons: true,
+	              faceMatchAutoAssignKnown: true,
+	              faceMatchRecognizeMissingInsightFacePersons: true,
+	              faceMatchSkipUnknownInsightFacePersons: true,
+	              faceMatchAutoApplySafeInsightFacePersons: true,
               insightFaceStatus: {
                 native_processors: {
                   FACE_PROCESSOR: {
@@ -1097,17 +1098,17 @@ def test_insightface_missing_face_start_never_sends_auto_assign_runtime():
 
             await component.startFaceMatchingAction();
 
-            assert.strictEqual(requestBody.action, 'search_missing_faces_insightface');
-            assert.strictEqual(requestBody.auto, false);
-            assert.strictEqual(requestBody.recognize_persons, true);
-            assert.strictEqual(requestBody.skip_unknown_persons, true);
+	            assert.strictEqual(requestBody.action, 'search_missing_faces_insightface');
+	            assert.strictEqual(requestBody.auto, true);
+	            assert.strictEqual(requestBody.recognize_persons, true);
+	            assert.strictEqual(requestBody.skip_unknown_persons, true);
             console.log(JSON.stringify({ requestBody }));
             """
         )
     )
 
     assert result["requestBody"]["action"] == "search_missing_faces_insightface"
-    assert result["requestBody"]["auto"] is False
+    assert result["requestBody"]["auto"] is True
     assert result["requestBody"]["recognize_persons"] is True
     assert result["requestBody"]["skip_unknown_persons"] is True
 

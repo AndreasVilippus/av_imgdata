@@ -289,8 +289,8 @@ Current UI locales:
 
 If you like this work, or if it inspires you or your AI to build something new, please support the project.
 
-- Buy me a coffee: https://ko-fi.com/andreasvilippus
-- Donate via PayPal: https://www.paypal.com/donate/?hosted_button_id=QNGJ8D92V99GN
+- Buy me a coffee: <https://ko-fi.com/andreasvilippus>
+- Donate via PayPal: <https://www.paypal.com/donate/?hosted_button_id=QNGJ8D92V99GN>
 - Support development
 
 ## License

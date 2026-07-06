@@ -67,13 +67,15 @@ def test_exiftool_persistent_config_is_visible_and_normalized():
 def test_insightface_ui_uses_native_status_without_wheelhouse_install_controls():
     view = Path("ui/src/views/ExternalLibrariesView.vue").read_text(encoding="utf-8")
     mixin = Path("ui/src/mixins/externalLibrariesMixin.js").read_text(encoding="utf-8")
-    status_mixin = Path("ui/src/mixins/statusMixin.js").read_text(encoding="utf-8")
+    status_view = Path("ui/src/views/StatusView.vue").read_text(encoding="utf-8")
+    app = Path("ui/src/App.vue").read_text(encoding="utf-8")
+    sidebar = Path("ui/src/components/AppSidebarNav.vue").read_text(encoding="utf-8")
     ger = Path("ui/texts/ger/strings").read_text(encoding="utf-8")
     enu = Path("ui/texts/enu/strings").read_text(encoding="utf-8")
     api = Path("src/api/imgdata_api.py").read_text(encoding="utf-8")
     client = Path("ui/src/services/dsm-api-client.js").read_text(encoding="utf-8")
 
-    assert "vm.fetchInsightFaceStatus" in view
+    assert "fetchInsightFaceStatus" in mixin
     assert "config:label_native_face_processor_status_detail" in view
     assert "formatInsightFaceNativeProcessorReason(vm.faceMatchInsightFaceNativeProcessorStatus.reason)" in view
     assert "formatInsightFaceNativeProcessorReason(reason)" in mixin
@@ -84,15 +86,17 @@ def test_insightface_ui_uses_native_status_without_wheelhouse_install_controls()
     assert "formatImageProcessorVipsReason(vm.imageProcessorVipsStatus.reason)" in view
     assert "formatImageProcessorVipsReason(reason)" in mixin
     assert "vips_reason_probe_failed" in mixin
-    assert "formatStatusImageProcessorVipsReason(text)" in status_mixin
-    assert "vips_reason_probe_failed" in status_mixin
-    assert "formatStatusInsightFaceNativeProcessorReason(text)" in status_mixin
-    assert "native_face_processor_reason_license_not_acknowledged" in status_mixin
+    assert "external_libraries_libvips" in app
+    assert "mode=\"libvips\"" in app
+    assert "nav:libvips" in sidebar
+    assert "status:insightface_title" not in status_view
     assert 'label_native_face_processor_status_detail="Prozessorstatus"' in ger
+    assert 'libvips="libvips"' in ger
     assert 'label_image_processor_vips="libvips-Bildbackend"' in ger
     assert 'vips_reason_probe_failed="libvips-Bildbackend-Prüfung fehlgeschlagen; Standard-Bildbackend wird verwendet."' in ger
     assert 'native_face_processor_reason_license_not_acknowledged="InsightFace-Modell-Lizenzbedingungen wurden noch nicht bestätigt."' in ger
     assert 'label_native_face_processor_status_detail="Processor status"' in enu
+    assert 'libvips="libvips"' in enu
     assert 'label_image_processor_vips="libvips image backend"' in enu
     assert 'vips_reason_probe_failed="libvips image backend probe failed; default image backend is used."' in enu
     assert 'native_face_processor_reason_license_not_acknowledged="InsightFace model license terms have not been acknowledged."' in enu

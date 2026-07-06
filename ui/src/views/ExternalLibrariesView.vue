@@ -258,21 +258,24 @@
 						</div>
 					</label>
 
-					<div class="sm-section-title">{{ vm.$avt('config:label_image_processor_vips', 'libvips image backend') }}</div>
+				</div>
 
-					<div class="sm-kv-list">
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_image_processor_vips', 'libvips image backend') }}</div>
-							<div class="sm-kv-value">
-								{{ vm.imageProcessorVipsStatus.available ? vm.$avt('status:available', 'Available') : vm.$avt('status:not_available', 'Not available') }}
-							</div>
-						</div>
-						<div v-if="vm.imageProcessorVipsStatus.reason" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_image_processor_vips_status_detail', 'Image backend status') }}</div>
-							<div class="sm-kv-value">{{ vm.formatImageProcessorVipsReason(vm.imageProcessorVipsStatus.reason) }}</div>
-						</div>
-					</div>
+				<div v-if="vm.exiftoolDownloadSourceUrl" class="config-card-desc">
+					{{ vm.$avt('config:exiftool_download_source', 'Latest ExifTool package will be downloaded from: {url}', { url: vm.exiftoolDownloadSourceUrl }) }}
+				</div>
 
+				<div class="config-actions config-actions-right">
+					<v-button @click="vm.installExiftool" :disabled="vm.externalLibrariesLoading || vm.externalLibrariesSaving || vm.exiftoolInstalling" style="width: 220px;">
+						{{ vm.exiftoolInstalling ? vm.$avt('config:button_exiftool_installing', 'Installing ExifTool...') : vm.$avt('config:button_exiftool_install', 'Download and install ExifTool') }}
+					</v-button>
+					<v-button v-if="vm.hasBundledExiftool" @click="vm.removeExiftool" :disabled="vm.externalLibrariesLoading || vm.externalLibrariesSaving || vm.exiftoolInstalling || vm.exiftoolRemoving" style="width: 220px;">
+						{{ vm.exiftoolRemoving ? vm.$avt('config:button_exiftool_removing', 'Removing ExifTool...') : vm.$avt('config:button_exiftool_remove', 'Remove ExifTool') }}
+					</v-button>
+				</div>
+			</section>
+
+			<section v-if="isLibvipsConfigView" class="config-card">
+				<div class="config-form-grid">
 					<label class="config-checkbox">
 						<input
 							:checked="vm.externalLibrariesConfigModel.native_processors.IMAGE_PROCESSOR_VIPS.ENABLED"
@@ -317,70 +320,10 @@
 						</span>
 					</label>
 				</div>
-
-				<div v-if="vm.exiftoolDownloadSourceUrl" class="config-card-desc">
-					{{ vm.$avt('config:exiftool_download_source', 'Latest ExifTool package will be downloaded from: {url}', { url: vm.exiftoolDownloadSourceUrl }) }}
-				</div>
-
-				<div class="config-actions config-actions-right">
-					<v-button @click="vm.installExiftool" :disabled="vm.externalLibrariesLoading || vm.externalLibrariesSaving || vm.exiftoolInstalling" style="width: 220px;">
-						{{ vm.exiftoolInstalling ? vm.$avt('config:button_exiftool_installing', 'Installing ExifTool...') : vm.$avt('config:button_exiftool_install', 'Download and install ExifTool') }}
-					</v-button>
-					<v-button v-if="vm.hasBundledExiftool" @click="vm.removeExiftool" :disabled="vm.externalLibrariesLoading || vm.externalLibrariesSaving || vm.exiftoolInstalling || vm.exiftoolRemoving" style="width: 220px;">
-						{{ vm.exiftoolRemoving ? vm.$avt('config:button_exiftool_removing', 'Removing ExifTool...') : vm.$avt('config:button_exiftool_remove', 'Remove ExifTool') }}
-					</v-button>
-				</div>
 			</section>
 
 			<section v-if="isInsightFaceConfigView" class="config-card">
 				<div class="config-form-grid">
-					<div class="sm-kv-list">
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_status', 'InsightFace status') }}</div>
-							<div class="sm-kv-value">
-								{{ vm.insightFaceRuntimeStatus.enabled ? vm.$avt('status:enabled', 'Enabled') : vm.$avt('status:disabled', 'Disabled') }}
-							</div>
-						</div>
-						<div class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_native_face_processor', 'Native face processor') }}</div>
-							<div class="sm-kv-value">
-								{{ vm.faceMatchInsightFaceNativeProcessorStatus.available ? vm.$avt('status:available', 'Available') : vm.$avt('status:not_available', 'Not available') }}
-							</div>
-						</div>
-						<div v-if="vm.faceMatchInsightFaceNativeProcessorStatus.reason" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_native_face_processor_status_detail', 'Processor status detail') }}</div>
-							<div class="sm-kv-value">{{ vm.formatInsightFaceNativeProcessorReason(vm.faceMatchInsightFaceNativeProcessorStatus.reason) }}</div>
-						</div>
-						<div v-if="vm.insightFaceModelStatus.root" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_model_root', 'InsightFace model root') }}</div>
-							<div class="sm-kv-value">{{ vm.insightFaceModelStatus.root }}</div>
-						</div>
-						<div v-if="vm.insightFaceModelStatus.model_store" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_model_store', 'InsightFace model store') }}</div>
-							<div class="sm-kv-value">{{ vm.insightFaceModelStatus.model_store }}</div>
-						</div>
-						<div v-if="vm.insightFaceActiveModelName" class="sm-kv-row">
-							<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_active_model', 'Active model') }}</div>
-							<div class="sm-kv-value">{{ vm.insightFaceActiveModelName }}</div>
-						</div>
-						<template v-if="Array.isArray(vm.insightFaceModelStatus.models) && vm.insightFaceModelStatus.models.length">
-							<div
-								v-for="modelStatus in vm.insightFaceModelStatus.models"
-								:key="`config-model-${modelStatus.name}`"
-								class="sm-kv-row"
-							>
-								<div class="sm-kv-key">{{ vm.$avt('config:label_insightface_model', 'Model') }}: {{ modelStatus.name }}</div>
-								<div class="sm-kv-value">{{ vm.getInsightFaceModelStatusLabel(modelStatus) }}</div>
-							</div>
-						</template>
-					</div>
-
-					<div class="config-actions config-actions-right">
-						<v-button @click="vm.fetchInsightFaceStatus" :disabled="vm.insightFaceStatusLoading" style="width: 220px;">
-							{{ vm.insightFaceStatusLoading ? vm.$avt('config:button_insightface_status_loading', 'Checking InsightFace...') : vm.$avt('config:button_insightface_status_refresh', 'Refresh InsightFace status') }}
-						</v-button>
-					</div>
-
 					<label class="config-checkbox">
 						<input
 							:checked="vm.externalLibrariesConfigModel.native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED"
@@ -402,6 +345,7 @@
 							type="text"
 							class="config-input"
 							:disabled="vm.externalLibrariesSaving"
+							:placeholder="vm.insightFaceModelStatus.root || vm.$avt('config:placeholder_insightface_model_root_default', 'Package default')"
 							@input="vm.setExternalLibrariesNativeProcessorConfigValue('FACE_PROCESSOR', 'MODEL_ROOT', $event.target.value)"
 						/>
 						<span class="config-card-desc">
@@ -480,7 +424,7 @@ export default {
 		mode: {
 			type: String,
 			default: 'info',
-			validator: (value) => ['info', 'config', 'insightface'].includes(value),
+			validator: (value) => ['info', 'config', 'insightface', 'libvips'].includes(value),
 		},
 		vm: {
 			type: Object,
@@ -497,8 +441,11 @@ export default {
 		isInsightFaceConfigView() {
 			return this.mode === 'insightface';
 		},
+		isLibvipsConfigView() {
+			return this.mode === 'libvips';
+		},
 		isEditableConfigView() {
-			return this.isExiftoolConfigView || this.isInsightFaceConfigView;
+			return this.isExiftoolConfigView || this.isInsightFaceConfigView || this.isLibvipsConfigView;
 		},
 		panelTitle() {
 			if (this.isExiftoolConfigView) {
@@ -507,11 +454,17 @@ export default {
 			if (this.isInsightFaceConfigView) {
 				return this.vm.$avt('nav:insightface', 'InsightFace');
 			}
+			if (this.isLibvipsConfigView) {
+				return this.vm.$avt('nav:libvips', 'libvips');
+			}
 			return this.vm.$avt('nav:external_libraries', 'External libraries');
 		},
 		panelDescription() {
 			if (this.isInsightFaceConfigView) {
 				return this.vm.$avt('config:section_insightface_desc', 'Settings for the native InsightFace face processor and model store.');
+			}
+			if (this.isLibvipsConfigView) {
+				return this.vm.$avt('config:section_libvips_desc', 'Settings for the optional libvips image backend.');
 			}
 			return this.vm.$avt('config:section_exiftool_desc', 'Settings for optional ExifTool usage when reading embedded XMP metadata.');
 		},

@@ -20,6 +20,7 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - Keep the package distributable under the MIT license.
 - Keep behavior close to DSM and Synology Photos conventions.
 - Keep the package installable on DSM without manual post-installation steps.
+- Keep native package components self-contained in the SPK when they are enabled by default.
 
 ### Must Not
 
@@ -28,14 +29,16 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - Mix unrelated refactoring into targeted fixes.
 - Hide structural problems behind retries, resets, or silent recovery.
 - Add broad CSS, broad component structure, or decorative UI without concrete need.
-- Introduce dependencies, assets, models, or bundled components that prevent MIT-compatible distribution.
+- Introduce dependencies, assets, models, or bundled components that prevent compliant SPK distribution under the project license and the bundled components' own licenses.
 - Require manual DSM shell steps, manual file copying, or manual patching after package installation.
 
 ## Distribution And Optional Dependencies
 
-- Bundled dependencies, assets, models, and libraries must be MIT-compatible for package distribution, or remain external and user-supplied.
+- Bundled dependencies, assets, models, and libraries must be compatible with distributing this MIT-licensed project as an SPK while preserving their own license obligations, or remain external and user-supplied.
 - Optional external tools and models must be explicit, configurable, status-visible, and license-aware.
-- InsightFace, ONNXRuntime, OpenCV, wheelhouse packages, and model archives are optional capabilities.
+- InsightFace model archives remain user-supplied.
+- ONNXRuntime, OpenCV, libvips, libheif, libde265, and required shared runtime libraries may be packaged only when their license notices, source references, and redistribution obligations are preserved in the SPK.
+- GPL codec implementations such as x265 must stay out of the package unless the package license and distribution model are deliberately changed.
 - InsightFace models must not be silently bundled or auto-downloaded.
 - Optional package tests must pass without installing optional packages or downloading models.
 
@@ -45,8 +48,9 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - New settings must be normalized in `ConfigService.normalizeConfig()`.
 - UI config editors must preserve the full config shape.
 - Runtime config and state live below `SYNOPKG_PKGVAR`.
-- Findings and runtime state should go through `FileAnalysisService` or a successor storage abstraction.
-- Runtime JSON writes should remain change-aware and atomic.
+- Operational findings, suppressions, mappings, and runtime state should go through `src/av_imgdata/db` repositories, `RuntimeStateService`, `FileAnalysisService`, or a successor storage abstraction.
+- Legacy JSON files are migration or compatibility inputs unless the current storage abstraction still owns that file.
+- Remaining runtime JSON writes should remain change-aware and atomic.
 - Legacy config migration is allowed only when deterministic and idempotent.
 
 ## Backend Architecture
@@ -61,6 +65,19 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - Shared multi-step workflows must not be duplicated between API routes, cleanup flows, checks flows, and face-match flows.
 - Synology Photos person creation must go through the shared person creation and person-id resolution path.
 - Session handling, authentication bootstrap, and Photos API retries belong in `SessionManager`.
+
+## Native Processor Architecture
+
+- Native source code belongs under `processors/native/`.
+- Native build and package integration belongs in `tools/`, `SynoBuildConf/build`, `SynoBuildConf/install`, and matching static contract tests.
+- Runtime access to native binaries must go through service adapters in `src/services/`; UI and workflow code should not execute native binaries directly.
+- The native face processor and the optional libvips image processor are separate components with separate status, config, and failure reasons.
+- `FACE_PROCESSOR` readiness covers the InsightFace-compatible embedding runtime and model/license state.
+- `IMAGE_PROCESSOR_VIPS` readiness covers the libvips image backend binary, linked libraries, supported formats, and fallback behavior.
+- libvips may be preferred only when `IMAGE_PROCESSOR_VIPS.ENABLED`, `PREFERRED`, status availability, and probed format support agree.
+- Fallback from libvips to the default decoder path must be controlled by `ALLOW_FALLBACK_TO_DEFAULT` and visible in logs/status when it matters.
+- Native processor command output must keep a stable JSON contract with `contract_version`, `success`, operation identity, and structured errors.
+- Native status checks should be cached or warmed in the background when direct probing would block the UI.
 
 ## Long-Running Process Rules
 
@@ -127,7 +144,7 @@ Details are defined in `docs/status-concept-integrated.md`.
 
 ## Metadata And Face Geometry
 
-- Supported metadata face schemas are `ACD`, `MICROSOFT`, and `MWG_REGIONS`.
+- Supported metadata face schemas are `ACD`, `MICROSOFT`, `MWG_REGIONS`, and `IPTC_EXT_REGIONS`.
 - Metadata schema enablement belongs under `metadata.SCHEMAS`.
 - Face coordinate comparison and signatures must use the shared coordinate precision helpers.
 - Do not add another coordinate rounding or string-formatting rule.
@@ -143,6 +160,7 @@ Details are defined in `docs/status-concept-integrated.md`.
 - Embedded XMP full scan is optional and bounded.
 - ExifTool persistent mode is optional and timeout-bounded.
 - ExifTool installation and update checks must remain explicit and status-visible.
+- libvips-backed image decode and normalization is optional, status-visible, and controlled by `IMAGE_PROCESSOR_VIPS`.
 - If parser/file access behavior changes, update `tests/function_matrix.md`.
 
 ## Synology API Rules
@@ -160,6 +178,8 @@ Details are defined in `docs/status-concept-integrated.md`.
 - Existing unrelated failures must not be confused with new changes.
 - Status/progress changes require status contract tests.
 - UI reconnect, progress identity, and button-state changes require focused UI or integration tests where available.
+- Native build, packaging, licensing, and binary-contract changes require static package/build contract tests.
+- Native processor runtime behavior requires focused service tests before relying on SPK-level validation.
 
 ## Decision Checklist
 
@@ -175,3 +195,4 @@ Before implementing a change, verify:
 8. Does schema status already provide the data the UI should use?
 9. Does the change affect findings, runtime state, ignore lists, or config migration?
 10. Does the change add or alter an optional dependency, external tool, model, or license-sensitive asset?
+11. Does the change add or alter a native processor command, binary, packaged library, or runtime fallback path?

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import json
 import threading
+import time
 import unicodedata
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from api.session_manager import SessionManager, SessionManagerError
 from services.config_service import ConfigService
 
@@ -24,6 +25,9 @@ class PhotosHandler:
     def __init__(self, session_manager: SessionManager, config_service: ConfigService):
         self._session_manager = session_manager
         self._config_service = config_service
+        self._person_status_lock = threading.Lock()
+        self._person_status_cache: Optional[Tuple[Tuple[str, str, int], float, Dict[str, Any]]] = None
+        self._person_status_refreshing = False
 
     def _max_photos_persons(self) -> int:
         config = self._config_service.readMergedConfig()
@@ -99,7 +103,29 @@ class PhotosHandler:
         user_key: str,
         cookies: Dict[str, str],
         base_url: str,
-    ) -> Dict[str, int]:
+        force: bool = False,
+        background: bool = False,
+    ) -> Dict[str, Any]:
+        cache_key = self._person_status_cache_key(user_key=user_key, base_url=base_url)
+        if not force:
+            cached = self._cached_person_status(cache_key)
+            if cached is not None:
+                return cached
+            if background:
+                stale = self._cached_person_status(cache_key, allow_stale=True)
+                self.refresh_person_status_background(user_key=user_key, cookies=cookies, base_url=base_url)
+                if stale is not None:
+                    return stale
+                return self._pending_person_status()
+        return self._store_person_status(cache_key, self._read_person_status(user_key=user_key, cookies=cookies, base_url=base_url))
+
+    def _read_person_status(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+    ) -> Dict[str, Any]:
         visible_persons = self.listFotoTeamPerson(user_key=user_key, cookies=cookies, base_url=base_url)
         persons = self.listFotoTeamPerson(user_key=user_key, cookies=cookies, base_url=base_url, show_hidden=True)
         total = len(persons)
@@ -121,7 +147,83 @@ class PhotosHandler:
             "hidden_total": hidden_total,
             "hidden_known": hidden_known,
             "hidden_unknown": hidden_unknown,
+            "cache_hit": False,
+            "cache_stale": False,
+            "refreshing": False,
         }
+
+    def _person_status_cache_key(self, *, user_key: str, base_url: str) -> Tuple[str, str, int]:
+        return (str(user_key or ""), str(base_url or ""), self._max_photos_persons())
+
+    @staticmethod
+    def _person_status_ttl_seconds() -> float:
+        return 300.0
+
+    def _cached_person_status(self, cache_key: Tuple[str, str, int], *, allow_stale: bool = False) -> Optional[Dict[str, Any]]:
+        with self._person_status_lock:
+            cached = self._person_status_cache
+            if cached is None:
+                return None
+            cached_key, cached_at, cached_value = cached
+            if cached_key != cache_key:
+                return None
+            expired = time.monotonic() - cached_at > self._person_status_ttl_seconds()
+            if expired and not allow_stale:
+                return None
+            result = dict(cached_value)
+            result["cache_hit"] = not expired
+            result["cache_stale"] = bool(expired)
+            result["refreshing"] = bool(self._person_status_refreshing)
+            return result
+
+    def _store_person_status(self, cache_key: Tuple[str, str, int], status: Dict[str, Any]) -> Dict[str, Any]:
+        result = dict(status)
+        result["cache_hit"] = False
+        result["cache_stale"] = False
+        result["refreshing"] = False
+        with self._person_status_lock:
+            self._person_status_cache = (cache_key, time.monotonic(), dict(result))
+        return result
+
+    @staticmethod
+    def _pending_person_status() -> Dict[str, Any]:
+        return {
+            "total": 0,
+            "known": 0,
+            "unknown": 0,
+            "visible_total": 0,
+            "visible_known": 0,
+            "visible_unknown": 0,
+            "hidden_total": 0,
+            "hidden_known": 0,
+            "hidden_unknown": 0,
+            "cache_hit": False,
+            "cache_stale": True,
+            "refreshing": True,
+        }
+
+    def refresh_person_status_background(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+    ) -> bool:
+        with self._person_status_lock:
+            if self._person_status_refreshing:
+                return False
+            self._person_status_refreshing = True
+
+        def refresh() -> None:
+            try:
+                self.person_status(user_key=user_key, cookies=cookies, base_url=base_url, force=True)
+            finally:
+                with self._person_status_lock:
+                    self._person_status_refreshing = False
+
+        thread = threading.Thread(target=refresh, name="av-imgdata-person-status-refresh", daemon=True)
+        thread.start()
+        return True
 
     def listFotoTeamPerson(
         self,

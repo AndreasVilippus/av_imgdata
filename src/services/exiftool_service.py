@@ -5,6 +5,8 @@ import re
 import shutil
 import subprocess
 import tarfile
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.request import Request, urlopen
@@ -23,6 +25,9 @@ class ExifToolService:
 
     def __init__(self, config_service: Optional[ConfigService] = None):
         self._config = config_service or ConfigService()
+        self._status_lock = threading.Lock()
+        self._status_cache: Optional[Tuple[Tuple[Any, ...], float, Dict[str, Any]]] = None
+        self._status_refreshing = False
 
     @staticmethod
     def _configuredPathFromFilesConfig(files_config: Dict[str, Any]) -> str:
@@ -33,7 +38,7 @@ class ExifToolService:
             return manual_path
         return str(config.get("PATHEXIFTOOL", "exiftool") or "exiftool").strip() or "exiftool"
 
-    def getStatus(self) -> Dict[str, Any]:
+    def getStatus(self, *, force: bool = False, background: bool = False) -> Dict[str, Any]:
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
         configured_path = self._configuredPathFromFilesConfig(files_config)
@@ -43,6 +48,25 @@ class ExifToolService:
         last_download_url = str(files_config.get("EXIFTOOL_DOWNLOAD_URL", "") or "").strip()
         manual_path = str(files_config.get("MANUAL_PATHEXIFTOOL", "") or "").strip()
         use_manual_path = bool(files_config.get("USE_MANUAL_PATHEXIFTOOL", False))
+        cache_key = self._status_cache_key(files_config, configured_path)
+        if not force:
+            cached = self._cached_status(cache_key)
+            if cached is not None:
+                return cached
+            if background:
+                stale = self._cached_status(cache_key, allow_stale=True)
+                self.refreshStatusBackground()
+                if stale is not None:
+                    return stale
+                return self._pending_status(
+                    configured_path=configured_path,
+                    manual_path=manual_path,
+                    use_manual_path=use_manual_path,
+                    use_exiftool=use_exiftool,
+                    check_updates=check_updates,
+                    last_download_url=last_download_url,
+                    bundled_install_root=bundled_install_root,
+                )
 
         local_info = self._detectLocalExifTool(configured_path)
         online_info = self._fetchLatestOfficialInfo() if check_updates else {
@@ -58,7 +82,7 @@ class ExifToolService:
         perl_info = self._detectPerl()
         update_available = check_updates and self._isUpdateAvailable(local_info.get("version"), online_info.get("latest_version"))
 
-        return {
+        return self._store_status_cache(cache_key, {
             "configured_path": configured_path,
             "manual_configured_path": manual_path,
             "use_manual_configured_path": use_manual_path,
@@ -73,7 +97,120 @@ class ExifToolService:
             "perl": perl_info,
             "architecture": self._architectureInfo(local_info),
             "update_available": update_available,
+        })
+
+    def _status_cache_key(self, files_config: Dict[str, Any], configured_path: str) -> Tuple[Any, ...]:
+        return (
+            str(configured_path or ""),
+            bool(files_config.get("USE_EXIFTOOL", False)),
+            bool(files_config.get("CHECK_EXIFTOOL_UPDATES", True)),
+            str(files_config.get("MANUAL_PATHEXIFTOOL", "") or ""),
+            bool(files_config.get("USE_MANUAL_PATHEXIFTOOL", False)),
+            str(files_config.get("EXIFTOOL_DOWNLOAD_URL", "") or ""),
+            str(self._packageTargetExecutablePath()),
+        )
+
+    @staticmethod
+    def _status_cache_ttl_seconds() -> float:
+        return 300.0
+
+    def _cached_status(self, cache_key: Tuple[Any, ...], *, allow_stale: bool = False) -> Optional[Dict[str, Any]]:
+        with self._status_lock:
+            cached = self._status_cache
+            if cached is None:
+                return None
+            cached_key, cached_at, cached_value = cached
+            if cached_key != cache_key:
+                return None
+            expired = time.monotonic() - cached_at > self._status_cache_ttl_seconds()
+            if expired and not allow_stale:
+                return None
+            result = dict(cached_value)
+            result["cache_hit"] = not expired
+            result["cache_stale"] = bool(expired)
+            result["refreshing"] = bool(self._status_refreshing)
+            return result
+
+    def _store_status_cache(self, cache_key: Tuple[Any, ...], status: Dict[str, Any]) -> Dict[str, Any]:
+        result = dict(status)
+        result["cache_hit"] = False
+        result["cache_stale"] = False
+        result["refreshing"] = False
+        with self._status_lock:
+            self._status_cache = (cache_key, time.monotonic(), dict(result))
+        return result
+
+    def _pending_status(
+        self,
+        *,
+        configured_path: str,
+        manual_path: str,
+        use_manual_path: bool,
+        use_exiftool: bool,
+        check_updates: bool,
+        last_download_url: str,
+        bundled_install_root: Path,
+    ) -> Dict[str, Any]:
+        return {
+            "configured_path": configured_path,
+            "manual_configured_path": manual_path,
+            "use_manual_configured_path": use_manual_path,
+            "use_exiftool": use_exiftool,
+            "check_updates": check_updates,
+            "last_download_url": last_download_url,
+            "bundled_install_root": str(bundled_install_root),
+            "bundled_install_exists": bundled_install_root.exists(),
+            "bundled_target_path": str(self._packageTargetExecutablePath()),
+            "local": {
+                "found": False,
+                "configured_path": configured_path,
+                "resolved_path": "",
+                "found_via": "",
+                "version": "",
+                "kind": "unknown",
+            },
+            "online": {
+                "checked": False,
+                "latest_version": "",
+                "latest_release_date": "",
+                "history_url": self.HISTORY_URL,
+                "install_url": self.INSTALL_URL,
+                "index_url": self.INDEX_URL,
+                "unix_package_name": "",
+                "unix_download_url": "",
+            },
+            "perl": {
+                "available": False,
+                "path": "",
+                "version": "",
+            },
+            "architecture": {
+                "system": platform.system(),
+                "machine": platform.machine(),
+                "executable_kind": "unknown",
+            },
+            "update_available": False,
+            "cache_hit": False,
+            "cache_stale": True,
+            "refreshing": True,
         }
+
+    def refreshStatusBackground(self) -> bool:
+        with self._status_lock:
+            if self._status_refreshing:
+                return False
+            self._status_refreshing = True
+
+        def refresh() -> None:
+            try:
+                self.getStatus(force=True, background=False)
+            finally:
+                with self._status_lock:
+                    self._status_refreshing = False
+
+        thread = threading.Thread(target=refresh, name="av-imgdata-exiftool-status-refresh", daemon=True)
+        thread.start()
+        return True
 
     def getSupportedReadableExtensions(self) -> Dict[str, Any]:
         config = self._config.readMergedConfig()

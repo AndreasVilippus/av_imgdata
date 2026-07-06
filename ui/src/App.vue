@@ -14,6 +14,7 @@
 						<external-libraries-view v-if="selectedOption === 'external_libraries'" :vm="this" mode="info" />
 						<external-libraries-view v-if="selectedOption === 'external_libraries_exiftool'" :vm="this" mode="config" />
 						<external-libraries-view v-if="selectedOption === 'external_libraries_insightface'" :vm="this" mode="insightface" />
+						<external-libraries-view v-if="selectedOption === 'external_libraries_libvips'" :vm="this" mode="libvips" />
 						<database-lists-view v-if="selectedOption === 'database_lists'" :vm="this" />
 					</main>
 				</div>
@@ -92,7 +93,7 @@ export default {
 			if (selectedOption === 'cleanup') {
 				this.refreshCleanupSessionState();
 			}
-			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool' || selectedOption === 'external_libraries_insightface') {
+			if (selectedOption === 'external_libraries' || selectedOption === 'external_libraries_exiftool' || selectedOption === 'external_libraries_insightface' || selectedOption === 'external_libraries_libvips') {
 				this.loadExternalLibrariesConfig();
 			}
 			if (selectedOption === 'database_lists') {

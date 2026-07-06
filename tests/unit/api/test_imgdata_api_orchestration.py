@@ -204,9 +204,19 @@ def test_status_routes_run_blocking_service_calls_off_event_loop(monkeypatch):
     assert exiftool_payload["success"] is True
     assert insightface_payload["success"] is True
     assert len(calls) == 4
-    imgdata_api.IMGDATA.status_persons.assert_called_once()
-    imgdata_api.IMGDATA.status_system.assert_called_once()
-    imgdata_api.IMGDATA.exiftool_status.assert_called_once()
+    imgdata_api.IMGDATA.status_persons.assert_called_once_with(
+        user_key=SESSION_CTX["user_key"],
+        cookies=SESSION_CTX["cookies"],
+        base_url=SESSION_CTX["base_url"],
+        background=True,
+    )
+    imgdata_api.IMGDATA.status_system.assert_called_once_with(
+        user_key=SESSION_CTX["user_key"],
+        cookies=SESSION_CTX["cookies"],
+        base_url=SESSION_CTX["base_url"],
+        background=True,
+    )
+    imgdata_api.IMGDATA.exiftool_status.assert_called_once_with(background=True)
     imgdata_api.IMGDATA.insightFaceStatus.assert_called_once()
 
 

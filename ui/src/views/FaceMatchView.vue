@@ -53,7 +53,7 @@
 							class="face-match-switch"
 							:title="vm.$avt('face_match:hint_save_only', 'Known persons are still assigned depending on the setting; otherwise matches are only listed for later.')"
 					>
-						<input v-model="vm.faceMatchSaveOnly" type="checkbox" :disabled="vm.faceMatchLoading || vm.faceMatchUseStoredFindings" />
+						<input v-model="vm.faceMatchSaveOnly" type="checkbox" :disabled="vm.faceMatchLoading || vm.faceMatchUseStoredFindings || vm.faceMatchAutoApplySafeInsightFacePersons" />
 							<span class="face-match-switch-slider"></span>
 							<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_save_only', 'Save matches only') }}</span>
 						</label>
@@ -99,6 +99,15 @@
 							<input v-model="vm.faceMatchRecognizeMissingInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasInsightFaceForFaceMatch" />
 							<span class="face-match-switch-slider"></span>
 								<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_recognize_missing_faces', 'Person recognition with InsightFace') }}</span>
+							</label>
+							<label
+								v-if="vm.selectedFaceMatchingAction === 'search_missing_faces_insightface' && vm.faceMatchRecognizeMissingInsightFacePersons"
+								class="face-match-switch"
+								:title="vm.$avt('face_match:hint_auto_apply_safe_missing_faces', 'Safe InsightFace person matches are created and assigned in Photos directly; uncertain matches remain available for display or findings list.')"
+							>
+								<input :checked="vm.faceMatchAutoApplySafeInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasInsightFaceForFaceMatch" @change="vm.setFaceMatchAutoApplySafeInsightFacePersons($event.target.checked)" />
+								<span class="face-match-switch-slider"></span>
+								<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_auto_apply_safe_missing_faces', 'Apply safe suggestions directly') }}</span>
 							</label>
 							<label
 								v-if="vm.selectedFaceMatchingAction === 'search_missing_faces_insightface' && vm.faceMatchRecognizeMissingInsightFacePersons"

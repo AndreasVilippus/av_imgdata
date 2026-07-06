@@ -39,6 +39,47 @@ def test_write_operation_lock_keeps_structured_conflict_details():
     assert details["image_path"] == "/volume1/photo/a.jpg"
 
 
+def test_status_system_background_returns_pending_without_shared_folder_call():
+    service = make_service()
+    service.core.getSharedFolder = Mock(side_effect=AssertionError("shared folder lookup must be backgrounded"))
+    service._refreshSystemStatusBackground = Mock(return_value=True)
+
+    status = service.status_system(
+        user_key="user",
+        cookies={},
+        base_url="https://example.test",
+        background=True,
+    )
+
+    assert status["shared_folder"] == ""
+    assert status["cache_stale"] is True
+    assert status["refreshing"] is True
+    service._refreshSystemStatusBackground.assert_called_once()
+
+
+def test_status_system_uses_cached_shared_folder_without_refreshing():
+    service = make_service()
+    service.core.getSharedFolder = Mock(return_value="/volume1/photo")
+
+    first = service.status_system(
+        user_key="user",
+        cookies={},
+        base_url="https://example.test",
+        force=True,
+    )
+    second = service.status_system(
+        user_key="user",
+        cookies={},
+        base_url="https://example.test",
+        background=True,
+    )
+
+    assert first["shared_folder"] == "/volume1/photo"
+    assert second["shared_folder"] == "/volume1/photo"
+    assert second["cache_hit"] is True
+    service.core.getSharedFolder.assert_called_once()
+
+
 def test_photo_face_write_lock_conflict_includes_affected_face_identity():
     service = make_service()
 

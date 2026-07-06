@@ -39,10 +39,12 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     assert "faceMatchInsightFaceUnavailableMessage" in face_match_view
     assert "faceMatchRecognizeMissingInsightFacePersons" in face_match_view
     assert "faceMatchSkipUnknownInsightFacePersons" in face_match_view
+    assert "faceMatchAutoApplySafeInsightFacePersons" in face_match_view
+    assert "switch_auto_apply_safe_missing_faces" in face_match_view
     assert "skip_unknown_persons:" in face_match_mixin
     assert 'v-if="vm.faceMatchSupportsAutoAssignKnown"' in face_match_view
     assert "faceMatchSupportsAutoAssignKnown()" in face_match_mixin
-    assert "auto: this.faceMatchSupportsAutoAssignKnown && this.faceMatchAutoAssignKnown" in face_match_mixin
+    assert "this.faceMatchAutoApplySafeInsightFacePersons" in face_match_mixin
     assert "stoppingMessageKey: 'face_match:output_stopping'" in face_match_mixin
     assert "faceMatchRecognitionActionSelected" in face_match_view
     assert '<RecognitionOptions v-if="vm.faceMatchRecognitionActionSelected"' not in face_match_view
@@ -140,7 +142,8 @@ def test_recognition_review_uses_persisted_findings_and_apply_endpoints():
     for endpoint in ("recognition_findings", "recognition_review", "recognition_suggestions_apply"):
         assert f'@router.post("/{endpoint}")' in api
         assert f"/api/{endpoint}" in mixin
-    assert 'class="panel face-match-split-panel"' in review
+    assert 'class="panel face-match-split-panel panel-content-start"' in review
+    assert 'class="config-card-desc"' in review
     assert "face-match-icon-button-floating" in review
     assert "getRecognitionApplyIconUrl" in review
     assert "getRecognitionExcludeReferenceBaseIconUrl" in review

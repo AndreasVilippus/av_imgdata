@@ -4,11 +4,9 @@ export default {
 			statusLoading: false,
 			statusLoaded: false,
 			fileAnalysisProgress: {},
-			fileAnalysisProgressTimer: null,
-			fileAnalysisProgressRequestId: 0,
-			statusInsightFaceStatus: {},
-			statusInsightFaceLoading: false,
-			persons: {
+				fileAnalysisProgressTimer: null,
+				fileAnalysisProgressRequestId: 0,
+				persons: {
 				total: 0,
 				known: 0,
 				unknown: 0,
@@ -43,11 +41,10 @@ export default {
 		},
 	},
 	mounted() {
-		this.getStatus({ auto: true });
-		this.fetchFileAnalysisProgress();
-		this.fetchExiftoolStatus();
-		this.fetchStatusInsightFaceStatus();
-	},
+			this.getStatus({ auto: true });
+			this.fetchFileAnalysisProgress();
+			this.fetchExiftoolStatus();
+		},
 	beforeDestroy() {
 		this.stopFileAnalysisProgressPolling();
 	},
@@ -102,91 +99,6 @@ export default {
 				};
 				this.output = `Error: ${err.message}`;
 			}
-		},
-		async fetchStatusInsightFaceStatus() {
-			this.statusInsightFaceLoading = true;
-			try {
-				const data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/insightface_status', {}, { resume: false, requireSynoToken: false, timeoutMs: 8000 });
-				this.statusInsightFaceStatus = this.getResponseData(data);
-			} catch (err) {
-				this.statusInsightFaceStatus = {
-					...(this.statusInsightFaceStatus && typeof this.statusInsightFaceStatus === 'object' ? this.statusInsightFaceStatus : {}),
-					error: err && err.message ? err.message : String(err || ''),
-				};
-			} finally {
-				this.statusInsightFaceLoading = false;
-			}
-		},
-		getStatusInsightFaceEntries() {
-			const root = this.statusInsightFaceStatus && typeof this.statusInsightFaceStatus === 'object'
-				? this.statusInsightFaceStatus
-				: {};
-			const insightFace = root.insightface && typeof root.insightface === 'object' ? { INSIGHTFACE: root.insightface } : {};
-			return Object.entries(insightFace)
-				.map(([key, value]) => ({
-					key,
-					...(value && typeof value === 'object' ? value : {}),
-				}))
-				.sort((left, right) => String(left.label || left.key).localeCompare(String(right.label || right.key)));
-		},
-		getStatusInsightFaceStatusBlocks(packageStatus) {
-			return packageStatus && Array.isArray(packageStatus.status_blocks)
-				? packageStatus.status_blocks.filter((block) => block && typeof block === 'object')
-				: [];
-		},
-		getStatusInsightFaceStatusBlockLabel(block) {
-			const labelKey = String(block && block.label_key || '').trim();
-			const fallback = String(block && (block.fallback_label || block.key) || '').trim();
-			return labelKey ? this.$avt(labelKey, fallback) : fallback;
-		},
-		getStatusInsightFaceStatusBlockValue(block) {
-			const value = block && Object.prototype.hasOwnProperty.call(block, 'value') ? block.value : '';
-			const text = String(value ?? '').trim();
-			if (String(block && block.key || '') === 'native_face_processor') {
-				return this.formatStatusInsightFaceNativeProcessorReason(text);
-			}
-			if (String(block && block.key || '') === 'image_processor_vips') {
-				return this.formatStatusImageProcessorVipsReason(text);
-			}
-			return text || this.$avt('status:not_available', 'Not available');
-		},
-		formatStatusInsightFaceNativeProcessorReason(reason) {
-				const normalized = String(reason || '').trim().toLowerCase();
-				const labels = {
-					insightface_license_not_acknowledged: ['status:native_face_processor_reason_license_not_acknowledged', 'InsightFace model license terms have not been acknowledged.'],
-					binary_missing: ['status:native_face_processor_reason_binary_missing', 'Native face processor binary is missing.'],
-				binary_not_executable: ['status:native_face_processor_reason_binary_not_executable', 'Native face processor binary is not executable.'],
-				version_failed: ['status:native_face_processor_reason_version_failed', 'Native face processor version check failed.'],
-				probe_failed: ['status:native_face_processor_reason_probe_failed', 'Native face processor model probe failed.'],
-				skeleton_no_inference: ['status:native_face_processor_reason_skeleton_no_inference', 'Native face processor skeleton does not run inference.'],
-				onnxruntime_smoke_only: ['status:native_face_processor_reason_onnxruntime_smoke_only', 'ONNXRuntime smoke backend is available, but full inference is not ready.'],
-				ready: ['status:native_face_processor_reason_ready', 'Native face processor is ready.'],
-				unknown: ['status:native_face_processor_reason_unknown', 'Native face processor status is unknown.'],
-			};
-			const entry = labels[normalized];
-			if (entry) {
-				return this.$avt(entry[0], entry[1]);
-			}
-			return normalized || this.$avt('status:not_available', 'Not available');
-		},
-		formatStatusImageProcessorVipsReason(reason) {
-			const normalized = String(reason || '').trim().toLowerCase();
-			const labels = {
-				vips_disabled: ['status:vips_reason_disabled', 'libvips image backend is disabled.'],
-				vips_binary_missing: ['status:vips_reason_binary_missing', 'libvips image processor binary is missing.'],
-				vips_binary_not_executable: ['status:vips_reason_binary_not_executable', 'libvips image processor binary is not executable.'],
-				vips_version_failed: ['status:vips_reason_version_failed', 'libvips image processor version check failed.'],
-				vips_probe_failed: ['status:vips_reason_probe_failed', 'libvips image backend probe failed; default image backend is used.'],
-				vips_format_unsupported: ['status:vips_reason_format_unsupported', 'Image format is not supported by the libvips backend.'],
-				vips_ready: ['status:vips_reason_ready', 'libvips image backend is ready.'],
-				vips_failed_fallback_used: ['status:vips_reason_failed_fallback_used', 'libvips failed; default image backend was used.'],
-				vips_failed_no_fallback: ['status:vips_reason_failed_no_fallback', 'libvips failed and fallback is disabled.'],
-			};
-			const entry = labels[normalized];
-			if (entry) {
-				return this.$avt(entry[0], entry[1]);
-			}
-			return normalized || this.$avt('status:not_available', 'Not available');
 		},
 		getPerlStatusValue() {
 			const perlInfo = this.exiftoolStatus && typeof this.exiftoolStatus === 'object'

@@ -156,6 +156,59 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
         self.assertEqual(result["metadata_face"]["name"], "Alice")
         self.assertTrue(result["resume_cursor"]["recognize_persons"])
 
+    def test_insightface_missing_face_auto_applies_safe_recognition_profile(self):
+        class FakeEmbedder:
+            @classmethod
+            def available_models(cls, model_root=None):
+                return {"root": str(model_root or ""), "model_store": "", "models": []}
+
+            def __init__(self, **kwargs):
+                pass
+
+            def detect_and_embed(self, image_path):
+                return [{
+                    "bbox": {"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.5},
+                    "center": {"x": 0.2, "y": 0.35},
+                    "embedding": [1.0, 0.0],
+                }]
+
+        transferred = []
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.files.listImageFiles = lambda base_path: ["/volume1/photo/tests/image.jpg"]
+        self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 123, "name": "image.jpg"}
+        self.service.photos.list_faceFotoTeamItems = lambda **kwargs: []
+        self.service.face_recognition.profiles = lambda _options=None: {
+            "profiles": [{
+                "person_id": 42,
+                "person_name": "Alice",
+                "centroid_embedding": [1.0, 0.0],
+                "medoid": {"thumbnail": {"cache_key": "thumb", "unit_id": 123}},
+            }]
+        }
+
+        def resolve(**kwargs):
+            transferred.append(kwargs)
+            return {"updated": True, "face_id": 987}
+
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceEmbedder", return_value=FakeEmbedder()), \
+             patch.object(self.service, "resolveOrCreatePhotosPersonForMetadataFace", side_effect=resolve):
+            result = self.service.searchMissingPhotosFacesWithInsightFace(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                auto=True,
+                recognize_persons=True,
+            )
+
+        self.assertTrue(result["searched"])
+        self.assertIsNone(result["face"])
+        self.assertEqual(result["transferred_count"], 1)
+        self.assertEqual(len(transferred), 1)
+        self.assertEqual(transferred[0]["person_name"], "Alice")
+        self.assertFalse(transferred[0]["create_missing_person"])
+        self.assertEqual(result["resume_cursor"]["transferred_count"], 1)
+
     def test_insightface_missing_face_can_skip_unrecognized_person(self):
         class FakeEmbedder:
             @classmethod

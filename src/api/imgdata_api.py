@@ -659,6 +659,7 @@ async def status(request: Request):
                 user_key=session_ctx["user_key"],
                 cookies=session_ctx["cookies"],
                 base_url=session_ctx["base_url"],
+                background=True,
             )
         )
         backend_debug_log(
@@ -675,6 +676,7 @@ async def status(request: Request):
                 user_key=session_ctx["user_key"],
                 cookies=session_ctx["cookies"],
                 base_url=session_ctx["base_url"],
+                background=True,
             )
         )
         backend_debug_log(
@@ -713,7 +715,7 @@ async def exiftool_status(request: Request):
     if error_response:
         return error_response
 
-    data = await _run_backend_call(lambda: IMGDATA.exiftool_status())
+    data = await _run_backend_call(lambda: IMGDATA.exiftool_status(background=True))
     return {
         "success": True,
         "data": data,

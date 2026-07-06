@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.abspath("src"))
 
@@ -103,6 +103,62 @@ class ExifToolServiceTests(unittest.TestCase):
             self.assertTrue(updated["USE_MANUAL_PATHEXIFTOOL"])
             self.assertEqual(updated["MANUAL_PATHEXIFTOOL"], "/usr/local/bin/exiftool")
             self.assertEqual(updated["PATHEXIFTOOL"], "/var/packages/AV_ImgData/target/usr/bin/exiftool")
+
+    def test_status_background_returns_pending_without_sync_probe_or_online_check(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_service = ConfigService(str(Path(tmpdir) / "config.json"))
+            config_service.writeConfig({
+                "files": {
+                    "USE_EXIFTOOL": True,
+                    "CHECK_EXIFTOOL_UPDATES": True,
+                    "PATHEXIFTOOL": "exiftool",
+                }
+            })
+            service = ExifToolService(config_service)
+            service.refreshStatusBackground = Mock(return_value=True)
+
+            with patch.object(service, "_detectLocalExifTool", side_effect=AssertionError("local probe must be backgrounded")), \
+                    patch.object(service, "_fetchLatestOfficialInfo", side_effect=AssertionError("online check must be backgrounded")), \
+                    patch.object(service, "_detectPerl", side_effect=AssertionError("perl probe must be backgrounded")):
+                status = service.getStatus(background=True)
+
+            self.assertTrue(status["cache_stale"])
+            self.assertTrue(status["refreshing"])
+            self.assertEqual(status["configured_path"], "exiftool")
+            service.refreshStatusBackground.assert_called_once()
+
+    def test_status_background_uses_cached_status_without_new_probe(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_service = ConfigService(str(Path(tmpdir) / "config.json"))
+            config_service.writeConfig({
+                "files": {
+                    "USE_EXIFTOOL": True,
+                    "CHECK_EXIFTOOL_UPDATES": False,
+                    "PATHEXIFTOOL": "exiftool",
+                }
+            })
+            service = ExifToolService(config_service)
+
+            with patch.object(service, "_detectLocalExifTool", return_value={
+                "found": True,
+                "configured_path": "exiftool",
+                "resolved_path": "/usr/bin/exiftool",
+                "found_via": "path_lookup",
+                "version": "13.00",
+                "kind": "perl_script",
+            }), patch.object(service, "_detectPerl", return_value={
+                "available": True,
+                "path": "/usr/bin/perl",
+                "version": "5.36",
+            }):
+                first = service.getStatus(force=True)
+
+            with patch.object(service, "_detectLocalExifTool", side_effect=AssertionError("cache should avoid local probe")):
+                second = service.getStatus(background=True)
+
+            self.assertEqual(first["local"]["version"], "13.00")
+            self.assertEqual(second["local"]["version"], "13.00")
+            self.assertTrue(second["cache_hit"])
 
 
 if __name__ == "__main__":

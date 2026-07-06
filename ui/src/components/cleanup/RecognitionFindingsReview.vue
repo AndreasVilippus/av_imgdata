@@ -1,5 +1,5 @@
 <template>
-	<section v-if="vm.recognitionManualReviewEnabled" class="panel face-match-split-panel">
+		<section v-if="vm.recognitionManualReviewEnabled" class="panel face-match-split-panel panel-content-start">
 		<div class="face-match-status-head">
 			<div class="sm-section-title">{{ reviewTitle }}</div>
 			<div v-if="vm.recognitionCurrentFinding" class="face-match-status-running">
@@ -64,7 +64,7 @@
 				</v-button>
 			</div>
 		</div>
-		<p v-else-if="!vm.cleanupLoading">{{ vm.$avt('cleanup:recognition_no_review_findings', 'No recognition findings require manual review.') }}</p>
+			<p v-else-if="!vm.cleanupLoading" class="config-card-desc">{{ vm.$avt('cleanup:recognition_no_review_findings', 'No recognition findings require manual review.') }}</p>
 	</section>
 </template>
 

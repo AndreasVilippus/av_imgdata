@@ -170,6 +170,9 @@ class ImgDataService:
         self.face_match_findings = FaceMatchFindingsService(self.name_mappings._database)
         self._debug_logger: Optional[Callable[..., None]] = None
         self._checks_start_lock = Lock()
+        self._system_status_lock = Lock()
+        self._system_status_cache: Optional[Tuple[Tuple[str, str], float, Dict[str, Any]]] = None
+        self._system_status_refreshing = False
         self.write_locks = WriteLockService(self._buildWriteConflictError)
         self.face_match_mutations = FaceMatchMutationService(self, self._debugLog)
         self.status_builder = StatusPayloadBuilder()
@@ -590,8 +593,9 @@ class ImgDataService:
         user_key: str,
         cookies: Dict[str, str],
         base_url: str,
-    ) -> Dict[str, int]:
-        status = self.photos.person_status(user_key=user_key, cookies=cookies, base_url=base_url)
+        background: bool = False,
+    ) -> Dict[str, Any]:
+        status = self.photos.person_status(user_key=user_key, cookies=cookies, base_url=base_url, background=background)
         status["mappings"] = len(self.name_mappings.readNameMappings())
         return status
 
@@ -601,17 +605,92 @@ class ImgDataService:
         user_key: str,
         cookies: Dict[str, str],
         base_url: str,
-    ) -> Dict[str, str]:
+        background: bool = False,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        cache_key = (str(user_key or ""), str(base_url or ""))
+        if not force:
+            cached = self._cachedSystemStatus(cache_key)
+            if cached is not None:
+                return cached
+            if background:
+                stale = self._cachedSystemStatus(cache_key, allow_stale=True)
+                self._refreshSystemStatusBackground(user_key=user_key, cookies=cookies, base_url=base_url)
+                if stale is not None:
+                    return stale
+                return {"shared_folder": "", "cache_hit": False, "cache_stale": True, "refreshing": True}
+        return self._storeSystemStatus(cache_key, self._readSystemStatus(user_key=user_key, cookies=cookies, base_url=base_url))
+
+    def _readSystemStatus(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+    ) -> Dict[str, Any]:
         shared_folder = self.core.getSharedFolder(
             user_key=user_key,
             cookies=cookies,
             base_url=base_url,
             folder_name="photo",
         )
-        return {"shared_folder": shared_folder or ""}
+        return {"shared_folder": shared_folder or "", "cache_hit": False, "cache_stale": False, "refreshing": False}
 
-    def exiftool_status(self) -> Dict[str, Any]:
-        return self.exiftool.getStatus()
+    @staticmethod
+    def _systemStatusTtlSeconds() -> float:
+        return 300.0
+
+    def _cachedSystemStatus(self, cache_key: Tuple[str, str], *, allow_stale: bool = False) -> Optional[Dict[str, Any]]:
+        with self._system_status_lock:
+            cached = self._system_status_cache
+            if cached is None:
+                return None
+            cached_key, cached_at, cached_value = cached
+            if cached_key != cache_key:
+                return None
+            expired = monotonic() - cached_at > self._systemStatusTtlSeconds()
+            if expired and not allow_stale:
+                return None
+            result = dict(cached_value)
+            result["cache_hit"] = not expired
+            result["cache_stale"] = bool(expired)
+            result["refreshing"] = bool(self._system_status_refreshing)
+            return result
+
+    def _storeSystemStatus(self, cache_key: Tuple[str, str], status: Dict[str, Any]) -> Dict[str, Any]:
+        result = dict(status)
+        result["cache_hit"] = False
+        result["cache_stale"] = False
+        result["refreshing"] = False
+        with self._system_status_lock:
+            self._system_status_cache = (cache_key, monotonic(), dict(result))
+        return result
+
+    def _refreshSystemStatusBackground(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+    ) -> bool:
+        with self._system_status_lock:
+            if self._system_status_refreshing:
+                return False
+            self._system_status_refreshing = True
+
+        def refresh() -> None:
+            try:
+                self.status_system(user_key=user_key, cookies=cookies, base_url=base_url, force=True)
+            finally:
+                with self._system_status_lock:
+                    self._system_status_refreshing = False
+
+        thread = Thread(target=refresh, name="av-imgdata-system-status-refresh", daemon=True)
+        thread.start()
+        return True
+
+    def exiftool_status(self, *, background: bool = False) -> Dict[str, Any]:
+        return self.exiftool.getStatus(background=background)
 
     def exiftool_extensions(self) -> Dict[str, Any]:
         return self.exiftool.getSupportedReadableExtensions()
@@ -8303,6 +8382,10 @@ class ImgDataService:
                         ),
                     )
                     continue
+                recognition_is_safe = False
+                if recognize_persons and isinstance(matched_person, dict) and recognition_score is not None:
+                    recognition_options = self.face_recognition.normalize_options({})
+                    recognition_is_safe = float(recognition_score) >= float(recognition_options["safe_score"])
 
                 result_entry = {
                     "action": action,
@@ -8327,6 +8410,7 @@ class ImgDataService:
                     "matched_person": matched_person,
                     "matched_person_id": matched_person.get("id") if isinstance(matched_person, dict) else None,
                     "recognition_score": recognition_score,
+                    "recognition_safe": recognition_is_safe,
                     "recognition_enabled": bool(recognize_persons),
                     "name_mapping": None,
                     "lookup_debug": {},
@@ -8351,6 +8435,47 @@ class ImgDataService:
                         metadata_faces_read=metadata_faces_read,
                     ),
                 }
+
+                if auto and recognition_is_safe and isinstance(matched_person, dict) and matched_person.get("id") is not None:
+                    matched_person_name = str(matched_person.get("name") or target_face.name or "").strip()
+                    if matched_person_name:
+                        result = self.resolveOrCreatePhotosPersonForMetadataFace(
+                            user_key=user_key,
+                            cookies=cookies,
+                            base_url=base_url,
+                            image_path=image_path,
+                            metadata_face=target_face.to_dict(),
+                            person_name=matched_person_name,
+                            create_missing_person=False,
+                        )
+                        if result.get("updated"):
+                            transferred_count += 1
+                            skip_target_tokens.append(target_token)
+                            final_message_key = "face_match:progress_auto_assigned"
+                            final_message_params = {"count": transferred_count}
+                            self._setFaceMatchingProgressMessage(
+                                user_key,
+                                final_message_key,
+                                message_params=final_message_params,
+                                transferred_count=transferred_count,
+                                resume_cursor=self._buildFaceMatchResumeCursor(
+                                    skip_face_ids=[],
+                                    skip_targets=skip_target_tokens,
+                                    transferred_count=transferred_count,
+                                    auto=auto,
+                                    save_only=save_only,
+                                    action=action,
+                                    recognize_persons=bool(recognize_persons),
+                                    skip_unknown_persons=bool(skip_unknown_persons),
+                                    findings_count=findings_count,
+                                    path_index=images_read,
+                                    images_read=images_read,
+                                    faces_read=faces_read,
+                                    target_faces_read=target_faces_read,
+                                    metadata_faces_read=metadata_faces_read,
+                                ),
+                            )
+                            continue
 
                 if save_only:
                     if self._appendUniqueFaceMatchFinding(saved_entries, result_entry):

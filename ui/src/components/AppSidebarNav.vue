@@ -70,6 +70,13 @@
 		>
 			{{ $avt('nav:insightface', 'InsightFace') }}
 		</button>
+		<button
+			class="sm-nav-item sm-nav-sub-item"
+			:class="{ active: selectedOption === 'external_libraries_libvips' }"
+			@click="$emit('select', 'external_libraries_libvips')"
+		>
+			{{ $avt('nav:libvips', 'libvips') }}
+		</button>
 	</aside>
 </template>
 
