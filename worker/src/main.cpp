@@ -160,6 +160,35 @@ std::string shell_quote(const std::string& value) {
 #endif
 }
 
+std::string build_processor_command(const std::string& executable, const std::vector<std::string>& arguments) {
+#ifdef _WIN32
+    std::string command = "cmd.exe /S /C \"\"";
+    command += executable;
+    command += "\"";
+    for (const std::string& argument : arguments) {
+        command += " \"";
+        for (char c : argument) {
+            if (c == '"') {
+                command += "\\\"";
+            } else {
+                command += c;
+            }
+        }
+        command += "\"";
+    }
+    command += " 2>&1\"";
+    return command;
+#else
+    std::string command = shell_quote(executable);
+    for (const std::string& argument : arguments) {
+        command += " ";
+        command += shell_quote(argument);
+    }
+    command += " 2>&1";
+    return command;
+#endif
+}
+
 CommandResult run_command_capture(const std::string& command) {
     CommandResult result;
     std::array<char, 256> buffer{};
@@ -175,6 +204,10 @@ CommandResult run_command_capture(const std::string& command) {
     result.exit_code = PCLOSE(pipe);
     result.output = trim_output(result.output);
     return result;
+}
+
+CommandResult run_processor_capture(const std::string& executable, const std::vector<std::string>& arguments) {
+    return run_command_capture(build_processor_command(executable, arguments));
 }
 
 std::string extract_json_string(const std::string& json, const std::string& key) {
@@ -323,13 +356,11 @@ int command_probe(const std::vector<std::string>& args) {
     bool face_probe_ok = false;
 
     if (face_binary_exists) {
-        face_version = run_command_capture(shell_quote(config.face_path) + " version 2>&1");
+        face_version = run_processor_capture(config.face_path, {"version"});
         face_version_ok = face_version.exit_code == 0;
-        face_probe = run_command_capture(
-            shell_quote(config.face_path) +
-            " probe --model-root " + shell_quote(config.face_model_root) +
-            " --model-name " + shell_quote(config.face_model_name) +
-            " 2>&1");
+        face_probe = run_processor_capture(
+            config.face_path,
+            {"probe", "--model-root", config.face_model_root, "--model-name", config.face_model_name});
         face_probe_ok = face_probe.exit_code == 0;
     }
 
