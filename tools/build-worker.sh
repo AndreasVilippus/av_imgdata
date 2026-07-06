@@ -19,6 +19,7 @@ Options:
 Environment:
   AV_IMGDATA_FACE_PROCESSOR_BIN   Optional explicit path to an already built av-imgdata-face-processor binary.
   AV_IMGDATA_FACE_PROCESSOR_ROOT  Optional root containing bin/, lib/, and share/licenses/ for the face processor bundle.
+  AV_IMGDATA_MINGW_BIN            Optional MinGW bin directory containing runtime DLLs.
 
 Phase B builds the UI-free external worker skeleton and local face-processor probe support. It does not build the DSM SPK and does not implement the DSM Worker API yet.
 EOF
@@ -104,6 +105,30 @@ copy_matching_files_if_exists() {
   done
 }
 
+copy_mingw_runtime_dlls() {
+  local target_dir="$1"
+  local mingw_bin="${AV_IMGDATA_MINGW_BIN:-}"
+  if [ -z "${mingw_bin}" ]; then
+    local compiler
+    compiler="$(command -v x86_64-w64-mingw32-g++ 2>/dev/null || true)"
+    if [ -n "${compiler}" ]; then
+      mingw_bin="$(dirname "${compiler}")"
+    fi
+  fi
+  if [ -z "${mingw_bin}" ] || [ ! -d "${mingw_bin}" ]; then
+    echo "WARNING: MinGW bin directory not found; runtime DLLs were not bundled." >&2
+    echo "         Set AV_IMGDATA_MINGW_BIN=/path/to/mingw/bin if Windows reports missing libstdc++/libgcc/libwinpthread DLLs." >&2
+    return 0
+  fi
+  copy_matching_files_if_exists "${mingw_bin}" "${target_dir}" \
+    "libstdc++-6.dll" \
+    "libgcc_s_seh-1.dll" \
+    "libgcc_s_sjlj-1.dll" \
+    "libgcc_s_dw2-1.dll" \
+    "libwinpthread-1.dll"
+  echo "Bundled MinGW runtime DLLs from ${mingw_bin} into ${target_dir}"
+}
+
 bundle_face_processor_if_available() {
   local target_binary_name="av-imgdata-face-processor"
   local processor_target="${TARGET}"
@@ -152,6 +177,7 @@ bundle_face_processor_if_available() {
     if [ "${TARGET}" = "windows-x86_64" ]; then
       copy_matching_files_if_exists "${source_base}/bin" "${DIST_DIR}/bin" "*.dll" "*.DLL"
       copy_matching_files_if_exists "${source_base}/lib" "${DIST_DIR}/bin" "*.dll" "*.DLL"
+      copy_mingw_runtime_dlls "${DIST_DIR}/bin"
       echo "Bundled Windows face processor runtime DLLs into ${DIST_DIR}/bin"
     fi
   else
