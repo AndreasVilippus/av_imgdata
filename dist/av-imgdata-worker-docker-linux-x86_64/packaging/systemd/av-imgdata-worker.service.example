@@ -1,0 +1,16 @@
+[Unit]
+Description=AV ImgData external worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/av-imgdata-worker
+ExecStart=/opt/av-imgdata-worker/bin/av-imgdata-worker run --config /opt/av-imgdata-worker/config/worker-config.json
+Restart=on-failure
+RestartSec=10
+User=av-imgdata-worker
+Group=av-imgdata-worker
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+{
+  "job_id": "local-test-1",
+  "type": "face_native_embed",
+  "asset": {
+    "asset_id": "test-image",
+    "local_path": "./testdata/person.jpg"
+  },
+  "options": {
+    "model_name": "buffalo_l",
+    "min_confidence": 0.5,
+    "max_faces": 0,
+    "det_size": [640, 640],
+    "normalize_coordinates": true
+  }
+}

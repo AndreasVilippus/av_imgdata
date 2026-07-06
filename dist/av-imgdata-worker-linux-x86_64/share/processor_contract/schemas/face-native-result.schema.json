@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://av-imgdata.local/schemas/face-native-result.schema.json",
+  "title": "AV ImgData native face processor result",
+  "type": "object",
+  "required": ["contract_version", "job_id", "type", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "contract_version": { "const": "1.0" },
+    "job_id": { "type": "string", "minLength": 1 },
+    "type": {
+      "enum": [
+        "face_native_detect",
+        "face_native_embed",
+        "face_native_detect_batch",
+        "face_native_embed_batch",
+        "face_native_rank_embeddings",
+        "face_native_profile_math"
+      ]
+    },
+    "status": { "enum": ["completed", "failed"] },
+    "processor": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "backend": { "type": "string" }
+      }
+    },
+    "timing_ms": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "total": { "type": "number", "minimum": 0 },
+        "image_decode": { "type": "number", "minimum": 0 },
+        "model_load": { "type": "number", "minimum": 0 },
+        "detector_prepare": { "type": "number", "minimum": 0 },
+        "detector_run": { "type": "number", "minimum": 0 },
+        "detector_decode": { "type": "number", "minimum": 0 },
+        "recognizer_prepare": { "type": "number", "minimum": 0 },
+        "recognizer_run": { "type": "number", "minimum": 0 },
+        "embedding_normalize": { "type": "number", "minimum": 0 },
+        "result_write": { "type": "number", "minimum": 0 },
+        "recognizer_runs": { "type": "integer", "minimum": 0 },
+        "recognized_faces": { "type": "integer", "minimum": 0 },
+        "recognizer_batch_size": { "type": "integer", "minimum": 0 },
+        "recognizer_batched": { "type": "boolean" },
+        "recognizer_batch_fallback": { "type": "boolean" },
+        "reused_models": { "type": "boolean" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "faces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "face_id": { "type": "string" },
+              "confidence": { "type": "number" },
+              "bbox": {
+                "type": "object",
+                "required": ["x1", "y1", "x2", "y2"],
+                "properties": {
+                  "x1": { "type": "number" },
+                  "y1": { "type": "number" },
+                  "x2": { "type": "number" },
+                  "y2": { "type": "number" }
+                }
+              },
+              "box": {
+                "type": "object",
+                "required": ["x", "y", "width", "height", "unit"],
+                "properties": {
+                  "x": { "type": "number" },
+                  "y": { "type": "number" },
+                  "width": { "type": "number" },
+                  "height": { "type": "number" },
+                  "unit": { "const": "normalized" }
+                }
+              },
+              "embedding": {
+                "oneOf": [
+                  { "type": "array", "items": { "type": "number" } },
+                  {
+                    "type": "object",
+                    "required": ["encoding", "value"],
+                    "properties": {
+                      "model": { "type": "string" },
+                      "dimension": { "type": "integer", "minimum": 1 },
+                      "encoding": { "const": "float32-le-base64" },
+                      "value": { "type": "string" }
+                    }
+                  }
+                ]
+              }
+            },
+            "anyOf": [
+              { "required": ["bbox"] },
+              { "required": ["box"] }
+            ]
+          }
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "image_path": { "type": "string" },
+              "source_id": { "type": "string" },
+              "status": { "enum": ["completed", "failed"] },
+              "faces": { "type": "array" }
+            }
+          }
+        },
+        "ranks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target_index", "best_index", "best_score", "second_index", "second_score", "margin"],
+            "additionalProperties": true,
+            "properties": {
+              "target_index": { "type": "integer", "minimum": 0 },
+              "best_index": { "type": "integer" },
+              "best_score": { "type": "number" },
+              "second_index": { "type": "integer" },
+              "second_score": { "type": "number" },
+              "margin": { "type": "number" }
+            }
+          }
+        },
+        "centroid_embedding": {
+          "type": "array",
+          "items": { "type": "number" }
+        },
+        "medoid_index": { "type": "integer", "minimum": 0 },
+        "intra_person_similarity": { "type": "number" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "phase": { "type": "string" }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
