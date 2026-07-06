@@ -441,16 +441,7 @@ class NativeFaceProcessorService:
             workdir = Path(tmpdir)
             input_path = workdir / "job-input.json"
             output_path = workdir / "processor-result.json"
-            processor_paths: List[Path] = []
-            for index, image_path in enumerate(paths):
-                image_hash = hashlib.sha256(str(image_path).encode("utf-8", errors="replace")).hexdigest()[:16]
-                decoded_input = self._decode_processor_input(image_path, workdir, image_hash=image_hash, command=command)
-                if decoded_input is not None:
-                    decoded_target = workdir / f"decoded-input-{index}.jpg"
-                    decoded_input.replace(decoded_target)
-                    processor_paths.append(decoded_target)
-                else:
-                    processor_paths.append(image_path)
+            processor_paths = self._decode_processor_inputs_batch(paths, workdir, command=command)
             input_path.write_text(
                 json.dumps(
                     self._batch_job_input(command, processor_paths, options),
@@ -598,6 +589,50 @@ class NativeFaceProcessorService:
                 normalized[text_key] = round(number, 2)
         return normalized
 
+    def _decode_processor_inputs_batch(self, image_paths: List[Path], workdir: Path, *, command: str) -> List[Path]:
+        processor_paths = [Path(path) for path in image_paths]
+        decode_candidates = [
+            (index, path)
+            for index, path in enumerate(processor_paths)
+            if path.suffix.lower().lstrip(".") in self._decoder_extensions()
+        ]
+        decoder = getattr(self, "image_decoder", None)
+        decode_many = getattr(decoder, "decode_many_to_jpeg", None) if decoder is not None else None
+        if callable(decode_many) and len(decode_candidates) > 1:
+            try:
+                decoded_many = decode_many([str(path) for _index, path in decode_candidates])
+            except Exception as exc:
+                decoded_many = {}
+                self._debug_log(
+                    "native_face_processor_batch_input_decode_failed",
+                    command=command,
+                    source="image_decoder",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            for index, image_path in decode_candidates:
+                image_hash = hashlib.sha256(str(image_path).encode("utf-8", errors="replace")).hexdigest()[:16]
+                decoded = decoded_many.get(str(image_path)) if isinstance(decoded_many, dict) else None
+                if decoded is None:
+                    continue
+                decoded_path = self._write_decoded_processor_input(
+                    decoded,
+                    workdir / f"decoded-input-{index}.jpg",
+                    image_hash=image_hash,
+                    command=command,
+                )
+                if decoded_path is not None:
+                    processor_paths[index] = decoded_path
+            return processor_paths
+
+        for index, image_path in decode_candidates:
+            image_hash = hashlib.sha256(str(image_path).encode("utf-8", errors="replace")).hexdigest()[:16]
+            decoded_input = self._decode_processor_input(image_path, workdir, image_hash=image_hash, command=command)
+            if decoded_input is not None:
+                decoded_target = workdir / f"decoded-input-{index}.jpg"
+                decoded_input.replace(decoded_target)
+                processor_paths[index] = decoded_target
+        return processor_paths
+
     def _decode_processor_input(self, image_path: Path, workdir: Path, *, image_hash: str, command: str) -> Optional[Path]:
         if image_path.suffix.lower().lstrip(".") not in self._decoder_extensions():
             return None
@@ -615,6 +650,10 @@ class NativeFaceProcessorService:
                 error=f"{type(exc).__name__}: {exc}",
             )
             return None
+        decoded_path = workdir / "decoded-input.jpg"
+        return self._write_decoded_processor_input(decoded, decoded_path, image_hash=image_hash, command=command)
+
+    def _write_decoded_processor_input(self, decoded: Any, decoded_path: Path, *, image_hash: str, command: str) -> Optional[Path]:
         if not getattr(decoded, "success", False) or not getattr(decoded, "image_bytes", b""):
             if str(getattr(decoded, "source", "") or "") == "libvips" and not self._vips_fallback_allowed():
                 raise NativeFaceProcessorUnavailable(
@@ -630,7 +669,6 @@ class NativeFaceProcessorService:
                     error=error,
                 )
             return None
-        decoded_path = workdir / "decoded-input.jpg"
         decoded_path.write_bytes(getattr(decoded, "image_bytes"))
         self._debug_log(
             "native_face_processor_input_decoded",

@@ -102,6 +102,55 @@ def test_vips_preferred_decoder_runs_before_configured_fallback(tmp_path):
     assert calls == [(image_path, "resize", {"quality": 95, "width": 1024, "height": 1024, "maintain_aspect": True}, "jpeg")]
 
 
+def test_vips_preferred_decoder_batches_multiple_images(tmp_path):
+    image_a = tmp_path / "a.jpg"
+    image_b = tmp_path / "b.jpg"
+    image_a.write_bytes(b"jpeg-a")
+    image_b.write_bytes(b"jpeg-b")
+    calls = []
+
+    class _VipsProcessor:
+        def status(self):
+            return {"available": True, "formats": {"jpeg": True, "jpg": True}}
+
+        def batch_process_images(self, paths, operation, options, output_format):
+            calls.append((list(paths), operation, options, output_format))
+            return [
+                {"path": str(path), "success": True, "image_bytes": b"\xff\xd8batch-" + path.name.encode("ascii")}
+                for path in paths
+            ]
+
+        def process_image(self, *_args, **_kwargs):
+            raise AssertionError("decode_many_to_jpeg must use the libvips batch command")
+
+    service = ImageDecodeService(
+        _Config(
+            {
+                "IMAGE_DECODER_ENABLED": True,
+                "IMAGE_DECODER_EXTENSIONS": ["heic"],
+                "IMAGE_DECODER_ORDER": ["pillow-heif"],
+                "IMAGE_DECODER_MAX_EDGE": 1024,
+            },
+            native_processors={
+                "IMAGE_PROCESSOR_VIPS": {
+                    "ENABLED": True,
+                    "PREFERRED": True,
+                    "ALLOW_FALLBACK_TO_DEFAULT": True,
+                },
+            },
+        ),
+        vips_processor=_VipsProcessor(),
+    )
+
+    results = service.decode_many_to_jpeg([str(image_a), str(image_b)])
+
+    assert results[str(image_a)].success is True
+    assert results[str(image_a)].source == "libvips"
+    assert results[str(image_a)].image_bytes == b"\xff\xd8batch-a.jpg"
+    assert results[str(image_b)].success is True
+    assert calls == [([image_a, image_b], "resize", {"quality": 95, "width": 1024, "height": 1024, "maintain_aspect": True}, "jpeg")]
+
+
 def test_vips_preferred_decoder_skips_heic_when_probe_reports_no_heif(monkeypatch, tmp_path):
     image_path = tmp_path / "image.heic"
     image_path.write_bytes(b"heic")

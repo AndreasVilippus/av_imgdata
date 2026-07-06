@@ -10,6 +10,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -150,6 +151,85 @@ std::string json_object_body(const std::string& body, const std::string& key) {
     return "";
 }
 
+std::string json_array_body(const std::string& body, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    const auto key_pos = body.find(needle);
+    if (key_pos == std::string::npos) {
+        return "";
+    }
+    const auto open = body.find('[', key_pos + needle.size());
+    if (open == std::string::npos) {
+        return "";
+    }
+    int depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+    for (auto i = open; i < body.size(); ++i) {
+        const char ch = body[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+        } else if (ch == '[') {
+            ++depth;
+        } else if (ch == ']') {
+            --depth;
+            if (depth == 0) {
+                return body.substr(open, i - open + 1);
+            }
+        }
+    }
+    return "";
+}
+
+std::vector<std::string> json_string_array_value(const std::string& body, const std::string& key) {
+    const std::string block = json_array_body(body, key);
+    std::vector<std::string> values;
+    bool in_string = false;
+    bool escaped = false;
+    std::ostringstream current;
+    for (auto i = 0U; i < block.size(); ++i) {
+        const char ch = block[i];
+        if (!in_string) {
+            if (ch == '"') {
+                in_string = true;
+                current.str("");
+                current.clear();
+            }
+            continue;
+        }
+        if (escaped) {
+            switch (ch) {
+                case 'n': current << '\n'; break;
+                case 'r': current << '\r'; break;
+                case 't': current << '\t'; break;
+                default: current << ch; break;
+            }
+            escaped = false;
+            continue;
+        }
+        if (ch == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (ch == '"') {
+            values.push_back(current.str());
+            in_string = false;
+            continue;
+        }
+        current << ch;
+    }
+    return values;
+}
+
 int json_int_value(const std::string& body, const std::string& key, int fallback) {
     const std::string text = trim(json_string_value(body, key));
     if (!text.empty()) {
@@ -214,6 +294,10 @@ Job parse_job(const std::string& path) {
         job.options["maintain_aspect"] = maintain_aspect ? "true" : "false";
     }
     return job;
+}
+
+std::vector<std::string> parse_job_image_paths(const std::string& path) {
+    return json_string_array_value(read_file(path), "image_paths");
 }
 
 Args parse_args(int argc, char** argv) {
@@ -344,14 +428,13 @@ int write_image(VipsImage* image, const std::string& path, int quality) {
     return vips_image_write_to_file(image, path.c_str(), "Q", quality, nullptr);
 }
 
-int command_process(const Args& args) {
-    const Job job = parse_job(args.input);
+int process_job(const Args& args, const Job& job, const std::string& output_stem) {
     if (job.image_path.empty()) {
         return write_error(args.output, "process", "invalid_job", "image_path missing");
     }
     const std::string operation = job.operation.empty() ? "convert" : job.operation;
     const std::string format = output_extension(job.output_format);
-    const std::string out_path = (args.workdir.empty() ? "." : args.workdir) + "/output." + format;
+    const std::string out_path = (args.workdir.empty() ? "." : args.workdir) + "/" + output_stem + "." + format;
     const int quality = std::max(1, std::min(100, std::atoi(job.options.count("quality") ? job.options.at("quality").c_str() : "95")));
     VipsImage* image = nullptr;
     VipsImage* processed = nullptr;
@@ -417,9 +500,61 @@ int command_process(const Args& args) {
     return write_file(args.output, json) ? 0 : 1;
 }
 
+int command_process(const Args& args) {
+    return process_job(args, parse_job(args.input), "output");
+}
+
+int command_process_batch(const Args& args) {
+    const Job base_job = parse_job(args.input);
+    const std::vector<std::string> image_paths = parse_job_image_paths(args.input);
+    if (image_paths.empty()) {
+        return write_error(args.output, "process-batch", "invalid_job", "image_paths missing");
+    }
+    std::ostringstream results;
+    results << "[";
+    int failed_count = 0;
+    for (std::size_t i = 0; i < image_paths.size(); ++i) {
+        Job item = base_job;
+        item.image_path = image_paths[i];
+        Args item_args = args;
+        item_args.output = (args.workdir.empty() ? "." : args.workdir) + "/processor-result-" + std::to_string(i) + ".json";
+        const int rc = process_job(item_args, item, "output-" + std::to_string(i));
+        const std::string item_json = read_file(item_args.output);
+        if (rc != 0) {
+            ++failed_count;
+        }
+        if (i) {
+            results << ",";
+        }
+        if (!item_json.empty() && item_json[0] == '{') {
+            std::string item_result = item_json;
+            const std::size_t last_brace = item_result.find_last_of('}');
+            if (last_brace != std::string::npos) {
+                item_result = item_result.substr(0, last_brace)
+                    + ",\"path\":\"" + escape_json(image_paths[i]) + "\"}";
+            }
+            results << item_result;
+        } else {
+            results << "{\"success\":false,\"path\":\"" << escape_json(image_paths[i])
+                    << "\",\"error\":\"processor_error\"}";
+        }
+        std::remove(item_args.output.c_str());
+    }
+    results << "]";
+    std::ostringstream json;
+    json << "{"
+         << "\"success\":" << (failed_count == static_cast<int>(image_paths.size()) ? "false" : "true") << ","
+         << "\"contract_version\":\"1.0\","
+         << "\"operation\":\"process-batch\","
+         << "\"results\":" << results.str() << ","
+         << "\"failed_images\":" << failed_count
+         << "}";
+    return write_file(args.output, json.str()) ? (failed_count == static_cast<int>(image_paths.size()) ? 1 : 0) : 1;
+}
+
 void print_usage() {
     std::cout
-        << "av-imgdata-image-processor commands: version, probe, image-info, info, thumbnail, normalize-for-face, process, self-test\n";
+        << "av-imgdata-image-processor commands: version, probe, image-info, info, thumbnail, normalize-for-face, process, process-batch, self-test\n";
 }
 
 } // namespace
@@ -452,6 +587,8 @@ int main(int argc, char** argv) {
             process_args.output = args.output;
         }
         rc = command_process(process_args);
+    } else if (args.command == "process-batch") {
+        rc = command_process_batch(args);
     } else if (args.command == "self-test") {
         rc = command_probe("");
     } else {

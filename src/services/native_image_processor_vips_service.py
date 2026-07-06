@@ -447,11 +447,56 @@ class NativeImageProcessorVipsService:
         Returns:
             List of result dictionaries, one per input image
         """
-        results = []
-        for image_path in image_paths:
-            result = self.process_image(image_path, operation, options, output_format)
-            results.append({"path": str(image_path), **result})
-        return results
+        paths = [Path(path) for path in image_paths]
+        if not paths:
+            return []
+        if not self.enabled():
+            return [{"path": str(path), "success": False, "error": "vips_processor_disabled"} for path in paths]
+        status = self.status()
+        if not status.get("available"):
+            error = status.get("reason", "vips_unavailable")
+            return [{"path": str(path), "success": False, "error": error} for path in paths]
+        supported_fmts = self.supported_formats()
+        if output_format.lower() not in supported_fmts:
+            return [{"path": str(path), "success": False, "error": f"unsupported_format:{output_format}"} for path in paths]
+
+        missing = {str(path) for path in paths if not path.exists()}
+        runnable_paths = [path for path in paths if str(path) not in missing]
+        results_by_path: Dict[str, Dict[str, Any]] = {
+            path: {"path": path, "success": False, "error": "image_not_found"}
+            for path in missing
+        }
+        if runnable_paths:
+            try:
+                with tempfile.TemporaryDirectory(prefix="av-imgdata-vips-batch-") as tmpdir:
+                    workdir = Path(tmpdir)
+                    input_data = self._batch_job_input(runnable_paths, operation, options, output_format)
+                    input_path = workdir / "job-input.json"
+                    output_path = workdir / "processor-result.json"
+                    input_path.write_text(
+                        json.dumps(input_data, ensure_ascii=False, sort_keys=True),
+                        encoding="utf-8",
+                    )
+                    exec_result = self._run_processor_command(
+                        [str(self.executable_path()), "process-batch"],
+                        input_path,
+                        output_path,
+                        workdir,
+                    )
+                    batch_results = self._parse_batch_processor_result(exec_result, output_path)
+                    for item in batch_results:
+                        item_path = str(item.get("path") or item.get("image_path") or "")
+                        if item_path:
+                            results_by_path[item_path] = item
+            except Exception as exc:
+                self._debug_log("vips_batch_process_images_failed", error=str(exc))
+                for path in runnable_paths:
+                    results_by_path[str(path)] = {"path": str(path), "success": False, "error": f"processor_error:{type(exc).__name__}"}
+
+        return [
+            {"path": str(path), **{key: value for key, value in results_by_path.get(str(path), {"success": False, "error": "missing_batch_result"}).items() if key != "path"}}
+            for path in paths
+        ]
 
     @staticmethod
     def _job_input(
@@ -464,6 +509,23 @@ class NativeImageProcessorVipsService:
         return {
             "contract_version": "1.0",
             "image_path": str(image_path),
+            "operation": operation,
+            "output_format": output_format,
+            "options": options,
+            "timestamp": time.time(),
+        }
+
+    @staticmethod
+    def _batch_job_input(
+        image_paths: List[Path],
+        operation: str,
+        options: Dict[str, Any],
+        output_format: str,
+    ) -> Dict[str, Any]:
+        """Create batch job input JSON structure for processor."""
+        return {
+            "contract_version": "1.0",
+            "image_paths": [str(path) for path in image_paths],
             "operation": operation,
             "output_format": output_format,
             "options": options,
@@ -536,6 +598,37 @@ class NativeImageProcessorVipsService:
             result["error"] = result.get("error", exec_result.get("output", "processor_error"))
         
         return result
+
+    @staticmethod
+    def _parse_batch_processor_result(
+        exec_result: Dict[str, Any],
+        output_path: Path,
+    ) -> List[Dict[str, Any]]:
+        if output_path.exists():
+            try:
+                parsed = json.loads(output_path.read_text(encoding="utf-8"))
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                raw_results = parsed.get("results") if isinstance(parsed.get("results"), list) else []
+                results: List[Dict[str, Any]] = []
+                for item in raw_results:
+                    if not isinstance(item, dict):
+                        continue
+                    result = dict(item)
+                    image_output_path = result.get("output_path")
+                    if isinstance(image_output_path, str) and image_output_path:
+                        try:
+                            image_path = Path(image_output_path)
+                            if image_path.is_file():
+                                result["image_bytes"] = image_path.read_bytes()
+                        except OSError:
+                            pass
+                    results.append(result)
+                if results:
+                    return results
+        error = exec_result.get("output", "processor_error")
+        return [{"success": False, "error": error}]
 
     def get_image_info(self, image_path: Path) -> Dict[str, Any]:
         """Get image information (dimensions, format, metadata)."""

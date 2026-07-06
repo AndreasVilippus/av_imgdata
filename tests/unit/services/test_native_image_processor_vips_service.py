@@ -1,4 +1,5 @@
 import time
+import json
 from pathlib import Path
 
 from services.config_service import ConfigService
@@ -339,6 +340,46 @@ def test_vips_batch_process_images(tmp_path):
     assert len(results) == 3
     assert all("path" in r for r in results)
     assert all("success" in r for r in results)
+
+
+def test_vips_batch_process_images_uses_single_batch_command(monkeypatch, tmp_path):
+    binary = tmp_path / "bin" / "av-imgdata-image-processor"
+    binary.parent.mkdir(parents=True)
+    _write_vips_ready(binary)
+    images = []
+    for i in range(2):
+        img_path = tmp_path / f"batch{i}.jpg"
+        img_path.write_bytes(b"fake jpeg")
+        images.append(img_path)
+    config = ConfigService(str(tmp_path / "config.json"))
+    config.writeConfig({"native_processors": {"IMAGE_PROCESSOR_VIPS": {"ENABLED": True}}})
+    service = NativeImageProcessorVipsService(config, package_root=tmp_path)
+    commands = []
+
+    def fake_run(command, input_path, output_path, workdir):
+        commands.append(command)
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
+        assert payload["image_paths"] == [str(path) for path in images]
+        output_a = workdir / "output-0.jpeg"
+        output_b = workdir / "output-1.jpeg"
+        output_a.write_bytes(b"\xff\xd8a")
+        output_b.write_bytes(b"\xff\xd8b")
+        output_path.write_text(json.dumps({
+            "success": True,
+            "results": [
+                {"path": str(images[0]), "success": True, "output_path": str(output_a)},
+                {"path": str(images[1]), "success": True, "output_path": str(output_b)},
+            ],
+        }), encoding="utf-8")
+        return {"ok": True, "returncode": 0, "output": ""}
+
+    monkeypatch.setattr(service, "_run_processor_command", fake_run)
+
+    results = service.batch_process_images(images, "resize", {"width": 100, "height": 100})
+
+    assert commands == [[str(binary), "process-batch"]]
+    assert results[0]["image_bytes"] == b"\xff\xd8a"
+    assert results[1]["image_bytes"] == b"\xff\xd8b"
 
 
 def test_vips_get_image_info(tmp_path):

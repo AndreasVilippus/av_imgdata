@@ -90,6 +90,46 @@ class ImageDecodeService:
                 errors.append(f"{decoder}:{result.error}")
         return ImageDecodeResult(False, error="; ".join(errors) or "image_decoder_unavailable")
 
+    def decode_many_to_jpeg(self, image_paths: List[str]) -> Dict[str, ImageDecodeResult]:
+        paths = [Path(path) for path in image_paths]
+        if not paths:
+            return {}
+        root_config = self._root_config()
+        config = self._files_config(root_config)
+        if not bool(config.get("IMAGE_DECODER_ENABLED", True)):
+            return {str(path): ImageDecodeResult(False, error="image_decoder_disabled") for path in paths}
+
+        results: Dict[str, ImageDecodeResult] = {}
+        pending: List[Path] = []
+        extensions = self._decoder_extensions(root_config, config)
+        for path in paths:
+            if not path.is_file():
+                results[str(path)] = ImageDecodeResult(False, error="image_not_found")
+                continue
+            if path.suffix.lower().lstrip(".") not in extensions:
+                results[str(path)] = ImageDecodeResult(False, error="image_decoder_extension_not_enabled")
+                continue
+            pending.append(path)
+
+        decoder_order = self._preferred_decoder_order(root_config, config)
+        if pending and decoder_order and decoder_order[0] in {"libvips", "vips"}:
+            vips_results = self._decode_many_with_vips(pending, root_config, config)
+            for path in list(pending):
+                result = vips_results.get(str(path))
+                if result is None:
+                    continue
+                if result.success:
+                    results[str(path)] = result
+                    pending.remove(path)
+                    continue
+                if not self._vips_fallback_allowed(root_config):
+                    results[str(path)] = result
+                    pending.remove(path)
+
+        for path in pending:
+            results[str(path)] = self.decode_to_jpeg(str(path))
+        return {str(path): results.get(str(path), ImageDecodeResult(False, error="image_decoder_unavailable")) for path in paths}
+
     def _preferred_decoder_order(self, root_config: Dict[str, Any], files_config: Dict[str, Any]) -> List[str]:
         order = self._string_list(
             files_config.get("IMAGE_DECODER_ORDER"),
@@ -168,6 +208,80 @@ class ImageDecodeService:
             output_bytes=len(image_bytes),
         )
         return ImageDecodeResult(True, image_bytes=image_bytes, source="libvips")
+
+    def _decode_many_with_vips(self, image_paths: List[Path], root_config: Dict[str, Any], files_config: Dict[str, Any]) -> Dict[str, ImageDecodeResult]:
+        processor = self._native_vips_processor(root_config)
+        if processor is None:
+            return {str(path): ImageDecodeResult(False, source="libvips", error="vips_processor_unavailable") for path in image_paths}
+
+        supported_paths: List[Path] = []
+        results: Dict[str, ImageDecodeResult] = {}
+        for image_path in image_paths:
+            supported, reason = self._vips_input_format_supported(processor, image_path.suffix.lower().lstrip("."))
+            if supported:
+                supported_paths.append(image_path)
+            else:
+                self._debug_log("image_decoder_vips_skipped", image_suffix=image_path.suffix.lower(), reason=reason)
+                results[str(image_path)] = ImageDecodeResult(False, source="libvips", error=reason)
+        if not supported_paths:
+            return results
+
+        operation, options = self._vips_decode_operation(files_config)
+        batch_process = getattr(processor, "batch_process_images", None)
+        if not callable(batch_process):
+            for image_path in supported_paths:
+                results[str(image_path)] = self._decode_with_vips(image_path, root_config, files_config)
+            return results
+        try:
+            batch_results = batch_process(supported_paths, operation, options, "jpeg")
+        except Exception as exc:
+            error = f"vips_batch_decode_failed:{type(exc).__name__}: {exc}"
+            self._debug_log("image_decoder_vips_batch_failed", error=error, images_count=len(supported_paths))
+            return {**results, **{str(path): ImageDecodeResult(False, source="libvips", error=error) for path in supported_paths}}
+
+        by_path = {
+            str(item.get("path") or item.get("image_path") or ""): item
+            for item in batch_results
+            if isinstance(item, dict)
+        }
+        for image_path in supported_paths:
+            item = by_path.get(str(image_path), {})
+            image_bytes = item.get("image_bytes") if isinstance(item.get("image_bytes"), bytes) else b""
+            output_path = Path(str(item.get("output_path") or ""))
+            if not image_bytes and output_path.is_file():
+                try:
+                    image_bytes = output_path.read_bytes()
+                except OSError as exc:
+                    error = f"vips_output_missing:{exc}"
+                    self._debug_log("image_decoder_vips_failed", image_suffix=image_path.suffix.lower(), operation=operation, error=error)
+                    results[str(image_path)] = ImageDecodeResult(False, source="libvips", error=error)
+                    continue
+            if not item.get("success") or not image_bytes:
+                error = str(item.get("error") or item.get("message") or "vips_decode_failed")
+                self._debug_log("image_decoder_vips_failed", image_suffix=image_path.suffix.lower(), operation=operation, error=error)
+                results[str(image_path)] = ImageDecodeResult(False, source="libvips", error=error)
+                continue
+            if not image_bytes.startswith(b"\xff\xd8"):
+                self._debug_log("image_decoder_vips_failed", image_suffix=image_path.suffix.lower(), operation=operation, error="decoder_output_not_jpeg")
+                results[str(image_path)] = ImageDecodeResult(False, source="libvips", error="decoder_output_not_jpeg")
+                continue
+            results[str(image_path)] = ImageDecodeResult(True, image_bytes=image_bytes, source="libvips")
+        self._debug_log(
+            "image_decoder_vips_batch_used",
+            operation=operation,
+            images_count=len(supported_paths),
+            decoded_count=len([result for result in results.values() if result.success and result.source == "libvips"]),
+        )
+        return results
+
+    def _vips_decode_operation(self, files_config: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        max_edge = self._max_edge(files_config)
+        options: Dict[str, Any] = {"quality": 95}
+        operation = "auto-orient"
+        if max_edge > 0:
+            operation = "resize"
+            options.update({"width": max_edge, "height": max_edge, "maintain_aspect": True})
+        return operation, options
 
     @staticmethod
     def _vips_format_aliases(extension: str) -> List[str]:

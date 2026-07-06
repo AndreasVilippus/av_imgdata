@@ -617,6 +617,57 @@ def test_native_face_processor_batches_images_and_vector_operations(tmp_path):
     assert embedder.profile_math([[1.0, 0.0], [0.9, 0.1]])["medoid_index"] == 1
 
 
+def test_native_face_processor_batch_uses_decoder_batch(tmp_path):
+    processor = _packaged_processor_path(tmp_path)
+    _write_worker_processor(processor)
+    config_path = tmp_path / "config.json"
+    config = ConfigService(str(config_path))
+    config.writeConfig({
+        "native_processors": {
+            "FACE_PROCESSOR": {
+                "MODEL_ROOT": str(tmp_path / "models"),
+                "MODEL_NAME": "buffalo_l",
+                "INSIGHTFACE_LICENSE_ACKNOWLEDGED": True,
+            },
+            "IMAGE_PROCESSOR_VIPS": {
+                "ENABLED": True,
+                "PREFERRED": True,
+                "SUPPORTED_FORMATS": ["jpg", "jpeg"],
+            },
+        },
+    })
+    image_a = tmp_path / "a.jpg"
+    image_b = tmp_path / "b.jpg"
+    image_a.write_bytes(b"jpeg-a")
+    image_b.write_bytes(b"jpeg-b")
+    calls = []
+
+    class _Decoder:
+        def decode_many_to_jpeg(self, paths):
+            calls.append(list(paths))
+            return {
+                path: SimpleNamespace(
+                    success=True,
+                    image_bytes=b"\xff\xd8decoded-" + Path(path).name.encode("ascii"),
+                    source="libvips",
+                    error="",
+                )
+                for path in paths
+            }
+
+        def decode_to_jpeg(self, *_args, **_kwargs):
+            raise AssertionError("batch path must not call per-image decode_to_jpeg")
+
+    service = NativeFaceProcessorService(config, package_root=tmp_path, image_decoder=_Decoder())
+    embedder = service.create_embedder(model_name="fallback")
+
+    batch = embedder.detect_and_embed_many([image_a, image_b])
+
+    assert calls == [[str(image_a), str(image_b)]]
+    assert sorted(batch.keys()) == [str(image_a), str(image_b)]
+    assert batch[str(image_a)][0]["embedding"] == [0.25, 0.75]
+
+
 def test_native_face_processor_passes_onnxruntime_environment_config(tmp_path):
     processor = _packaged_processor_path(tmp_path)
     _write_worker_processor(processor)

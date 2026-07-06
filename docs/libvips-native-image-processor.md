@@ -196,6 +196,8 @@ for result in results:
     print(f"{result['path']}: {result['success']}")
 ```
 
+The service sends one native `process-batch` command and returns one result dictionary per input path.
+
 ### Image Information
 
 ```python
@@ -364,6 +366,51 @@ Output file format (processor-result.json):
 }
 ```
 
+### Batch Process Command
+
+```bash
+av-imgdata-image-processor process-batch \
+  --input job-input.json \
+  --output processor-result.json \
+  --workdir /tmp/workdir
+```
+
+Input file format:
+
+```json
+{
+  "contract_version": "1.0",
+  "image_paths": ["/path/to/input-a.jpg", "/path/to/input-b.jpg"],
+  "operation": "resize",
+  "output_format": "jpeg",
+  "options": {
+    "width": 640,
+    "height": 480,
+    "quality": 95
+  }
+}
+```
+
+Output file format:
+
+```json
+{
+  "success": true,
+  "contract_version": "1.0",
+  "operation": "process-batch",
+  "results": [
+    {
+      "success": true,
+      "path": "/path/to/input-a.jpg",
+      "output_path": "/tmp/workdir/output-0.jpeg",
+      "width": 640,
+      "height": 480
+    }
+  ],
+  "failed_images": 0
+}
+```
+
 ### Info Command
 
 ```bash
@@ -383,7 +430,7 @@ Returns image metadata without modifying the image.
    - PNG: Lossless, larger files, better for graphics
    - WebP: Modern format, better compression than JPEG
 3. **Timeout**: Adjust `TIMEOUT_SECONDS` based on image size and system performance
-4. **Batch Processing**: Process multiple images in parallel for better throughput
+4. **Batch Processing**: Process multiple images in one native command to reduce transfer overhead. The current native batch command processes items serially inside one process.
 
 ## Testing
 

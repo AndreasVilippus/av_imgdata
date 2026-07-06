@@ -685,7 +685,11 @@ class FaceRecognitionService:
         }
 
     def _rank_profiles(self, embedder: Any, target_embeddings: List[List[float]], profiles: List[Dict[str, Any]]) -> List[Tuple[float, Dict[str, Any], float, Dict[str, Any], float]]:
+        if not target_embeddings:
+            return []
         profile_embeddings = [profile.get("centroid_embedding") or [] for profile in profiles]
+        if not profile_embeddings:
+            return [(0.0, {}, 0.0, {}, 0.0) for _target in target_embeddings]
         native_rank = getattr(embedder, "rank_embeddings", None)
         if callable(native_rank):
             try:
@@ -968,15 +972,24 @@ class FaceRecognitionService:
         for profile in profiles if isinstance(profiles, list) else []:
             centroid = profile.get("centroid_embedding") or []
             medoid = profile.get("medoid") if isinstance(profile.get("medoid"), dict) else {}
+            candidate_references = []
             for reference in profile.get("references", []):
                 if int(reference.get("face_id") or 0) in resolved_face_ids:
                     continue
                 similarity = self._similarity(reference.get("embedding") or [], centroid)
                 if similarity >= options["outlier_similarity_threshold"]:
                     continue
-                other_profiles = [other for other in profiles if other.get("person_id") != profile.get("person_id")]
-                rank = self._rank_profiles(embedder, [reference.get("embedding") or []], other_profiles)
-                nearest_other_score, nearest_other = (rank[0][0], rank[0][1]) if rank else (0.0, {})
+                candidate_references.append((reference, similarity))
+            if not candidate_references:
+                continue
+            other_profiles = [other for other in profiles if other.get("person_id") != profile.get("person_id")]
+            ranks = self._rank_profiles(
+                embedder,
+                [reference.get("embedding") or [] for reference, _similarity in candidate_references],
+                other_profiles,
+            )
+            for index, (reference, similarity) in enumerate(candidate_references):
+                nearest_other_score, nearest_other = (ranks[index][0], ranks[index][1]) if index < len(ranks) else (0.0, {})
                 entries.append({
                     "outlier_id": f"out-{reference.get('face_id')}", "image_path": reference.get("image_path"),
                     "person_id": profile.get("person_id"), "person_name": profile.get("person_name"),
@@ -1056,13 +1069,23 @@ class FaceRecognitionService:
                     "findings_count": len(entries),
                 },
             )
-            for reference in references:
-                if int(reference.get("face_id") or 0) in resolved_face_ids:
+            candidate_references = [
+                reference for reference in references
+                if int(reference.get("face_id") or 0) not in resolved_face_ids
+            ]
+            ranks = self._rank_profiles(
+                embedder,
+                [reference["embedding"] for reference in candidate_references if reference.get("embedding")],
+                profiles,
+            )
+            rank_index = 0
+            for reference in candidate_references:
+                if not reference.get("embedding"):
                     continue
-                ranked = self._rank_profiles(embedder, [reference["embedding"]], profiles)
-                if not ranked:
-                    continue
-                best_score, best, second_score, second, margin = ranked[0]
+                if rank_index >= len(ranks):
+                    break
+                best_score, best, second_score, second, margin = ranks[rank_index]
+                rank_index += 1
                 decision = "reject"
                 if best_score >= options["safe_score"] and margin >= options["min_margin"]:
                     decision = "accept"
@@ -1189,6 +1212,7 @@ class FaceRecognitionService:
             if self._should_stop(user_key, self.ACTION_ASSIGNMENT):
                 self._finish_stopped_scan(user_key, self.ACTION_ASSIGNMENT, options, entries)
                 return
+            candidate_references = []
             for reference in references:
                 if self._should_stop(user_key, self.ACTION_ASSIGNMENT):
                     self._finish_stopped_scan(user_key, self.ACTION_ASSIGNMENT, options, entries)
@@ -1199,10 +1223,18 @@ class FaceRecognitionService:
                     face_id = 0
                 if not face_id or face_id in resolved_face_ids:
                     continue
-                ranked = self._rank_profiles(embedder, [reference["embedding"]], profiles)
-                if not ranked:
+                if not reference.get("embedding"):
                     continue
-                best_score, best, second_score, second, margin = ranked[0]
+                candidate_references.append((face_id, reference))
+            ranks = self._rank_profiles(
+                embedder,
+                [reference["embedding"] for _face_id, reference in candidate_references],
+                profiles,
+            )
+            for index, (face_id, reference) in enumerate(candidate_references):
+                if index >= len(ranks):
+                    break
+                best_score, best, second_score, second, margin = ranks[index]
                 best_person_id = int(best.get("person_id") or 0)
                 if best_person_id == current_person_id:
                     continue

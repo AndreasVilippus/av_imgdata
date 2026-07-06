@@ -228,6 +228,41 @@ def test_apply_assignment_suggestion_uses_assignment_findings_type():
     assert findings.values[service.FINDING_ASSIGNMENTS]["entries"][0]["write_state"] == "written"
 
 
+def test_assignment_suggestion_ranks_person_references_in_one_native_call():
+    service, findings = _service()
+    options = service.normalize_options({"operation_mode": "save_only", "review_score": 0.1, "min_margin": 0.0})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {"person_id": 1, "person_name": "Current", "used_count": 3, "centroid_embedding": [1.0, 0.0], "medoid": {}},
+            {"person_id": 2, "person_name": "Suggested", "used_count": 3, "centroid_embedding": [0.0, 1.0], "medoid": {}},
+        ],
+    }
+    rank_calls = []
+
+    class _Embedder:
+        def rank_embeddings(self, target_embeddings, profile_embeddings):
+            rank_calls.append((target_embeddings, profile_embeddings))
+            return [
+                {"target_index": 0, "best_index": 1, "best_score": 0.9, "second_index": 0, "second_score": 0.1, "margin": 0.8},
+                {"target_index": 1, "best_index": 1, "best_score": 0.8, "second_index": 0, "second_score": 0.2, "margin": 0.6},
+            ]
+
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
+    service.backend.photos = SimpleNamespace(listFotoTeamPersonKnown=lambda **_kwargs: [{"id": 1, "name": "Current"}])
+    service._prepared_embedder = lambda _options: _Embedder()
+    service._person_references = lambda **_kwargs: [
+        {"face_id": 11, "image_id": 22, "image_path": "/volume1/photo/a.jpg", "bbox": {}, "embedding": [0.0, 1.0]},
+        {"face_id": 12, "image_id": 23, "image_path": "/volume1/photo/b.jpg", "bbox": {}, "embedding": [0.1, 0.9]},
+    ]
+
+    service._build_assignment_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    assert len(rank_calls) == 1
+    assert rank_calls[0][0] == [[0.0, 1.0], [0.1, 0.9]]
+    assert len(findings.values[service.FINDING_ASSIGNMENTS]["entries"]) == 2
+
+
 def test_assignment_resume_skips_persons_before_previous_review_finding():
     service, findings = _service()
     options = service.normalize_options({"operation_mode": "immediate", "resume_existing": True})
@@ -1039,6 +1074,91 @@ def test_unknown_face_recognition_without_profiles_reports_actionable_status():
     assert update["finished"] is True
     assert update["phase"] == "needs_profiles"
     assert update["message_key"] == "cleanup:recognition_profiles_missing"
+
+
+def test_outlier_scan_ranks_profile_references_in_one_native_call():
+    service, findings = _service()
+    options = service.normalize_options({
+        "operation_mode": "save_only",
+        "outlier_similarity_threshold": 0.99,
+    })
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {
+                "person_id": 1,
+                "person_name": "One",
+                "used_count": 3,
+                "centroid_embedding": [1.0, 0.0],
+                "medoid": {},
+                "references": [
+                    {"face_id": 11, "image_id": 21, "image_path": "/a.jpg", "bbox": {}, "embedding": [0.0, 1.0]},
+                    {"face_id": 12, "image_id": 22, "image_path": "/b.jpg", "bbox": {}, "embedding": [0.1, 0.9]},
+                ],
+            },
+            {
+                "person_id": 2,
+                "person_name": "Two",
+                "used_count": 3,
+                "centroid_embedding": [0.0, 1.0],
+                "medoid": {},
+                "references": [],
+            },
+        ],
+    }
+    rank_calls = []
+
+    class _Embedder:
+        def rank_embeddings(self, target_embeddings, profile_embeddings):
+            rank_calls.append((target_embeddings, profile_embeddings))
+            return [
+                {"target_index": 0, "best_index": 0, "best_score": 0.9, "second_index": -1, "second_score": 0.0, "margin": 0.9},
+                {"target_index": 1, "best_index": 0, "best_score": 0.8, "second_index": -1, "second_score": 0.0, "margin": 0.8},
+            ]
+
+    service._prepared_embedder = lambda _options: _Embedder()
+
+    service._build_outliers(user_key="u", options=options)
+
+    assert len(rank_calls) == 1
+    assert rank_calls[0][0] == [[0.0, 1.0], [0.1, 0.9]]
+    assert rank_calls[0][1] == [[0.0, 1.0]]
+    assert len(findings.values[service.FINDING_OUTLIERS]["entries"]) == 2
+
+
+def test_unknown_face_suggestions_rank_references_in_one_native_call():
+    service, findings = _service()
+    options = service.normalize_options({"operation_mode": "save_only", "review_score": 0.1, "min_margin": 0.0})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {"person_id": 1, "person_name": "One", "used_count": 3, "centroid_embedding": [1.0, 0.0], "medoid": {}},
+            {"person_id": 2, "person_name": "Two", "used_count": 3, "centroid_embedding": [0.0, 1.0], "medoid": {}},
+        ],
+    }
+    rank_calls = []
+
+    class _Embedder:
+        def rank_embeddings(self, target_embeddings, profile_embeddings):
+            rank_calls.append((target_embeddings, profile_embeddings))
+            return [
+                {"target_index": 0, "best_index": 0, "best_score": 0.9, "second_index": 1, "second_score": 0.2, "margin": 0.7},
+                {"target_index": 1, "best_index": 1, "best_score": 0.8, "second_index": 0, "second_score": 0.1, "margin": 0.7},
+            ]
+
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
+    service.backend.photos = SimpleNamespace(listFotoTeamPersonUnknown=lambda **_kwargs: [{"id": 100, "name": "Unknown"}])
+    service._prepared_embedder = lambda _options: _Embedder()
+    service._person_references = lambda **_kwargs: [
+        {"face_id": 31, "image_id": 41, "image_path": "/volume1/photo/u1.jpg", "bbox": {}, "embedding": [1.0, 0.0]},
+        {"face_id": 32, "image_id": 42, "image_path": "/volume1/photo/u2.jpg", "bbox": {}, "embedding": [0.0, 1.0]},
+    ]
+
+    service._build_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    assert len(rank_calls) == 1
+    assert rank_calls[0][0] == [[1.0, 0.0], [0.0, 1.0]]
+    assert len(findings.values[service.FINDING_SUGGESTIONS]["entries"]) == 2
 
 
 def test_recognition_status_schema_uses_integrated_modes_for_operation_modes():
