@@ -62,6 +62,67 @@ require_command() {
   fi
 }
 
+copy_if_exists() {
+  local source="$1"
+  local target="$2"
+  if [ -f "${source}" ]; then
+    mkdir -p "$(dirname "${target}")"
+    cp -a "${source}" "${target}"
+    return 0
+  fi
+  return 1
+}
+
+copy_dir_if_exists() {
+  local source="$1"
+  local target="$2"
+  if [ -d "${source}" ]; then
+    mkdir -p "${target}"
+    cp -a "${source}/." "${target}/"
+    return 0
+  fi
+  return 1
+}
+
+bundle_face_processor_if_available() {
+  local target_binary_name="av-imgdata-face-processor"
+  local processor_target="${TARGET}"
+  local copied=0
+  local source_base=""
+
+  if [ "${TARGET}" = "windows-x86_64" ]; then
+    target_binary_name="av-imgdata-face-processor.exe"
+  fi
+  if [ "${TARGET}" = "docker-linux-x86_64" ]; then
+    processor_target="linux-x86_64"
+  fi
+
+  local binary_candidates=(
+    "${PROJECT_DIR}/build/native/${processor_target}/face_processor-install/usr/local/AV_ImgData/bin/${target_binary_name}"
+    "${PROJECT_DIR}/build/native/local/face_processor-install/usr/local/AV_ImgData/bin/${target_binary_name}"
+    "${PROJECT_DIR}/dist/av-imgdata-face-processor-${processor_target}/bin/${target_binary_name}"
+    "${PROJECT_DIR}/dist/native-face-processor-${processor_target}/bin/${target_binary_name}"
+  )
+
+  local candidate
+  for candidate in "${binary_candidates[@]}"; do
+    if copy_if_exists "${candidate}" "${DIST_DIR}/bin/${target_binary_name}"; then
+      source_base="$(dirname "$(dirname "${candidate}")")"
+      copied=1
+      break
+    fi
+  done
+
+  if [ "${copied}" = "1" ]; then
+    echo "Bundled face processor: ${DIST_DIR}/bin/${target_binary_name}"
+    copy_dir_if_exists "${source_base}/lib" "${DIST_DIR}/lib" || true
+    copy_dir_if_exists "${source_base}/share/licenses" "${DIST_DIR}/share/licenses" || true
+  else
+    echo "WARNING: optional face processor binary not found for ${TARGET}; worker probe will report face_processor_binary_exists=false." >&2
+    echo "         Build/copy ${target_binary_name} into ${DIST_DIR}/bin/ to enable processor probing." >&2
+  fi
+}
+
 BUILD_DIR="${PROJECT_DIR}/build/worker/${TARGET}"
 DIST_DIR="${PROJECT_DIR}/dist/av-imgdata-worker-${TARGET}"
 
@@ -108,6 +169,8 @@ Expected default model layout:
   models/buffalo_l/w600k_r50.onnx
 EOF
 fi
+
+bundle_face_processor_if_available
 
 case "${TARGET}" in
   windows-x86_64)
