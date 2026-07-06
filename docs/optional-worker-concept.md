@@ -124,64 +124,418 @@ ProcessorContract
   = language-neutral anti-duplication boundary
 ```
 
-## Current Implementation Status
+## Source And Build Strategy
 
-Already present:
+The external worker should use the same GitHub repository and the same processor sources as the DSM package, but it must not be built as part of the Synology SPK by default.
+
+Required separation:
 
 ```text
-processors/native/face_processor/
-  CMakeLists.txt
-  src/main.cpp
+same repository
+same processor contracts
+same C++ ProcessorCore sources
+separate build targets
+separate toolchains
+separate artifacts
+```
 
+Target repository layout:
+
+```text
+av_imgdata/
+  processors/native/
+    face_processor/              # existing ProcessorCore
+    image_processor_vips/        # optional image ProcessorCore
+    common/                      # future shared C++ utility layer
+  worker/
+    CMakeLists.txt               # future external worker build entry
+    src/
+      main.cpp
+      config.cpp
+      dsm_client.cpp
+      worker_loop.cpp
+      processor_runner.cpp
+      capabilities.cpp
+      workspace.cpp
+      result_validator.cpp
+    include/
+    packaging/
+      systemd/
+      windows/
+      docker/
+  processor_contract/
+    schemas/
+  cmake/
+    toolchains/
+      linux-x86_64.cmake
+      windows-mingw-x86_64.cmake
+      dsm-geminilake.cmake       # optional wrapper around Toolkit environment
+  tools/
+    build-package.sh             # DSM SPK path
+    build-worker.sh              # future external worker bundle path
+```
+
+The DSM package build remains:
+
+```text
+Debian build host
+  -> Synology Toolkit
+  -> DSM platform chroot
+  -> SynoBuildConf/build
+  -> tools/build-native-face-processor.sh
+  -> tools/build-native-image-processor-vips.sh when AV_IMGDATA_WITH_VIPS=1
+  -> SPK artifact
+```
+
+The external worker build should become:
+
+```text
+Debian build host
+  -> CMake/Ninja
+  -> Linux native build
+  -> Windows cross build through MinGW-w64
+  -> optional Docker image build
+  -> optional other Unix/Linux builds
+  -> worker bundle artifacts
+```
+
+Rule:
+
+```text
+Synology Toolkit builds DSM packages.
+The external worker build builds external worker bundles.
+Windows worker artifacts must not depend on Synology Toolkit libraries or DSM chroots.
+```
+
+## Build Targets
+
+Initial worker target matrix:
+
+| Target | Purpose | Build location | Status |
+|---|---|---|---|
+| `dsm-geminilake` | SPK/package for DSM | Synology Toolkit/chroot | Existing package path. |
+| `linux-x86_64` | First external worker runtime | Debian native CMake/Ninja | New. |
+| `windows-x86_64` | Windows 11 external worker runtime | Debian + MinGW-w64 or native Windows CI later | New. |
+| `docker-linux-x86_64` | Containerized Linux worker | Debian/Docker | New. |
+| `linux-arm64` | Later external ARM worker host | Native ARM or cross build | Later. |
+| `dsm-* external` | Optional worker running outside the package on DSM-like hosts | Toolkit/chroot | Later only. |
+
+The first implementation should target:
+
+```text
+1. linux-x86_64
+2. windows-x86_64
+3. docker-linux-x86_64
+```
+
+Additional DSM chroots are useful for SPK platform support and possibly DSM-like external workers. They are not useful for Windows 11 builds.
+
+## Worker Bundle Model
+
+The external worker should be shipped as a self-contained bundle for each platform. It should not assume that `av-imgdata-face-processor` is installed globally on the worker host.
+
+Linux bundle target:
+
+```text
+dist/av-imgdata-worker-linux-x86_64/
+  bin/
+    av-imgdata-worker
+    av-imgdata-face-processor
+    av-imgdata-image-processor        # optional
+  lib/
+    libonnxruntime.so*
+    libjpeg.so*
+    libvips.so*                       # optional
+  models/
+    README.txt
+  config/
+    worker-config.example.json
+  share/
+    processor_contract/
+      schemas/
+```
+
+Windows bundle target:
+
+```text
+dist/av-imgdata-worker-windows-x86_64/
+  bin/
+    av-imgdata-worker.exe
+    av-imgdata-face-processor.exe
+    av-imgdata-image-processor.exe    # optional later
+  lib/
+    onnxruntime.dll
+    jpeg*.dll
+    vips*.dll                         # optional later
+  models/
+    README.txt
+  config/
+    worker-config.example.json
+  share/
+    processor_contract/
+      schemas/
+```
+
+Docker bundle target:
+
+```text
+dist/av-imgdata-worker-docker-linux-x86_64/
+  Dockerfile
+  entrypoint.sh
+  bin/
+    av-imgdata-worker
+    av-imgdata-face-processor
+  lib/
+    required runtime libraries
+  config/
+    worker-config.example.json
+```
+
+The worker config should point to bundle-local binaries by default:
+
+```json
+{
+  "processors": {
+    "face": {
+      "path": "./bin/av-imgdata-face-processor",
+      "model_root": "./models",
+      "model_name": "buffalo_l"
+    }
+  }
+}
+```
+
+Windows config uses Windows paths:
+
+```json
+{
+  "processors": {
+    "face": {
+      "path": ".\\bin\\av-imgdata-face-processor.exe",
+      "model_root": ".\\models",
+      "model_name": "buffalo_l"
+    }
+  }
+}
+```
+
+## Debian Build Host Setup
+
+The existing Debian environment with Synology Toolkit and DSM chroots remains the correct base for SPK builds. For external worker builds, install a normal C++ build toolchain alongside it.
+
+Baseline packages for Linux native and Windows cross-builds:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential \
+  cmake \
+  ninja-build \
+  pkg-config \
+  curl \
+  ca-certificates \
+  git \
+  zip \
+  unzip \
+  mingw-w64 \
+  g++-mingw-w64-x86-64
+```
+
+Additional Linux worker build packages:
+
+```bash
+sudo apt-get install -y \
+  libcurl4-openssl-dev \
+  libssl-dev \
+  libjpeg-dev
+```
+
+Recommended external dependency root:
+
+```text
+/opt/av-imgdata-deps/
+  linux-x86_64/
+    onnxruntime/
+    libjpeg/
+    curl/
+    openssl/
+  windows-x86_64/
+    onnxruntime/
+    jpeg/
+    curl/
+    openssl/
+  docker-linux-x86_64/
+    onnxruntime/
+    libjpeg/
+```
+
+Important rule:
+
+```text
+DSM/Synology sysroot libraries are valid for DSM package targets.
+They are not valid for Windows worker targets.
+Windows worker builds need Windows ONNXRuntime, Windows libjpeg, and Windows curl/TLS runtime files.
+```
+
+## Worker Build Script
+
+Add one external worker build wrapper:
+
+```text
+tools/build-worker.sh
+```
+
+Target examples:
+
+```bash
+./tools/build-worker.sh --target linux-x86_64
+./tools/build-worker.sh --target windows-x86_64
+./tools/build-worker.sh --target docker-linux-x86_64
+```
+
+The script should orchestrate CMake only. It should not call `PkgCreate.py` and should not enter Synology package assembly.
+
+Linux build shape:
+
+```bash
+cmake -S . -B build/worker/linux-x86_64 \
+  -G Ninja \
+  -DAV_IMGDATA_BUILD_WORKER=ON \
+  -DAV_IMGDATA_BUILD_FACE_PROCESSOR=ON \
+  -DAV_IMGDATA_BUILD_VIPS_PROCESSOR=OFF \
+  -DONNXRUNTIME_ROOT=/opt/av-imgdata-deps/linux-x86_64/onnxruntime \
+  -DJPEG_ROOT=/usr
+
+cmake --build build/worker/linux-x86_64
+cmake --install build/worker/linux-x86_64 --prefix dist/av-imgdata-worker-linux-x86_64
+```
+
+Windows cross-build shape:
+
+```bash
+cmake -S . -B build/worker/windows-x86_64 \
+  -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/windows-mingw-x86_64.cmake \
+  -DAV_IMGDATA_BUILD_WORKER=ON \
+  -DAV_IMGDATA_BUILD_FACE_PROCESSOR=ON \
+  -DAV_IMGDATA_BUILD_VIPS_PROCESSOR=OFF \
+  -DONNXRUNTIME_ROOT=/opt/av-imgdata-deps/windows-x86_64/onnxruntime \
+  -DJPEG_ROOT=/opt/av-imgdata-deps/windows-x86_64/jpeg
+
+cmake --build build/worker/windows-x86_64
+cmake --install build/worker/windows-x86_64 --prefix dist/av-imgdata-worker-windows-x86_64
+```
+
+The first Windows worker should deliberately omit libvips and HEIF to reduce cross-build complexity:
+
+```text
+Windows 11 first target:
+  required: av-imgdata-worker.exe
+  required: av-imgdata-face-processor.exe
+  required: onnxruntime.dll
+  required: jpeg runtime
+  optional later: libheif
+  optional later: libvips
+```
+
+## Shared C++ Source Policy
+
+The existing native face processor currently keeps most implementation in `processors/native/face_processor/src/main.cpp`. That is acceptable for the current package path, but the worker build should introduce shared C++ code gradually.
+
+Recommended future shared layer:
+
+```text
+processors/native/common/
+  json_minimal.cpp
+  json_minimal.hpp
+  file_util.cpp
+  file_util.hpp
+  process_util.cpp
+  process_util.hpp
+  logging.cpp
+  logging.hpp
+  platform.cpp
+  platform.hpp
+  contract_validation.cpp
+  contract_validation.hpp
+```
+
+Allowed shared code:
+
+```text
+- JSON helpers
+- file/path helpers
+- process spawning helpers
+- platform detection
+- logging primitives
+- ProcessorContract validation helpers
+- checksum helpers
+- timing helpers
+```
+
+Not allowed in shared ProcessorCore code:
+
+```text
+- DSM API client
+- worker registration
+- worker polling
+- worker authentication
+- Synology Photos calls
+- DSM package path assumptions
+- UI state handling
+```
+
+Worker-specific code belongs under:
+
+```text
+worker/src/
+```
+
+DSM backend-specific code remains under:
+
+```text
+src/services/
+```
+
+Synology package build logic remains under:
+
+```text
+SynoBuildConf/
+tools/build-package.sh
 tools/build-native-face-processor.sh
-tools/smoke-native-face-processor.sh
-tools/functional-native-face-processor.sh
-
-src/services/native_face_processor_service.py
-
-processor_contract/
-  README.md
-  schemas/face-native-job-input.schema.json
-  schemas/face-native-result.schema.json
-
-processors/native/image_processor_vips/          # if present in build tree
-src/services/native_image_processor_vips_service.py
-src/services/image_decode_service.py
-
-tools/build-native-image-processor-vips.sh       # optional vips path
+tools/build-native-image-processor-vips.sh
 ```
 
-No longer present / no longer production path:
+## Worker Runtime Dependencies
+
+Minimum worker runtime dependencies:
 
 ```text
-src/services/native_face_processor_worker.py
-python_bridge CMake backend
-runtime pip/wheelhouse installation path for InsightFace/OpenCV/ONNXRuntime as production backend
+C++17 or C++20
+HTTP client
+TLS support
+JSON handling
+filesystem support
+process management
 ```
 
-Not present yet for external workers:
+Recommended first implementation dependencies:
 
 ```text
-worker/ runtime project
-UI-free C++ worker executable
-DSM Worker API routes
-worker registration endpoint
-worker heartbeat endpoint
-job polling endpoint
-job status endpoint
-worker log endpoint
-Variant B file download endpoint
-result upload endpoint
-optional artifact upload endpoint
-worker token/capability persistence
-worker assignment scheduler
-external worker config format
-external worker packaging for Windows/Linux/Docker
-remote JobInput translation from DSM asset references to local worker files
-worker-side ProcessorResult schema validation
-worker-side backoff/retry/dead-letter handling
-worker-side local workspace cleanup policy
+libcurl       HTTP/HTTPS
+OpenSSL       TLS through libcurl
+nlohmann/json JSON, preferably header-only
 ```
+
+Recommended first validation approach:
+
+```text
+- manual validation of required fields
+- schema files shipped in bundle for documentation and later strict validation
+- full JSON Schema engine can be added later if cross-build friction is acceptable
+```
+
+This keeps Linux and Windows cross-builds simpler.
 
 ## Local Persistent Processor Versus External Worker
 
@@ -302,7 +656,7 @@ Minimum executable shape:
 
 ```text
 av-imgdata-worker run --config <worker-config.json>
-av-imgdata-worker once --config <worker-config.json>
+av-imgdata-worker once --config <worker-config.json> --job <job.json>
 av-imgdata-worker probe --config <worker-config.json>
 av-imgdata-worker version
 ```
@@ -353,6 +707,45 @@ Bootstrap behavior:
 ```
 
 The first version should keep `max_parallel_jobs=1` unless the DSM assignment model, model memory use, and processor process model are explicitly made concurrency-safe.
+
+## Local Worker Test Before DSM API
+
+Before implementing remote DSM polling, the worker should support a local test mode:
+
+```bash
+av-imgdata-worker once \
+  --config worker-config.json \
+  --job sample-worker-job.json
+```
+
+Example local worker job:
+
+```json
+{
+  "job_id": "local-test-1",
+  "type": "face_native_embed",
+  "asset": {
+    "asset_id": "test-image",
+    "local_path": "./testdata/person.jpg"
+  },
+  "options": {
+    "model_name": "buffalo_l",
+    "min_confidence": 0.5,
+    "max_faces": 0,
+    "det_size": [640, 640],
+    "normalize_coordinates": true
+  }
+}
+```
+
+Expected local test outputs:
+
+```text
+work/local-test-1/job-input.json
+work/local-test-1/processor-result.json
+```
+
+This validates the worker runtime, config parsing, processor probing, local path translation, process execution, result parsing, and bundle layout before DSM API work begins.
 
 ## Functions That Must Be Available Locally In An External Worker
 
@@ -482,6 +875,7 @@ The worker must not invent a separate remote result format. It must upload the s
 A compatible worker host must provide:
 
 ```text
+- av-imgdata-worker executable for the worker OS/architecture
 - av-imgdata-face-processor executable for the worker OS/architecture
 - ONNXRuntime runtime library compatible with that executable
 - libjpeg-compatible runtime library
@@ -904,6 +1298,7 @@ The face processor status must not be called a pip package status anymore.
 - Processor contract schemas include single-image, batch, rank and profile math jobs.
 - Optional native libvips image processor service exists.
 - ImageDecodeService can use libvips and batch libvips decode when configured.
+- A Debian build host with Synology Toolkit/chroots exists for DSM package builds.
 ```
 
 ## What Does Not Work Yet
@@ -911,6 +1306,12 @@ The face processor status must not be called a pip package status anymore.
 ```text
 - No external worker runtime exists.
 - No UI-free C++ av-imgdata-worker executable exists.
+- No top-level external worker CMake target exists.
+- No tools/build-worker.sh exists.
+- No Linux worker bundle exists.
+- No Windows 11 worker bundle exists.
+- No Docker worker bundle exists.
+- No Windows dependency root for ONNXRuntime/libjpeg/curl/OpenSSL exists.
 - No DSM Worker API routes exist.
 - No worker registration/heartbeat/job polling exists.
 - No worker auth/token lifecycle exists.
@@ -964,7 +1365,37 @@ Required next.
 - add tests for every native face and vips status reason
 ```
 
-### Phase 4: Worker API foundation
+### Phase 4: External worker build foundation
+
+```text
+- create worker/ project skeleton
+- add worker/CMakeLists.txt
+- add optional top-level CMake entry for external worker builds
+- add tools/build-worker.sh
+- add cmake/toolchains/windows-mingw-x86_64.cmake
+- define dependency root layout under /opt/av-imgdata-deps or configurable equivalent
+- build linux-x86_64 worker bundle from Debian natively
+- build windows-x86_64 worker bundle from Debian through MinGW-w64
+- copy ProcessorContract schemas into worker bundles
+- copy processor binaries and required runtime libraries into bundles
+```
+
+### Phase 5: UI-free local worker runtime
+
+```text
+- implement av-imgdata-worker version
+- implement av-imgdata-worker probe --config
+- implement config parsing and validation
+- implement local face processor probe
+- implement optional local image processor probe
+- implement capability payload creation
+- implement local once mode using a sample worker job file
+- translate local asset paths into worker-local ProcessorContract input
+- execute av-imgdata-face-processor locally
+- parse and validate ProcessorResult
+```
+
+### Phase 6: Worker API foundation
 
 ```text
 - add worker registration/heartbeat/job polling endpoints
@@ -976,23 +1407,23 @@ Required next.
 - define remote job state transitions
 ```
 
-### Phase 5: UI-free C++ external worker runtime
+### Phase 7: Remote worker runtime
 
 ```text
-- create worker/ project
-- implement av-imgdata-worker run/once/probe/version
-- implement DSM API client
-- implement local face processor probe
-- implement optional local image processor probe
+- implement DSM API client in av-imgdata-worker
+- implement registration
+- implement heartbeat
+- implement job polling
 - implement Variant B download/upload
 - translate DSM asset jobs into worker-local ProcessorContract inputs
 - execute av-imgdata-face-processor locally
 - optionally keep av-imgdata-face-processor worker subprocess warm
 - validate ProcessorResult before upload
+- upload status/result/logs
 - package worker for Linux first, then Windows/Docker as separate artifacts
 ```
 
-### Phase 6: Worker-side optional libvips integration
+### Phase 8: Worker-side optional libvips integration
 
 ```text
 - keep default image path unchanged
@@ -1010,6 +1441,9 @@ Python bridge = removed / not production fallback
 Local persistent worker mode = stdin/stdout optimization, not external DSM worker
 External worker = separate runtime using DSM Worker API and compatible processor binaries
 First external worker = UI-free C++ runtime
+External worker build = separate CMake/Ninja bundle build from the same repository
+Debian host = builds DSM SPK through Synology Toolkit and external worker bundles through normal toolchains
+Windows 11 worker = MinGW-w64 cross-build or later native Windows CI, not Synology Toolkit
 ProcessorContract = shared boundary for local and remote execution
 Status model = must report native processor readiness, not pip package readiness
 libvips = optional image preprocessing backend, not face inference replacement
