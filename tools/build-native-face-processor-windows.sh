@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="windows-x86_64"
+DEPS_ROOT="${PROJECT_DIR}/worker/native_deps/${TARGET}"
 BUILD_DIR="${PROJECT_DIR}/build/native/${TARGET}/face_processor-build"
 INSTALL_DIR="${PROJECT_DIR}/build/native/${TARGET}/face_processor-install"
 DIST_DIR="${PROJECT_DIR}/dist/av-imgdata-face-processor-${TARGET}"
@@ -16,9 +17,14 @@ Options:
   --clean        Remove build, install, and dist directories before building
   -h, --help     Show this help
 
-Environment:
-  ONNXRUNTIME_ROOT   Required. Windows ONNXRuntime C API root containing include/ and lib/.
-  JPEG_ROOT          Required. Windows JPEG/libjpeg root containing include/ and lib/.
+Dependency defaults:
+  worker/native_deps/windows-x86_64/onnxruntime
+  worker/native_deps/windows-x86_64/jpeg
+  worker/native_deps/windows-x86_64/heif       optional
+
+Environment overrides:
+  ONNXRUNTIME_ROOT   Optional. Windows ONNXRuntime C API root containing include/ and lib/ or bin/.
+  JPEG_ROOT          Optional. Windows JPEG/libjpeg root containing include/ and lib/ or bin/.
   HEIF_ROOT          Optional. Windows libheif root containing include/libheif/heif.h.
   CC                 Optional. Defaults to x86_64-w64-mingw32-gcc.
   CXX                Optional. Defaults to x86_64-w64-mingw32-g++.
@@ -93,12 +99,36 @@ copy_optional_license_file() {
   fi
 }
 
+resolve_deps() {
+  if [ -z "${ONNXRUNTIME_ROOT:-}" ]; then
+    if [ -d "${DEPS_ROOT}/onnxruntime" ]; then
+      ONNXRUNTIME_ROOT="${DEPS_ROOT}/onnxruntime"
+    fi
+  fi
+  if [ -z "${JPEG_ROOT:-}" ]; then
+    if [ -d "${DEPS_ROOT}/jpeg" ]; then
+      JPEG_ROOT="${DEPS_ROOT}/jpeg"
+    elif [ -d "${DEPS_ROOT}/libjpeg" ]; then
+      JPEG_ROOT="${DEPS_ROOT}/libjpeg"
+    elif [ -d "${DEPS_ROOT}/libjpeg-turbo" ]; then
+      JPEG_ROOT="${DEPS_ROOT}/libjpeg-turbo"
+    fi
+  fi
+  if [ -z "${HEIF_ROOT:-}" ] && [ -d "${DEPS_ROOT}/heif" ]; then
+    HEIF_ROOT="${DEPS_ROOT}/heif"
+  fi
+}
+
+resolve_deps
+
 if [ -z "${ONNXRUNTIME_ROOT:-}" ]; then
   echo "ERROR: ONNXRUNTIME_ROOT is required for the Windows face processor build." >&2
+  echo "       Expected default: ${DEPS_ROOT}/onnxruntime" >&2
   exit 1
 fi
 if [ -z "${JPEG_ROOT:-}" ]; then
   echo "ERROR: JPEG_ROOT is required for the Windows face processor build." >&2
+  echo "       Expected default: ${DEPS_ROOT}/jpeg" >&2
   exit 1
 fi
 
@@ -174,7 +204,7 @@ copy_optional_license_file "${ONNXRUNTIME_ROOT}/ThirdPartyNotices.txt" "${DIST_D
 copy_optional_license_file "${JPEG_ROOT}/LICENSE" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/jpeg.LICENSE"
 copy_optional_license_file "${JPEG_ROOT}/share/licenses/libjpeg-turbo/LICENSE.md" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/libjpeg-turbo.LICENSE.md"
 
-cat > "${DIST_DIR}/README.txt" <<'EOF'
+cat > "${DIST_DIR}/README.txt" <<'README_EOF'
 AV_ImgData Windows native face processor bundle.
 
 Use with worker bundling:
@@ -185,7 +215,7 @@ Use with worker bundling:
 Runtime model files are not included. Put InsightFace model files into the worker bundle under:
   models/buffalo_l/det_10g.onnx
   models/buffalo_l/w600k_r50.onnx
-EOF
+README_EOF
 
 echo "Windows native face processor build completed: ${DIST_DIR}"
 echo "Binary: ${DIST_DIR}/bin/av-imgdata-face-processor.exe"
