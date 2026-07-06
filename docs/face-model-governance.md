@@ -28,22 +28,58 @@ var/models/face/buffalo_l/
   LICENSE_ACK.json
 ```
 
-`manifest.json` should describe the model pack, required files, source, hashes, and package compatibility.
+`manifest.json` describes the model pack, source, file presence, hashes, and package compatibility.
 
-`LICENSE_ACK.json` should record that the DSM package showed the usage notice and that an administrator accepted it before model use.
+`LICENSE_ACK.json` records that the DSM package showed the usage notice and that an administrator accepted it before model use.
 
 Example acknowledgement shape:
 
 ```json
 {
   "model_pack": "buffalo_l",
-  "source": "insightface",
+  "source": "manual",
   "usage_notice_shown": true,
   "accepted_by": "admin",
   "accepted_at": "2026-07-07T20:00:00Z",
   "package_version": "unknown"
 }
 ```
+
+## Service and CLI
+
+DSM-side implementation entry points:
+
+```text
+src/services/face_model_store_service.py
+tools/face-model-store.py
+```
+
+Status:
+
+```bash
+python3 tools/face-model-store.py status
+```
+
+Acknowledge usage terms after showing the notice to the administrator:
+
+```bash
+python3 tools/face-model-store.py acknowledge --accepted-by admin --package-version "$SYNOPKG_PKGVER"
+```
+
+Import administrator-provided model files from a local directory:
+
+```bash
+python3 tools/face-model-store.py import --source-dir /path/to/buffalo_l
+```
+
+The source directory must contain:
+
+```text
+det_10g.onnx
+w600k_r50.onnx
+```
+
+The import command copies the files into `var/models/face/buffalo_l/` and writes `manifest.json`. The acknowledge command writes `LICENSE_ACK.json` and also sets the legacy config flag `native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED=true` for compatibility with the current native processor status gate.
 
 ## Worker-local model layout
 
