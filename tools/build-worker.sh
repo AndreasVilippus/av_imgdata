@@ -111,28 +111,51 @@ copy_matching_files_if_exists() {
   done
 }
 
-copy_mingw_runtime_dlls() {
-  local target_dir="$1"
-  local mingw_bin="${AV_IMGDATA_MINGW_BIN:-}"
-  if [ -z "${mingw_bin}" ]; then
-    local compiler
-    compiler="$(command -v x86_64-w64-mingw32-g++ 2>/dev/null || true)"
-    if [ -n "${compiler}" ]; then
-      mingw_bin="$(dirname "${compiler}")"
+copy_mingw_runtime_file() {
+  local dll_name="$1"
+  local target_dir="$2"
+  local compiler="${CXX:-x86_64-w64-mingw32-g++}"
+  local resolved=""
+
+  if command -v "${compiler}" >/dev/null 2>&1; then
+    resolved="$(${compiler} -print-file-name="${dll_name}" 2>/dev/null || true)"
+    if [ -n "${resolved}" ] && [ "${resolved}" != "${dll_name}" ] && [ -f "${resolved}" ]; then
+      cp -aL "${resolved}" "${target_dir}/"
+      echo "Bundled MinGW runtime DLL: ${dll_name} from ${resolved}"
+      return 0
     fi
   fi
-  if [ -z "${mingw_bin}" ] || [ ! -d "${mingw_bin}" ]; then
-    echo "WARNING: MinGW bin directory not found; runtime DLLs were not bundled." >&2
-    echo "         Set AV_IMGDATA_MINGW_BIN=/path/to/mingw/bin if Windows reports missing libstdc++/libgcc/libwinpthread DLLs." >&2
+
+  local mingw_bin="${AV_IMGDATA_MINGW_BIN:-}"
+  if [ -z "${mingw_bin}" ] && command -v "${compiler}" >/dev/null 2>&1; then
+    mingw_bin="$(dirname "$(command -v "${compiler}")")"
+  fi
+  if [ -n "${mingw_bin}" ] && [ -d "${mingw_bin}" ] && [ -f "${mingw_bin}/${dll_name}" ]; then
+    cp -aL "${mingw_bin}/${dll_name}" "${target_dir}/"
+    echo "Bundled MinGW runtime DLL: ${dll_name} from ${mingw_bin}"
     return 0
   fi
-  copy_matching_files_if_exists "${mingw_bin}" "${target_dir}" \
+
+  echo "WARNING: MinGW runtime DLL not found: ${dll_name}" >&2
+  return 1
+}
+
+copy_mingw_runtime_dlls() {
+  local target_dir="$1"
+  mkdir -p "${target_dir}"
+  local missing=0
+  local dll
+  for dll in \
     "libstdc++-6.dll" \
     "libgcc_s_seh-1.dll" \
     "libgcc_s_sjlj-1.dll" \
     "libgcc_s_dw2-1.dll" \
-    "libwinpthread-1.dll"
-  echo "Bundled MinGW runtime DLLs from ${mingw_bin} into ${target_dir}"
+    "libwinpthread-1.dll"; do
+    copy_mingw_runtime_file "${dll}" "${target_dir}" || missing=1
+  done
+  if [ "${missing}" = "1" ]; then
+    echo "WARNING: Some optional MinGW runtime DLLs were not found. This is normal for unused exception models, but libstdc++-6.dll, libgcc_s_seh-1.dll and libwinpthread-1.dll should be present for this build." >&2
+  fi
 }
 
 apply_target_defaults() {
