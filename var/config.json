@@ -10,7 +10,7 @@
   "native_processors": {
     "FACE_PROCESSOR": {
       "MODEL_ROOT": "",
-      "MODEL_NAME": "",
+      "MODEL_NAME": "buffalo_l",
       "TIMEOUT_SECONDS": 120,
       "STATUS_CACHE_SECONDS": 60,
       "MAX_IMAGE_BYTES": 67108864,
