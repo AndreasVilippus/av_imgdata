@@ -19,7 +19,9 @@ Options:
 
 Dependency defaults:
   worker/native_deps/windows-x86_64/onnxruntime
+  worker/native_deps/windows-x86_64/onnxruntime-win-x64-*
   worker/native_deps/windows-x86_64/jpeg
+  worker/native_deps/windows-x86_64/libjpeg*
   worker/native_deps/windows-x86_64/heif       optional
 
 Environment overrides:
@@ -99,23 +101,39 @@ copy_optional_license_file() {
   fi
 }
 
+first_existing_dir() {
+  local candidate
+  for candidate in "$@"; do
+    [ -d "${candidate}" ] || continue
+    printf '%s\n' "${candidate}"
+    return 0
+  done
+  return 1
+}
+
 resolve_deps() {
   if [ -z "${ONNXRUNTIME_ROOT:-}" ]; then
-    if [ -d "${DEPS_ROOT}/onnxruntime" ]; then
-      ONNXRUNTIME_ROOT="${DEPS_ROOT}/onnxruntime"
-    fi
+    ONNXRUNTIME_ROOT="$(first_existing_dir \
+      "${DEPS_ROOT}/onnxruntime" \
+      "${DEPS_ROOT}"/onnxruntime-win-x64* \
+      "${DEPS_ROOT}"/onnxruntime* \
+      2>/dev/null || true)"
   fi
   if [ -z "${JPEG_ROOT:-}" ]; then
-    if [ -d "${DEPS_ROOT}/jpeg" ]; then
-      JPEG_ROOT="${DEPS_ROOT}/jpeg"
-    elif [ -d "${DEPS_ROOT}/libjpeg" ]; then
-      JPEG_ROOT="${DEPS_ROOT}/libjpeg"
-    elif [ -d "${DEPS_ROOT}/libjpeg-turbo" ]; then
-      JPEG_ROOT="${DEPS_ROOT}/libjpeg-turbo"
-    fi
+    JPEG_ROOT="$(first_existing_dir \
+      "${DEPS_ROOT}/jpeg" \
+      "${DEPS_ROOT}/libjpeg" \
+      "${DEPS_ROOT}/libjpeg-turbo" \
+      "${DEPS_ROOT}"/jpeg* \
+      "${DEPS_ROOT}"/libjpeg* \
+      2>/dev/null || true)"
   fi
-  if [ -z "${HEIF_ROOT:-}" ] && [ -d "${DEPS_ROOT}/heif" ]; then
-    HEIF_ROOT="${DEPS_ROOT}/heif"
+  if [ -z "${HEIF_ROOT:-}" ]; then
+    HEIF_ROOT="$(first_existing_dir \
+      "${DEPS_ROOT}/heif" \
+      "${DEPS_ROOT}"/libheif* \
+      "${DEPS_ROOT}"/heif* \
+      2>/dev/null || true)"
   fi
 }
 
@@ -123,12 +141,18 @@ resolve_deps
 
 if [ -z "${ONNXRUNTIME_ROOT:-}" ]; then
   echo "ERROR: ONNXRUNTIME_ROOT is required for the Windows face processor build." >&2
-  echo "       Expected default: ${DEPS_ROOT}/onnxruntime" >&2
+  echo "       Expected one of:" >&2
+  echo "       ${DEPS_ROOT}/onnxruntime" >&2
+  echo "       ${DEPS_ROOT}/onnxruntime-win-x64-*" >&2
+  echo "       or set ONNXRUNTIME_ROOT=/path/to/onnxruntime" >&2
   exit 1
 fi
 if [ -z "${JPEG_ROOT:-}" ]; then
   echo "ERROR: JPEG_ROOT is required for the Windows face processor build." >&2
-  echo "       Expected default: ${DEPS_ROOT}/jpeg" >&2
+  echo "       Expected one of:" >&2
+  echo "       ${DEPS_ROOT}/jpeg" >&2
+  echo "       ${DEPS_ROOT}/libjpeg*" >&2
+  echo "       or set JPEG_ROOT=/path/to/jpeg" >&2
   exit 1
 fi
 
