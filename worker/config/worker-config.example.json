@@ -3,18 +3,18 @@
   "dsm_base_url": "https://nas.example:5001",
   "auth": {
     "type": "worker_token",
-    "token_file": "./worker.token"
+    "token_file": "../worker.token"
   },
-  "workspace_root": "./work",
+  "workspace_root": "../work",
   "processors": {
     "face": {
-      "path": "./bin/av-imgdata-face-processor",
-      "model_root": "./models",
+      "path": "../bin/av-imgdata-face-processor",
+      "model_root": "../models",
       "model_name": "buffalo_l"
     },
     "image_vips": {
       "enabled": false,
-      "path": "./bin/av-imgdata-image-processor"
+      "path": "../bin/av-imgdata-image-processor"
     }
   },
   "poll_interval_seconds": 2,
