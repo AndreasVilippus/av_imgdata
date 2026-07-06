@@ -14,23 +14,29 @@ External worker
 
 The worker reuses the same processor contracts and will reuse compatible processor binaries from the same repository, but it is built and packaged as a separate artifact.
 
-## Phase A status
+## Phase B status
 
-Phase A is a local build and packaging foundation.
+Phase A established the local build and packaging foundation. Phase B adds the first local processor probe.
 
-Implemented in Phase A:
+Implemented through Phase B:
 
 ```text
 - worker/ project path
 - worker-local CMake project
-- minimal av-imgdata-worker executable
+- av-imgdata-worker executable
 - version command
-- probe command with config-file checks
+- probe command with structured config extraction
+- config-relative path resolution
+- local face processor path resolution
+- local face processor binary existence check
+- local face processor version command when binary exists
+- local face processor probe command when binary exists
+- capability list emitted only when version and probe succeed
 - once command with local job-file checks
 - run command placeholder
 - linux-x86_64 build target
 - windows-x86_64 MinGW cross-build target
-- docker-linux-x86_64 staging target
+- docker-linux-x86_64 staging target, currently deferred for validation
 - example config
 - sample local job
 - Linux systemd packaging placeholder
@@ -38,7 +44,7 @@ Implemented in Phase A:
 - Dockerfile and entrypoint
 ```
 
-Not implemented in Phase A:
+Not implemented yet:
 
 ```text
 - DSM Worker API client
@@ -46,8 +52,9 @@ Not implemented in Phase A:
 - heartbeat
 - job polling
 - file download/upload
-- native processor execution
-- ONNXRuntime/libjpeg/libvips bundling
+- native processor job execution from once mode
+- ONNXRuntime/libjpeg/libvips bundle integration
+- automatic bundling of av-imgdata-face-processor into worker dist
 ```
 
 ## Commands
@@ -83,7 +90,7 @@ bash tools/build-worker.sh --target windows-x86_64 --clean
 bash tools/build-worker.sh --target docker-linux-x86_64 --clean
 ```
 
-Optional Docker image build after Docker staging:
+Docker validation is currently deferred. Optional Docker image build after Docker staging:
 
 ```bash
 bash tools/build-worker.sh --target docker-linux-x86_64 --docker-build
@@ -179,9 +186,29 @@ Windows, after copying the bundle to Windows 11:
 Docker:
 
 ```bash
-docker build -t av-imgdata-worker:phase-a dist/av-imgdata-worker-docker-linux-x86_64
-docker run --rm av-imgdata-worker:phase-a version
+docker build -t av-imgdata-worker:phase-b dist/av-imgdata-worker-docker-linux-x86_64
+docker run --rm av-imgdata-worker:phase-b version
 ```
+
+## Phase B probe behavior
+
+`probe` reads `worker-config.example.json`, extracts the configured face processor, resolves relative paths against the config file directory, and attempts:
+
+```text
+<face_processor> version
+<face_processor> probe --model-root <model_root> --model-name <model_name>
+```
+
+If the face processor binary is not present in the worker bundle yet, `probe` still returns a valid worker JSON payload with:
+
+```json
+{
+  "face_processor_binary_exists": false,
+  "capabilities": []
+}
+```
+
+Capabilities are advertised only when both `version` and `probe` succeed.
 
 ## Directory policy
 
