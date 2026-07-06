@@ -260,7 +260,7 @@ CMAKE_ARGS=(
   -S "${PATCHED_SOURCE_DIR}"
   -B "${BUILD_DIR}"
   -DCMAKE_BUILD_TYPE=Release
-  -DCMAKE_INSTALL_PREFIX=/usr/local/AV_ImgData
+  -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}/usr/local/AV_ImgData"
   -DCMAKE_SYSTEM_NAME=Windows
   -DCMAKE_C_COMPILER="${CC:-x86_64-w64-mingw32-gcc}"
   -DCMAKE_CXX_COMPILER="${CXX:-x86_64-w64-mingw32-g++}"
@@ -277,7 +277,7 @@ fi
 
 cmake "${CMAKE_ARGS[@]}"
 cmake --build "${BUILD_DIR}"
-cmake --install "${BUILD_DIR}" --prefix /usr/local/AV_ImgData --strip -- DESTDIR="${INSTALL_DIR}" 2>/dev/null || cmake --install "${BUILD_DIR}" --prefix /usr/local/AV_ImgData -- DESTDIR="${INSTALL_DIR}"
+cmake --install "${BUILD_DIR}" --strip || cmake --install "${BUILD_DIR}"
 
 NATIVE_BINARY="${INSTALL_DIR}/usr/local/AV_ImgData/bin/av-imgdata-face-processor.exe"
 if [ ! -f "${NATIVE_BINARY}" ]; then
