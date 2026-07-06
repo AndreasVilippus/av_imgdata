@@ -16,6 +16,10 @@ Options:
   --clean               Remove the target build and dist directories before building
   -h, --help            Show this help
 
+Environment:
+  AV_IMGDATA_FACE_PROCESSOR_BIN   Optional explicit path to an already built av-imgdata-face-processor binary.
+  AV_IMGDATA_FACE_PROCESSOR_ROOT  Optional root containing bin/, lib/, and share/licenses/ for the face processor bundle.
+
 Phase B builds the UI-free external worker skeleton and local face-processor probe support. It does not build the DSM SPK and does not implement the DSM Worker API yet.
 EOF
 }
@@ -97,6 +101,16 @@ bundle_face_processor_if_available() {
     processor_target="linux-x86_64"
   fi
 
+  if [ -n "${AV_IMGDATA_FACE_PROCESSOR_BIN:-}" ]; then
+    if [ ! -f "${AV_IMGDATA_FACE_PROCESSOR_BIN}" ]; then
+      echo "ERROR: AV_IMGDATA_FACE_PROCESSOR_BIN does not exist: ${AV_IMGDATA_FACE_PROCESSOR_BIN}" >&2
+      exit 1
+    fi
+    cp -a "${AV_IMGDATA_FACE_PROCESSOR_BIN}" "${DIST_DIR}/bin/${target_binary_name}"
+    source_base="${AV_IMGDATA_FACE_PROCESSOR_ROOT:-$(dirname "$(dirname "${AV_IMGDATA_FACE_PROCESSOR_BIN}")")}" 
+    copied=1
+  fi
+
   local binary_candidates=(
     "${PROJECT_DIR}/build/native/${processor_target}/face_processor-install/usr/local/AV_ImgData/bin/${target_binary_name}"
     "${PROJECT_DIR}/build/native/local/face_processor-install/usr/local/AV_ImgData/bin/${target_binary_name}"
@@ -105,13 +119,15 @@ bundle_face_processor_if_available() {
   )
 
   local candidate
-  for candidate in "${binary_candidates[@]}"; do
-    if copy_if_exists "${candidate}" "${DIST_DIR}/bin/${target_binary_name}"; then
-      source_base="$(dirname "$(dirname "${candidate}")")"
-      copied=1
-      break
-    fi
-  done
+  if [ "${copied}" = "0" ]; then
+    for candidate in "${binary_candidates[@]}"; do
+      if copy_if_exists "${candidate}" "${DIST_DIR}/bin/${target_binary_name}"; then
+        source_base="$(dirname "$(dirname "${candidate}")")"
+        copied=1
+        break
+      fi
+    done
+  fi
 
   if [ "${copied}" = "1" ]; then
     echo "Bundled face processor: ${DIST_DIR}/bin/${target_binary_name}"
@@ -120,6 +136,7 @@ bundle_face_processor_if_available() {
   else
     echo "WARNING: optional face processor binary not found for ${TARGET}; worker probe will report face_processor_binary_exists=false." >&2
     echo "         Build/copy ${target_binary_name} into ${DIST_DIR}/bin/ to enable processor probing." >&2
+    echo "         Or set AV_IMGDATA_FACE_PROCESSOR_BIN=/path/to/${target_binary_name}." >&2
   fi
 }
 
@@ -159,15 +176,15 @@ cmake "${CMAKE_ARGS[@]}"
 cmake --build "${BUILD_DIR}"
 cmake --install "${BUILD_DIR}"
 
-mkdir -p "${DIST_DIR}/models" "${DIST_DIR}/logs" "${DIST_DIR}/work"
+mkdir -p "${DIST_DIR}/models" "${DIST_DIR}/logs" "${DIST_DIR}/work" "${DIST_DIR}/bin"
 if [ ! -f "${DIST_DIR}/models/README.txt" ]; then
-  cat >"${DIST_DIR}/models/README.txt" <<'EOF'
+  cat >"${DIST_DIR}/models/README.txt" <<'MODEL_README'
 Place InsightFace-compatible model files here for local worker tests.
 
 Expected default model layout:
   models/buffalo_l/det_10g.onnx
   models/buffalo_l/w600k_r50.onnx
-EOF
+MODEL_README
 fi
 
 bundle_face_processor_if_available
