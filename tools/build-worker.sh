@@ -88,6 +88,22 @@ copy_dir_if_exists() {
   return 1
 }
 
+copy_matching_files_if_exists() {
+  local source_dir="$1"
+  local target_dir="$2"
+  shift 2
+  local pattern
+  local source
+  [ -d "${source_dir}" ] || return 0
+  mkdir -p "${target_dir}"
+  for pattern in "$@"; do
+    for source in "${source_dir}"/${pattern}; do
+      [ -e "${source}" ] || continue
+      cp -aL "${source}" "${target_dir}/"
+    done
+  done
+}
+
 bundle_face_processor_if_available() {
   local target_binary_name="av-imgdata-face-processor"
   local processor_target="${TARGET}"
@@ -133,6 +149,11 @@ bundle_face_processor_if_available() {
     echo "Bundled face processor: ${DIST_DIR}/bin/${target_binary_name}"
     copy_dir_if_exists "${source_base}/lib" "${DIST_DIR}/lib" || true
     copy_dir_if_exists "${source_base}/share/licenses" "${DIST_DIR}/share/licenses" || true
+    if [ "${TARGET}" = "windows-x86_64" ]; then
+      copy_matching_files_if_exists "${source_base}/bin" "${DIST_DIR}/bin" "*.dll" "*.DLL"
+      copy_matching_files_if_exists "${source_base}/lib" "${DIST_DIR}/bin" "*.dll" "*.DLL"
+      echo "Bundled Windows face processor runtime DLLs into ${DIST_DIR}/bin"
+    fi
   else
     echo "WARNING: optional face processor binary not found for ${TARGET}; worker probe will report face_processor_binary_exists=false." >&2
     echo "         Build/copy ${target_binary_name} into ${DIST_DIR}/bin/ to enable processor probing." >&2
