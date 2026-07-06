@@ -4,8 +4,10 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="windows-x86_64"
 DEPS_ROOT="${PROJECT_DIR}/worker/native_deps/${TARGET}"
-BUILD_DIR="${PROJECT_DIR}/build/native/${TARGET}/face_processor-build"
-INSTALL_DIR="${PROJECT_DIR}/build/native/${TARGET}/face_processor-install"
+BUILD_ROOT="${PROJECT_DIR}/build/native/${TARGET}"
+PATCHED_SOURCE_DIR="${BUILD_ROOT}/face_processor-source"
+BUILD_DIR="${BUILD_ROOT}/face_processor-build"
+INSTALL_DIR="${BUILD_ROOT}/face_processor-install"
 DIST_DIR="${PROJECT_DIR}/dist/av-imgdata-face-processor-${TARGET}"
 CLEAN=0
 
@@ -137,6 +139,89 @@ resolve_deps() {
   fi
 }
 
+prepare_windows_source_tree() {
+  require_command python3
+  rm -rf "${PATCHED_SOURCE_DIR}"
+  mkdir -p "$(dirname "${PATCHED_SOURCE_DIR}")"
+  cp -a "${PROJECT_DIR}/processors/native/face_processor" "${PATCHED_SOURCE_DIR}"
+
+  python3 - "${PATCHED_SOURCE_DIR}" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+cmake = root / "CMakeLists.txt"
+main = root / "src" / "main.cpp"
+
+cmake_text = cmake.read_text()
+cmake_text = cmake_text.replace("set(CMAKE_CXX_STANDARD 11)", "set(CMAKE_CXX_STANDARD 17)")
+cmake.write_text(cmake_text)
+
+text = main.read_text()
+old_create = '''bool create_session(OrtHandles& ort, const std::string& model_path, std::string* error) {
+    OrtSession* session = NULL;
+    OrtStatus* status = ort.api->CreateSession(ort.env, model_path.c_str(), ort.options, &session);
+    if (status) {
+        *error = status_message(ort.api, status);
+        return false;
+    }
+    ort.api->ReleaseSession(session);
+    return true;
+}'''
+new_create = '''bool create_session(OrtHandles& ort, const std::string& model_path, std::string* error) {
+    const std::string model_data = read_text(model_path);
+    if (model_data.empty()) {
+        *error = "failed to read model file: " + model_path;
+        return false;
+    }
+    OrtSession* session = NULL;
+    OrtStatus* status = ort.api->CreateSessionFromArray(
+        ort.env,
+        model_data.data(),
+        model_data.size(),
+        ort.options,
+        &session
+    );
+    if (status) {
+        *error = status_message(ort.api, status);
+        return false;
+    }
+    ort.api->ReleaseSession(session);
+    return true;
+}'''
+old_load = '''bool load_session(OrtHandles& ort, const std::string& model_path, OnnxSession* loaded, std::string* error) {
+    loaded->ort = &ort;
+    OrtStatus* status = ort.api->CreateSession(ort.env, model_path.c_str(), ort.options, &loaded->session);
+    if (status) {
+        *error = status_message(ort.api, status);
+        return false;
+    }'''
+new_load = '''bool load_session(OrtHandles& ort, const std::string& model_path, OnnxSession* loaded, std::string* error) {
+    loaded->ort = &ort;
+    const std::string model_data = read_text(model_path);
+    if (model_data.empty()) {
+        *error = "failed to read model file: " + model_path;
+        return false;
+    }
+    OrtStatus* status = ort.api->CreateSessionFromArray(
+        ort.env,
+        model_data.data(),
+        model_data.size(),
+        ort.options,
+        &loaded->session
+    );
+    if (status) {
+        *error = status_message(ort.api, status);
+        return false;
+    }'''
+for old, new in ((old_create, new_create), (old_load, new_load)):
+    if old not in text:
+        raise SystemExit("expected source block not found while preparing Windows source tree")
+    text = text.replace(old, new, 1)
+main.write_text(text)
+PY
+}
+
 resolve_deps
 
 if [ -z "${ONNXRUNTIME_ROOT:-}" ]; then
@@ -166,12 +251,13 @@ require_file "${ONNXRUNTIME_ROOT}/include/onnxruntime_c_api.h"
 require_file "${JPEG_ROOT}/include/jpeglib.h"
 
 if [ "${CLEAN}" = "1" ]; then
-  rm -rf "${BUILD_DIR}" "${INSTALL_DIR}" "${DIST_DIR}"
+  rm -rf "${PATCHED_SOURCE_DIR}" "${BUILD_DIR}" "${INSTALL_DIR}" "${DIST_DIR}"
 fi
 mkdir -p "${BUILD_DIR}" "${INSTALL_DIR}" "${DIST_DIR}"
+prepare_windows_source_tree
 
 CMAKE_ARGS=(
-  -S "${PROJECT_DIR}/processors/native/face_processor"
+  -S "${PATCHED_SOURCE_DIR}"
   -B "${BUILD_DIR}"
   -DCMAKE_BUILD_TYPE=Release
   -DCMAKE_INSTALL_PREFIX=/usr/local/AV_ImgData
