@@ -112,6 +112,12 @@ fi
 case "${TARGET}" in
   windows-x86_64)
     cp -a "${PROJECT_DIR}/worker/packaging/windows/README.md" "${DIST_DIR}/" 2>/dev/null || true
+    if [ -f "${DIST_DIR}/config/worker-config.example.json" ]; then
+      sed -i \
+        -e 's#\.\./bin/av-imgdata-face-processor"#../bin/av-imgdata-face-processor.exe"#g' \
+        -e 's#\.\./bin/av-imgdata-image-processor"#../bin/av-imgdata-image-processor.exe"#g' \
+        "${DIST_DIR}/config/worker-config.example.json"
+    fi
     ;;
   docker-linux-x86_64)
     cp -a "${PROJECT_DIR}/worker/packaging/docker/Dockerfile" "${DIST_DIR}/Dockerfile"
@@ -140,6 +146,7 @@ fi
 case "${TARGET}" in
   windows-x86_64)
     echo "Windows worker binary built: ${WORKER_BIN}"
+    echo "Windows worker config uses .exe processor paths."
     echo "Local execution skipped on Debian/Linux host. Test this .exe on Windows 11."
     ;;
   *)
