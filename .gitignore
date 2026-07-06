@@ -1,6 +1,8 @@
 /.vscode
 /dev/
 /build/
+/dist/
+/worker/native_deps/
 /.test-venv/
 /ui/node_modules/
 __pycache__/
