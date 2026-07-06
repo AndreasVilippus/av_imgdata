@@ -16,7 +16,7 @@ Options:
   --clean               Remove the target build and dist directories before building
   -h, --help            Show this help
 
-Phase A builds the UI-free external worker skeleton only. It does not build the DSM SPK and does not implement the DSM Worker API yet.
+Phase B builds the UI-free external worker skeleton and local face-processor probe support. It does not build the DSM SPK and does not implement the DSM Worker API yet.
 EOF
 }
 
@@ -119,7 +119,7 @@ case "${TARGET}" in
     chmod +x "${DIST_DIR}/entrypoint.sh"
     if [ "${BUILD_DOCKER_IMAGE}" = "1" ]; then
       require_command docker
-      docker build -t av-imgdata-worker:phase-a "${DIST_DIR}"
+      docker build -t av-imgdata-worker:phase-b "${DIST_DIR}"
     fi
     ;;
   linux-x86_64)
@@ -132,11 +132,24 @@ if [ "${TARGET}" = "windows-x86_64" ]; then
   WORKER_BIN="${DIST_DIR}/bin/av-imgdata-worker.exe"
 fi
 
-if [ -x "${WORKER_BIN}" ]; then
-  "${WORKER_BIN}" version || true
-else
+if [ ! -f "${WORKER_BIN}" ]; then
   echo "ERROR: worker binary was not installed: ${WORKER_BIN}" >&2
   exit 1
 fi
 
-echo "Worker Phase A build completed: target=${TARGET} dist=${DIST_DIR}"
+case "${TARGET}" in
+  windows-x86_64)
+    echo "Windows worker binary built: ${WORKER_BIN}"
+    echo "Local execution skipped on Debian/Linux host. Test this .exe on Windows 11."
+    ;;
+  *)
+    if [ -x "${WORKER_BIN}" ]; then
+      "${WORKER_BIN}" version
+    else
+      echo "ERROR: worker binary is not executable: ${WORKER_BIN}" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+echo "Worker Phase B build completed: target=${TARGET} dist=${DIST_DIR}"
