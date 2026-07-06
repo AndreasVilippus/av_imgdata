@@ -21,6 +21,12 @@ Environment:
   AV_IMGDATA_FACE_PROCESSOR_ROOT  Optional root containing bin/, lib/, and share/licenses/ for the face processor bundle.
   AV_IMGDATA_MINGW_BIN            Optional MinGW bin directory containing runtime DLLs.
 
+Defaults:
+  For windows-x86_64, the worker automatically uses:
+    dist/av-imgdata-face-processor-windows-x86_64/bin/av-imgdata-face-processor.exe
+    dist/av-imgdata-face-processor-windows-x86_64
+  if that bundle exists.
+
 Phase B builds the UI-free external worker skeleton and local face-processor probe support. It does not build the DSM SPK and does not implement the DSM Worker API yet.
 EOF
 }
@@ -129,6 +135,18 @@ copy_mingw_runtime_dlls() {
   echo "Bundled MinGW runtime DLLs from ${mingw_bin} into ${target_dir}"
 }
 
+apply_target_defaults() {
+  if [ "${TARGET}" = "windows-x86_64" ] && [ -z "${AV_IMGDATA_FACE_PROCESSOR_BIN:-}" ]; then
+    local default_face_root="${PROJECT_DIR}/dist/av-imgdata-face-processor-windows-x86_64"
+    local default_face_bin="${default_face_root}/bin/av-imgdata-face-processor.exe"
+    if [ -f "${default_face_bin}" ]; then
+      AV_IMGDATA_FACE_PROCESSOR_ROOT="${AV_IMGDATA_FACE_PROCESSOR_ROOT:-${default_face_root}}"
+      AV_IMGDATA_FACE_PROCESSOR_BIN="${default_face_bin}"
+      echo "Using default Windows face processor bundle: ${default_face_root}"
+    fi
+  fi
+}
+
 bundle_face_processor_if_available() {
   local target_binary_name="av-imgdata-face-processor"
   local processor_target="${TARGET}"
@@ -186,6 +204,8 @@ bundle_face_processor_if_available() {
     echo "         Or set AV_IMGDATA_FACE_PROCESSOR_BIN=/path/to/${target_binary_name}." >&2
   fi
 }
+
+apply_target_defaults
 
 BUILD_DIR="${PROJECT_DIR}/build/worker/${TARGET}"
 DIST_DIR="${PROJECT_DIR}/dist/av-imgdata-worker-${TARGET}"
