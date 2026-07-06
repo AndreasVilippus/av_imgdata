@@ -326,18 +326,9 @@ WorkerConfig parse_worker_config(const std::string& config_path, const std::stri
 
 FaceModelStatus inspect_face_models(const WorkerConfig& config) {
     FaceModelStatus status;
-    const std::string direct_dir = join_path(config.face_model_root, config.face_model_name);
-    const std::string nested_dir = join_path(join_path(config.face_model_root, "models"), config.face_model_name);
-
-    status.model_dir = direct_dir;
+    status.model_dir = join_path(config.face_model_root, config.face_model_name);
     status.detector_path = join_path(status.model_dir, "det_10g.onnx");
     status.recognizer_path = join_path(status.model_dir, "w600k_r50.onnx");
-    if (!file_exists(status.detector_path) && !file_exists(status.recognizer_path)) {
-        status.model_dir = nested_dir;
-        status.detector_path = join_path(status.model_dir, "det_10g.onnx");
-        status.recognizer_path = join_path(status.model_dir, "w600k_r50.onnx");
-    }
-
     status.manifest_path = join_path(status.model_dir, "manifest.json");
     status.license_ack_path = join_path(status.model_dir, "LICENSE_ACK.json");
     status.detector_present = file_exists(status.detector_path);
