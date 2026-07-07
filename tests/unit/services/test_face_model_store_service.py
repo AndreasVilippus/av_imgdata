@@ -12,6 +12,9 @@ class DummyConfigService:
     def readConfig(self):
         return dict(self.config)
 
+    def readMergedConfig(self):
+        return dict(self.config)
+
     def writeConfig(self, config):
         self.config = config
         return True
@@ -31,6 +34,28 @@ def test_status_reports_missing_models_and_ack(tmp_path: Path):
     assert status["license_ack_present"] is False
     assert status["ready"] is False
     assert status["distributed_with_package"] is False
+    assert status["root_source"] == "package_var"
+
+
+def test_status_uses_configured_model_root(tmp_path: Path):
+    configured_root = tmp_path / "configured-models"
+    config = DummyConfigService()
+    config.config = {
+        "native_processors": {
+            "FACE_PROCESSOR": {
+                "MODEL_ROOT": str(configured_root),
+                "MODEL_NAME": "buffalo_l",
+            }
+        }
+    }
+    store = FaceModelStoreService(config, package_var=tmp_path / "var", clock=_clock)
+
+    status = store.status("buffalo_l")
+
+    assert status["root"] == str(configured_root.resolve())
+    assert status["root_source"] == "config"
+    assert status["fallback_root"] == str(tmp_path / "var" / "models" / "face")
+    assert status["files"]["det_10g.onnx"]["path"] == str(configured_root.resolve() / "buffalo_l" / "det_10g.onnx")
 
 
 def test_acknowledge_usage_writes_ack_and_legacy_config_flag(tmp_path: Path):
@@ -46,6 +71,7 @@ def test_acknowledge_usage_writes_ack_and_legacy_config_flag(tmp_path: Path):
     assert saved["accepted_at"] == "2026-07-07T20:00:00Z"
     assert ack["package_version"] == "1.2.3"
     assert config.config["native_processors"]["FACE_PROCESSOR"]["INSIGHTFACE_LICENSE_ACKNOWLEDGED"] is True
+    assert config.config["native_processors"]["FACE_PROCESSOR"]["MODEL_NAME"] == "buffalo_l"
 
 
 def test_import_model_files_copies_required_files_and_manifest(tmp_path: Path):
