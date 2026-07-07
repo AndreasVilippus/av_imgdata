@@ -37,7 +37,7 @@ class FaceModelStoreService:
     ):
         self.config_service = config_service
         self.package_var = Path(package_var) if package_var else Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
-        self.fallback_root = self.package_var / "models" / "face"
+        self.fallback_root = self.package_var / ".models" / "face"
         self._clock = clock if callable(clock) else lambda: datetime.now(timezone.utc)
 
     def model_root(self) -> Path:
@@ -228,6 +228,8 @@ class FaceModelStoreService:
             face["INSIGHTFACE_LICENSE_ACKNOWLEDGED"] = bool(acknowledged)
             if not str(face.get("MODEL_NAME") or "").strip():
                 face["MODEL_NAME"] = self.DEFAULT_MODEL_PACK
+            if not str(face.get("MODEL_ROOT") or "").strip():
+                face["MODEL_ROOT"] = str(self.fallback_root)
             config_service.writeConfig(config)
         except Exception:
             return
