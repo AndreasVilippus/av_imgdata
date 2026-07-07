@@ -528,6 +528,24 @@ export default {
 				&& this.faceMatchResult.image_path
 			);
 		},
+		faceMatchCanIgnoreInsightFaceDetection() {
+			return !!(
+				this.faceMatchCurrentAction === 'search_missing_faces_insightface'
+				&& this.faceMatchResult
+				&& this.faceMatchResult.metadata_face
+				&& this.faceMatchResult.image_path
+				&& this.faceMatchResultSummary.found
+			);
+		},
+		faceMatchLeftPreviewDeleteButtonVisible() {
+			return this.faceMatchCanDeleteMetadataFace || this.faceMatchCanIgnoreInsightFaceDetection;
+		},
+		faceMatchLeftPreviewDeleteTooltip() {
+			if (this.faceMatchCanIgnoreInsightFaceDetection) {
+				return this.$avt('face_match:button_ignore_insightface_detection', 'Ignore detected face');
+			}
+			return this.$avt('face_match:button_delete_file_face', 'Delete face from file');
+		},
 		faceMatchShouldShowAddOverlay() {
 			return this.faceMatchAddsNewPhotosFaces || this.faceMatchActionMode === 'create';
 		},
@@ -1071,39 +1089,69 @@ export default {
 				this.faceMatchActionLocked = false;
 			}
 		},
-			async loadStoredFaceMatchFindings({ refresh = false } = {}) {
-				const autoApplying = !!this.faceMatchAutoAssignKnown;
+		async ignoreCurrentInsightFaceDetection() {
+			if (this.faceMatchInteractionDisabled || !this.faceMatchCanIgnoreInsightFaceDetection) {
+				return;
+			}
+			if (this.faceMatchReviewingStoredFindings) {
+				await this.skipCurrentStoredFaceMatchFinding();
+				return;
+			}
+			this.faceMatchActionLocked = true;
+			try {
+				const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
+				this.setFaceMatchMutationPending(
+					'face_match:output_ignore_detection_starting',
+					'Ignoring detected face: {path}',
+					imagePath,
+					this.faceMatchEditableName
+				);
+				this.faceMatchSkippedTargets = this.buildNextSkippedTargets();
+				await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
+			} finally {
+				this.faceMatchActionLocked = false;
+			}
+		},
+		async handleFaceMatchLeftPreviewDelete() {
+			if (this.faceMatchCanIgnoreInsightFaceDetection) {
+				await this.ignoreCurrentInsightFaceDetection();
+				return;
+			}
+			await this.deleteFaceMatchMetadataFace();
+		},
+		async loadStoredFaceMatchFindings({ refresh = false } = {}) {
+			const autoApplying = !!this.faceMatchAutoAssignKnown;
+			if (autoApplying) {
+				this.faceMatchLoading = true;
+				this.faceMatchProgress = {
+					...(this.faceMatchProgress || {}),
+					action: 'load_photo_face_match_findings',
+					source_mode: 'findings',
+					running: true,
+					finished: false,
+					message_key: 'face_match:progress_applying_known_findings',
+					message: this.$avt('face_match:progress_applying_known_findings', 'Applying known persons from saved findings...'),
+				};
+				this.startFaceMatchProgressPolling();
+			}
+			let data;
+			try {
+				data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
+					action: 'load_photo_face_match_findings',
+					findings_action: this.getFaceMatchFindingsSourceAction(),
+					auto: autoApplying,
+					refresh: !!refresh,
+				});
 				if (autoApplying) {
-					this.faceMatchLoading = true;
-					this.faceMatchProgress = {
-						...(this.faceMatchProgress || {}),
-						action: 'load_photo_face_match_findings',
-						source_mode: 'findings',
-						running: true,
-						finished: false,
-						message_key: 'face_match:progress_applying_known_findings',
-						message: this.$avt('face_match:progress_applying_known_findings', 'Applying known persons from saved findings...'),
-					};
-					this.startFaceMatchProgressPolling();
+					await this.fetchFaceMatchingProgress();
 				}
-				let data;
-				try {
-					data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
-						action: 'load_photo_face_match_findings',
-						findings_action: this.getFaceMatchFindingsSourceAction(),
-						auto: autoApplying,
-						refresh: !!refresh,
-					});
-					if (autoApplying) {
-						await this.fetchFaceMatchingProgress();
-					}
-				} finally {
-					if (autoApplying) {
-						this.faceMatchLoading = false;
-						this.stopFaceMatchProgressPolling();
-					}
+			} finally {
+				if (autoApplying) {
+					this.faceMatchLoading = false;
+					this.stopFaceMatchProgressPolling();
 				}
-				const payload = this.getResponseDataObject(data, 'face_matches');
+			}
+			const payload = this.getResponseDataObject(data, 'face_matches');
 			const entries = this.filterSkippedFaceMatchFindings(Array.isArray(payload.entries) ? payload.entries : []);
 			const remainingCount = Number(payload.count) || entries.length;
 			const transferredCount = Math.max(0, Number(payload.transferred_count) || 0);

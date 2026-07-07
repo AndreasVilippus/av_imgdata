@@ -113,6 +113,27 @@ def test_face_match_stored_findings_can_skip_false_detection_persistently():
     assert "face_match:button_skip_false_detection" in view
 
 
+def test_face_match_left_preview_delete_icon_can_ignore_insightface_missing_face():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+
+    can_ignore = _computed_method(source, "faceMatchCanIgnoreInsightFaceDetection")
+    assert "search_missing_faces_insightface" in can_ignore
+    assert "metadata_face" in can_ignore
+    assert "image_path" in can_ignore
+    assert "faceMatchResultSummary.found" in can_ignore
+
+    ignore_method = _watch_method(source, "ignoreCurrentInsightFaceDetection")
+    assert "skipCurrentStoredFaceMatchFinding" in ignore_method
+    assert "this.faceMatchSkippedTargets = this.buildNextSkippedTargets()" in ignore_method
+    assert "await this.startFaceMatchingAction({ resetSkippedFaceIds: false })" in ignore_method
+
+    assert 'v-if="vm.faceMatchLeftPreviewDeleteButtonVisible"' in view
+    assert ':title="vm.faceMatchLeftPreviewDeleteTooltip"' in view
+    assert '@click.prevent="vm.handleFaceMatchLeftPreviewDelete"' in view
+    assert "face_match:button_ignore_insightface_detection" in source
+
+
 def test_face_match_live_next_preserves_displayed_progress_as_partial_scan_base():
     source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
 

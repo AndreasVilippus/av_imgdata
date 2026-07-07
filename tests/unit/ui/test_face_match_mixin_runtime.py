@@ -885,6 +885,60 @@ def test_missing_photos_face_has_no_marker_on_photos_side_runtime():
     }
 
 
+def test_insightface_missing_face_can_be_ignored_from_left_preview_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const metadataFace = { name: '', x: 0.5, y: 0.5, w: 0.2, h: 0.2, source_format: 'INSIGHTFACE' };
+            let startArgs = null;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_missing_faces_insightface',
+              faceMatchResult: {
+                action: 'search_missing_faces_insightface',
+                image_path: '/volume1/photo/test.jpg',
+                metadata_face: metadataFace,
+                source_face: metadataFace,
+                face: metadataFace,
+                match: { source_type: 'insightface_detection' },
+                add_new_faces_to_photos: true,
+              },
+              setFaceMatchMutationPending: () => {},
+              startFaceMatchingAction: async (args) => { startArgs = args; },
+            });
+
+            assert.strictEqual(component.faceMatchCanDeleteMetadataFace, false);
+            assert.strictEqual(component.faceMatchCanIgnoreInsightFaceDetection, true);
+            assert.strictEqual(component.faceMatchLeftPreviewDeleteButtonVisible, true);
+            assert.strictEqual(component.faceMatchLeftPreviewDeleteTooltip, 'Ignore detected face');
+
+            await component.handleFaceMatchLeftPreviewDelete();
+
+            assert.strictEqual(JSON.stringify(startArgs), JSON.stringify({ resetSkippedFaceIds: false }));
+            assert.strictEqual(component.faceMatchSkippedTargets.length, 1);
+            assert.strictEqual(
+              component.faceMatchSkippedTargets[0],
+              '/volume1/photo/test.jpg|INSIGHTFACE|0.500000|0.500000|0.200000|0.200000'
+            );
+            console.log(JSON.stringify({
+              canIgnore: component.faceMatchCanIgnoreInsightFaceDetection,
+              buttonVisible: component.faceMatchLeftPreviewDeleteButtonVisible,
+              tooltip: component.faceMatchLeftPreviewDeleteTooltip,
+              skippedTargets: component.faceMatchSkippedTargets,
+              startArgs,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "canIgnore": True,
+        "buttonVisible": True,
+        "tooltip": "Ignore detected face",
+        "skippedTargets": ["/volume1/photo/test.jpg|INSIGHTFACE|0.500000|0.500000|0.200000|0.200000"],
+        "startArgs": {"resetSkippedFaceIds": False},
+    }
+
+
 def test_different_photos_name_prompts_for_file_name_update_runtime():
     result = run_node(
         face_match_runtime_script(

@@ -269,13 +269,13 @@
 					<h2>{{ vm.faceMatchLeftTitle }}</h2>
 					<div v-if="vm.getCurrentFaceMatchImageUrl()" class="face-match-thumbnail-wrap">
 						<button
-							v-if="vm.faceMatchCanDeleteMetadataFace"
+							v-if="vm.faceMatchLeftPreviewDeleteButtonVisible"
 							type="button"
 							class="face-match-icon-button checks-delete-button checks-delete-button-right"
-							:title="vm.$avt('face_match:button_delete_file_face', 'Delete face from file')"
-							:aria-label="vm.$avt('face_match:button_delete_file_face', 'Delete face from file')"
+							:title="vm.faceMatchLeftPreviewDeleteTooltip"
+							:aria-label="vm.faceMatchLeftPreviewDeleteTooltip"
 							:disabled="vm.faceMatchInteractionDisabled"
-							@click.prevent="vm.deleteFaceMatchMetadataFace"
+							@click.prevent="vm.handleFaceMatchLeftPreviewDelete"
 						>
 							<span class="face-match-icon-stack">
 								<img :src="vm.faceIconUrl" alt="" class="face-match-icon-image" />
