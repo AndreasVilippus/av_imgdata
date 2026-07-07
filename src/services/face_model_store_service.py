@@ -109,7 +109,16 @@ class FaceModelStoreService:
             "model_root_source": "config" if self._configured_model_root() is not None else "package_var",
         }
         self._write_json_atomic(directory / "LICENSE_ACK.json", payload)
+        manifest = None
+        if self._required_files_present(model_pack):
+            manifest = self.write_manifest(model_pack=model_pack, source=source)
         self._set_legacy_config_ack(True)
+        if manifest is not None:
+            payload["manifest_written"] = True
+            payload["manifest_path"] = str(directory / "manifest.json")
+        else:
+            payload["manifest_written"] = False
+            payload["manifest_skipped_reason"] = "required_model_files_missing"
         return payload
 
     def clear_acknowledgement(self, model_pack: str = DEFAULT_MODEL_PACK) -> bool:
@@ -186,6 +195,10 @@ class FaceModelStoreService:
             payload.update(extra)
         self._write_json_atomic(directory / "manifest.json", payload)
         return payload
+
+    def _required_files_present(self, model_pack: str = DEFAULT_MODEL_PACK) -> bool:
+        paths = self.required_paths(model_pack)
+        return bool(paths["detector"].is_file() and paths["recognizer"].is_file())
 
     def _configured_model_root(self) -> Optional[Path]:
         config_service = self.config_service
