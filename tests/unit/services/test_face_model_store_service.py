@@ -35,6 +35,7 @@ def test_status_reports_missing_models_and_ack(tmp_path: Path):
     assert status["ready"] is False
     assert status["distributed_with_package"] is False
     assert status["root_source"] == "package_var"
+    assert status["root"] == str(tmp_path / ".models" / "face")
 
 
 def test_status_uses_configured_model_root(tmp_path: Path):
@@ -54,7 +55,7 @@ def test_status_uses_configured_model_root(tmp_path: Path):
 
     assert status["root"] == str(configured_root.resolve())
     assert status["root_source"] == "config"
-    assert status["fallback_root"] == str(tmp_path / "var" / "models" / "face")
+    assert status["fallback_root"] == str(tmp_path / "var" / ".models" / "face")
     assert status["files"]["det_10g.onnx"]["path"] == str(configured_root.resolve() / "buffalo_l" / "det_10g.onnx")
 
 
@@ -64,7 +65,7 @@ def test_acknowledge_usage_writes_ack_and_legacy_config_flag(tmp_path: Path):
 
     ack = store.acknowledge_usage(model_pack="buffalo_l", accepted_by="tester", package_version="1.2.3")
 
-    ack_path = tmp_path / "models" / "face" / "buffalo_l" / "LICENSE_ACK.json"
+    ack_path = tmp_path / ".models" / "face" / "buffalo_l" / "LICENSE_ACK.json"
     assert ack_path.is_file()
     saved = json.loads(ack_path.read_text(encoding="utf-8"))
     assert saved["accepted_by"] == "tester"
@@ -72,6 +73,7 @@ def test_acknowledge_usage_writes_ack_and_legacy_config_flag(tmp_path: Path):
     assert ack["package_version"] == "1.2.3"
     assert config.config["native_processors"]["FACE_PROCESSOR"]["INSIGHTFACE_LICENSE_ACKNOWLEDGED"] is True
     assert config.config["native_processors"]["FACE_PROCESSOR"]["MODEL_NAME"] == "buffalo_l"
+    assert config.config["native_processors"]["FACE_PROCESSOR"]["MODEL_ROOT"] == str(tmp_path / ".models" / "face")
 
 
 def test_import_model_files_copies_required_files_and_manifest(tmp_path: Path):
@@ -83,7 +85,7 @@ def test_import_model_files_copies_required_files_and_manifest(tmp_path: Path):
 
     result = store.import_model_files(source, model_pack="buffalo_l", source="manual-test")
 
-    model_dir = tmp_path / "var" / "models" / "face" / "buffalo_l"
+    model_dir = tmp_path / "var" / ".models" / "face" / "buffalo_l"
     assert (model_dir / "det_10g.onnx").read_bytes() == b"detector"
     assert (model_dir / "w600k_r50.onnx").read_bytes() == b"recognizer"
     assert (model_dir / "manifest.json").is_file()
