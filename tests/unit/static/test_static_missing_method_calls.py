@@ -33,6 +33,7 @@ UI_ALLOWED_MISSING_THIS_METHODS = {
 }
 
 BACKEND_ALLOWED_MISSING_SELF_METHODS = {
+    "_clock",
     "_now_func",
 }
 
