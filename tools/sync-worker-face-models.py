@@ -2,7 +2,6 @@
 import argparse
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -52,66 +51,73 @@ def build_store(args: argparse.Namespace) -> FaceModelStoreService:
     return FaceModelStoreService(config_service, package_var=package_var)
 
 
-def sync_models(args: argparse.Namespace) -> Dict[str, Any]:
+def read_worker_config(worker_dir: Path) -> Dict[str, Any]:
+    config_path = worker_dir / "config" / "worker-config.example.json"
+    if not config_path.is_file():
+        return {}
+    try:
+        parsed = json.loads(config_path.read_text(encoding="utf-8"))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def write_worker_config(worker_dir: Path, config: Dict[str, Any]) -> None:
+    config_path = worker_dir / "config" / "worker-config.example.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def configure_worker(args: argparse.Namespace) -> Dict[str, Any]:
     store = build_store(args)
     status = store.status(args.model_pack)
     worker_dir = Path(args.worker_dir) if args.worker_dir else default_worker_dir(args.target)
-    destination_dir = worker_dir / ".models" / "face" / args.model_pack
-    source_dir = Path(status["model_dir"])
+    config_path = worker_dir / "config" / "worker-config.example.json"
+    model_root = args.model_root or str(Path(status["root"]))
+    if args.relative:
+        try:
+            model_root = os.path.relpath(str(Path(model_root).resolve()), str(config_path.parent.resolve()))
+        except Exception:
+            pass
 
-    files = ["det_10g.onnx", "w600k_r50.onnx", "manifest.json", "LICENSE_ACK.json"]
-    missing_required: List[str] = []
-    planned: List[Dict[str, Any]] = []
-    copied: List[Dict[str, Any]] = []
-
-    for filename in files:
-        source = source_dir / filename
-        destination = destination_dir / filename
-        required = filename in {"det_10g.onnx", "w600k_r50.onnx"}
-        present = source.is_file()
-        item = {
-            "name": filename,
-            "source": str(source),
-            "destination": str(destination),
-            "required": required,
-            "present": present,
-        }
-        planned.append(item)
-        if required and not present:
-            missing_required.append(filename)
-
-    if missing_required:
-        return {
-            "ok": False,
-            "error": "required_model_files_missing",
-            "missing": missing_required,
-            "source_status": status,
-            "worker_dir": str(worker_dir),
-            "destination_dir": str(destination_dir),
-            "planned": planned,
-        }
+    config = read_worker_config(worker_dir)
+    processors = config.setdefault("processors", {})
+    if not isinstance(processors, dict):
+        processors = {}
+        config["processors"] = processors
+    face = processors.setdefault("face", {})
+    if not isinstance(face, dict):
+        face = {}
+        processors["face"] = face
+    old_model_root = face.get("model_root")
+    face["model_root"] = model_root
+    face["model_name"] = args.model_pack
 
     if not args.dry_run:
-        destination_dir.mkdir(parents=True, exist_ok=True)
-        for item in planned:
-            if not item["present"]:
-                continue
-            shutil.copy2(item["source"], item["destination"])
-            copied.append(item)
+        write_worker_config(worker_dir, config)
+
+    expected_files: List[Dict[str, Any]] = []
+    source_dir = Path(status["model_dir"])
+    for filename in ("det_10g.onnx", "w600k_r50.onnx", "manifest.json", "LICENSE_ACK.json"):
+        source = source_dir / filename
+        expected_files.append({"name": filename, "path": str(source), "present": source.is_file()})
 
     return {
         "ok": True,
         "dry_run": bool(args.dry_run),
-        "source_status": status,
+        "mode": "configure_only_no_model_copy",
         "worker_dir": str(worker_dir),
-        "destination_dir": str(destination_dir),
-        "planned": planned,
-        "copied": copied,
+        "config_path": str(config_path),
+        "old_model_root": old_model_root,
+        "new_model_root": model_root,
+        "model_pack": args.model_pack,
+        "source_status": status,
+        "expected_files": expected_files,
     }
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Sync DSM/dev face model store files into a worker runtime directory.")
+    parser = argparse.ArgumentParser(description="Configure a worker runtime to use the DSM/dev face model store without copying model files.")
     parser.add_argument("--config", default="", help="Optional config.json path. Defaults to package var config, then repo var/config.json.")
     parser.add_argument(
         "--package-var",
@@ -121,6 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-pack", default=FaceModelStoreService.DEFAULT_MODEL_PACK)
     parser.add_argument("--target", default="linux-x86_64", help="Worker dist target used when --worker-dir is not set.")
     parser.add_argument("--worker-dir", default="", help="Worker runtime/dist directory. Defaults to dist/av-imgdata-worker-<target>.")
+    parser.add_argument("--model-root", default="", help="Explicit model_root to write into worker config. Defaults to the configured model store root.")
+    parser.add_argument("--relative", action="store_true", help="Write model_root relative to the worker config directory when possible.")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -128,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    result = sync_models(args)
+    result = configure_worker(args)
     emit(result)
     return 0 if result.get("ok") else 1
 
