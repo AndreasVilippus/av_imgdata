@@ -189,7 +189,7 @@ bundle_face_processor_if_available() {
       exit 1
     fi
     cp -a "${AV_IMGDATA_FACE_PROCESSOR_BIN}" "${DIST_DIR}/bin/${target_binary_name}"
-    source_base="${AV_IMGDATA_FACE_PROCESSOR_ROOT:-$(dirname "$(dirname "${AV_IMGDATA_FACE_PROCESSOR_BIN}")")}" 
+    source_base="${AV_IMGDATA_FACE_PROCESSOR_ROOT:-$(dirname "$(dirname "${AV_IMGDATA_FACE_PROCESSOR_BIN}")")}"
     copied=1
   fi
 
@@ -226,6 +226,22 @@ bundle_face_processor_if_available() {
     echo "         Build/copy ${target_binary_name} into ${DIST_DIR}/bin/ to enable processor probing." >&2
     echo "         Or set AV_IMGDATA_FACE_PROCESSOR_BIN=/path/to/${target_binary_name}." >&2
   fi
+}
+
+write_worker_model_readme() {
+  local readme="${DIST_DIR}/.models/face/README.txt"
+  mkdir -p "$(dirname "${readme}")"
+  cat >"${readme}" <<'MODEL_README'
+Face model files are not distributed with this worker bundle.
+
+Expected runtime layout:
+  .models/face/buffalo_l/det_10g.onnx
+  .models/face/buffalo_l/w600k_r50.onnx
+  .models/face/buffalo_l/manifest.json
+  .models/face/buffalo_l/LICENSE_ACK.json
+
+Use tools/sync-worker-face-models.py from the source tree, or let the DSM package provide/sync these files after administrator acknowledgement.
+MODEL_README
 }
 
 apply_target_defaults
@@ -266,16 +282,8 @@ cmake "${CMAKE_ARGS[@]}"
 cmake --build "${BUILD_DIR}"
 cmake --install "${BUILD_DIR}"
 
-mkdir -p "${DIST_DIR}/models" "${DIST_DIR}/logs" "${DIST_DIR}/work" "${DIST_DIR}/bin"
-if [ ! -f "${DIST_DIR}/models/README.txt" ]; then
-  cat >"${DIST_DIR}/models/README.txt" <<'MODEL_README'
-Place InsightFace-compatible model files here for local worker tests.
-
-Expected default model layout:
-  models/buffalo_l/det_10g.onnx
-  models/buffalo_l/w600k_r50.onnx
-MODEL_README
-fi
+mkdir -p "${DIST_DIR}/logs" "${DIST_DIR}/work" "${DIST_DIR}/bin"
+write_worker_model_readme
 
 bundle_face_processor_if_available
 
