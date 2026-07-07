@@ -1,49 +1,55 @@
 {
-  "photos": {
-    "MAX_PHOTOS_PERSONS": 5000,
-    "REINDEX_MISSING_ITEMS": false
+  "analysis": {
+    "CHECKS": {
+      "DIMENSION_ISSUES": true,
+      "DUPLICATE_FACES": true,
+      "NAME_CONFLICTS": true,
+      "NAME_CONFLICTS_INCLUDE_PHOTOS": true,
+      "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": 0.05,
+      "NAME_CONFLICT_OVERLAP_THRESHOLD": 0.75,
+      "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": true,
+      "POSITION_DEVIATIONS": true,
+      "POSITION_DEVIATIONS_INCLUDE_PHOTOS": true,
+      "RECOGNITION_DET_THRESH": 0.5,
+      "RECOGNITION_MIN_MARGIN": 0.08,
+      "RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD": 0.35,
+      "RECOGNITION_REVIEW_SCORE": 0.45,
+      "RECOGNITION_SAFE_SCORE": 0.55,
+      "SINGLE_SOURCE_OF_TRUTH": ""
+    }
+  },
+  "debug": {
+    "BACKEND_DEBUG_ENABLED": false,
+    "BACKEND_DEBUG_LOG_BACKUPS": 3,
+    "BACKEND_DEBUG_LOG_MAX_BYTES": 1048576,
+    "BACKEND_DEBUG_LOG_PATH": "",
+    "IO_METRICS_ENABLED": false
   },
   "face_match": {
     "FILE_MATCH_SOURCE_SCOPE": "both",
     "PERSON_SORT_ORDER": "id_desc"
   },
-  "native_processors": {
-    "FACE_PROCESSOR": {
-      "MODEL_ROOT": "/var/packages/AV_ImgData/var/.models/face",
-      "MODEL_NAME": "buffalo_l",
-      "TIMEOUT_SECONDS": 120,
-      "STATUS_CACHE_SECONDS": 60,
-      "MAX_IMAGE_BYTES": 67108864,
-      "ORT_INTRA_THREADS": 0,
-      "ORT_GRAPH_OPT_LEVEL": "all",
-      "INSIGHTFACE_LICENSE_ACKNOWLEDGED": false
-    },
-    "IMAGE_PROCESSOR_VIPS": {
-      "ENABLED": false,
-      "PREFERRED": true,
-      "PATH": "bin/av-imgdata-image-processor",
-      "TIMEOUT_SECONDS": 120,
-      "STATUS_CACHE_SECONDS": 60,
-      "MAX_IMAGE_BYTES": 268435456,
-      "SUPPORTED_FORMATS": [
-        "jpeg",
-        "jpg",
-        "png",
-        "webp",
-        "tiff"
-      ],
-      "ALLOW_FALLBACK_TO_DEFAULT": true
-    }
-  },
   "files": {
-    "USE_EXIFTOOL": false,
     "CHECK_EXIFTOOL_UPDATES": true,
-    "USE_EXIFTOOL_FOR_SIDECARS": false,
-    "PREFER_EXIFTOOL_FOR_CONTEXT": false,
-    "PATHEXIFTOOL": "exiftool",
-    "USE_MANUAL_PATHEXIFTOOL": false,
-    "MANUAL_PATHEXIFTOOL": "",
-    "IMAGE_EXTENSIONS_NATIVE_ONLY": true,
+    "EMBEDDED_XMP_FULL_SCAN_ENABLED": false,
+    "EMBEDDED_XMP_FULL_SCAN_MAX_BYTES": 67108864,
+    "EXIFTOOL_IMAGE_EXTENSIONS": [],
+    "EXIFTOOL_PERSISTENT_ENABLED": true,
+    "EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS": 30,
+    "IMAGE_DECODER_ENABLED": true,
+    "IMAGE_DECODER_EXTENSIONS": [
+      "heic",
+      "heif"
+    ],
+    "IMAGE_DECODER_MAX_EDGE": 4096,
+    "IMAGE_DECODER_ORDER": [
+      "pillow-heif",
+      "heif-convert",
+      "magick",
+      "ffmpeg",
+      "convert"
+    ],
+    "IMAGE_DECODER_TIMEOUT_SECONDS": 30,
     "IMAGE_EXTENSIONS": [
       "jpg",
       "jpeg",
@@ -63,7 +69,16 @@
       "raf",
       "pef"
     ],
-    "EXIFTOOL_IMAGE_EXTENSIONS": [],
+    "IMAGE_EXTENSIONS_NATIVE_ONLY": true,
+    "MANUAL_PATHEXIFTOOL": "",
+    "PATHEXIFTOOL": "exiftool",
+    "PATH_CONVERT": "convert",
+    "PATH_FFMPEG": "ffmpeg",
+    "PATH_HEIF_CONVERT": "heif-convert",
+    "PATH_IMAGEMAGICK": "magick",
+    "PREFER_EXIFTOOL_FOR_CONTEXT": false,
+    "RECOGNITION_IMAGE_MAX_EDGE": 4096,
+    "SIDECAR_EXIFTOOL_FALLBACK_ENABLED": false,
     "SIDECAR_LOOKUP_VARIANTS": [
       "same_dir_stem",
       "same_dir_filename",
@@ -71,73 +86,58 @@
       "xmp_dir_filename"
     ],
     "SIDECAR_READ_MODE": "direct_first",
-    "SIDECAR_EXIFTOOL_FALLBACK_ENABLED": false,
-    "EMBEDDED_XMP_FULL_SCAN_ENABLED": false,
-    "EMBEDDED_XMP_FULL_SCAN_MAX_BYTES": 67108864,
-    "EXIFTOOL_PERSISTENT_ENABLED": true,
-    "EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS": 30,
-    "IMAGE_DECODER_ENABLED": true,
-    "IMAGE_DECODER_EXTENSIONS": [
-      "heic",
-      "heif"
-    ],
-    "IMAGE_DECODER_ORDER": [
-      "pillow-heif",
-      "heif-convert",
-      "magick",
-      "ffmpeg",
-      "convert"
-    ],
-    "IMAGE_DECODER_MAX_EDGE": 4096,
-    "RECOGNITION_IMAGE_MAX_EDGE": 4096,
-    "IMAGE_DECODER_TIMEOUT_SECONDS": 30,
-    "PATH_HEIF_CONVERT": "heif-convert",
-    "PATH_IMAGEMAGICK": "magick",
-    "PATH_FFMPEG": "ffmpeg",
-    "PATH_CONVERT": "convert"
+    "USE_EXIFTOOL": false,
+    "USE_EXIFTOOL_FOR_SIDECARS": false,
+    "USE_MANUAL_PATHEXIFTOOL": false
   },
   "metadata": {
     "SCHEMAS": {
       "ACD": true,
+      "IPTC_EXT_REGIONS": true,
       "MICROSOFT": true,
-      "MWG_REGIONS": true,
-      "IPTC_EXT_REGIONS": true
+      "MWG_REGIONS": true
     }
   },
-  "analysis": {
-    "CHECKS": {
-      "DUPLICATE_FACES": true,
-      "POSITION_DEVIATIONS": true,
-      "POSITION_DEVIATIONS_INCLUDE_PHOTOS": true,
-      "DIMENSION_ISSUES": true,
-      "NAME_CONFLICTS": true,
-      "NAME_CONFLICTS_INCLUDE_PHOTOS": true,
-      "NAME_CONFLICT_OVERLAP_THRESHOLD": 0.75,
-      "NAME_CONFLICT_REQUIRE_MUTUAL_BEST_MATCH": true,
-      "NAME_CONFLICT_MIN_BEST_MATCH_MARGIN": 0.05,
-      "RECOGNITION_SAFE_SCORE": 0.55,
-      "RECOGNITION_REVIEW_SCORE": 0.45,
-      "RECOGNITION_MIN_MARGIN": 0.08,
-      "RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD": 0.35,
-      "RECOGNITION_DET_THRESH": 0.5,
-      "SINGLE_SOURCE_OF_TRUTH": ""
+  "native_processors": {
+    "FACE_PROCESSOR": {
+      "INSIGHTFACE_LICENSE_ACKNOWLEDGED": true,
+      "MAX_IMAGE_BYTES": 67108864,
+      "MODEL_NAME": "buffalo_l",
+      "MODEL_ROOT": "/var/packages/AV_ImgData/var/.models/face",
+      "ORT_GRAPH_OPT_LEVEL": "all",
+      "ORT_INTRA_THREADS": 0,
+      "STATUS_CACHE_SECONDS": 60,
+      "TIMEOUT_SECONDS": 120
+    },
+    "IMAGE_PROCESSOR_VIPS": {
+      "ALLOW_FALLBACK_TO_DEFAULT": true,
+      "ENABLED": false,
+      "MAX_IMAGE_BYTES": 268435456,
+      "PATH": "bin/av-imgdata-image-processor",
+      "PREFERRED": true,
+      "STATUS_CACHE_SECONDS": 60,
+      "SUPPORTED_FORMATS": [
+        "jpeg",
+        "jpg",
+        "png",
+        "webp",
+        "tiff"
+      ],
+      "TIMEOUT_SECONDS": 120
     }
   },
-  "debug": {
-    "IO_METRICS_ENABLED": false,
-    "BACKEND_DEBUG_ENABLED": false,
-    "BACKEND_DEBUG_LOG_PATH": "",
-    "BACKEND_DEBUG_LOG_MAX_BYTES": 1048576,
-    "BACKEND_DEBUG_LOG_BACKUPS": 3
+  "photos": {
+    "MAX_PHOTOS_PERSONS": 5000,
+    "REINDEX_MISSING_ITEMS": false
   },
   "review": {
-    "OPTIONS": {
-      "DUPLICATE_FACE_SUGGESTIONS": true
-    },
     "CHECKS_IGNORE_LISTS": {
       "DUPLICATE_FACES_ENABLED": true,
-      "POSITION_DEVIATIONS_ENABLED": true,
-      "NAME_CONFLICTS_ENABLED": true
+      "NAME_CONFLICTS_ENABLED": true,
+      "POSITION_DEVIATIONS_ENABLED": true
+    },
+    "OPTIONS": {
+      "DUPLICATE_FACE_SUGGESTIONS": true
     }
   }
 }
