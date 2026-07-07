@@ -16,11 +16,11 @@ add_executable(av-imgdata-worker
 target_include_directories(av-imgdata-worker PRIVATE include)
 
 target_compile_definitions(av-imgdata-worker PRIVATE
-  AV_IMGDATA_WORKER_VERSION="0.1.0-phase-b"
+  AV_IMGDATA_WORKER_VERSION="0.1.0-phase-c"
 )
 
 if(MINGW)
-  # Keep the Phase B Windows worker executable runnable on a plain Windows 11 host
+  # Keep the Windows worker executable runnable on a plain Windows 11 host
   # without requiring MinGW runtime DLLs next to the .exe.
   target_link_options(av-imgdata-worker PRIVATE
     -static-libgcc
