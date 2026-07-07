@@ -1,4 +1,5 @@
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -17,7 +19,7 @@
 #endif
 
 #ifndef AV_IMGDATA_WORKER_VERSION
-#define AV_IMGDATA_WORKER_VERSION "0.1.0-phase-c"
+#define AV_IMGDATA_WORKER_VERSION "0.1.0-phase-d"
 #endif
 
 namespace {
@@ -31,6 +33,7 @@ struct WorkerConfig {
     std::string face_path;
     std::string face_model_root;
     std::string face_model_name;
+    int poll_interval_seconds = 2;
 };
 
 struct FaceModelStatus {
@@ -66,6 +69,18 @@ bool has_arg(const std::vector<std::string>& args, const std::string& name) {
         }
     }
     return false;
+}
+
+int parse_int(const std::string& value, int fallback) {
+    if (value.empty()) {
+        return fallback;
+    }
+    char* end = NULL;
+    const long parsed = std::strtol(value.c_str(), &end, 10);
+    if (end == value.c_str()) {
+        return fallback;
+    }
+    return static_cast<int>(parsed);
 }
 
 bool is_path_separator(char c) {
@@ -403,6 +418,10 @@ WorkerConfig parse_worker_config(const std::string& config_path, const std::stri
     config.worker_id = extract_json_string(config_json, "worker_id");
     config.dsm_base_url = extract_json_string(config_json, "dsm_base_url");
     config.workspace_root = extract_json_string(config_json, "workspace_root");
+    config.poll_interval_seconds = parse_int(extract_json_scalar(config_json, "poll_interval_seconds", "2"), 2);
+    if (config.poll_interval_seconds < 1) {
+        config.poll_interval_seconds = 1;
+    }
 
     const std::string processors = extract_object_block(config_json, "processors");
     const std::string face = extract_object_block(processors.empty() ? config_json : processors, "face");
@@ -469,8 +488,7 @@ std::string build_processor_payload(const std::string& job_json, const std::stri
     const std::string image_paths = extract_array_block(job_json, "image_paths");
 
     std::ostringstream payload;
-    payload << "{"
-            << "\"contract_version\":\"1.0\",";
+    payload << "{" << "\"contract_version\":\"1.0\",";
     payload << "\"job_id\":\"" << json_escape(job_id) << "\",";
     payload << "\"type\":\"" << json_escape(type) << "\",";
     if (command == "detect_batch" || command == "embed_batch") {
@@ -495,6 +513,74 @@ std::string build_processor_payload(const std::string& job_json, const std::stri
     return payload.str();
 }
 
+bool load_config_from_args(const std::vector<std::string>& args, WorkerConfig* config, std::string* config_json) {
+    const std::string config_path = arg_value(args, "--config");
+    if (config_path.empty()) {
+        std::cerr << "ERROR: --config is required\n";
+        return false;
+    }
+    if (!file_exists(config_path)) {
+        std::cerr << "ERROR: config file not found: " << config_path << "\n";
+        return false;
+    }
+    *config_json = read_file(config_path);
+    *config = parse_worker_config(config_path, *config_json);
+    return true;
+}
+
+struct ReadinessStatus {
+    bool has_worker_id = false;
+    bool has_processors = false;
+    bool has_face = false;
+    bool face_binary_exists = false;
+    bool models_present = false;
+    bool face_version_ok = false;
+    bool face_probe_ok = false;
+    FaceModelStatus model_status;
+    CommandResult face_version;
+    CommandResult face_probe;
+};
+
+ReadinessStatus check_readiness(const WorkerConfig& config, const std::string& config_json) {
+    ReadinessStatus status;
+    status.model_status = inspect_face_models(config);
+    status.models_present = face_models_present(status.model_status);
+    status.has_worker_id = !config.worker_id.empty();
+    status.has_processors = config_json.find("\"processors\"") != std::string::npos;
+    status.has_face = !config.face_path.empty();
+    status.face_binary_exists = file_exists(config.face_path);
+    if (status.face_binary_exists) {
+        status.face_version = run_processor_capture(config.face_path, {"version"});
+        status.face_version_ok = status.face_version.exit_code == 0;
+        if (status.models_present) {
+            status.face_probe = run_processor_capture(config.face_path, {"probe", "--model-root", config.face_model_root, "--model-name", config.face_model_name});
+            status.face_probe_ok = status.face_probe.exit_code == 0;
+        } else {
+            status.face_probe.exit_code = 5;
+            status.face_probe.output = missing_model_message(status.model_status);
+        }
+    }
+    return status;
+}
+
+bool ready_for_face_jobs(const ReadinessStatus& status) {
+    return status.has_worker_id && status.has_processors && status.has_face && status.face_binary_exists && status.models_present && status.face_version_ok && status.face_probe_ok;
+}
+
+void print_capabilities(bool ready) {
+    if (!ready) {
+        return;
+    }
+    std::cout
+        << "\"face_native_detect\", "
+        << "\"face_native_embed\", "
+        << "\"face_native_detect_batch\", "
+        << "\"face_native_embed_batch\", "
+        << "\"face_native_rank_embeddings\", "
+        << "\"face_native_profile_math\", "
+        << "\"warm_processor_worker\"";
+}
+
 int print_usage() {
     std::cout
         << "av-imgdata-worker " << AV_IMGDATA_WORKER_VERSION << "\n"
@@ -503,10 +589,10 @@ int print_usage() {
         << "  av-imgdata-worker version\n"
         << "  av-imgdata-worker probe --config <worker-config.json>\n"
         << "  av-imgdata-worker once --config <worker-config.json> --job <job.json>\n"
-        << "  av-imgdata-worker run --config <worker-config.json>\n"
+        << "  av-imgdata-worker run --config <worker-config.json> [--max-iterations <n>]\n"
         << "\n"
-        << "Phase C status:\n"
-        << "  Local worker config parsing, native face processor probe and once job execution. DSM Worker API loop is not implemented yet.\n";
+        << "Phase D status:\n"
+        << "  Local readiness loop for the future DSM Worker API. Remote job polling is still disabled.\n";
     return 0;
 }
 
@@ -516,63 +602,34 @@ int command_version() {
 }
 
 int command_probe(const std::vector<std::string>& args) {
-    const std::string config_path = arg_value(args, "--config");
-    if (config_path.empty()) {
-        std::cerr << "ERROR: --config is required\n";
+    WorkerConfig config;
+    std::string config_json;
+    if (!load_config_from_args(args, &config, &config_json)) {
         return 2;
     }
-    if (!file_exists(config_path)) {
-        std::cerr << "ERROR: config file not found: " << config_path << "\n";
-        return 3;
-    }
-
-    const std::string config_json = read_file(config_path);
-    const WorkerConfig config = parse_worker_config(config_path, config_json);
-    const FaceModelStatus model_status = inspect_face_models(config);
-    const bool models_present = face_models_present(model_status);
-    const bool has_worker_id = !config.worker_id.empty();
-    const bool has_processors = config_json.find("\"processors\"") != std::string::npos;
-    const bool has_face = !config.face_path.empty();
-    const bool face_binary_exists = file_exists(config.face_path);
-
-    CommandResult face_version;
-    CommandResult face_probe;
-    bool face_version_ok = false;
-    bool face_probe_ok = false;
-
-    if (face_binary_exists) {
-        face_version = run_processor_capture(config.face_path, {"version"});
-        face_version_ok = face_version.exit_code == 0;
-        if (models_present) {
-            face_probe = run_processor_capture(
-                config.face_path,
-                {"probe", "--model-root", config.face_model_root, "--model-name", config.face_model_name});
-            face_probe_ok = face_probe.exit_code == 0;
-        } else {
-            face_probe.exit_code = 5;
-            face_probe.output = missing_model_message(model_status);
-        }
-    }
+    const ReadinessStatus status = check_readiness(config, config_json);
+    const bool ready = ready_for_face_jobs(status);
 
     std::cout
         << "{\n"
         << "  \"worker\": {\"name\": \"av-imgdata-worker\", \"version\": \"" << AV_IMGDATA_WORKER_VERSION << "\"},\n"
-        << "  \"phase\": \"C\",\n"
+        << "  \"phase\": \"D\",\n"
         << "  \"config\": {\n"
         << "    \"path\": \"" << json_escape(config.config_path) << "\",\n"
         << "    \"readable\": true,\n"
         << "    \"worker_id\": \"" << json_escape(config.worker_id) << "\",\n"
         << "    \"dsm_base_url\": \"" << json_escape(config.dsm_base_url) << "\",\n"
-        << "    \"workspace_root\": \"" << json_escape(config.workspace_root) << "\"\n"
+        << "    \"workspace_root\": \"" << json_escape(config.workspace_root) << "\",\n"
+        << "    \"poll_interval_seconds\": " << config.poll_interval_seconds << "\n"
         << "  },\n"
         << "  \"checks\": {\n"
-        << "    \"worker_id_present\": " << (has_worker_id ? "true" : "false") << ",\n"
-        << "    \"processors_present\": " << (has_processors ? "true" : "false") << ",\n"
-        << "    \"face_processor_config_present\": " << (has_face ? "true" : "false") << ",\n"
-        << "    \"face_processor_binary_exists\": " << (face_binary_exists ? "true" : "false") << ",\n"
-        << "    \"face_models_present\": " << (models_present ? "true" : "false") << ",\n"
-        << "    \"face_model_manifest_present\": " << (model_status.manifest_present ? "true" : "false") << ",\n"
-        << "    \"face_model_license_ack_present\": " << (model_status.license_ack_present ? "true" : "false") << "\n"
+        << "    \"worker_id_present\": " << (status.has_worker_id ? "true" : "false") << ",\n"
+        << "    \"processors_present\": " << (status.has_processors ? "true" : "false") << ",\n"
+        << "    \"face_processor_config_present\": " << (status.has_face ? "true" : "false") << ",\n"
+        << "    \"face_processor_binary_exists\": " << (status.face_binary_exists ? "true" : "false") << ",\n"
+        << "    \"face_models_present\": " << (status.models_present ? "true" : "false") << ",\n"
+        << "    \"face_model_manifest_present\": " << (status.model_status.manifest_present ? "true" : "false") << ",\n"
+        << "    \"face_model_license_ack_present\": " << (status.model_status.license_ack_present ? "true" : "false") << "\n"
         << "  },\n"
         << "  \"processors\": [\n"
         << "    {\n"
@@ -580,50 +637,41 @@ int command_probe(const std::vector<std::string>& args) {
         << "      \"path\": \"" << json_escape(config.face_path) << "\",\n"
         << "      \"model_root\": \"" << json_escape(config.face_model_root) << "\",\n"
         << "      \"model_name\": \"" << json_escape(config.face_model_name) << "\",\n"
-        << "      \"binary_exists\": " << (face_binary_exists ? "true" : "false") << ",\n"
-        << "      \"version_ok\": " << (face_version_ok ? "true" : "false") << ",\n"
-        << "      \"version_output\": \"" << json_escape(face_version.output) << "\",\n"
+        << "      \"binary_exists\": " << (status.face_binary_exists ? "true" : "false") << ",\n"
+        << "      \"version_ok\": " << (status.face_version_ok ? "true" : "false") << ",\n"
+        << "      \"version_output\": \"" << json_escape(status.face_version.output) << "\",\n"
         << "      \"models\": {\n"
         << "        \"managed_by\": \"dsm_or_manual\",\n"
         << "        \"distributed_with_worker\": false,\n"
         << "        \"usage_ack_required\": true,\n"
-        << "        \"model_dir\": \"" << json_escape(model_status.model_dir) << "\",\n"
-        << "        \"detector_path\": \"" << json_escape(model_status.detector_path) << "\",\n"
-        << "        \"recognizer_path\": \"" << json_escape(model_status.recognizer_path) << "\",\n"
-        << "        \"manifest_path\": \"" << json_escape(model_status.manifest_path) << "\",\n"
-        << "        \"license_ack_path\": \"" << json_escape(model_status.license_ack_path) << "\",\n"
-        << "        \"detector_present\": " << (model_status.detector_present ? "true" : "false") << ",\n"
-        << "        \"recognizer_present\": " << (model_status.recognizer_present ? "true" : "false") << ",\n"
-        << "        \"models_present\": " << (models_present ? "true" : "false") << ",\n"
-        << "        \"manifest_present\": " << (model_status.manifest_present ? "true" : "false") << ",\n"
-        << "        \"license_ack_present\": " << (model_status.license_ack_present ? "true" : "false") << "\n"
+        << "        \"model_dir\": \"" << json_escape(status.model_status.model_dir) << "\",\n"
+        << "        \"detector_path\": \"" << json_escape(status.model_status.detector_path) << "\",\n"
+        << "        \"recognizer_path\": \"" << json_escape(status.model_status.recognizer_path) << "\",\n"
+        << "        \"manifest_path\": \"" << json_escape(status.model_status.manifest_path) << "\",\n"
+        << "        \"license_ack_path\": \"" << json_escape(status.model_status.license_ack_path) << "\",\n"
+        << "        \"detector_present\": " << (status.model_status.detector_present ? "true" : "false") << ",\n"
+        << "        \"recognizer_present\": " << (status.model_status.recognizer_present ? "true" : "false") << ",\n"
+        << "        \"models_present\": " << (status.models_present ? "true" : "false") << ",\n"
+        << "        \"manifest_present\": " << (status.model_status.manifest_present ? "true" : "false") << ",\n"
+        << "        \"license_ack_present\": " << (status.model_status.license_ack_present ? "true" : "false") << "\n"
         << "      },\n"
-        << "      \"probe_ok\": " << (face_probe_ok ? "true" : "false") << ",\n"
-        << "      \"probe_output\": \"" << json_escape(face_probe.output) << "\"\n"
+        << "      \"probe_ok\": " << (status.face_probe_ok ? "true" : "false") << ",\n"
+        << "      \"probe_output\": \"" << json_escape(status.face_probe.output) << "\"\n"
         << "    }\n"
         << "  ],\n"
         << "  \"capabilities\": [";
-
-    if (face_version_ok && face_probe_ok && models_present) {
-        std::cout
-            << "\"face_native_detect\", "
-            << "\"face_native_embed\", "
-            << "\"face_native_detect_batch\", "
-            << "\"face_native_embed_batch\", "
-            << "\"face_native_rank_embeddings\", "
-            << "\"face_native_profile_math\", "
-            << "\"warm_processor_worker\"";
-    }
-
+    print_capabilities(ready);
     std::cout
         << "],\n"
-        << "  \"remote_api\": " << "{\n"
-        << "    \"status\": \"not_implemented\",\n"
+        << "  \"remote_api\": {\n"
+        << "    \"status\": \"planned\",\n"
+        << "    \"run_loop_ready\": true,\n"
+        << "    \"job_polling\": \"not_implemented\",\n"
         << "    \"planned_model_source\": \"dsm_package_model_store_after_license_ack\"\n"
         << "  }\n"
         << "}\n";
 
-    return has_worker_id && has_processors && has_face ? 0 : 4;
+    return status.has_worker_id && status.has_processors && status.has_face ? 0 : 4;
 }
 
 int command_once(const std::vector<std::string>& args) {
@@ -696,7 +744,7 @@ int command_once(const std::vector<std::string>& args) {
     std::cout
         << "{\n"
         << "  \"worker\": {\"name\": \"av-imgdata-worker\", \"version\": \"" << AV_IMGDATA_WORKER_VERSION << "\"},\n"
-        << "  \"phase\": \"C\",\n"
+        << "  \"phase\": \"D\",\n"
         << "  \"mode\": \"once\",\n"
         << "  \"config_path\": \"" << json_escape(config_path) << "\",\n"
         << "  \"job_path\": \"" << json_escape(job_path) << "\",\n"
@@ -719,18 +767,37 @@ int command_once(const std::vector<std::string>& args) {
 }
 
 int command_run(const std::vector<std::string>& args) {
-    const std::string config_path = arg_value(args, "--config");
-    if (config_path.empty()) {
-        std::cerr << "ERROR: --config is required\n";
+    WorkerConfig config;
+    std::string config_json;
+    if (!load_config_from_args(args, &config, &config_json)) {
         return 2;
     }
-    if (!file_exists(config_path)) {
-        std::cerr << "ERROR: config file not found: " << config_path << "\n";
-        return 3;
+    const int max_iterations = parse_int(arg_value(args, "--max-iterations"), 0);
+    int iteration = 0;
+    while (max_iterations <= 0 || iteration < max_iterations) {
+        ++iteration;
+        const ReadinessStatus status = check_readiness(config, config_json);
+        const bool ready = ready_for_face_jobs(status);
+        std::cout
+            << "{\"worker\":{\"name\":\"av-imgdata-worker\",\"version\":\"" << AV_IMGDATA_WORKER_VERSION << "\"}"
+            << ",\"phase\":\"D\""
+            << ",\"mode\":\"run\""
+            << ",\"iteration\":" << iteration
+            << ",\"worker_id\":\"" << json_escape(config.worker_id) << "\""
+            << ",\"ready\":" << (ready ? "true" : "false")
+            << ",\"dsm_base_url\":\"" << json_escape(config.dsm_base_url) << "\""
+            << ",\"poll_interval_seconds\":" << config.poll_interval_seconds
+            << ",\"job_polling\":\"not_implemented\""
+            << ",\"checks\":{\"face_processor_binary_exists\":" << (status.face_binary_exists ? "true" : "false")
+            << ",\"face_models_present\":" << (status.models_present ? "true" : "false")
+            << ",\"face_probe_ok\":" << (status.face_probe_ok ? "true" : "false")
+            << ",\"license_ack_present\":" << (status.model_status.license_ack_present ? "true" : "false")
+            << "}}" << std::endl;
+        if (max_iterations > 0 && iteration >= max_iterations) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(config.poll_interval_seconds));
     }
-    std::cout
-        << "av-imgdata-worker run mode is reserved for the DSM Worker API loop.\n"
-        << "Phase C verifies config parsing, local processor probing and once job execution.\n";
     return 0;
 }
 
