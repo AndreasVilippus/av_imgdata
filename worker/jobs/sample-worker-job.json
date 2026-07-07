@@ -3,7 +3,8 @@
   "type": "face_native_embed",
   "asset": {
     "asset_id": "test-image",
-    "local_path": "./testdata/person.jpg"
+    "local_path": "./testdata/person.jpg",
+    "note": "Placeholder path for local/manual testing. No test image is distributed with the worker bundle. Place a JPEG at jobs/testdata/person.jpg or change local_path to an existing image."
   },
   "options": {
     "model_name": "buffalo_l",
