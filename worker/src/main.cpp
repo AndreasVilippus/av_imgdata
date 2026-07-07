@@ -1,4 +1,5 @@
 #include <array>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -16,7 +17,7 @@
 #endif
 
 #ifndef AV_IMGDATA_WORKER_VERSION
-#define AV_IMGDATA_WORKER_VERSION "0.1.0-phase-b"
+#define AV_IMGDATA_WORKER_VERSION "0.1.0-phase-c"
 #endif
 
 namespace {
@@ -82,6 +83,14 @@ std::string dirname_of(const std::string& path) {
     return path.substr(0, pos);
 }
 
+std::string basename_of(const std::string& path) {
+    const std::size_t pos = path.find_last_of("/\\");
+    if (pos == std::string::npos) {
+        return path;
+    }
+    return path.substr(pos + 1);
+}
+
 bool looks_absolute(const std::string& path) {
     if (path.empty()) {
         return false;
@@ -122,6 +131,15 @@ std::string read_file(const std::string& path) {
     std::ostringstream buffer;
     buffer << input.rdbuf();
     return buffer.str();
+}
+
+bool write_file(const std::string& path, const std::string& text) {
+    std::ofstream output(path.c_str(), std::ios::binary);
+    if (!output) {
+        return false;
+    }
+    output << text;
+    return static_cast<bool>(output);
 }
 
 std::string trim_output(std::string value) {
@@ -304,6 +322,80 @@ std::string extract_object_block(const std::string& json, const std::string& key
     return "";
 }
 
+std::string extract_array_block(const std::string& json, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    std::size_t pos = json.find(needle);
+    if (pos == std::string::npos) {
+        return "";
+    }
+    pos = json.find('[', pos + needle.size());
+    if (pos == std::string::npos) {
+        return "";
+    }
+    int depth = 0;
+    bool in_string = false;
+    bool escaping = false;
+    for (std::size_t i = pos; i < json.size(); ++i) {
+        const char c = json[i];
+        if (escaping) {
+            escaping = false;
+            continue;
+        }
+        if (c == '\\') {
+            escaping = true;
+            continue;
+        }
+        if (c == '"') {
+            in_string = !in_string;
+            continue;
+        }
+        if (in_string) {
+            continue;
+        }
+        if (c == '[') {
+            ++depth;
+        } else if (c == ']') {
+            --depth;
+            if (depth == 0) {
+                return json.substr(pos, i - pos + 1);
+            }
+        }
+    }
+    return "";
+}
+
+std::string extract_json_scalar(const std::string& json, const std::string& key, const std::string& fallback) {
+    const std::string needle = "\"" + key + "\"";
+    std::size_t pos = json.find(needle);
+    if (pos == std::string::npos) {
+        return fallback;
+    }
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) {
+        return fallback;
+    }
+    ++pos;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+        ++pos;
+    }
+    if (pos >= json.size()) {
+        return fallback;
+    }
+    if (json[pos] == '[') {
+        const std::string arr = extract_array_block(json.substr(0, json.size()), key);
+        return arr.empty() ? fallback : arr;
+    }
+    std::size_t end = pos;
+    while (end < json.size() && json[end] != ',' && json[end] != '}' && json[end] != ']') {
+        ++end;
+    }
+    std::string value = json.substr(pos, end - pos);
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+        value.pop_back();
+    }
+    return value.empty() ? fallback : value;
+}
+
 WorkerConfig parse_worker_config(const std::string& config_path, const std::string& config_json) {
     WorkerConfig config;
     config.config_path = config_path;
@@ -349,6 +441,60 @@ std::string missing_model_message(const FaceModelStatus& status) {
     return out.str();
 }
 
+std::string face_command_from_type(const std::string& type) {
+    if (type == "face_native_detect") return "detect";
+    if (type == "face_native_embed") return "embed";
+    if (type == "face_native_detect_batch") return "detect_batch";
+    if (type == "face_native_embed_batch") return "embed_batch";
+    if (type == "face_native_rank_embeddings") return "rank_embeddings";
+    if (type == "face_native_profile_math") return "profile_math";
+    return "";
+}
+
+std::string resolve_job_image_path(const std::string& job_json, const std::string& job_dir) {
+    std::string image_path = extract_json_string(job_json, "image_path");
+    if (image_path.empty()) {
+        image_path = extract_json_string(job_json, "local_path");
+    }
+    return join_path(job_dir, image_path);
+}
+
+std::string build_processor_payload(const std::string& job_json, const std::string& job_path, const WorkerConfig& config, const std::string& type, const std::string& command) {
+    const std::string job_id = extract_json_string(job_json, "job_id").empty() ? "local" : extract_json_string(job_json, "job_id");
+    const std::string job_dir = dirname_of(job_path);
+    const std::string image_path = resolve_job_image_path(job_json, job_dir);
+    const std::string min_confidence = extract_json_scalar(job_json, "min_confidence", "0.5");
+    const std::string max_faces = extract_json_scalar(job_json, "max_faces", "0");
+    const std::string det_size = extract_json_scalar(job_json, "det_size", "[640,640]");
+    const std::string image_paths = extract_array_block(job_json, "image_paths");
+
+    std::ostringstream payload;
+    payload << "{"
+            << "\"contract_version\":\"1.0\",";
+    payload << "\"job_id\":\"" << json_escape(job_id) << "\",";
+    payload << "\"type\":\"" << json_escape(type) << "\",";
+    if (command == "detect_batch" || command == "embed_batch") {
+        payload << "\"image_paths\":" << (image_paths.empty() ? "[]" : image_paths) << ",";
+    } else {
+        payload << "\"image_path\":\"" << json_escape(image_path) << "\",";
+        payload << "\"input\":{\"image_path\":\"" << json_escape(image_path) << "\",\"source_id\":\"" << json_escape(image_path) << "\"},";
+    }
+    payload << "\"model_root\":\"" << json_escape(config.face_model_root) << "\",";
+    payload << "\"model_name\":\"" << json_escape(config.face_model_name) << "\",";
+    payload << "\"min_confidence\":" << min_confidence << ",";
+    payload << "\"max_faces\":" << max_faces << ",";
+    payload << "\"det_size\":" << det_size << ",";
+    payload << "\"options\":{"
+            << "\"model_root\":\"" << json_escape(config.face_model_root) << "\",";
+    payload << "\"model_name\":\"" << json_escape(config.face_model_name) << "\",";
+    payload << "\"min_confidence\":" << min_confidence << ",";
+    payload << "\"max_faces\":" << max_faces << ",";
+    payload << "\"det_size\":" << det_size << ",";
+    payload << "\"normalize_coordinates\":true}";
+    payload << "}";
+    return payload.str();
+}
+
 int print_usage() {
     std::cout
         << "av-imgdata-worker " << AV_IMGDATA_WORKER_VERSION << "\n"
@@ -359,8 +505,8 @@ int print_usage() {
         << "  av-imgdata-worker once --config <worker-config.json> --job <job.json>\n"
         << "  av-imgdata-worker run --config <worker-config.json>\n"
         << "\n"
-        << "Phase B status:\n"
-        << "  Local worker config parsing and native face processor probe. DSM Worker API is not implemented yet.\n";
+        << "Phase C status:\n"
+        << "  Local worker config parsing, native face processor probe and once job execution. DSM Worker API loop is not implemented yet.\n";
     return 0;
 }
 
@@ -411,7 +557,7 @@ int command_probe(const std::vector<std::string>& args) {
     std::cout
         << "{\n"
         << "  \"worker\": {\"name\": \"av-imgdata-worker\", \"version\": \"" << AV_IMGDATA_WORKER_VERSION << "\"},\n"
-        << "  \"phase\": \"B\",\n"
+        << "  \"phase\": \"C\",\n"
         << "  \"config\": {\n"
         << "    \"path\": \"" << json_escape(config.config_path) << "\",\n"
         << "    \"readable\": true,\n"
@@ -495,21 +641,81 @@ int command_once(const std::vector<std::string>& args) {
         std::cerr << "ERROR: job file not found: " << job_path << "\n";
         return 3;
     }
+
+    const std::string config_json = read_file(config_path);
+    const WorkerConfig config = parse_worker_config(config_path, config_json);
     const std::string job = read_file(job_path);
+    const std::string job_id = extract_json_string(job, "job_id").empty() ? "local" : extract_json_string(job, "job_id");
+    const std::string type = extract_json_string(job, "type");
+    const std::string processor_command = face_command_from_type(type);
     const bool has_job_id = job.find("job_id") != std::string::npos;
-    const bool has_type = job.find("type") != std::string::npos;
+    const bool has_type = !type.empty();
+    const bool face_binary_exists = file_exists(config.face_path);
+    const FaceModelStatus model_status = inspect_face_models(config);
+    const bool models_present = face_models_present(model_status);
+    const std::string job_dir = dirname_of(job_path);
+    const std::string safe_job_name = basename_of(job_path);
+    const std::string processor_input = join_path(job_dir, safe_job_name + ".processor-input.json");
+    const std::string processor_output = join_path(job_dir, safe_job_name + ".processor-result.json");
+
+    CommandResult processor_result;
+    std::string processor_output_json;
+    std::string processor_execution = "not_started";
+    std::string error_code;
+    std::string error_message;
+
+    if (processor_command.empty()) {
+        processor_execution = "unsupported_job_type";
+        error_code = "unsupported_job_type";
+        error_message = "unsupported or missing job type";
+    } else if (!face_binary_exists) {
+        processor_execution = "blocked";
+        error_code = "face_processor_missing";
+        error_message = "face processor binary is missing";
+    } else if (!models_present) {
+        processor_execution = "blocked";
+        error_code = "face_models_missing";
+        error_message = missing_model_message(model_status);
+    } else {
+        const std::string payload = build_processor_payload(job, job_path, config, type, processor_command);
+        if (!write_file(processor_input, payload)) {
+            processor_execution = "failed";
+            error_code = "input_write_failed";
+            error_message = processor_input;
+        } else {
+            processor_result = run_processor_capture(config.face_path, {processor_command, "--input", processor_input, "--output", processor_output});
+            processor_output_json = read_file(processor_output);
+            processor_execution = processor_result.exit_code == 0 ? "completed" : "failed";
+            if (processor_result.exit_code != 0) {
+                error_code = "processor_failed";
+                error_message = processor_result.output;
+            }
+        }
+    }
+
     std::cout
         << "{\n"
         << "  \"worker\": {\"name\": \"av-imgdata-worker\", \"version\": \"" << AV_IMGDATA_WORKER_VERSION << "\"},\n"
-        << "  \"phase\": \"B\",\n"
+        << "  \"phase\": \"C\",\n"
         << "  \"mode\": \"once\",\n"
         << "  \"config_path\": \"" << json_escape(config_path) << "\",\n"
         << "  \"job_path\": \"" << json_escape(job_path) << "\",\n"
         << "  \"checks\": {\"job_id_present\": " << (has_job_id ? "true" : "false")
-        << ", \"type_present\": " << (has_type ? "true" : "false") << "},\n"
-        << "  \"processor_execution\": \"not_implemented\"\n"
-        << "}\n";
-    return has_job_id && has_type ? 0 : 4;
+        << ", \"type_present\": " << (has_type ? "true" : "false")
+        << ", \"face_processor_binary_exists\": " << (face_binary_exists ? "true" : "false")
+        << ", \"face_models_present\": " << (models_present ? "true" : "false") << "},\n"
+        << "  \"job\": {\"job_id\": \"" << json_escape(job_id) << "\", \"type\": \"" << json_escape(type) << "\", \"processor_command\": \"" << json_escape(processor_command) << "\"},\n"
+        << "  \"processor_execution\": \"" << json_escape(processor_execution) << "\",\n"
+        << "  \"processor\": {\"path\": \"" << json_escape(config.face_path) << "\", \"exit_code\": " << processor_result.exit_code << ", \"output\": \"" << json_escape(processor_result.output) << "\"},\n"
+        << "  \"artifacts\": {\"processor_input\": \"" << json_escape(processor_input) << "\", \"processor_result\": \"" << json_escape(processor_output) << "\"}";
+    if (!processor_output_json.empty() && processor_output_json.find('{') != std::string::npos) {
+        std::cout << ",\n  \"processor_result\": " << processor_output_json;
+    }
+    if (!error_code.empty()) {
+        std::cout << ",\n  \"error\": {\"code\": \"" << json_escape(error_code) << "\", \"message\": \"" << json_escape(error_message) << "\"}";
+    }
+    std::cout << "\n}\n";
+    return processor_execution == "completed" ? 0 : 4;
 }
 
 int command_run(const std::vector<std::string>& args) {
@@ -524,7 +730,7 @@ int command_run(const std::vector<std::string>& args) {
     }
     std::cout
         << "av-imgdata-worker run mode is reserved for the DSM Worker API loop.\n"
-        << "Phase B verifies config parsing and local processor probing.\n";
+        << "Phase C verifies config parsing, local processor probing and once job execution.\n";
     return 0;
 }
 
