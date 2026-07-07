@@ -103,7 +103,7 @@
       "INSIGHTFACE_LICENSE_ACKNOWLEDGED": true,
       "MAX_IMAGE_BYTES": 67108864,
       "MODEL_NAME": "buffalo_l",
-      "MODEL_ROOT": "/var/packages/AV_ImgData/var/.models/face",
+      "MODEL_ROOT": "",
       "ORT_GRAPH_OPT_LEVEL": "all",
       "ORT_INTRA_THREADS": 0,
       "STATUS_CACHE_SECONDS": 60,
