@@ -412,6 +412,24 @@ def test_file_image_decodes_heic_preview_before_returning_original(monkeypatch, 
     imgdata_api.IMGDATA.image_decoder.decode_to_jpeg.assert_called_once_with(str(image_path))
 
 
+def test_file_image_returns_browser_compatible_jpeg_without_embedded_preview(monkeypatch, tmp_path):
+    calls = _install_backend_call_recorder(monkeypatch)
+    image_path = tmp_path / "image.jpg"
+    image_path.write_bytes(b"\xff\xd8original")
+    extract_preview = Mock(return_value=b"\xff\xd8embedded-preview")
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": str(tmp_path)}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.files, "extractEmbeddedJpegPreview", extract_preview)
+
+    response = _run(imgdata_api.file_image(object(), path=str(image_path)))
+
+    assert response.status_code == 200
+    assert getattr(response, "path", "") == str(image_path)
+    extract_preview.assert_not_called()
+    assert len(calls) == 1
+
+
 def test_file_image_returns_placeholder_for_incompatible_image_when_preview_fails(monkeypatch, tmp_path):
     calls = _install_backend_call_recorder(monkeypatch)
     image_path = tmp_path / "image.heic"

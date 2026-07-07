@@ -2386,16 +2386,18 @@ async def file_image(request: Request, path: str = ""):
     if not os.path.isfile(requested):
         return {"success": False, "error": {"code": 404, "message": "file_not_found"}}
 
-    preview = IMGDATA.files.extractEmbeddedJpegPreview(requested)
-    if preview:
-        return Response(
-            content=preview,
-            media_type="image/jpeg",
-            headers={"Cache-Control": "private, max-age=3600"},
-        )
+    browser_compatible = _is_browser_image_compatible_path(requested)
+    if not browser_compatible:
+        preview = IMGDATA.files.extractEmbeddedJpegPreview(requested)
+        if preview:
+            return Response(
+                content=preview,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "private, max-age=3600"},
+            )
 
     decoder = getattr(IMGDATA, "image_decoder", None)
-    if decoder is not None:
+    if decoder is not None and not browser_compatible:
         decoded = await _run_backend_call(lambda: decoder.decode_to_jpeg(requested))
         if getattr(decoded, "success", False) and getattr(decoded, "image_bytes", b""):
             return Response(
@@ -2412,7 +2414,7 @@ async def file_image(request: Request, path: str = ""):
                 error=error,
             )
 
-    if not _is_browser_image_compatible_path(requested):
+    if not browser_compatible:
         return _image_preview_unavailable_response()
 
     return FileResponse(requested)

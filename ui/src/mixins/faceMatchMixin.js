@@ -528,21 +528,21 @@ export default {
 				&& this.faceMatchResult.image_path
 			);
 		},
-		faceMatchCanIgnoreInsightFaceDetection() {
+		faceMatchCanIgnoreMissingFace() {
+			const targetFace = this.getCurrentFaceMatchTargetFace();
 			return !!(
-				this.faceMatchCurrentAction === 'search_missing_faces_insightface'
+				['mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(this.faceMatchCurrentAction)
 				&& this.faceMatchResult
-				&& this.faceMatchResult.metadata_face
+				&& targetFace
 				&& this.faceMatchResult.image_path
-				&& this.faceMatchResultSummary.found
 			);
 		},
 		faceMatchLeftPreviewDeleteButtonVisible() {
-			return this.faceMatchCanDeleteMetadataFace || this.faceMatchCanIgnoreInsightFaceDetection;
+			return this.faceMatchCanDeleteMetadataFace || this.faceMatchCanIgnoreMissingFace;
 		},
 		faceMatchLeftPreviewDeleteTooltip() {
-			if (this.faceMatchCanIgnoreInsightFaceDetection) {
-				return this.$avt('face_match:button_ignore_insightface_detection', 'Ignore detected face');
+			if (this.faceMatchCanIgnoreMissingFace) {
+				return this.$avt('face_match:button_ignore_missing_face', 'Ignore detected face');
 			}
 			return this.$avt('face_match:button_delete_file_face', 'Delete face from file');
 		},
@@ -1089,8 +1089,8 @@ export default {
 				this.faceMatchActionLocked = false;
 			}
 		},
-		async ignoreCurrentInsightFaceDetection() {
-			if (this.faceMatchInteractionDisabled || !this.faceMatchCanIgnoreInsightFaceDetection) {
+		async ignoreCurrentMissingFace() {
+			if (this.faceMatchInteractionDisabled || !this.faceMatchCanIgnoreMissingFace) {
 				return;
 			}
 			if (this.faceMatchReviewingStoredFindings) {
@@ -1113,8 +1113,8 @@ export default {
 			}
 		},
 		async handleFaceMatchLeftPreviewDelete() {
-			if (this.faceMatchCanIgnoreInsightFaceDetection) {
-				await this.ignoreCurrentInsightFaceDetection();
+			if (this.faceMatchCanIgnoreMissingFace) {
+				await this.ignoreCurrentMissingFace();
 				return;
 			}
 			await this.deleteFaceMatchMetadataFace();
@@ -1429,6 +1429,15 @@ export default {
 			}
 			return this.faceMatchResult.face || null;
 		},
+		getCurrentFaceMatchTargetFace() {
+			if (!this.faceMatchResult) {
+				return null;
+			}
+			return this.faceMatchResult.metadata_face
+				|| this.faceMatchResult.source_face
+				|| this.faceMatchResult.face
+				|| null;
+		},
 		getFaceMatchThumbnailUrl(image) {
 			return this.getPhotoThumbnailUrl(image);
 		},
@@ -1438,6 +1447,9 @@ export default {
 		},
 		getCurrentFaceMatchImageUrl() {
 			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
+			if (imagePath && this.faceMatchIsFileSourceAction) {
+				return this.getCurrentFaceMatchImageFallbackUrl();
+			}
 			if (imagePath && !this.isBrowserImageCompatiblePath(imagePath)) {
 				return this.getCurrentFaceMatchImageFallbackUrl();
 			}
@@ -1790,7 +1802,7 @@ export default {
 			return nextIds;
 		},
 		buildNextSkippedTargets() {
-			const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
+			const metadataFace = this.getCurrentFaceMatchTargetFace();
 			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
 			if (!metadataFace || !imagePath) {
 				return this.faceMatchSkippedTargets.slice();

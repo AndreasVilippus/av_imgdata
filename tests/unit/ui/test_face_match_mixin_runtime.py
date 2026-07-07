@@ -868,10 +868,15 @@ def test_missing_photos_face_has_no_marker_on_photos_side_runtime():
             assert.deepStrictEqual(component.getLeftFaceMatchFace(), metadataFace);
             assert.strictEqual(component.getRightFaceMatchFace(), null);
             assert.strictEqual(component.faceMatchCanDeleteMetadataFace, true);
+            assert.strictEqual(component.faceMatchCanIgnoreMissingFace, true);
+            assert.strictEqual(component.faceMatchLeftPreviewDeleteButtonVisible, true);
+            assert.strictEqual(component.faceMatchLeftPreviewDeleteTooltip, 'Ignore detected face');
             assert.strictEqual(component.faceMatchTransferIconUrl, 'person_data_to_right.png');
             console.log(JSON.stringify({
               right: component.getRightFaceMatchFace(),
               canDelete: component.faceMatchCanDeleteMetadataFace,
+              canIgnore: component.faceMatchCanIgnoreMissingFace,
+              buttonVisible: component.faceMatchLeftPreviewDeleteButtonVisible,
               transferIcon: component.faceMatchTransferIconUrl,
             }));
             """
@@ -881,7 +886,56 @@ def test_missing_photos_face_has_no_marker_on_photos_side_runtime():
     assert result == {
         "right": None,
         "canDelete": True,
+        "canIgnore": True,
+        "buttonVisible": True,
         "transferIcon": "person_data_to_right.png",
+    }
+
+
+def test_missing_photos_face_ignore_uses_visible_left_face_without_metadata_face_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const sourceFace = { name: 'Old Name', x: 0.5, y: 0.5, w: 0.2, h: 0.2, source_format: 'MWG_REGIONS' };
+            let startArgs = null;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'mark_missing_photos_faces',
+              faceMatchResult: {
+                action: 'mark_missing_photos_faces',
+                image_path: '/volume1/photo/test.jpg',
+                source_face: sourceFace,
+                face: sourceFace,
+                add_new_faces_to_photos: true,
+              },
+              setFaceMatchMutationPending: () => {},
+              startFaceMatchingAction: async (args) => { startArgs = args; },
+            });
+
+            assert.deepStrictEqual(component.getLeftFaceMatchFace(), sourceFace);
+            assert.strictEqual(component.faceMatchCanDeleteMetadataFace, false);
+            assert.strictEqual(component.faceMatchCanIgnoreMissingFace, true);
+            assert.strictEqual(component.faceMatchLeftPreviewDeleteButtonVisible, true);
+
+            await component.handleFaceMatchLeftPreviewDelete();
+
+            assert.strictEqual(JSON.stringify(startArgs), JSON.stringify({ resetSkippedFaceIds: false }));
+            assert.strictEqual(
+              component.faceMatchSkippedTargets[0],
+              '/volume1/photo/test.jpg|MWG_REGIONS|0.500000|0.500000|0.200000|0.200000'
+            );
+            console.log(JSON.stringify({
+              canIgnore: component.faceMatchCanIgnoreMissingFace,
+              buttonVisible: component.faceMatchLeftPreviewDeleteButtonVisible,
+              skippedTargets: component.faceMatchSkippedTargets,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "canIgnore": True,
+        "buttonVisible": True,
+        "skippedTargets": ["/volume1/photo/test.jpg|MWG_REGIONS|0.500000|0.500000|0.200000|0.200000"],
     }
 
 
@@ -907,7 +961,7 @@ def test_insightface_missing_face_can_be_ignored_from_left_preview_runtime():
             });
 
             assert.strictEqual(component.faceMatchCanDeleteMetadataFace, false);
-            assert.strictEqual(component.faceMatchCanIgnoreInsightFaceDetection, true);
+            assert.strictEqual(component.faceMatchCanIgnoreMissingFace, true);
             assert.strictEqual(component.faceMatchLeftPreviewDeleteButtonVisible, true);
             assert.strictEqual(component.faceMatchLeftPreviewDeleteTooltip, 'Ignore detected face');
 
@@ -920,7 +974,7 @@ def test_insightface_missing_face_can_be_ignored_from_left_preview_runtime():
               '/volume1/photo/test.jpg|INSIGHTFACE|0.500000|0.500000|0.200000|0.200000'
             );
             console.log(JSON.stringify({
-              canIgnore: component.faceMatchCanIgnoreInsightFaceDetection,
+              canIgnore: component.faceMatchCanIgnoreMissingFace,
               buttonVisible: component.faceMatchLeftPreviewDeleteButtonVisible,
               tooltip: component.faceMatchLeftPreviewDeleteTooltip,
               skippedTargets: component.faceMatchSkippedTargets,
@@ -1365,6 +1419,35 @@ def test_thumbnail_error_switches_to_backend_image_fallback_runtime():
     )
 
     assert result["fallback"].endswith("Zweites%20Bild.jpg")
+
+
+def test_file_source_face_match_uses_backend_image_preview_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              selectedFaceMatchingAction: 'mark_missing_photos_faces',
+              faceMatchResult: {
+                action: 'mark_missing_photos_faces',
+                image_path: '/volume1/photo/Familie/Test Bild.jpg',
+                image: { id: 115579 },
+                source_face: { x: 0.5, y: 0.5, w: 0.2, h: 0.2 },
+              },
+              getPhotoThumbnailUrl: (image) => `/synofoto/api/v2/t/Thumbnail/get?id=${image.id}`,
+            });
+
+            const url = component.getCurrentFaceMatchImageUrl();
+
+            assert.strictEqual(
+              url,
+              '/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=%2Fvolume1%2Fphoto%2FFamilie%2FTest%20Bild.jpg'
+            );
+            console.log(JSON.stringify({ url }));
+            """
+        )
+    )
+
+    assert result["url"].endswith("Test%20Bild.jpg")
 
 
 def test_heic_preview_uses_backend_image_url_without_synology_thumbnail_runtime():
