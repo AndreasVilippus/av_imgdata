@@ -9,24 +9,36 @@ The DSM package is the authority for:
 ```text
 - showing the model usage notice
 - recording administrator acknowledgement
-- importing or downloading model files
+- managing the configured model path
 - storing the model manifest
 - making model files available to workers
 ```
 
 The external worker is an execution component only. It does not decide whether a model may be used. It only reports whether the configured model files and acknowledgement metadata are present.
 
-## DSM-managed model store
+## Model store layout
 
-Recommended package-local layout:
+Default source-tree development layout when `SYNOPKG_PKGVAR` is not set:
 
 ```text
-var/models/face/buffalo_l/
+.models/face/buffalo_l/
   det_10g.onnx
   w600k_r50.onnx
   manifest.json
   LICENSE_ACK.json
 ```
+
+Default DSM package runtime layout when `SYNOPKG_PKGVAR` is set:
+
+```text
+$SYNOPKG_PKGVAR/.models/face/buffalo_l/
+  det_10g.onnx
+  w600k_r50.onnx
+  manifest.json
+  LICENSE_ACK.json
+```
+
+A configured `native_processors.FACE_PROCESSOR.MODEL_ROOT` takes precedence over both defaults. The expected model pack directory is always `<MODEL_ROOT>/buffalo_l/` unless a different model pack is configured.
 
 `manifest.json` describes the model pack, source, file presence, hashes, and package compatibility.
 
@@ -66,34 +78,64 @@ Acknowledge usage terms after showing the notice to the administrator:
 python3 tools/face-model-store.py acknowledge --accepted-by admin --package-version "$SYNOPKG_PKGVER"
 ```
 
-Import administrator-provided model files from a local directory:
+`acknowledge` writes `LICENSE_ACK.json` and also sets the legacy config flag `native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED=true` for compatibility with the current native processor status gate.
 
-```bash
-python3 tools/face-model-store.py import --source-dir /path/to/buffalo_l
-```
-
-The source directory must contain:
-
-```text
-det_10g.onnx
-w600k_r50.onnx
-```
-
-The import command copies the files into `var/models/face/buffalo_l/` and writes `manifest.json`. The acknowledge command writes `LICENSE_ACK.json` and also sets the legacy config flag `native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED=true` for compatibility with the current native processor status gate.
+A manual import helper still exists for ad-hoc copies, but the preferred flow is to place model files directly in the configured model path and use `status`/`acknowledge`/manifest generation around that fixed path.
 
 ## Worker-local model layout
 
-Workers may receive or mount the DSM-managed model directory, or an administrator may place files manually for local tests:
+Workers use a hidden model directory as well:
 
 ```text
-worker/models/buffalo_l/
+worker-runtime/.models/face/buffalo_l/
   det_10g.onnx
   w600k_r50.onnx
   manifest.json
   LICENSE_ACK.json
 ```
 
-The worker bundle still ships only `models/README.txt`; no ONNX model files are included.
+The worker config default is:
+
+```json
+{
+  "processors": {
+    "face": {
+      "model_root": "../.models/face",
+      "model_name": "buffalo_l"
+    }
+  }
+}
+```
+
+The worker bundle ships only `.models/face/README.txt`; no ONNX model files are included.
+
+## Worker sync helper
+
+For local development and later DSM-controlled sync, the source tree contains:
+
+```text
+tools/sync-worker-face-models.py
+```
+
+Example, sync from source-tree `.models/face` into a Linux worker dist:
+
+```bash
+python3 tools/sync-worker-face-models.py --target linux-x86_64
+```
+
+Example, sync into a Windows worker dist:
+
+```bash
+python3 tools/sync-worker-face-models.py --target windows-x86_64
+```
+
+Example, explicit worker runtime directory:
+
+```bash
+python3 tools/sync-worker-face-models.py --worker-dir /path/to/av-imgdata-worker
+```
+
+The sync helper copies only to the requested worker runtime directory. It does not add model files to Git and does not change release packaging policy.
 
 ## Probe contract
 
