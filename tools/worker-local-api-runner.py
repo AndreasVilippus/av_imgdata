@@ -11,10 +11,9 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 
@@ -36,6 +35,22 @@ def resolve_path(base: Path, value: str) -> Path:
     if path.is_absolute():
         return path
     return (base / path).resolve()
+
+
+def normalize_local_image_path(value: Any) -> Any:
+    if not isinstance(value, str) or not value.strip():
+        return value
+    path = Path(value)
+    if path.is_absolute():
+        return value
+    candidates = [
+        (PROJECT_DIR / value).resolve(),
+        (PROJECT_DIR / "dist" / value).resolve(),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return str((PROJECT_DIR / value).resolve())
 
 
 def extract_config(config_path: Path) -> Dict[str, Any]:
@@ -91,16 +106,18 @@ def build_job_file_payload(claimed_job: Dict[str, Any]) -> Dict[str, Any]:
         "type": str(claimed_job.get("type") or ""),
     }
     for key, value in payload.items():
-        if key not in job_payload:
+        if key in ("image_path", "local_path"):
+            job_payload[key] = normalize_local_image_path(value)
+        elif key not in job_payload:
             job_payload[key] = value
-    if "asset" not in job_payload and ("image_path" in payload or "local_path" in payload):
+    if "asset" not in job_payload and ("image_path" in job_payload or "local_path" in job_payload):
         job_payload["asset"] = {
             "asset_id": str(payload.get("asset_id") or claimed_job.get("job_id") or "asset"),
         }
-        if "image_path" in payload:
-            job_payload["asset"]["image_path"] = payload["image_path"]
-        if "local_path" in payload:
-            job_payload["asset"]["local_path"] = payload["local_path"]
+        if "image_path" in job_payload:
+            job_payload["asset"]["image_path"] = job_payload["image_path"]
+        if "local_path" in job_payload:
+            job_payload["asset"]["local_path"] = job_payload["local_path"]
     return job_payload
 
 
