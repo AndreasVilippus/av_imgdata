@@ -146,6 +146,30 @@ def run_worker_once(worker_bin: Path, config_path: Path, job_path: Path, timeout
     return result
 
 
+def extract_error_summary(worker_result: Dict[str, Any]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    error = worker_result.get("error") if isinstance(worker_result.get("error"), dict) else {}
+    processor_result = worker_result.get("processor_result") if isinstance(worker_result.get("processor_result"), dict) else {}
+    processor_error = processor_result.get("error") if isinstance(processor_result.get("error"), dict) else {}
+    artifacts = worker_result.get("artifacts") if isinstance(worker_result.get("artifacts"), dict) else {}
+    processor = worker_result.get("processor") if isinstance(worker_result.get("processor"), dict) else {}
+    if processor.get("exit_code") is not None:
+        summary["processor_exit_code"] = processor.get("exit_code")
+    if error.get("code"):
+        summary["error_code"] = error.get("code")
+        summary["error_message"] = error.get("message", "")
+    if processor_error.get("code"):
+        summary["processor_error_code"] = processor_error.get("code")
+        summary["processor_error_message"] = processor_error.get("message", "")
+    if artifacts.get("processor_input"):
+        summary["processor_input"] = artifacts.get("processor_input")
+    if artifacts.get("processor_result"):
+        summary["processor_result"] = artifacts.get("processor_result")
+    if artifacts.get("claimed_job"):
+        summary["claimed_job"] = artifacts.get("claimed_job")
+    return summary
+
+
 def execute_claimed_job(
     *,
     worker_bin: Path,
@@ -219,6 +243,7 @@ def main() -> int:
                 ])
                 event["reported"] = "result"
             else:
+                event.update(extract_error_summary(worker_result))
                 run_api(api_tool, package_var, [
                     "fail",
                     "--token", token,
