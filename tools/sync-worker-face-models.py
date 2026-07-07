@@ -44,10 +44,17 @@ def default_worker_dir(target: str) -> Path:
     return PROJECT_DIR / "dist" / f"av-imgdata-worker-{target}"
 
 
+def default_model_root(package_var: Path) -> Path:
+    return package_var / ".models" / "face"
+
+
 def build_store(args: argparse.Namespace) -> FaceModelStoreService:
     package_var = Path(args.package_var) if args.package_var else default_package_var()
-    config_path = args.config or default_config_path(package_var)
-    config_service = ConfigService(config_path=config_path) if config_path else ConfigService(config_path=str(package_var / "config.json"))
+    if args.use_config_model_root:
+        config_path = args.config or default_config_path(package_var)
+        config_service = ConfigService(config_path=config_path) if config_path else ConfigService(config_path=str(package_var / "config.json"))
+    else:
+        config_service = ConfigService(config_path=str(package_var / "config.json"))
     return FaceModelStoreService(config_service, package_var=package_var)
 
 
@@ -69,11 +76,14 @@ def write_worker_config(worker_dir: Path, config: Dict[str, Any]) -> None:
 
 
 def configure_worker(args: argparse.Namespace) -> Dict[str, Any]:
+    package_var = Path(args.package_var) if args.package_var else default_package_var()
     store = build_store(args)
     status = store.status(args.model_pack)
     worker_dir = Path(args.worker_dir) if args.worker_dir else default_worker_dir(args.target)
     config_path = worker_dir / "config" / "worker-config.example.json"
-    model_root = args.model_root or str(Path(status["root"]))
+    model_root = args.model_root or str(default_model_root(package_var))
+    if args.use_config_model_root and not args.model_root:
+        model_root = str(Path(status["root"]))
     if args.relative:
         try:
             model_root = os.path.relpath(str(Path(model_root).resolve()), str(config_path.parent.resolve()))
@@ -97,7 +107,10 @@ def configure_worker(args: argparse.Namespace) -> Dict[str, Any]:
         write_worker_config(worker_dir, config)
 
     expected_files: List[Dict[str, Any]] = []
-    source_dir = Path(status["model_dir"])
+    source_dir = Path(model_root)
+    if not Path(model_root).is_absolute():
+        source_dir = (config_path.parent / model_root)
+    source_dir = source_dir / args.model_pack
     for filename in ("det_10g.onnx", "w600k_r50.onnx", "manifest.json", "LICENSE_ACK.json"):
         source = source_dir / filename
         expected_files.append({"name": filename, "path": str(source), "present": source.is_file()})
@@ -111,6 +124,8 @@ def configure_worker(args: argparse.Namespace) -> Dict[str, Any]:
         "old_model_root": old_model_root,
         "new_model_root": model_root,
         "model_pack": args.model_pack,
+        "package_var": str(package_var),
+        "use_config_model_root": bool(args.use_config_model_root),
         "source_status": status,
         "expected_files": expected_files,
     }
@@ -118,16 +133,17 @@ def configure_worker(args: argparse.Namespace) -> Dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Configure a worker runtime to use the DSM/dev face model store without copying model files.")
-    parser.add_argument("--config", default="", help="Optional config.json path. Defaults to package var config, then repo var/config.json.")
+    parser.add_argument("--config", default="", help="Optional config.json path. Used only with --use-config-model-root.")
     parser.add_argument(
         "--package-var",
         default="",
-        help="Optional package var root. Defaults to SYNOPKG_PKGVAR, or the source tree when SYNOPKG_PKGVAR is unset.",
+        help="Optional package/root directory. Defaults to SYNOPKG_PKGVAR, or the source tree when SYNOPKG_PKGVAR is unset.",
     )
     parser.add_argument("--model-pack", default=FaceModelStoreService.DEFAULT_MODEL_PACK)
     parser.add_argument("--target", default="linux-x86_64", help="Worker dist target used when --worker-dir is not set.")
     parser.add_argument("--worker-dir", default="", help="Worker runtime/dist directory. Defaults to dist/av-imgdata-worker-<target>.")
-    parser.add_argument("--model-root", default="", help="Explicit model_root to write into worker config. Defaults to the configured model store root.")
+    parser.add_argument("--model-root", default="", help="Explicit model_root to write into worker config. Defaults to <package/root>/.models/face.")
+    parser.add_argument("--use-config-model-root", action="store_true", help="Use native_processors.FACE_PROCESSOR.MODEL_ROOT from config as model_root.")
     parser.add_argument("--relative", action="store_true", help="Write model_root relative to the worker config directory when possible.")
     parser.add_argument("--dry-run", action="store_true")
     return parser
