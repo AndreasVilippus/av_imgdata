@@ -2,7 +2,9 @@
 /dev/
 /build/
 /dist/
+/.models/
 /worker/native_deps/
+/worker/.models/
 /.test-venv/
 /ui/node_modules/
 __pycache__/
