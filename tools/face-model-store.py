@@ -20,9 +20,30 @@ def emit(payload: Dict[str, Any]) -> int:
     return 0
 
 
+def default_package_var() -> Path:
+    configured = str(os.getenv("SYNOPKG_PKGVAR") or "").strip()
+    if configured:
+        return Path(configured)
+    return PROJECT_DIR
+
+
+def default_config_path(package_var: Path) -> str:
+    configured = str(os.getenv("AV_IMGDATA_CONFIG") or "").strip()
+    if configured:
+        return configured
+    runtime_config = package_var / "config.json"
+    if runtime_config.is_file():
+        return str(runtime_config)
+    source_config = PROJECT_DIR / "var" / "config.json"
+    if source_config.is_file():
+        return str(source_config)
+    return ""
+
+
 def service(args: argparse.Namespace) -> FaceModelStoreService:
-    config_service = ConfigService(config_path=args.config) if args.config else ConfigService()
-    package_var = Path(args.package_var) if args.package_var else None
+    package_var = Path(args.package_var) if args.package_var else default_package_var()
+    config_path = args.config or default_config_path(package_var)
+    config_service = ConfigService(config_path=config_path) if config_path else ConfigService(config_path=str(package_var / "config.json"))
     return FaceModelStoreService(config_service, package_var=package_var)
 
 
@@ -58,8 +79,12 @@ def cmd_clear_ack(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage AV ImgData DSM face model store metadata.")
-    parser.add_argument("--config", default="", help="Optional config.json path. Defaults to SYNOPKG_PKGVAR/config.json.")
-    parser.add_argument("--package-var", default=os.getenv("SYNOPKG_PKGVAR", ""), help="Optional package var root. Defaults to SYNOPKG_PKGVAR.")
+    parser.add_argument("--config", default="", help="Optional config.json path. Defaults to package var config, then repo var/config.json.")
+    parser.add_argument(
+        "--package-var",
+        default="",
+        help="Optional package var root. Defaults to SYNOPKG_PKGVAR, or the source tree when SYNOPKG_PKGVAR is unset.",
+    )
     parser.add_argument("--model-pack", default=FaceModelStoreService.DEFAULT_MODEL_PACK)
     sub = parser.add_subparsers(dest="command", required=True)
 
