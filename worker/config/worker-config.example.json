@@ -9,7 +9,7 @@
   "processors": {
     "face": {
       "path": "../bin/av-imgdata-face-processor",
-      "model_root": "../.models/face",
+      "model_root": "../../../.models/face",
       "model_name": "buffalo_l"
     },
     "image_vips": {
