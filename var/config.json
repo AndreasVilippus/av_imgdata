@@ -9,7 +9,7 @@
   },
   "native_processors": {
     "FACE_PROCESSOR": {
-      "MODEL_ROOT": "",
+      "MODEL_ROOT": "/var/packages/AV_ImgData/var/.models/face",
       "MODEL_NAME": "buffalo_l",
       "TIMEOUT_SECONDS": 120,
       "STATUS_CACHE_SECONDS": 60,
