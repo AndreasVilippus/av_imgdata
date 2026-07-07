@@ -16,7 +16,7 @@ add_executable(av-imgdata-worker
 target_include_directories(av-imgdata-worker PRIVATE include)
 
 target_compile_definitions(av-imgdata-worker PRIVATE
-  AV_IMGDATA_WORKER_VERSION="0.1.0-phase-c"
+  AV_IMGDATA_WORKER_VERSION="0.1.0-phase-d"
 )
 
 if(MINGW)
