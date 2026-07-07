@@ -3,8 +3,8 @@
   "type": "face_native_embed",
   "asset": {
     "asset_id": "test-image",
-    "local_path": "./testdata/person.jpg",
-    "note": "Placeholder path for local/manual testing. No test image is distributed with the worker bundle. Place a JPEG at jobs/testdata/person.jpg or change local_path to an existing image."
+    "local_path": "../../../tests/images/test_mic.jpg",
+    "note": "Path is relative to the installed worker job directory: dist/av-imgdata-worker-<target>/jobs/. The fixture is documented in tests/images/README.md."
   },
   "options": {
     "model_name": "buffalo_l",
