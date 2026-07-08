@@ -1,6 +1,7 @@
 {
   "worker_id": "worker-01",
   "dsm_base_url": "https://nas.example:5001",
+  "worker_api_base_url": "https://nas.example:5001/worker-api",
   "auth": {
     "type": "worker_token",
     "token_file": "../worker.token"
