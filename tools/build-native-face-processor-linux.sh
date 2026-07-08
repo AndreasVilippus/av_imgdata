@@ -9,14 +9,20 @@ BUILD_DIR="${BUILD_ROOT}/face_processor-build"
 INSTALL_DIR="${BUILD_ROOT}/face_processor-install"
 DIST_DIR="${PROJECT_DIR}/dist/av-imgdata-face-processor-${TARGET}"
 CLEAN=0
+FETCH_DEPS=1
+FORCE_DEPS=0
+UPDATE_CHECK=1
 
 usage() {
   cat <<'EOF'
 Usage: tools/build-native-face-processor-linux.sh [options]
 
 Options:
-  --clean        Remove build, install, and dist directories before building
-  -h, --help     Show this help
+  --clean             Remove build, install, and dist directories before building
+  --no-fetch-deps     Do not auto-download missing Linux native dependencies
+  --force-deps        Re-download and re-extract Linux native dependencies
+  --no-update-check   Do not query GitHub release metadata for newer dependency versions
+  -h, --help          Show this help
 
 Dependency defaults:
   worker/native_deps/linux-x86_64/onnxruntime
@@ -27,11 +33,13 @@ Dependency defaults:
   worker/native_deps/linux-x86_64/heif       optional
 
 Environment overrides:
-  ONNXRUNTIME_ROOT   Optional. Linux ONNXRuntime C API root containing include/ and lib/.
-  JPEG_ROOT          Optional. Linux libjpeg-turbo root containing include/ and lib/ or lib64/.
-  HEIF_ROOT          Optional. Linux libheif root containing include/libheif/heif.h.
-  CC                 Optional. Defaults to cc.
-  CXX                Optional. Defaults to c++.
+  ONNXRUNTIME_ROOT       Optional. Linux ONNXRuntime C API root containing include/ and lib/.
+  JPEG_ROOT              Optional. Linux libjpeg-turbo root containing include/ and lib/ or lib64/.
+  HEIF_ROOT              Optional. Linux libheif root containing include/libheif/heif.h.
+  ONNXRUNTIME_VERSION    Optional for auto-fetch. Default is set by tools/fetch-worker-native-deps.sh.
+  LIBJPEG_TURBO_VERSION  Optional for auto-fetch. Default is set by tools/fetch-worker-native-deps.sh.
+  CC                     Optional. Defaults to cc.
+  CXX                    Optional. Defaults to c++.
 
 Output:
   dist/av-imgdata-face-processor-linux-x86_64/bin/av-imgdata-face-processor
@@ -43,6 +51,18 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --clean)
       CLEAN=1
+      shift
+      ;;
+    --no-fetch-deps)
+      FETCH_DEPS=0
+      shift
+      ;;
+    --force-deps)
+      FORCE_DEPS=1
+      shift
+      ;;
+    --no-update-check)
+      UPDATE_CHECK=0
       shift
       ;;
     -h|--help)
@@ -124,6 +144,24 @@ resolve_deps() {
   fi
 }
 
+fetch_missing_deps() {
+  [ "${FETCH_DEPS}" = "1" ] || return 0
+  if [ -n "${ONNXRUNTIME_ROOT:-}" ] && [ -n "${JPEG_ROOT:-}" ] && [ "${FORCE_DEPS}" != "1" ]; then
+    return 0
+  fi
+  local fetch_args=(--target "${TARGET}")
+  if [ "${FORCE_DEPS}" = "1" ]; then
+    fetch_args+=(--force)
+  fi
+  if [ "${UPDATE_CHECK}" != "1" ]; then
+    fetch_args+=(--no-update-check)
+  fi
+  echo "Preparing Linux native dependencies..."
+  "${PROJECT_DIR}/tools/fetch-worker-native-deps.sh" "${fetch_args[@]}"
+}
+
+resolve_deps
+fetch_missing_deps
 resolve_deps
 
 if [ -z "${ONNXRUNTIME_ROOT:-}" ]; then
@@ -203,6 +241,7 @@ copy_optional_license_file "${ONNXRUNTIME_ROOT}/ThirdPartyNotices.txt" "${DIST_D
 copy_optional_license_file "${JPEG_ROOT}/LICENSE" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/jpeg.LICENSE"
 copy_optional_license_file "${JPEG_ROOT}/share/doc/libjpeg-turbo/LICENSE.md" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/libjpeg-turbo.LICENSE.md"
 copy_optional_license_file "${JPEG_ROOT}/share/licenses/libjpeg-turbo/LICENSE.md" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/libjpeg-turbo.LICENSE.md"
+copy_optional_license_file "${JPEG_ROOT}/opt/libjpeg-turbo/LICENSE.md" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/libjpeg-turbo.LICENSE.md"
 
 if command -v ldd >/dev/null 2>&1; then
   echo "Linux native face processor runtime dependencies:"
