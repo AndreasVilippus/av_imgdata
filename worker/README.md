@@ -14,26 +14,26 @@ External worker
 
 The worker reuses the same processor contracts and will reuse compatible processor binaries from the same repository, but it is built and packaged as a separate artifact.
 
-## Phase B status
+## Current status
 
-Phase A established the local build and packaging foundation. Phase B adds the first local processor probe.
-
-Implemented through Phase B:
+Implemented:
 
 ```text
 - worker/ project path
 - worker-local CMake project
 - av-imgdata-worker executable
+- av-imgdata-worker-api-loop executable
 - version command
 - probe command with structured config extraction
 - config-relative path resolution
 - local face processor path resolution
 - local face processor binary existence check
-- local face processor version command when binary exists
-- local face processor probe command when binary exists
+- local face processor version/probe checks
 - capability list emitted only when version and probe succeed
-- once command with local job-file checks
-- run command placeholder
+- once command with native face processor execution
+- run readiness loop
+- C++ Worker API HTTP loop using curl as transport
+- local/DSM-compatible worker API HTTP router for integration tests
 - linux-x86_64 build target
 - windows-x86_64 MinGW cross-build target
 - docker-linux-x86_64 staging target, currently deferred for validation
@@ -44,15 +44,12 @@ Implemented through Phase B:
 - Dockerfile and entrypoint
 ```
 
-Not implemented yet:
+Still pending:
 
 ```text
-- DSM Worker API client
-- registration
-- heartbeat
-- job polling
-- file download/upload
-- native processor job execution from once mode
+- DSM package routing/wiring for the worker API HTTP endpoints
+- file download/upload for non-shared-filesystem workers
+- persistent warm native processor mode with model reuse
 - automatic model distribution into worker bundles
 ```
 
@@ -63,6 +60,7 @@ av-imgdata-worker version
 av-imgdata-worker probe --config <worker-config.json>
 av-imgdata-worker once --config <worker-config.json> --job <job.json>
 av-imgdata-worker run --config <worker-config.json>
+av-imgdata-worker-api-loop --config <worker-config.json> --api-url <worker-api-url>
 ```
 
 ## Local build targets
@@ -159,6 +157,66 @@ bash tools/build-native-face-processor-windows.sh --clean
 bash tools/build-worker.sh --target windows-x86_64 --clean
 ```
 
+## Worker API HTTP router integration test
+
+The framework-free local router exposes the same endpoint adapter that DSM routing should call later:
+
+```text
+POST /worker-api/register
+POST /worker-api/heartbeat
+POST /worker-api/claim
+POST /worker-api/result
+POST /worker-api/fail
+GET  /worker-api/status
+```
+
+Start the router from the repository root:
+
+```bash
+python3 tools/worker-api-http-router.py \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --package-var "$PWD"
+```
+
+Create or refresh a local worker token and copy it into the worker bundle:
+
+```bash
+TOKEN="$(python3 tools/worker-api-store.py --package-var "$PWD" create-token \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+printf '%s\n' "$TOKEN" > dist/av-imgdata-worker-linux-x86_64/worker.token
+```
+
+Queue a local test job:
+
+```bash
+python3 tools/worker-api-store.py --package-var "$PWD" enqueue \
+  --job-id job-http-local-1 \
+  --type face_native_embed \
+  --payload '{"local_path":"tests/images/test_raw.jpg","min_confidence":0.5,"max_faces":1,"det_size":[640,640]}'
+```
+
+Run the C++ HTTP loop against the router:
+
+```bash
+dist/av-imgdata-worker-linux-x86_64/bin/av-imgdata-worker-api-loop \
+  --config dist/av-imgdata-worker-linux-x86_64/config/worker-config.example.json \
+  --api-url http://127.0.0.1:8765/worker-api \
+  --max-iterations 1
+```
+
+Expected event:
+
+```json
+{"mode":"api-loop","claim_status":"claimed","reported":"result"}
+```
+
+Check API state:
+
+```bash
+curl -s http://127.0.0.1:8765/worker-api/status
+```
+
 ## Debian build host requirements
 
 Baseline:
@@ -193,6 +251,7 @@ Linux:
 ```text
 dist/av-imgdata-worker-linux_x86_64/    # canonical path is dist/av-imgdata-worker-linux-x86_64/
   bin/av-imgdata-worker
+  bin/av-imgdata-worker-api-loop
   bin/av-imgdata-face-processor
   config/worker-config.example.json
   jobs/sample-worker-job.json
@@ -209,6 +268,7 @@ Windows:
 ```text
 dist/av-imgdata-worker-windows-x86_64/
   bin/av-imgdata-worker.exe
+  bin/av-imgdata-worker-api-loop.exe
   bin/av-imgdata-face-processor.exe
   config/worker-config.example.json
   jobs/sample-worker-job.json
@@ -242,6 +302,7 @@ dist/av-imgdata-worker-linux-x86_64/bin/av-imgdata-worker probe \
 dist/av-imgdata-worker-linux-x86_64/bin/av-imgdata-worker once \
   --config dist/av-imgdata-worker-linux-x86_64/config/worker-config.example.json \
   --job dist/av-imgdata-worker-linux-x86_64/jobs/sample-worker-job.json
+dist/av-imgdata-worker-linux-x86_64/bin/av-imgdata-worker-api-loop --help
 ```
 
 Windows, after copying the bundle to Windows 11:
@@ -250,16 +311,17 @@ Windows, after copying the bundle to Windows 11:
 .\bin\av-imgdata-worker.exe version
 .\bin\av-imgdata-worker.exe probe --config .\config\worker-config.example.json
 .\bin\av-imgdata-worker.exe once --config .\config\worker-config.example.json --job .\jobs\sample-worker-job.json
+.\bin\av-imgdata-worker-api-loop.exe --help
 ```
 
 Docker:
 
 ```bash
-docker build -t av-imgdata-worker:phase-b dist/av-imgdata-worker-docker-linux-x86_64
-docker run --rm av-imgdata-worker:phase-b version
+docker build -t av-imgdata-worker:phase-e dist/av-imgdata-worker-docker-linux-x86_64
+docker run --rm av-imgdata-worker:phase-e version
 ```
 
-## Phase B probe behavior
+## Probe behavior
 
 `probe` reads `worker-config.example.json`, extracts the configured face processor, resolves relative paths against the config file directory, and attempts:
 
