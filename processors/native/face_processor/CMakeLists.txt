@@ -74,14 +74,10 @@ install(DIRECTORY "${ONNXRUNTIME_ROOT}/lib/" DESTINATION lib
     FILES_MATCHING PATTERN "libonnxruntime.so*"
 )
 if(AV_FACE_PROCESSOR_BUNDLE_JPEG)
-    if(EXISTS "${JPEG_ROOT}/lib")
-        install(DIRECTORY "${JPEG_ROOT}/lib/" DESTINATION lib
-            FILES_MATCHING PATTERN "libjpeg.so*"
-        )
+    get_filename_component(JPEG_LIBRARY_DIR "${JPEG_LIBRARY_REALPATH}" DIRECTORY)
+    file(GLOB JPEG_RUNTIME_FILES "${JPEG_LIBRARY_DIR}/libjpeg.so*")
+    if(NOT JPEG_RUNTIME_FILES)
+        message(FATAL_ERROR "libjpeg runtime files not found next to ${JPEG_LIBRARY_REALPATH}")
     endif()
-    if(EXISTS "${JPEG_ROOT}/lib64")
-        install(DIRECTORY "${JPEG_ROOT}/lib64/" DESTINATION lib
-            FILES_MATCHING PATTERN "libjpeg.so*"
-        )
-    endif()
+    install(FILES ${JPEG_RUNTIME_FILES} DESTINATION lib)
 endif()
