@@ -11,11 +11,15 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <direct.h>
 #define POPEN _popen
 #define PCLOSE _pclose
+#define GETCWD _getcwd
 #else
+#include <unistd.h>
 #define POPEN popen
 #define PCLOSE pclose
+#define GETCWD getcwd
 #endif
 
 #ifndef AV_IMGDATA_WORKER_VERSION
@@ -37,6 +41,7 @@ struct LoopConfig {
     std::string api_url;
     std::string token_file;
     std::string workspace_root;
+    std::string path_base_dir;
     int poll_interval_seconds = 2;
 };
 
@@ -63,11 +68,20 @@ int parse_int(const std::string& value, int fallback) {
         return fallback;
     }
     char* end = nullptr;
-    long parsed = std::strtol(value.c_str(), &end, 10);
+    const long parsed = std::strtol(value.c_str(), &end, 10);
     if (end == value.c_str()) {
         return fallback;
     }
     return static_cast<int>(parsed);
+}
+
+int normalized_exit_code(int raw) {
+#ifndef _WIN32
+    if (raw >= 256 && raw % 256 == 0) {
+        return raw / 256;
+    }
+#endif
+    return raw;
 }
 
 bool is_path_separator(char c) {
@@ -98,14 +112,6 @@ std::string dirname_of(const std::string& path) {
     return path.substr(0, pos);
 }
 
-std::string basename_of(const std::string& path) {
-    const std::size_t pos = path.find_last_of("/\\");
-    if (pos == std::string::npos) {
-        return path;
-    }
-    return path.substr(pos + 1);
-}
-
 std::string join_path(const std::string& base, const std::string& path) {
     if (path.empty() || looks_absolute(path)) {
         return path;
@@ -120,6 +126,14 @@ std::string join_path(const std::string& base, const std::string& path) {
     return base + sep + path;
 }
 
+std::string current_working_dir() {
+    std::array<char, 4096> buffer{};
+    if (GETCWD(buffer.data(), static_cast<int>(buffer.size())) == nullptr) {
+        return ".";
+    }
+    return buffer.data();
+}
+
 bool file_exists(const std::string& path) {
     if (path.empty()) {
         return false;
@@ -128,22 +142,40 @@ bool file_exists(const std::string& path) {
     return static_cast<bool>(input);
 }
 
+std::string shell_quote(const std::string& value) {
+#ifdef _WIN32
+    std::string out = "\"";
+    for (char c : value) {
+        if (c == '"') {
+            out += "\\\"";
+        } else {
+            out += c;
+        }
+    }
+    out += "\"";
+    return out;
+#else
+    std::string out = "'";
+    for (char c : value) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
+    }
+    out += "'";
+    return out;
+#endif
+}
+
 bool ensure_dir(const std::string& path) {
     if (path.empty()) {
         return false;
     }
 #ifdef _WIN32
-    std::string command = "mkdir \"" + path + "\" >NUL 2>NUL";
+    std::string command = "mkdir " + shell_quote(path) + " >NUL 2>NUL";
 #else
-    std::string command = "mkdir -p '";
-    for (char c : path) {
-        if (c == '\'') {
-            command += "'\\''";
-        } else {
-            command += c;
-        }
-    }
-    command += "'";
+    std::string command = "mkdir -p " + shell_quote(path);
 #endif
     return std::system(command.c_str()) == 0;
 }
@@ -179,6 +211,16 @@ std::string trim(std::string value) {
     return value;
 }
 
+std::string abbreviate(const std::string& value, std::size_t max_len) {
+    if (value.size() <= max_len) {
+        return value;
+    }
+    if (max_len <= 3) {
+        return value.substr(0, max_len);
+    }
+    return value.substr(0, max_len - 3) + "...";
+}
+
 std::string json_escape(const std::string& value) {
     std::ostringstream out;
     for (char c : value) {
@@ -192,32 +234,6 @@ std::string json_escape(const std::string& value) {
         }
     }
     return out.str();
-}
-
-std::string shell_quote(const std::string& value) {
-#ifdef _WIN32
-    std::string out = "\"";
-    for (char c : value) {
-        if (c == '"') {
-            out += "\\\"";
-        } else {
-            out += c;
-        }
-    }
-    out += "\"";
-    return out;
-#else
-    std::string out = "'";
-    for (char c : value) {
-        if (c == '\'') {
-            out += "'\\''";
-        } else {
-            out += c;
-        }
-    }
-    out += "'";
-    return out;
-#endif
 }
 
 CommandResult run_command_capture(const std::string& command) {
@@ -322,10 +338,6 @@ std::string extract_object_block(const std::string& json, const std::string& key
     return extract_block_after_key(json, key, '{', '}');
 }
 
-std::string extract_array_block(const std::string& json, const std::string& key) {
-    return extract_block_after_key(json, key, '[', ']');
-}
-
 std::string normalize_base_url(std::string url) {
     while (!url.empty() && url.back() == '/') {
         url.pop_back();
@@ -337,12 +349,64 @@ std::string read_token(const std::string& token_file) {
     return trim(read_file(token_file));
 }
 
+std::string normalize_job_path_value(const std::string& base_dir, const std::string& value) {
+    if (value.empty() || looks_absolute(value)) {
+        return value;
+    }
+    return join_path(base_dir, value);
+}
+
+bool replace_json_string_value(std::string* json, const std::string& key, const std::string& base_dir) {
+    const std::string needle = "\"" + key + "\"";
+    std::size_t pos = json->find(needle);
+    if (pos == std::string::npos) {
+        return false;
+    }
+    pos = json->find(':', pos + needle.size());
+    if (pos == std::string::npos) {
+        return false;
+    }
+    std::size_t quote = json->find('"', pos + 1);
+    if (quote == std::string::npos) {
+        return false;
+    }
+    std::size_t end = quote + 1;
+    bool escaping = false;
+    for (; end < json->size(); ++end) {
+        const char c = (*json)[end];
+        if (escaping) {
+            escaping = false;
+        } else if (c == '\\') {
+            escaping = true;
+        } else if (c == '"') {
+            break;
+        }
+    }
+    if (end >= json->size()) {
+        return false;
+    }
+    const std::string old_value = json->substr(quote + 1, end - quote - 1);
+    const std::string new_value = normalize_job_path_value(base_dir, old_value);
+    json->replace(quote + 1, end - quote - 1, json_escape(new_value));
+    return true;
+}
+
+std::string normalize_payload_paths(std::string payload, const std::string& base_dir) {
+    replace_json_string_value(&payload, "local_path", base_dir);
+    replace_json_string_value(&payload, "image_path", base_dir);
+    return payload;
+}
+
 LoopConfig parse_config(const std::string& config_path, const std::string& config_json, const std::vector<std::string>& args) {
     LoopConfig config;
     config.config_path = config_path;
     config.config_dir = dirname_of(config_path);
     config.worker_id = extract_json_string(config_json, "worker_id");
     config.workspace_root = join_path(config.config_dir, extract_json_string(config_json, "workspace_root"));
+    config.path_base_dir = arg_value(args, "--path-base-dir");
+    if (config.path_base_dir.empty()) {
+        config.path_base_dir = current_working_dir();
+    }
     config.poll_interval_seconds = parse_int(extract_json_string(config_json, "poll_interval_seconds"), 2);
     if (config.poll_interval_seconds < 1) {
         config.poll_interval_seconds = 1;
@@ -390,7 +454,7 @@ std::string api_post_payload(const LoopConfig& config, const std::string& action
     command += " " + shell_quote(url);
     command += " 2>&1";
     CommandResult result = run_command_capture(command);
-    if (result.exit_code != 0) {
+    if (normalized_exit_code(result.exit_code) != 0) {
         return "{\"status\":\"error\",\"code\":\"curl_failed\",\"message\":\"" + json_escape(result.output) + "\"}";
     }
     return result.output;
@@ -402,7 +466,7 @@ std::string heartbeat_body(const LoopConfig& config, const std::string& status) 
     body << "\"version\":\"" << AV_IMGDATA_WORKER_VERSION << "\",";
     body << "\"status\":\"" << json_escape(status) << "\",";
     body << "\"capabilities\":" << capabilities_json() << ",";
-    body << "\"metadata\":{\"runtime\":\"cxx-api-loop\"}}";
+    body << "\"metadata\":{\"runtime\":\"cxx-api-loop\",\"path_base_dir\":\"" << json_escape(config.path_base_dir) << "\"}}";
     return body.str();
 }
 
@@ -413,14 +477,14 @@ std::string claim_body(const LoopConfig& config) {
     return body.str();
 }
 
-std::string claimed_job_to_local_job(const std::string& claimed_job) {
-    const std::string payload = extract_object_block(claimed_job, "payload");
+std::string claimed_job_to_local_job(const std::string& claimed_job, const std::string& path_base_dir) {
+    const std::string payload = normalize_payload_paths(extract_object_block(claimed_job, "payload"), path_base_dir);
     const std::string job_id = extract_json_string(claimed_job, "job_id");
     const std::string type = extract_json_string(claimed_job, "type");
     std::ostringstream job;
     job << "{\"job_id\":\"" << json_escape(job_id) << "\",\"type\":\"" << json_escape(type) << "\"";
     if (!payload.empty() && payload.size() >= 2) {
-        std::string inner = payload.substr(1, payload.size() - 2);
+        const std::string inner = payload.substr(1, payload.size() - 2);
         if (!trim(inner).empty()) {
             job << "," << inner;
         }
@@ -458,14 +522,14 @@ std::string fail_body(const LoopConfig& config, const std::string& job_id, const
 }
 
 bool is_worker_success(const CommandResult& result) {
-    return result.exit_code == 0 && result.output.find("\"processor_execution\": \"completed\"") != std::string::npos;
+    return normalized_exit_code(result.exit_code) == 0 && result.output.find("\"processor_execution\": \"completed\"") != std::string::npos;
 }
 
 int print_usage() {
     std::cout
         << "av-imgdata-worker-api-loop " << AV_IMGDATA_WORKER_VERSION << "\n\n"
         << "Usage:\n"
-        << "  av-imgdata-worker-api-loop --config <worker-config.json> [--api-url <url>] [--worker-bin <path>] [--max-iterations <n>]\n\n"
+        << "  av-imgdata-worker-api-loop --config <worker-config.json> [--api-url <url>] [--worker-bin <path>] [--path-base-dir <path>] [--max-iterations <n>]\n\n"
         << "The loop uses curl for HTTP POST calls and av-imgdata-worker once for local job execution.\n";
     return 0;
 }
@@ -524,6 +588,7 @@ int main(int argc, char** argv) {
         std::cout << "{\"mode\":\"api-loop\",\"iteration\":" << iteration
                   << ",\"worker_id\":\"" << json_escape(config.worker_id) << "\""
                   << ",\"api_url\":\"" << json_escape(config.api_url) << "\""
+                  << ",\"path_base_dir\":\"" << json_escape(config.path_base_dir) << "\""
                   << ",\"heartbeat_status\":\"" << json_escape(extract_json_string(heartbeat, "status")) << "\""
                   << ",\"claim_status\":\"" << json_escape(claim_status) << "\"";
 
@@ -531,14 +596,16 @@ int main(int argc, char** argv) {
             const std::string claimed_job = extract_object_block(claim, "job");
             const std::string job_id = extract_json_string(claimed_job, "job_id");
             const std::string job_path = join_path(join_path(config.workspace_root, "claimed-jobs"), job_id + ".json");
-            write_file(job_path, claimed_job_to_local_job(claimed_job));
+            const std::string local_job = claimed_job_to_local_job(claimed_job, config.path_base_dir);
+            write_file(job_path, local_job);
             const CommandResult worker_result = run_worker_once(config, job_path);
+            const int exit_code = normalized_exit_code(worker_result.exit_code);
             if (is_worker_success(worker_result)) {
                 api_post_payload(config, "result", token, result_body(config, job_id, worker_result.output));
-                std::cout << ",\"job_id\":\"" << json_escape(job_id) << "\",\"reported\":\"result\",\"worker_exit_code\":" << worker_result.exit_code;
+                std::cout << ",\"job_id\":\"" << json_escape(job_id) << "\",\"reported\":\"result\",\"worker_exit_code\":" << exit_code << ",\"worker_raw_status\":" << worker_result.exit_code;
             } else {
                 api_post_payload(config, "fail", token, fail_body(config, job_id, "worker_execution_failed", worker_result.output, worker_result.output));
-                std::cout << ",\"job_id\":\"" << json_escape(job_id) << "\",\"reported\":\"fail\",\"worker_exit_code\":" << worker_result.exit_code;
+                std::cout << ",\"job_id\":\"" << json_escape(job_id) << "\",\"reported\":\"fail\",\"worker_exit_code\":" << exit_code << ",\"worker_raw_status\":" << worker_result.exit_code << ",\"job_path\":\"" << json_escape(job_path) << "\",\"worker_output_preview\":\"" << json_escape(abbreviate(worker_result.output, 600)) << "\"";
             }
         }
         std::cout << "}" << std::endl;
