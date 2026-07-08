@@ -74,12 +74,14 @@ install(DIRECTORY "${ONNXRUNTIME_ROOT}/lib/" DESTINATION lib
     FILES_MATCHING PATTERN "libonnxruntime.so*"
 )
 if(AV_FACE_PROCESSOR_BUNDLE_JPEG)
-    install(DIRECTORY "${JPEG_ROOT}/lib/" DESTINATION lib
-        FILES_MATCHING PATTERN "libjpeg.so*"
-        OPTIONAL
-    )
-    install(DIRECTORY "${JPEG_ROOT}/lib64/" DESTINATION lib
-        FILES_MATCHING PATTERN "libjpeg.so*"
-        OPTIONAL
-    )
+    if(EXISTS "${JPEG_ROOT}/lib")
+        install(DIRECTORY "${JPEG_ROOT}/lib/" DESTINATION lib
+            FILES_MATCHING PATTERN "libjpeg.so*"
+        )
+    endif()
+    if(EXISTS "${JPEG_ROOT}/lib64")
+        install(DIRECTORY "${JPEG_ROOT}/lib64/" DESTINATION lib
+            FILES_MATCHING PATTERN "libjpeg.so*"
+        )
+    endif()
 endif()
