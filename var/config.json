@@ -139,5 +139,9 @@
     "OPTIONS": {
       "DUPLICATE_FACE_SUGGESTIONS": true
     }
+  },
+  "worker_api": {
+    "ENABLED": false,
+    "STATE_PATH": ""
   }
 }
