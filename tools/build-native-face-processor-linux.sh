@@ -157,7 +157,7 @@ fetch_missing_deps() {
     fetch_args+=(--no-update-check)
   fi
   echo "Preparing Linux native dependencies..."
-  "${PROJECT_DIR}/tools/fetch-worker-native-deps.sh" "${fetch_args[@]}"
+  bash "${PROJECT_DIR}/tools/fetch-worker-native-deps.sh" "${fetch_args[@]}"
 }
 
 resolve_deps
