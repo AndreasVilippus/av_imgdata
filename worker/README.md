@@ -53,8 +53,7 @@ Not implemented yet:
 - job polling
 - file download/upload
 - native processor job execution from once mode
-- ONNXRuntime/libjpeg/libvips bundle integration
-- automatic bundling of av-imgdata-face-processor into worker dist
+- automatic model distribution into worker bundles
 ```
 
 ## Commands
@@ -96,6 +95,44 @@ Docker validation is currently deferred. Optional Docker image build after Docke
 bash tools/build-worker.sh --target docker-linux-x86_64 --docker-build
 ```
 
+## Native face processor bundles
+
+Build the Linux native face processor before building the Linux worker when native face jobs should run from the worker bundle:
+
+```bash
+bash tools/build-native-face-processor-linux.sh --clean
+bash tools/build-worker.sh --target linux-x86_64 --clean
+```
+
+The Linux native build expects controlled dependencies below `worker/native_deps/linux-x86_64/` unless paths are supplied with environment variables:
+
+```text
+worker/native_deps/linux-x86_64/onnxruntime/
+  include/onnxruntime_c_api.h
+  lib/libonnxruntime.so*
+
+worker/native_deps/linux-x86_64/jpeg/        # or libjpeg-turbo/
+  include/jpeglib.h
+  lib/libjpeg.so*
+```
+
+The Linux face processor is built and bundled with matching libjpeg/libjpeg-turbo headers and runtime from the same `JPEG_ROOT`. The build fails on detected JPEG header/runtime ABI mismatches.
+
+Environment overrides:
+
+```bash
+ONNXRUNTIME_ROOT=/path/to/onnxruntime \
+JPEG_ROOT=/path/to/libjpeg-turbo \
+bash tools/build-native-face-processor-linux.sh --clean
+```
+
+For Windows native face processor builds, use:
+
+```bash
+bash tools/build-native-face-processor-windows.sh --clean
+bash tools/build-worker.sh --target windows-x86_64 --clean
+```
+
 ## Debian build host requirements
 
 Baseline:
@@ -128,11 +165,14 @@ Linux:
 ```text
 dist/av-imgdata-worker-linux-x86_64/
   bin/av-imgdata-worker
+  bin/av-imgdata-face-processor
   config/worker-config.example.json
   jobs/sample-worker-job.json
-  models/README.txt
+  .models/face/README.txt
   logs/
   work/
+  lib/libonnxruntime.so*
+  lib/libjpeg.so*
   share/processor_contract/schemas/
 ```
 
@@ -141,9 +181,10 @@ Windows:
 ```text
 dist/av-imgdata-worker-windows-x86_64/
   bin/av-imgdata-worker.exe
+  bin/av-imgdata-face-processor.exe
   config/worker-config.example.json
   jobs/sample-worker-job.json
-  models/README.txt
+  .models/face/README.txt
   logs/
   work/
   share/processor_contract/schemas/
@@ -158,7 +199,7 @@ dist/av-imgdata-worker-docker-linux-x86_64/
   bin/av-imgdata-worker
   config/worker-config.example.json
   jobs/sample-worker-job.json
-  models/README.txt
+  .models/face/README.txt
   share/processor_contract/schemas/
 ```
 
