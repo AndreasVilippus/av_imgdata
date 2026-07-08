@@ -31,7 +31,7 @@ find_path(JPEG_INCLUDE_DIR
 )
 find_library(JPEG_LIBRARY
     NAMES jpeg
-    PATHS "${JPEG_ROOT}/lib" "${JPEG_ROOT}/usr/lib" "${JPEG_ROOT}/usr/lib64"
+    PATHS "${JPEG_ROOT}/lib" "${JPEG_ROOT}/lib64" "${JPEG_ROOT}/usr/lib" "${JPEG_ROOT}/usr/lib64"
 )
 if(NOT JPEG_INCLUDE_DIR OR NOT JPEG_LIBRARY)
     message(FATAL_ERROR "libjpeg not found; set JPEG_ROOT to a sysroot containing jpeglib.h and libjpeg")
@@ -74,5 +74,11 @@ install(DIRECTORY "${ONNXRUNTIME_ROOT}/lib/" DESTINATION lib
     FILES_MATCHING PATTERN "libonnxruntime.so*"
 )
 if(AV_FACE_PROCESSOR_BUNDLE_JPEG)
-    install(FILES "${JPEG_LIBRARY}" DESTINATION lib)
+    install(DIRECTORY "${JPEG_ROOT}/lib/" DESTINATION lib
+        FILES_MATCHING PATTERN "libjpeg.so*"
+    )
+    install(DIRECTORY "${JPEG_ROOT}/lib64/" DESTINATION lib
+        FILES_MATCHING PATTERN "libjpeg.so*"
+        OPTIONAL
+    )
 endif()
