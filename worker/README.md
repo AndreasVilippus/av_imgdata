@@ -104,26 +104,52 @@ bash tools/build-native-face-processor-linux.sh --clean
 bash tools/build-worker.sh --target linux-x86_64 --clean
 ```
 
-The Linux native build expects controlled dependencies below `worker/native_deps/linux-x86_64/` unless paths are supplied with environment variables:
+The Linux native build automatically downloads missing upstream native dependencies into `worker/native_deps/linux-x86_64/`:
 
 ```text
 worker/native_deps/linux-x86_64/onnxruntime/
   include/onnxruntime_c_api.h
   lib/libonnxruntime.so*
 
-worker/native_deps/linux-x86_64/jpeg/        # or libjpeg-turbo/
+worker/native_deps/linux-x86_64/jpeg/
   include/jpeglib.h
   lib/libjpeg.so*
 ```
 
+Downloaded dependency files are ignored by Git. The dependency fetcher records the pinned source URLs and versions in:
+
+```text
+worker/native_deps/linux-x86_64/native-deps-manifest.json
+```
+
+The fetcher also queries GitHub release metadata and prints update hints when newer releases are available. To force a dependency refresh:
+
+```bash
+bash tools/build-native-face-processor-linux.sh --clean --force-deps
+```
+
+To disable network fetching and update checks:
+
+```bash
+bash tools/build-native-face-processor-linux.sh --clean --no-fetch-deps --no-update-check
+```
+
+Pinned versions can be overridden for validation runs:
+
+```bash
+ONNXRUNTIME_VERSION=1.20.1 \
+LIBJPEG_TURBO_VERSION=3.2.0 \
+bash tools/build-native-face-processor-linux.sh --clean --force-deps
+```
+
 The Linux face processor is built and bundled with matching libjpeg/libjpeg-turbo headers and runtime from the same `JPEG_ROOT`. The build fails on detected JPEG header/runtime ABI mismatches.
 
-Environment overrides:
+Environment overrides for fully local dependency roots:
 
 ```bash
 ONNXRUNTIME_ROOT=/path/to/onnxruntime \
 JPEG_ROOT=/path/to/libjpeg-turbo \
-bash tools/build-native-face-processor-linux.sh --clean
+bash tools/build-native-face-processor-linux.sh --clean --no-fetch-deps
 ```
 
 For Windows native face processor builds, use:
@@ -145,7 +171,9 @@ sudo apt-get install -y \
   ninja-build \
   git \
   zip \
-  unzip
+  unzip \
+  curl \
+  dpkg
 ```
 
 For Windows cross-builds:
@@ -163,7 +191,7 @@ Docker image build requires Docker only when `--docker-build` is used.
 Linux:
 
 ```text
-dist/av-imgdata-worker-linux-x86_64/
+dist/av-imgdata-worker-linux_x86_64/    # canonical path is dist/av-imgdata-worker-linux-x86_64/
   bin/av-imgdata-worker
   bin/av-imgdata-face-processor
   config/worker-config.example.json
