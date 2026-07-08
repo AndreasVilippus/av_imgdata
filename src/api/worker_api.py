@@ -3,7 +3,7 @@
 
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -23,7 +23,7 @@ def _package_var() -> Path:
     return Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
 
 
-def _env_enabled_override() -> bool | None:
+def _env_enabled_override() -> Optional[bool]:
     value = os.getenv("AV_IMGDATA_WORKER_API_ENABLED", "").strip().lower()
     if value in _TRUE_VALUES:
         return True
@@ -49,7 +49,7 @@ def _worker_api_enabled() -> bool:
     return bool(config.get("ENABLED", False))
 
 
-def _worker_api_state_path() -> Path | None:
+def _worker_api_state_path() -> Optional[Path]:
     configured = str(_worker_api_config().get("STATE_PATH") or "").strip()
     if not configured:
         return None
