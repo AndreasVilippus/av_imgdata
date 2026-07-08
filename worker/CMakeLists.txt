@@ -13,22 +13,34 @@ add_executable(av-imgdata-worker
   src/main.cpp
 )
 
+add_executable(av-imgdata-worker-api-loop
+  src/api_loop.cpp
+)
+
 target_include_directories(av-imgdata-worker PRIVATE include)
+target_include_directories(av-imgdata-worker-api-loop PRIVATE include)
 
 target_compile_definitions(av-imgdata-worker PRIVATE
   AV_IMGDATA_WORKER_VERSION="0.1.0-phase-d"
 )
+target_compile_definitions(av-imgdata-worker-api-loop PRIVATE
+  AV_IMGDATA_WORKER_VERSION="0.1.0-phase-e"
+)
 
 if(MINGW)
-  # Keep the Windows worker executable runnable on a plain Windows 11 host
+  # Keep the Windows worker executables runnable on a plain Windows 11 host
   # without requiring MinGW runtime DLLs next to the .exe.
   target_link_options(av-imgdata-worker PRIVATE
     -static-libgcc
     -static-libstdc++
   )
+  target_link_options(av-imgdata-worker-api-loop PRIVATE
+    -static-libgcc
+    -static-libstdc++
+  )
 endif()
 
-install(TARGETS av-imgdata-worker RUNTIME DESTINATION bin)
+install(TARGETS av-imgdata-worker av-imgdata-worker-api-loop RUNTIME DESTINATION bin)
 install(FILES config/worker-config.example.json DESTINATION config)
 install(FILES jobs/sample-worker-job.json DESTINATION jobs)
 
