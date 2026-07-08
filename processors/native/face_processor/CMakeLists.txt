@@ -4,6 +4,7 @@ project(av_imgdata_face_processor LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+option(AV_FACE_PROCESSOR_BUNDLE_JPEG "Install the resolved libjpeg runtime into the native processor bundle" OFF)
 
 if(NOT ONNXRUNTIME_ROOT)
     message(FATAL_ERROR "ONNXRUNTIME_ROOT is required")
@@ -35,6 +36,21 @@ find_library(JPEG_LIBRARY
 if(NOT JPEG_INCLUDE_DIR OR NOT JPEG_LIBRARY)
     message(FATAL_ERROR "libjpeg not found; set JPEG_ROOT to a sysroot containing jpeglib.h and libjpeg")
 endif()
+
+file(READ "${JPEG_INCLUDE_DIR}/jpeglib.h" JPEG_HEADER_TEXT)
+string(REGEX MATCH "#define[ \t]+JPEG_LIB_VERSION[ \t]+([0-9]+)" JPEG_VERSION_MATCH "${JPEG_HEADER_TEXT}")
+set(JPEG_HEADER_VERSION "${CMAKE_MATCH_1}")
+get_filename_component(JPEG_LIBRARY_REALPATH "${JPEG_LIBRARY}" REALPATH)
+if(UNIX AND NOT APPLE AND JPEG_HEADER_VERSION)
+    if(JPEG_HEADER_VERSION STREQUAL "80" AND JPEG_LIBRARY_REALPATH MATCHES "libjpeg\\.so\\.62")
+        message(FATAL_ERROR "libjpeg ABI mismatch: jpeglib.h reports JPEG_LIB_VERSION=80 but JPEG_LIBRARY resolves to ${JPEG_LIBRARY_REALPATH}. Install matching JPEG development/runtime packages or set JPEG_ROOT to a consistent libjpeg root.")
+    endif()
+    if(JPEG_HEADER_VERSION STREQUAL "62" AND JPEG_LIBRARY_REALPATH MATCHES "libjpeg\\.so\\.8")
+        message(FATAL_ERROR "libjpeg ABI mismatch: jpeglib.h reports JPEG_LIB_VERSION=62 but JPEG_LIBRARY resolves to ${JPEG_LIBRARY_REALPATH}. Install matching JPEG development/runtime packages or set JPEG_ROOT to a consistent libjpeg root.")
+    endif()
+endif()
+message(STATUS "libjpeg include: ${JPEG_INCLUDE_DIR}; library: ${JPEG_LIBRARY_REALPATH}; JPEG_LIB_VERSION=${JPEG_HEADER_VERSION}")
+
 find_path(HEIF_INCLUDE_DIR
     NAMES libheif/heif.h
     PATHS "${HEIF_ROOT}/include" "${HEIF_ROOT}/usr/include" "${JPEG_ROOT}/include" "${JPEG_ROOT}/usr/include"
@@ -57,4 +73,6 @@ install(TARGETS av-imgdata-face-processor RUNTIME DESTINATION bin)
 install(DIRECTORY "${ONNXRUNTIME_ROOT}/lib/" DESTINATION lib
     FILES_MATCHING PATTERN "libonnxruntime.so*"
 )
-install(FILES "${JPEG_LIBRARY}" DESTINATION lib)
+if(AV_FACE_PROCESSOR_BUNDLE_JPEG)
+    install(FILES "${JPEG_LIBRARY}" DESTINATION lib)
+endif()
