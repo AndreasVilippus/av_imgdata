@@ -31,6 +31,7 @@ namespace {
 struct CommandResult {
     int exit_code = -1;
     std::string output;
+    std::string command;
 };
 
 struct LoopConfig {
@@ -326,6 +327,7 @@ std::string json_escape(const std::string& value) {
 
 CommandResult run_command_capture(const std::string& command) {
     CommandResult result;
+    result.command = command;
     std::array<char, 512> buffer{};
     FILE* pipe = POPEN(command.c_str(), "r");
     if (!pipe) {
@@ -583,12 +585,16 @@ std::string claimed_job_to_local_job(const std::string& claimed_job, const std::
     return job.str();
 }
 
-CommandResult run_worker_once(const LoopConfig& config, const std::string& job_path) {
+std::string worker_once_command(const LoopConfig& config, const std::string& job_path) {
     std::string command = shell_quote(config.worker_bin);
     command += " once --config " + shell_quote(config.config_path);
     command += " --job " + shell_quote(normalize_path_lexically(job_path));
     command += " 2>&1";
-    return run_command_capture(command);
+    return command;
+}
+
+CommandResult run_worker_once(const LoopConfig& config, const std::string& job_path) {
+    return run_command_capture(worker_once_command(config, job_path));
 }
 
 std::string result_body(const LoopConfig& config, const std::string& job_id, const std::string& worker_result) {
@@ -695,7 +701,14 @@ int main(int argc, char** argv) {
                 std::cout << ",\"job_id\":\"" << json_escape(job_id) << "\",\"reported\":\"result\",\"worker_exit_code\":" << exit_code << ",\"worker_raw_status\":" << worker_result.exit_code;
             } else {
                 api_post_payload(config, "fail", token, fail_body(config, job_id, "worker_execution_failed", worker_result.output, worker_result.output));
-                std::cout << ",\"job_id\":\"" << json_escape(job_id) << "\",\"reported\":\"fail\",\"worker_exit_code\":" << exit_code << ",\"worker_raw_status\":" << worker_result.exit_code << ",\"job_path\":\"" << json_escape(job_path) << "\",\"worker_output_preview\":\"" << json_escape(abbreviate(worker_result.output, 600)) << "\"";
+                std::cout << ",\"job_id\":\"" << json_escape(job_id) << "\",\"reported\":\"fail\",\"worker_exit_code\":" << exit_code << ",\"worker_raw_status\":" << worker_result.exit_code
+                          << ",\"cwd\":\"" << json_escape(current_working_dir()) << "\""
+                          << ",\"config_path\":\"" << json_escape(config.config_path) << "\""
+                          << ",\"worker_bin\":\"" << json_escape(config.worker_bin) << "\""
+                          << ",\"workspace_root\":\"" << json_escape(config.workspace_root) << "\""
+                          << ",\"job_path\":\"" << json_escape(job_path) << "\""
+                          << ",\"worker_command_preview\":\"" << json_escape(abbreviate(worker_result.command, 1000)) << "\""
+                          << ",\"worker_output_preview\":\"" << json_escape(abbreviate(worker_result.output, 600)) << "\"";
             }
         }
         std::cout << "}" << std::endl;
