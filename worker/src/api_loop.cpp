@@ -586,7 +586,11 @@ std::string claimed_job_to_local_job(const std::string& claimed_job, const std::
 }
 
 std::string worker_once_command(const LoopConfig& config, const std::string& job_path) {
+#ifdef _WIN32
+    std::string command = "call " + shell_quote(config.worker_bin);
+#else
     std::string command = shell_quote(config.worker_bin);
+#endif
     command += " once --config " + shell_quote(config.config_path);
     command += " --job " + shell_quote(normalize_path_lexically(job_path));
     command += " 2>&1";
