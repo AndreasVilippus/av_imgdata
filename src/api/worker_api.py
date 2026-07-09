@@ -49,14 +49,21 @@ def _worker_api_enabled() -> bool:
     return bool(config.get("ENABLED", False))
 
 
-def _worker_api_state_path() -> Optional[Path]:
-    configured = str(_worker_api_config().get("STATE_PATH") or "").strip()
+def _resolve_package_var_path(value: str) -> Optional[Path]:
+    configured = str(value or "").strip()
     if not configured:
         return None
     path = Path(configured)
     if path.is_absolute():
         return path
     return _package_var() / path
+
+
+def _worker_api_state_path() -> Optional[Path]:
+    env_path = _resolve_package_var_path(os.getenv("AV_IMGDATA_WORKER_API_STATE_PATH", ""))
+    if env_path is not None:
+        return env_path
+    return _resolve_package_var_path(_worker_api_config().get("STATE_PATH") or "")
 
 
 def _headers(request: Request) -> Dict[str, str]:
