@@ -16,8 +16,10 @@ PIP_CACHE_DIR="${VAR_DIR}/pip_cache"
 APP_MODULE="app.main:app"
 HOST="127.0.0.1"
 PORT="9771"
+WORKER_API_STATE_PATH="${VAR_DIR}/worker-api-state.json"
 
 export NO_ALBUMENTATIONS_UPDATE=1
+export AV_IMGDATA_WORKER_API_STATE_PATH="${WORKER_API_STATE_PATH}"
 
 # Repository root (script directory's parent) — used to ensure imports work in test environments
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
