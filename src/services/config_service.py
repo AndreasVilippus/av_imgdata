@@ -138,6 +138,10 @@ class ConfigService:
                     "SINGLE_SOURCE_OF_TRUTH": "",
                 },
             },
+            "worker_api": {
+                "ENABLED": False,
+                "STATE_PATH": "",
+            },
             "debug": {
                 "IO_METRICS_ENABLED": False,
                 "BACKEND_DEBUG_ENABLED": False,
@@ -341,6 +345,11 @@ class ConfigService:
         image_processor_vips["ALLOW_FALLBACK_TO_DEFAULT"] = bool(image_processor_vips.get("ALLOW_FALLBACK_TO_DEFAULT", True))
         native_processors["IMAGE_PROCESSOR_VIPS"] = image_processor_vips
         config["native_processors"] = native_processors
+
+        worker_api = config.get("worker_api", {}) if isinstance(config.get("worker_api"), dict) else {}
+        worker_api["ENABLED"] = bool(worker_api.get("ENABLED", False))
+        worker_api["STATE_PATH"] = str(worker_api.get("STATE_PATH") or "").strip()
+        config["worker_api"] = worker_api
 
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}
         debug["BACKEND_DEBUG_ENABLED"] = bool(debug.get("BACKEND_DEBUG_ENABLED"))
