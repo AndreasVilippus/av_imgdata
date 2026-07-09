@@ -134,6 +134,94 @@ std::string current_working_dir() {
     return buffer.data();
 }
 
+char preferred_separator_for(const std::string& path) {
+#ifdef _WIN32
+    (void)path;
+    return '\\';
+#else
+    return path.find('\\') != std::string::npos ? '\\' : '/';
+#endif
+}
+
+std::string normalize_path_lexically(const std::string& path) {
+    if (path.empty()) {
+        return path;
+    }
+
+    const char sep = preferred_separator_for(path);
+    std::string normalized = path;
+    for (char& c : normalized) {
+        if (is_path_separator(c)) {
+            c = sep;
+        }
+    }
+
+    std::string prefix;
+    std::size_t pos = 0;
+    bool absolute = false;
+
+    if (normalized.size() >= 2 && normalized[1] == ':') {
+        prefix = normalized.substr(0, 2);
+        pos = 2;
+        if (pos < normalized.size() && normalized[pos] == sep) {
+            prefix += sep;
+            ++pos;
+            absolute = true;
+        }
+    } else if (normalized.size() >= 2 && normalized[0] == sep && normalized[1] == sep) {
+        prefix = std::string(2, sep);
+        pos = 2;
+        absolute = true;
+    } else if (normalized[0] == sep) {
+        prefix = std::string(1, sep);
+        pos = 1;
+        absolute = true;
+    }
+
+    std::vector<std::string> parts;
+    while (pos <= normalized.size()) {
+        const std::size_t next = normalized.find(sep, pos);
+        const std::string part = normalized.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
+        if (part.empty() || part == ".") {
+            // skip
+        } else if (part == "..") {
+            if (!parts.empty() && parts.back() != "..") {
+                parts.pop_back();
+            } else if (!absolute) {
+                parts.push_back(part);
+            }
+        } else {
+            parts.push_back(part);
+        }
+        if (next == std::string::npos) {
+            break;
+        }
+        pos = next + 1;
+    }
+
+    std::string output = prefix;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        if (!output.empty() && output.back() != sep) {
+            output += sep;
+        }
+        output += parts[i];
+    }
+    if (output.empty()) {
+        return ".";
+    }
+    return output;
+}
+
+std::string absolute_path(const std::string& path) {
+    if (path.empty()) {
+        return path;
+    }
+    if (looks_absolute(path)) {
+        return normalize_path_lexically(path);
+    }
+    return normalize_path_lexically(join_path(current_working_dir(), path));
+}
+
 bool file_exists(const std::string& path) {
     if (path.empty()) {
         return false;
@@ -173,9 +261,9 @@ bool ensure_dir(const std::string& path) {
         return false;
     }
 #ifdef _WIN32
-    std::string command = "mkdir " + shell_quote(path) + " >NUL 2>NUL";
+    std::string command = "mkdir " + shell_quote(normalize_path_lexically(path)) + " >NUL 2>NUL";
 #else
-    std::string command = "mkdir -p " + shell_quote(path);
+    std::string command = "mkdir -p " + shell_quote(normalize_path_lexically(path));
 #endif
     return std::system(command.c_str()) == 0;
 }
@@ -351,9 +439,9 @@ std::string read_token(const std::string& token_file) {
 
 std::string normalize_job_path_value(const std::string& base_dir, const std::string& value) {
     if (value.empty() || looks_absolute(value)) {
-        return value;
+        return normalize_path_lexically(value);
     }
-    return join_path(base_dir, value);
+    return normalize_path_lexically(join_path(base_dir, value));
 }
 
 bool replace_json_string_value(std::string* json, const std::string& key, const std::string& base_dir) {
@@ -399,14 +487,15 @@ std::string normalize_payload_paths(std::string payload, const std::string& base
 
 LoopConfig parse_config(const std::string& config_path, const std::string& config_json, const std::vector<std::string>& args) {
     LoopConfig config;
-    config.config_path = config_path;
-    config.config_dir = dirname_of(config_path);
+    config.config_path = absolute_path(config_path);
+    config.config_dir = dirname_of(config.config_path);
     config.worker_id = extract_json_string(config_json, "worker_id");
-    config.workspace_root = join_path(config.config_dir, extract_json_string(config_json, "workspace_root"));
+    config.workspace_root = absolute_path(join_path(config.config_dir, extract_json_string(config_json, "workspace_root")));
     config.path_base_dir = arg_value(args, "--path-base-dir");
     if (config.path_base_dir.empty()) {
         config.path_base_dir = current_working_dir();
     }
+    config.path_base_dir = absolute_path(config.path_base_dir);
     config.poll_interval_seconds = parse_int(extract_json_string(config_json, "poll_interval_seconds"), 2);
     if (config.poll_interval_seconds < 1) {
         config.poll_interval_seconds = 1;
@@ -414,7 +503,7 @@ LoopConfig parse_config(const std::string& config_path, const std::string& confi
 
     const std::string auth = extract_object_block(config_json, "auth");
     config.token_file = extract_json_string(auth.empty() ? config_json : auth, "token_file");
-    config.token_file = join_path(config.config_dir, config.token_file.empty() ? "../worker.token" : config.token_file);
+    config.token_file = absolute_path(join_path(config.config_dir, config.token_file.empty() ? "../worker.token" : config.token_file));
 
     config.api_url = arg_value(args, "--api-url");
     if (config.api_url.empty()) {
@@ -436,6 +525,7 @@ LoopConfig parse_config(const std::string& config_path, const std::string& confi
         config.worker_bin = join_path(config.config_dir, "../bin/av-imgdata-worker");
 #endif
     }
+    config.worker_bin = absolute_path(config.worker_bin);
     return config;
 }
 
@@ -444,7 +534,7 @@ std::string capabilities_json() {
 }
 
 std::string api_post_payload(const LoopConfig& config, const std::string& action, const std::string& token, const std::string& body) {
-    const std::string body_path = join_path(config.workspace_root, ".api-" + action + "-request.json");
+    const std::string body_path = normalize_path_lexically(join_path(config.workspace_root, ".api-" + action + "-request.json"));
     write_file(body_path, body);
     const std::string url = config.api_url + "/" + action;
     std::string command = "curl -sS -X POST";
@@ -496,7 +586,7 @@ std::string claimed_job_to_local_job(const std::string& claimed_job, const std::
 CommandResult run_worker_once(const LoopConfig& config, const std::string& job_path) {
     std::string command = shell_quote(config.worker_bin);
     command += " once --config " + shell_quote(config.config_path);
-    command += " --job " + shell_quote(job_path);
+    command += " --job " + shell_quote(normalize_path_lexically(job_path));
     command += " 2>&1";
     return run_command_capture(command);
 }
@@ -576,7 +666,7 @@ int main(int argc, char** argv) {
     }
 
     const std::string token = read_token(config.token_file);
-    ensure_dir(join_path(config.workspace_root, "claimed-jobs"));
+    ensure_dir(normalize_path_lexically(join_path(config.workspace_root, "claimed-jobs")));
 
     int iteration = 0;
     while (max_iterations <= 0 || iteration < max_iterations) {
@@ -595,7 +685,7 @@ int main(int argc, char** argv) {
         if (claim_status == "claimed") {
             const std::string claimed_job = extract_object_block(claim, "job");
             const std::string job_id = extract_json_string(claimed_job, "job_id");
-            const std::string job_path = join_path(join_path(config.workspace_root, "claimed-jobs"), job_id + ".json");
+            const std::string job_path = normalize_path_lexically(join_path(join_path(config.workspace_root, "claimed-jobs"), job_id + ".json"));
             const std::string local_job = claimed_job_to_local_job(claimed_job, config.path_base_dir);
             write_file(job_path, local_job);
             const CommandResult worker_result = run_worker_once(config, job_path);
