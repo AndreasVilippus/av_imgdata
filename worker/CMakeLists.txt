@@ -28,8 +28,6 @@ target_compile_definitions(av-imgdata-worker-api-loop PRIVATE
 )
 
 if(MINGW)
-  # Keep the Windows worker executables runnable on a plain Windows 11 host
-  # without requiring MinGW runtime DLLs next to the .exe.
   target_link_options(av-imgdata-worker PRIVATE
     -static-libgcc
     -static-libstdc++
@@ -49,3 +47,6 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../processor_contract/schemas/face-native-j
 endif()
 
 install(DIRECTORY packaging/ DESTINATION packaging)
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/packaging/windows/Initialize-AVImgDataWorker.ps1")
+  install(FILES packaging/windows/Initialize-AVImgDataWorker.ps1 DESTINATION .)
+endif()
