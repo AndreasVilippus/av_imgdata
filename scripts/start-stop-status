@@ -35,6 +35,22 @@ log() {
     :
 }
 
+repair_runtime_file_permissions() {
+    # Keep runtime files consistent with the DSM package var directory owner.
+    # This avoids hard-coded usernames and fixes files that were created by
+    # root-run administrative helper commands.
+    [ -d "${VAR_DIR}" ] || return 0
+
+    owner_group="$(/usr/bin/stat -c '%u:%g' "${VAR_DIR}" 2>/dev/null || /bin/stat -c '%u:%g' "${VAR_DIR}" 2>/dev/null || true)"
+    [ -n "${owner_group}" ] || return 0
+
+    for path in "${VAR_DIR}/config.json" "${WORKER_API_STATE_PATH}"; do
+        [ -e "${path}" ] || continue
+        chown "${owner_group}" "${path}" 2>/dev/null || true
+        chmod 600 "${path}" 2>/dev/null || true
+    done
+}
+
 pip_install_requirements() {
     req_file="$1"
     wheel_dir="${2:-${WHEEL_DIR}}"
@@ -77,6 +93,7 @@ start() {
     mkdir -p "${VAR_DIR}"
     cd "${SYNOPKG_PKGDEST}" || exit 1
     rm -f "${LEGACY_LOG_FILE}" "${LEGACY_LOG_FILE}".*
+    repair_runtime_file_permissions
 
     if is_running; then
         echo "${PACKAGE} already running (pid $(cat "${PID_FILE}"))."
@@ -93,6 +110,8 @@ start() {
         echo "Failed to start ${PACKAGE}. SQLite runtime database initialization failed."
         return 1
     fi
+
+    repair_runtime_file_permissions
 
     "${UVICORN}" "${APP_MODULE}" \
         --host "${HOST}" \
