@@ -27,20 +27,26 @@ trap cleanup_native_build_artifacts EXIT
 # load helper functions
 source /pkgscripts/include/pkg_util.sh
 
-copy_external_worker_bundles() {
+package_external_worker_archives() {
 	local package_tgz_dir="$1"
 	local target
 	local source_dir
+	local bundle_name
+	local archive_path
+	local archive_type
 	local required_targets="${AV_IMGDATA_PACKAGE_WORKER_TARGETS:-linux-x86_64 docker-linux-x86_64 windows-x86_64}"
 
 	if [ "${AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS:-1}" = "0" ]; then
-		echo "Skipping external worker bundle packaging because AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS=0."
+		echo "Skipping external worker archive packaging because AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS=0."
 		return 0
 	fi
 
 	mkdir -p "$package_tgz_dir/workers"
 	for target in $required_targets; do
-		source_dir="dist/av-imgdata-worker-${target}"
+		bundle_name="av-imgdata-worker-${target}"
+		source_dir="dist/${bundle_name}"
+		archive_type="tar.gz"
+		archive_path="$package_tgz_dir/workers/${bundle_name}.tar.gz"
 		if [ ! -d "$source_dir" ]; then
 			echo "ERROR: external worker bundle missing: $source_dir"
 			echo "Run tools/build-package.sh, or build the worker with: tools/build-worker.sh --target $target --clean"
@@ -51,13 +57,24 @@ copy_external_worker_bundles() {
 				echo "ERROR: Windows external worker binary missing: $source_dir/bin/av-imgdata-worker.exe"
 				exit 1
 			fi
+			if ! command -v zip >/dev/null 2>&1; then
+				echo "ERROR: zip command missing; required to package Windows external worker archive."
+				exit 1
+			fi
+			archive_type="zip"
+			archive_path="$package_tgz_dir/workers/${bundle_name}.zip"
 		else
 			if [ ! -x "$source_dir/bin/av-imgdata-worker" ]; then
 				echo "ERROR: external worker binary missing or not executable: $source_dir/bin/av-imgdata-worker"
 				exit 1
 			fi
 		fi
-		cp -av "$source_dir" "$package_tgz_dir/workers/"
+		echo "Packaging external worker archive: $archive_path"
+		if [ "$archive_type" = "zip" ]; then
+			(cd dist && zip -qr "$archive_path" "$bundle_name")
+		else
+			tar -C dist -czf "$archive_path" "$bundle_name"
+		fi
 	done
 }
 
@@ -122,7 +139,7 @@ create_install() {
 			cp -av "$VIPS_INSTALL/share/licenses" "$package_tgz_dir/share/"
 		fi
 	fi
-	copy_external_worker_bundles "$package_tgz_dir"
+	package_external_worker_archives "$package_tgz_dir"
 	# Fail fast if UI entrypoint didn't get packaged
 	if [ ! -f "$package_tgz_dir/ui/index.cgi" ]; then
 		echo "ERROR: ui/index.cgi missing in package staging dir."

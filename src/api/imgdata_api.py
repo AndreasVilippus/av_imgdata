@@ -4,8 +4,10 @@ import hashlib
 import json
 import logging
 import os
+import tarfile
 import time
 import traceback
+import zipfile
 from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -24,6 +26,8 @@ DSM_INTERNAL_BASE_URL = os.getenv("DSM_INTERNAL_BASE_URL", "https://127.0.0.1:50
 DSM_INTERNAL_VERIFY_SSL = os.getenv("DSM_INTERNAL_VERIFY_SSL", "false").lower() in ("1", "true", "yes")
 SESSION_MANAGER = SessionManager(verify_ssl=DSM_INTERNAL_VERIFY_SSL, timeout=20)
 IMGDATA = ImgDataService(SESSION_MANAGER)
+WORKER_ARCHIVE_SUFFIXES = (".zip", ".tar.gz", ".tgz")
+DEFAULT_WORKER_TARGETS = ("linux-x86_64", "docker-linux-x86_64", "windows-x86_64")
 
 _REQUEST_MUTATION_CONTEXT: ContextVar[Dict[str, Any]] = ContextVar("request_mutation_context", default={})
 _DEBUG_LOGGER = logging.getLogger("av_imgdata.backend_debug")
@@ -65,6 +69,124 @@ def backend_debug_log_path() -> str:
     if var_dir:
         return str(Path(var_dir) / "backend-debug.log")
     return str(Path(IMGDATA.config._config_path).parent / "backend-debug.log")
+
+
+def _package_target_root() -> Path:
+    configured = os.getenv("SYNOPKG_PKGDEST", "").strip()
+    if configured:
+        return Path(configured)
+    return Path("/var/packages/AV_ImgData/target")
+
+
+def _configured_worker_targets() -> Tuple[str, ...]:
+    configured = os.getenv("AV_IMGDATA_PACKAGE_WORKER_TARGETS", "").strip()
+    if not configured:
+        return DEFAULT_WORKER_TARGETS
+    targets = []
+    for target in configured.split():
+        target = target.strip()
+        if target and target not in targets:
+            targets.append(target)
+    return tuple(targets) or DEFAULT_WORKER_TARGETS
+
+
+def _is_safe_worker_target(target: str) -> bool:
+    if not target:
+        return False
+    return all(char.isalnum() or char in {"-", "_", "."} for char in target)
+
+
+def _worker_binary_relative_path(target: str) -> str:
+    return "bin/av-imgdata-worker.exe" if target == "windows-x86_64" else "bin/av-imgdata-worker"
+
+
+def _find_worker_archive(workers_root: Path, target: str) -> Optional[Path]:
+    bundle_name = f"av-imgdata-worker-{target}"
+    for suffix in WORKER_ARCHIVE_SUFFIXES:
+        archive = workers_root / f"{bundle_name}{suffix}"
+        if archive.is_file():
+            return archive
+    return None
+
+
+def _archive_contains_member(archive: Path, member: str) -> bool:
+    normalized = member.replace(os.sep, "/").strip("/")
+    try:
+        if archive.name.endswith(".zip"):
+            with zipfile.ZipFile(archive) as handle:
+                names = {name.strip("/") for name in handle.namelist()}
+                return normalized in names
+        if archive.name.endswith(".tar.gz") or archive.name.endswith(".tgz"):
+            with tarfile.open(archive, mode="r:gz") as handle:
+                names = {name.name.strip("/") for name in handle.getmembers()}
+                return normalized in names
+    except Exception:
+        return False
+    return False
+
+
+def _external_worker_package_status() -> Dict[str, Any]:
+    package_root = _package_target_root()
+    workers_root = package_root / "workers"
+    targets = list(_configured_worker_targets())
+    if workers_root.is_dir():
+        for candidate in sorted(workers_root.iterdir()):
+            name = candidate.name
+            if candidate.is_dir() and name.startswith("av-imgdata-worker-"):
+                target = name[len("av-imgdata-worker-"):]
+                if _is_safe_worker_target(target) and target not in targets:
+                    targets.append(target)
+
+    bundles = []
+    for target in targets:
+        bundle_name = f"av-imgdata-worker-{target}"
+        bundle_dir = workers_root / bundle_name
+        binary_relative = _worker_binary_relative_path(target)
+        binary_path = bundle_dir / binary_relative
+        archive = _find_worker_archive(workers_root, target)
+        download_ready = archive is not None
+        bundle_exists = bundle_dir.is_dir()
+        archive_binary_member = f"{bundle_name}/{binary_relative}"
+        if binary_path.is_file():
+            binary_exists = True
+            binary_location = "bundle"
+        elif archive is not None and _archive_contains_member(archive, archive_binary_member):
+            binary_exists = True
+            binary_location = "archive"
+        else:
+            binary_exists = False
+            binary_location = "missing"
+        if download_ready:
+            reason = "archive_ready"
+        elif bundle_exists:
+            reason = "archive_missing"
+        else:
+            reason = "bundle_missing"
+        bundles.append({
+            "target": target,
+            "bundle_name": bundle_name,
+            "bundle_path": str(bundle_dir),
+            "bundle_exists": bundle_exists,
+            "binary_relative_path": binary_relative,
+            "binary_exists": binary_exists,
+            "binary_location": binary_location,
+            "archive_path": str(archive) if archive else "",
+            "download_ready": download_ready,
+            "download_url": f"/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_download?target={target}" if download_ready else "",
+            "reason": reason,
+        })
+
+    return {
+        "package_root": str(package_root),
+        "workers_root": str(workers_root),
+        "workers_root_exists": workers_root.is_dir(),
+        "archive_formats_checked": list(WORKER_ARCHIVE_SUFFIXES),
+        "bundles": bundles,
+        "download_ready": any(bundle["download_ready"] for bundle in bundles),
+        "build_process_requires_archives": any(
+            bundle["bundle_exists"] and not bundle["download_ready"] for bundle in bundles
+        ),
+    }
 
 
 def _backend_debug_logger() -> Optional[logging.Logger]:
@@ -2436,6 +2558,49 @@ async def config_get(request: Request):
             "checks_ignore_lists": IMGDATA.getChecksIgnoreListsStatus(),
         },
     }
+
+
+@router.post("/external_worker_status")
+async def external_worker_status(request: Request):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    config = IMGDATA.getRuntimeConfig()
+    worker_api = config.get("worker_api", {}) if isinstance(config.get("worker_api"), dict) else {}
+    return {
+        "success": True,
+        "data": {
+            "worker_api": {
+                "ENABLED": bool(worker_api.get("ENABLED", False)),
+                "STATE_PATH": str(worker_api.get("STATE_PATH") or ""),
+            },
+            "package": _external_worker_package_status(),
+        },
+    }
+
+
+@router.get("/external_worker_download")
+async def external_worker_download(request: Request, target: str = ""):
+    session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+
+    target = str(target or "").strip()
+    if not _is_safe_worker_target(target):
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": {"code": 400, "message": "invalid_worker_target"}},
+        )
+
+    workers_root = _package_target_root() / "workers"
+    archive = _find_worker_archive(workers_root, target)
+    if archive is None:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": {"code": 404, "message": "worker_archive_not_found"}},
+        )
+    return FileResponse(archive, filename=archive.name)
 
 
 @router.post("/database_name_mappings")

@@ -4,6 +4,9 @@
 
 This document describes the optional worker architecture for `av_imgdata` after the first external Worker API path has been validated.
 
+Version `0.10.0` is the development line for turning the validated Worker API
+path into a maintained external-worker implementation.
+
 The DSM package remains the authority for:
 
 ```text
@@ -135,7 +138,7 @@ windows-x86_64
 docker-linux-x86_64
 ```
 
-The package may include generated worker bundles under the installed package target so that administrators can copy/download them for external hosts. These bundled artifacts are package contents, not source-controlled `dist/` files.
+The package includes generated worker archives under the installed package target so that administrators can download them for external hosts. Linux and Docker worker targets are packaged as `.tar.gz`; Windows worker targets are packaged as `.zip`. The package must not install the unpacked worker bundle directories; those remain generated build inputs under `dist/`, not package contents.
 
 ## Worker API Endpoint Model
 

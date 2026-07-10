@@ -16,6 +16,8 @@
 - Optionally use the package-shipped native libvips image processor for image
   information, thumbnail/normalization work, and HEIC/HEIF decoding through the
   packaged libheif/libde265 stack.
+- Build optional external worker bundles for Windows and Linux hosts as the
+  0.10.0 development focus for offloading selected processor jobs.
 
 ## Supported Environment
 

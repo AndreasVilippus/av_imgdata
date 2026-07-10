@@ -11,6 +11,7 @@
 						<checks-view v-if="selectedOption === 'checks'" :vm="this" />
 						<cleanup-view v-if="selectedOption === 'cleanup'" :vm="this" />
 						<configuration-view v-if="selectedOption === 'configuration'" />
+						<external-worker-view v-if="selectedOption === 'external_worker'" />
 						<external-libraries-view v-if="selectedOption === 'external_libraries'" :vm="this" mode="info" />
 						<external-libraries-view v-if="selectedOption === 'external_libraries_exiftool'" :vm="this" mode="config" />
 						<external-libraries-view v-if="selectedOption === 'external_libraries_insightface'" :vm="this" mode="insightface" />
@@ -39,6 +40,7 @@ import CleanupView from './views/CleanupView.vue';
 import ConfigurationView from './views/ConfigurationView.vue';
 import DatabaseListsView from './views/DatabaseListsView.vue';
 import ExternalLibrariesView from './views/ExternalLibrariesView.vue';
+import ExternalWorkerView from './views/ExternalWorkerView.vue';
 import FaceMatchView from './views/FaceMatchView.vue';
 import StatusView from './views/StatusView.vue';
 
@@ -51,6 +53,7 @@ export default {
 		ConfigurationView,
 		DatabaseListsView,
 		ExternalLibrariesView,
+		ExternalWorkerView,
 		FaceMatchView,
 		StatusView,
 	},

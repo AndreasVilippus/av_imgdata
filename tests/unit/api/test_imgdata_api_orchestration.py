@@ -1,4 +1,6 @@
 import asyncio
+import tarfile
+import zipfile
 from unittest.mock import Mock
 
 from api import imgdata_api
@@ -143,6 +145,91 @@ def test_config_get_exposes_backend_debug_log_path(monkeypatch, tmp_path):
 
     assert payload["success"] is True
     assert payload["data"]["backend_debug_log_path"] == str(tmp_path / "backend-debug.log")
+
+
+def test_external_worker_status_reports_bundle_without_download_archive(monkeypatch, tmp_path):
+    package_root = tmp_path / "target"
+    bundle = package_root / "workers" / "av-imgdata-worker-linux-x86_64"
+    binary = bundle / "bin" / "av-imgdata-worker"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setenv("SYNOPKG_PKGDEST", str(package_root))
+    monkeypatch.setenv("AV_IMGDATA_PACKAGE_WORKER_TARGETS", "linux-x86_64")
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getRuntimeConfig",
+        Mock(return_value={"worker_api": {"ENABLED": True, "STATE_PATH": "runtime/worker-api-state.json"}}),
+    )
+
+    payload = _run(imgdata_api.external_worker_status(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["worker_api"]["ENABLED"] is True
+    package = payload["data"]["package"]
+    assert package["build_process_requires_archives"] is True
+    assert package["download_ready"] is False
+    assert package["bundles"][0]["bundle_exists"] is True
+    assert package["bundles"][0]["binary_exists"] is True
+    assert package["bundles"][0]["download_ready"] is False
+    assert package["bundles"][0]["reason"] == "archive_missing"
+
+
+def test_external_worker_status_reports_ready_archive(monkeypatch, tmp_path):
+    package_root = tmp_path / "target"
+    workers_root = package_root / "workers"
+    workers_root.mkdir(parents=True)
+    archive = workers_root / "av-imgdata-worker-linux-x86_64.tar.gz"
+    binary_fixture = tmp_path / "av-imgdata-worker-linux-x86_64" / "bin" / "av-imgdata-worker"
+    binary_fixture.parent.mkdir(parents=True)
+    binary_fixture.write_text("#!/bin/sh\n", encoding="utf-8")
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(binary_fixture.parent.parent, arcname="av-imgdata-worker-linux-x86_64")
+    monkeypatch.setenv("SYNOPKG_PKGDEST", str(package_root))
+    monkeypatch.setenv("AV_IMGDATA_PACKAGE_WORKER_TARGETS", "linux-x86_64")
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getRuntimeConfig",
+        Mock(return_value={"worker_api": {"ENABLED": False, "STATE_PATH": ""}}),
+    )
+
+    payload = _run(imgdata_api.external_worker_status(object()))
+
+    package = payload["data"]["package"]
+    assert package["build_process_requires_archives"] is False
+    assert package["download_ready"] is True
+    assert package["bundles"][0]["bundle_exists"] is False
+    assert package["bundles"][0]["binary_exists"] is True
+    assert package["bundles"][0]["binary_location"] == "archive"
+    assert package["bundles"][0]["download_ready"] is True
+    assert package["bundles"][0]["archive_path"] == str(archive)
+    assert package["bundles"][0]["download_url"].endswith("target=linux-x86_64")
+
+
+def test_external_worker_status_reports_ready_zip_archive(monkeypatch, tmp_path):
+    package_root = tmp_path / "target"
+    workers_root = package_root / "workers"
+    workers_root.mkdir(parents=True)
+    archive = workers_root / "av-imgdata-worker-windows-x86_64.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("av-imgdata-worker-windows-x86_64/bin/av-imgdata-worker.exe", b"MZ")
+    monkeypatch.setenv("SYNOPKG_PKGDEST", str(package_root))
+    monkeypatch.setenv("AV_IMGDATA_PACKAGE_WORKER_TARGETS", "windows-x86_64")
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getRuntimeConfig",
+        Mock(return_value={"worker_api": {"ENABLED": False, "STATE_PATH": ""}}),
+    )
+
+    payload = _run(imgdata_api.external_worker_status(object()))
+
+    bundle = payload["data"]["package"]["bundles"][0]
+    assert bundle["download_ready"] is True
+    assert bundle["binary_exists"] is True
+    assert bundle["binary_location"] == "archive"
 
 
 def test_face_matching_progress_writes_debug_summary_when_enabled(monkeypatch, tmp_path):

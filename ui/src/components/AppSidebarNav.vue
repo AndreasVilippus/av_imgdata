@@ -43,6 +43,14 @@
 		</button>
 		<button
 			class="sm-nav-item"
+			:class="{ active: selectedOption === 'external_worker' }"
+			@click="$emit('select', 'external_worker')"
+		>
+			<ExternalWorkerIcon class="sm-nav-icon" />
+			{{ $avt('nav:external_worker', 'External worker') }}
+		</button>
+		<button
+			class="sm-nav-item"
 			:class="{ active: selectedOption === 'external_libraries' }"
 			@click="$emit('select', 'external_libraries')"
 		>
@@ -85,6 +93,7 @@ import ChecksIcon from './icons/ChecksIcon.vue';
 import CleanupIcon from './icons/CleanupIcon.vue';
 import ConfigIcon from './icons/ConfigIcon.vue';
 import ExternalLibrariesIcon from './icons/ExternalLibrariesIcon.vue';
+import ExternalWorkerIcon from './icons/PackageIcon.vue';
 import FaceMatchIcon from './icons/FaceMatchIcon.vue';
 import StatusIcon from './icons/StatusIcon.vue';
 
@@ -95,6 +104,7 @@ export default {
 		CleanupIcon,
 		ConfigIcon,
 		ExternalLibrariesIcon,
+		ExternalWorkerIcon,
 		FaceMatchIcon,
 		StatusIcon,
 	},
