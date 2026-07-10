@@ -24,7 +24,7 @@ target_compile_definitions(av-imgdata-worker PRIVATE
   AV_IMGDATA_WORKER_VERSION="0.1.0-phase-d"
 )
 target_compile_definitions(av-imgdata-worker-api-loop PRIVATE
-  AV_IMGDATA_WORKER_VERSION="0.1.0-phase-e"
+  AV_IMGDATA_WORKER_VERSION="0.1.0-phase-h1"
 )
 
 if(MINGW)
