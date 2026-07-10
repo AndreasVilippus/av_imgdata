@@ -11,6 +11,10 @@ PKGCREATE="${TOOLKIT_ROOT}/PkgCreate.py"
 PACKAGE_NAME="av_imgdata"
 
 DEFAULT_ARGS=(-v 7.3 -p geminilake -c)
+BUILD_EXTERNAL_WORKERS="${AV_IMGDATA_BUILD_EXTERNAL_WORKERS:-1}"
+EXTERNAL_WORKER_TARGETS="${AV_IMGDATA_WORKER_TARGETS:-linux-x86_64 docker-linux-x86_64 windows-x86_64}"
+BUILD_WINDOWS_FACE_PROCESSOR="${AV_IMGDATA_BUILD_WINDOWS_FACE_PROCESSOR:-1}"
+WORKER_CLEAN="${AV_IMGDATA_WORKER_CLEAN:-1}"
 
 log() {
   printf '\n==> %s\n' "$*"
@@ -24,8 +28,10 @@ SANITIZE_DIRS=(
   "app/__pycache__"
 )
 SANITIZE_NATIVE_BUILD_PATTERNS=(
+  "build/worker/*"
   "build/native/*/face_processor-build"
   "build/native/*/face_processor-install"
+  "build/native/*/face_processor-source"
   "build/native/*/libde265-build"
   "build/native/*/libde265-source"
   "build/native/*/libheif-build"
@@ -135,6 +141,45 @@ ${error_text}"
   rm -f "${error_log}"
 }
 
+target_list_contains() {
+  local wanted="$1"
+  local target
+  for target in ${EXTERNAL_WORKER_TARGETS}; do
+    [[ "${target}" == "${wanted}" ]] && return 0
+  done
+  return 1
+}
+
+worker_clean_args() {
+  if [[ "${WORKER_CLEAN}" != "0" ]]; then
+    printf '%s\n' --clean
+  fi
+}
+
+build_external_worker_bundles() {
+  local target
+  local clean_args=()
+
+  [[ "${BUILD_EXTERNAL_WORKERS}" != "0" ]] || {
+    log "Skipping external worker bundles because AV_IMGDATA_BUILD_EXTERNAL_WORKERS=0"
+    return 0
+  }
+
+  mapfile -t clean_args < <(worker_clean_args)
+
+  if target_list_contains windows-x86_64 && [[ "${BUILD_WINDOWS_FACE_PROCESSOR}" != "0" ]]; then
+    log "Building Windows native face processor for external worker bundle"
+    bash tools/build-native-face-processor-windows.sh "${clean_args[@]}"
+  fi
+
+  for target in ${EXTERNAL_WORKER_TARGETS}; do
+    log "Building external worker bundle: ${target}"
+    bash tools/build-worker.sh --target "${target}" "${clean_args[@]}"
+  done
+
+  log "External worker bundles built: ${EXTERNAL_WORKER_TARGETS}"
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -148,6 +193,16 @@ Examples:
 The script always builds the av_imgdata package. If no arguments are passed,
 it uses:
   -v 7.3 -p geminilake
+
+External worker bundles are built by default before the Synology package build:
+  linux-x86_64 docker-linux-x86_64 windows-x86_64
+
+Environment overrides:
+  AV_IMGDATA_BUILD_EXTERNAL_WORKERS=0   Skip external worker bundle builds
+  AV_IMGDATA_WORKER_TARGETS="..."       Worker targets to build
+  AV_IMGDATA_BUILD_WINDOWS_FACE_PROCESSOR=0
+                                      Skip Windows face processor build
+  AV_IMGDATA_WORKER_CLEAN=0             Reuse worker build directories
 EOF
 }
 
@@ -173,6 +228,8 @@ TEST_PKGVAR="$(mktemp -d)"
 export SYNOPKG_PKGVAR="${TEST_PKGVAR}"
 
 PYTHONPATH=src python3 -m pytest tests
+
+build_external_worker_bundles
 
 log "Temporarily moving local build artifacts out of the Toolkit link tree"
 sanitize_project_for_toolkit_link
