@@ -7,6 +7,10 @@
     "token_file": "../worker.token"
   },
   "workspace_root": "../work",
+  "path_base_dir": "P:\\photo",
+  "input_modes": [
+    "shared_path"
+  ],
   "processors": {
     "face": {
       "path": "../bin/av-imgdata-face-processor",
