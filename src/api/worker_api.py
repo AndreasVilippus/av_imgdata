@@ -6,14 +6,14 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from services.config_service import ConfigService
 from services.worker_api_endpoints import handle_worker_api_request
-from services.worker_api_service import WorkerApiService
+from services.worker_api_service import WorkerApiError, WorkerApiService
+from services.worker_provisioning_service import WorkerProvisioningService
 
 router = APIRouter(prefix="/worker-api")
-
 _POST_ACTIONS = {"register", "heartbeat", "claim", "result", "fail"}
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
@@ -49,8 +49,7 @@ def _worker_api_enabled() -> bool:
     override = _env_enabled_override()
     if override is not None:
         return override
-    config = _worker_api_config()
-    return bool(config.get("ENABLED", False))
+    return bool(_worker_api_config().get("ENABLED", False))
 
 
 def _resolve_package_var_path(value: str) -> Optional[Path]:
@@ -58,9 +57,7 @@ def _resolve_package_var_path(value: str) -> Optional[Path]:
     if not configured:
         return None
     path = Path(configured)
-    if path.is_absolute():
-        return path
-    return _package_var() / path
+    return path if path.is_absolute() else _package_var() / path
 
 
 def _worker_api_state_path() -> Optional[Path]:
@@ -86,12 +83,71 @@ def _disabled_response() -> JSONResponse:
     return JSONResponse(status_code=404, content={"status": "error", "code": "worker_api_disabled"})
 
 
+def _bearer(request: Request) -> str:
+    value = str(request.headers.get("authorization") or "").strip()
+    return value[7:].strip() if value.lower().startswith("bearer ") else ""
+
+
+def _worker_id(request: Request) -> str:
+    return str(request.headers.get("x-worker-id") or "").strip()
+
+
+def _error_response(exc: WorkerApiError) -> JSONResponse:
+    code = exc.code
+    status = 401 if code in {"unauthorized", "token_required"} else 403
+    if code.endswith("_not_found") or code == "model_file_not_allowed":
+        status = 404
+    if code.startswith("invalid_") or code.endswith("_required"):
+        status = 400
+    return JSONResponse(status_code=status, content={"status": "error", "code": code, "message": str(exc)})
+
+
 @router.get("/status")
 async def status() -> JSONResponse:
     if not _worker_api_enabled():
         return _disabled_response()
     service = WorkerApiService(package_var=_package_var(), state_path=_worker_api_state_path())
     return JSONResponse(status_code=200, content={"status": "ok", "service": service.status()})
+
+
+@router.post("/enroll")
+async def enroll(request: Request) -> JSONResponse:
+    if not _worker_api_enabled():
+        return _disabled_response()
+    body = await _json_body(request)
+    service = WorkerProvisioningService(package_var=_package_var(), state_path=_worker_api_state_path())
+    try:
+        payload = service.redeem_enrollment(
+            enrollment_code=str(body.get("enrollment_code") or ""),
+            worker_id=str(body.get("worker_id") or ""),
+        )
+        return JSONResponse(status_code=200, content=payload)
+    except WorkerApiError as exc:
+        return _error_response(exc)
+
+
+@router.get("/models/{model_pack}/manifest")
+async def model_manifest(model_pack: str, request: Request) -> JSONResponse:
+    if not _worker_api_enabled():
+        return _disabled_response()
+    service = WorkerProvisioningService(package_var=_package_var(), state_path=_worker_api_state_path())
+    try:
+        payload = service.model_manifest(token=_bearer(request), worker_id=_worker_id(request), model_pack=model_pack)
+        return JSONResponse(status_code=200, content=payload)
+    except WorkerApiError as exc:
+        return _error_response(exc)
+
+
+@router.get("/models/{model_pack}/files/{filename}")
+async def model_file(model_pack: str, filename: str, request: Request):
+    if not _worker_api_enabled():
+        return _disabled_response()
+    service = WorkerProvisioningService(package_var=_package_var(), state_path=_worker_api_state_path())
+    try:
+        path = service.model_file(token=_bearer(request), worker_id=_worker_id(request), model_pack=model_pack, filename=filename)
+        return FileResponse(path=str(path), media_type="application/octet-stream", filename=filename)
+    except WorkerApiError as exc:
+        return _error_response(exc)
 
 
 @router.post("/{action}")
