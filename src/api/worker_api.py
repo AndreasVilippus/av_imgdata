@@ -23,6 +23,10 @@ def _package_var() -> Path:
     return Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
 
 
+def _config_path() -> Path:
+    return _package_var() / "config.json"
+
+
 def _env_enabled_override() -> Optional[bool]:
     value = os.getenv("AV_IMGDATA_WORKER_API_ENABLED", "").strip().lower()
     if value in _TRUE_VALUES:
@@ -34,7 +38,7 @@ def _env_enabled_override() -> Optional[bool]:
 
 def _worker_api_config() -> Dict[str, Any]:
     try:
-        raw = ConfigService().readConfig()
+        raw = ConfigService(str(_config_path())).readMergedConfig()
     except Exception:
         raw = {}
     config = raw.get("worker_api") if isinstance(raw.get("worker_api"), dict) else {}
