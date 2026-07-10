@@ -1,0 +1,394 @@
+{
+  "jobs": {
+    "job-1": {
+      "attempts": 1,
+      "claimed_at": "2026-07-07T17:33:21Z",
+      "claimed_by": "worker-01",
+      "created_at": "2026-07-07T17:33:21Z",
+      "job_id": "job-1",
+      "payload": {
+        "image_path": "/tmp/test.jpg"
+      },
+      "priority": 100,
+      "status": "claimed",
+      "type": "face_native_embed",
+      "updated_at": "2026-07-07T17:33:21Z"
+    },
+    "job-remote-1": {
+      "attempts": 1,
+      "claimed_at": "2026-07-07T17:40:00Z",
+      "claimed_by": "worker-01",
+      "created_at": "2026-07-07T17:39:24Z",
+      "job_id": "job-remote-1",
+      "payload": {
+        "det_size": [
+          640,
+          640
+        ],
+        "local_path": "../../../tests/images/test_mic.jpg",
+        "max_faces": 1,
+        "min_confidence": 0.5
+      },
+      "priority": 100,
+      "status": "claimed",
+      "type": "face_native_embed",
+      "updated_at": "2026-07-07T17:40:00Z"
+    },
+    "job-remote-linux-1": {
+      "attempts": 1,
+      "claimed_at": "2026-07-07T17:43:27Z",
+      "claimed_by": "worker-01",
+      "created_at": "2026-07-07T17:43:14Z",
+      "error": {
+        "artifacts": {
+          "claimed_job": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-1.json",
+          "processor_input": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-1.json.processor-input.json",
+          "processor_result": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-1.json.processor-result.json"
+        },
+        "checks": {
+          "face_models_present": true,
+          "face_processor_binary_exists": true,
+          "job_id_present": true,
+          "type_present": true
+        },
+        "config_path": "dist/av-imgdata-worker-linux-x86_64/config/worker-config.example.json",
+        "error": {
+          "code": "processor_failed",
+          "message": ""
+        },
+        "job": {
+          "job_id": "job-remote-linux-1",
+          "processor_command": "embed",
+          "type": "face_native_embed"
+        },
+        "job_path": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-1.json",
+        "mode": "once",
+        "phase": "D",
+        "processor": {
+          "exit_code": 256,
+          "output": "",
+          "path": "dist/av-imgdata-worker-linux-x86_64/config/../bin/av-imgdata-face-processor"
+        },
+        "processor_execution": "failed",
+        "processor_result": {
+          "contract_version": "1.0",
+          "error": {
+            "code": "image_decode_failed",
+            "message": "image could not be opened: /home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/../../../tests/images/test_mic.jpg",
+            "phase": "inference",
+            "retryable": false
+          },
+          "job_id": "job-remote-linux-1",
+          "processor": {
+            "backend": "native",
+            "name": "av-imgdata-face-processor",
+            "version": "0.5.0-onnxruntime-native-heif"
+          },
+          "result": {
+            "faces": []
+          },
+          "status": "failed",
+          "type": "face_native_embed"
+        },
+        "worker": {
+          "name": "av-imgdata-worker",
+          "version": "0.1.0-phase-d"
+        },
+        "worker_exit_code": 4
+      },
+      "finished_at": "2026-07-07T17:43:27Z",
+      "job_id": "job-remote-linux-1",
+      "payload": {
+        "det_size": [
+          640,
+          640
+        ],
+        "local_path": "../../../tests/images/test_mic.jpg",
+        "max_faces": 1,
+        "min_confidence": 0.5
+      },
+      "priority": 100,
+      "status": "failed",
+      "type": "face_native_embed",
+      "updated_at": "2026-07-07T17:43:27Z"
+    },
+    "job-remote-linux-2": {
+      "attempts": 1,
+      "claimed_at": "2026-07-07T17:47:08Z",
+      "claimed_by": "worker-01",
+      "created_at": "2026-07-07T17:46:57Z",
+      "error": {
+        "artifacts": {
+          "claimed_job": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-2.json",
+          "processor_input": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-2.json.processor-input.json",
+          "processor_result": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-2.json.processor-result.json"
+        },
+        "checks": {
+          "face_models_present": true,
+          "face_processor_binary_exists": true,
+          "job_id_present": true,
+          "type_present": true
+        },
+        "config_path": "dist/av-imgdata-worker-linux-x86_64/config/worker-config.example.json",
+        "error": {
+          "code": "processor_failed",
+          "message": ""
+        },
+        "job": {
+          "job_id": "job-remote-linux-2",
+          "processor_command": "embed",
+          "type": "face_native_embed"
+        },
+        "job_path": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-2.json",
+        "mode": "once",
+        "phase": "D",
+        "processor": {
+          "exit_code": 256,
+          "output": "",
+          "path": "dist/av-imgdata-worker-linux-x86_64/config/../bin/av-imgdata-face-processor"
+        },
+        "processor_execution": "failed",
+        "processor_result": {
+          "contract_version": "1.0",
+          "error": {
+            "code": "image_decode_failed",
+            "message": "jpeg decode failed: /home/andreas/Projekte/Synology/toolkit/source/av_imgdata/tests/images/test_mic.jpg",
+            "phase": "inference",
+            "retryable": false
+          },
+          "job_id": "job-remote-linux-2",
+          "processor": {
+            "backend": "native",
+            "name": "av-imgdata-face-processor",
+            "version": "0.5.0-onnxruntime-native-heif"
+          },
+          "result": {
+            "faces": []
+          },
+          "status": "failed",
+          "type": "face_native_embed"
+        },
+        "worker": {
+          "name": "av-imgdata-worker",
+          "version": "0.1.0-phase-d"
+        },
+        "worker_exit_code": 4
+      },
+      "finished_at": "2026-07-07T17:47:08Z",
+      "job_id": "job-remote-linux-2",
+      "payload": {
+        "det_size": [
+          640,
+          640
+        ],
+        "local_path": "tests/images/test_mic.jpg",
+        "max_faces": 1,
+        "min_confidence": 0.5
+      },
+      "priority": 100,
+      "status": "failed",
+      "type": "face_native_embed",
+      "updated_at": "2026-07-07T17:47:08Z"
+    },
+    "job-remote-linux-3": {
+      "attempts": 1,
+      "claimed_at": "2026-07-07T18:10:01Z",
+      "claimed_by": "worker-01",
+      "created_at": "2026-07-07T18:10:01Z",
+      "error": {
+        "artifacts": {
+          "claimed_job": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-3.json",
+          "processor_input": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-3.json.processor-input.json",
+          "processor_result": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-3.json.processor-result.json"
+        },
+        "checks": {
+          "face_models_present": true,
+          "face_processor_binary_exists": true,
+          "job_id_present": true,
+          "type_present": true
+        },
+        "config_path": "dist/av-imgdata-worker-linux-x86_64/config/worker-config.example.json",
+        "error": {
+          "code": "processor_failed",
+          "message": ""
+        },
+        "job": {
+          "job_id": "job-remote-linux-3",
+          "processor_command": "embed",
+          "type": "face_native_embed"
+        },
+        "job_path": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-3.json",
+        "mode": "once",
+        "phase": "D",
+        "processor": {
+          "exit_code": 256,
+          "output": "",
+          "path": "dist/av-imgdata-worker-linux-x86_64/config/../bin/av-imgdata-face-processor"
+        },
+        "processor_execution": "failed",
+        "processor_result": {
+          "contract_version": "1.0",
+          "error": {
+            "code": "image_decode_failed",
+            "message": "jpeg decode failed: /home/andreas/Projekte/Synology/toolkit/source/av_imgdata/tests/images/test_mic.jpg",
+            "phase": "inference",
+            "retryable": false
+          },
+          "job_id": "job-remote-linux-3",
+          "processor": {
+            "backend": "native",
+            "name": "av-imgdata-face-processor",
+            "version": "0.5.0-onnxruntime-native-heif"
+          },
+          "result": {
+            "faces": []
+          },
+          "status": "failed",
+          "type": "face_native_embed"
+        },
+        "worker": {
+          "name": "av-imgdata-worker",
+          "version": "0.1.0-phase-d"
+        },
+        "worker_exit_code": 4
+      },
+      "finished_at": "2026-07-07T18:10:01Z",
+      "job_id": "job-remote-linux-3",
+      "payload": {
+        "det_size": [
+          640,
+          640
+        ],
+        "local_path": "tests/images/test_mic.jpg",
+        "max_faces": 1,
+        "min_confidence": 0.5
+      },
+      "priority": 100,
+      "status": "failed",
+      "type": "face_native_embed",
+      "updated_at": "2026-07-07T18:10:01Z"
+    },
+    "job-remote-linux-4": {
+      "attempts": 1,
+      "claimed_at": "2026-07-07T18:12:12Z",
+      "claimed_by": "worker-01",
+      "created_at": "2026-07-07T18:12:00Z",
+      "error": {
+        "artifacts": {
+          "claimed_job": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-4.json",
+          "processor_input": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-4.json.processor-input.json",
+          "processor_result": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-4.json.processor-result.json"
+        },
+        "checks": {
+          "face_models_present": true,
+          "face_processor_binary_exists": true,
+          "job_id_present": true,
+          "type_present": true
+        },
+        "config_path": "dist/av-imgdata-worker-linux-x86_64/config/worker-config.example.json",
+        "error": {
+          "code": "processor_failed",
+          "message": ""
+        },
+        "job": {
+          "job_id": "job-remote-linux-4",
+          "processor_command": "embed",
+          "type": "face_native_embed"
+        },
+        "job_path": "/home/andreas/Projekte/Synology/toolkit/source/av_imgdata/dist/av-imgdata-worker-linux-x86_64/work/claimed-jobs/job-remote-linux-4.json",
+        "mode": "once",
+        "phase": "D",
+        "processor": {
+          "exit_code": 256,
+          "output": "",
+          "path": "dist/av-imgdata-worker-linux-x86_64/config/../bin/av-imgdata-face-processor"
+        },
+        "processor_execution": "failed",
+        "processor_result": {
+          "contract_version": "1.0",
+          "error": {
+            "code": "image_decode_failed",
+            "message": "jpeg decode failed: /home/andreas/Projekte/Synology/toolkit/source/av_imgdata/tests/images/test_raw.jpg",
+            "phase": "inference",
+            "retryable": false
+          },
+          "job_id": "job-remote-linux-4",
+          "processor": {
+            "backend": "native",
+            "name": "av-imgdata-face-processor",
+            "version": "0.5.0-onnxruntime-native-heif"
+          },
+          "result": {
+            "faces": []
+          },
+          "status": "failed",
+          "type": "face_native_embed"
+        },
+        "worker": {
+          "name": "av-imgdata-worker",
+          "version": "0.1.0-phase-d"
+        },
+        "worker_exit_code": 4
+      },
+      "finished_at": "2026-07-07T18:12:12Z",
+      "job_id": "job-remote-linux-4",
+      "payload": {
+        "det_size": [
+          640,
+          640
+        ],
+        "local_path": "tests/images/test_raw.jpg",
+        "max_faces": 1,
+        "min_confidence": 0.5
+      },
+      "priority": 100,
+      "status": "failed",
+      "type": "face_native_embed",
+      "updated_at": "2026-07-07T18:12:12Z"
+    },
+    "job-remote-win-unix-prep-1": {
+      "attempts": 0,
+      "created_at": "2026-07-08T17:12:23Z",
+      "job_id": "job-remote-win-unix-prep-1",
+      "payload": {
+        "det_size": [
+          640,
+          640
+        ],
+        "local_path": "tests/images/test_raw.jpg",
+        "max_faces": 1,
+        "min_confidence": 0.5
+      },
+      "priority": 100,
+      "status": "queued",
+      "type": "face_native_embed",
+      "updated_at": "2026-07-08T17:12:23Z"
+    }
+  },
+  "schema_version": 1,
+  "tokens": {
+    "worker-01": {
+      "created_at": "2026-07-07T17:43:04Z",
+      "revoked": false,
+      "token_hash": "d6d66093dfc952fb8fa12e97bf22522b4995816f2857903aad312813977ae994"
+    },
+    "worker-win-01": {
+      "created_at": "2026-07-08T17:11:58Z",
+      "revoked": false,
+      "token_hash": "98ccce9a2f9644a383dc094cbecbd870b6eb9b8877835b166a1f11b75edd1eb3"
+    }
+  },
+  "workers": {
+    "worker-01": {
+      "capabilities": [
+        "face_native_embed"
+      ],
+      "last_seen_at": "2026-07-08T17:12:15Z",
+      "metadata": {},
+      "registered_at": "2026-07-07T17:33:21Z",
+      "status": "registered",
+      "version": "0.1.0-phase-d",
+      "worker_id": "worker-01"
+    }
+  }
+}
