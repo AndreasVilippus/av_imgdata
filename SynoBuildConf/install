@@ -27,6 +27,40 @@ trap cleanup_native_build_artifacts EXIT
 # load helper functions
 source /pkgscripts/include/pkg_util.sh
 
+copy_external_worker_bundles() {
+	local package_tgz_dir="$1"
+	local target
+	local source_dir
+	local required_targets="${AV_IMGDATA_PACKAGE_WORKER_TARGETS:-linux-x86_64 docker-linux-x86_64 windows-x86_64}"
+
+	if [ "${AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS:-1}" = "0" ]; then
+		echo "Skipping external worker bundle packaging because AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS=0."
+		return 0
+	fi
+
+	mkdir -p "$package_tgz_dir/workers"
+	for target in $required_targets; do
+		source_dir="dist/av-imgdata-worker-${target}"
+		if [ ! -d "$source_dir" ]; then
+			echo "ERROR: external worker bundle missing: $source_dir"
+			echo "Run tools/build-package.sh, or build the worker with: tools/build-worker.sh --target $target --clean"
+			exit 1
+		fi
+		if [ "$target" = "windows-x86_64" ]; then
+			if [ ! -f "$source_dir/bin/av-imgdata-worker.exe" ]; then
+				echo "ERROR: Windows external worker binary missing: $source_dir/bin/av-imgdata-worker.exe"
+				exit 1
+			fi
+		else
+			if [ ! -x "$source_dir/bin/av-imgdata-worker" ]; then
+				echo "ERROR: external worker binary missing or not executable: $source_dir/bin/av-imgdata-worker"
+				exit 1
+			fi
+		fi
+		cp -av "$source_dir" "$package_tgz_dir/workers/"
+	done
+}
+
 create_install() {
 	local package_tgz_dir=/tmp/_install
 
@@ -38,6 +72,8 @@ create_install() {
 	cp -av src $package_tgz_dir
 	cp -av app $package_tgz_dir
 	cp -av conf $package_tgz_dir
+	mkdir -p "$package_tgz_dir/tools"
+	cp -av tools/worker-api-store.py "$package_tgz_dir/tools/"
 	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type d -name '__pycache__' -prune -exec rm -rf {} +
 	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 	make install DESTDIR="$package_tgz_dir" INSTALLDIR="$package_tgz_dir"
@@ -86,6 +122,7 @@ create_install() {
 			cp -av "$VIPS_INSTALL/share/licenses" "$package_tgz_dir/share/"
 		fi
 	fi
+	copy_external_worker_bundles "$package_tgz_dir"
 	# Fail fast if UI entrypoint didn't get packaged
 	if [ ! -f "$package_tgz_dir/ui/index.cgi" ]; then
 		echo "ERROR: ui/index.cgi missing in package staging dir."
