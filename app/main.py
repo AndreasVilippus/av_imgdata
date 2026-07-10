@@ -25,6 +25,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from api.imgdata_api import IMGDATA, backend_debug_log, is_backend_debug_enabled, router as imgdata_router  # noqa: E402
+from api.worker_admin_api import router as worker_admin_router  # noqa: E402
 from api.worker_api import router as worker_api_router  # noqa: E402
 
 
@@ -84,4 +85,5 @@ async def backend_debug_request_logging(request, call_next):
 
 
 app.include_router(imgdata_router)
+app.include_router(worker_admin_router)
 app.include_router(worker_api_router)
