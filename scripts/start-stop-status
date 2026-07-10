@@ -14,8 +14,8 @@ WHEEL_DIR="${SYNOPKG_PKGDEST}/wheels"
 PIP_TMP_DIR="${VAR_DIR}/pip_tmp"
 PIP_CACHE_DIR="${VAR_DIR}/pip_cache"
 APP_MODULE="app.main:app"
-HOST="127.0.0.1"
-PORT="9771"
+HOST="${AV_IMGDATA_BACKEND_HOST:-127.0.0.1}"
+PORT="${AV_IMGDATA_BACKEND_PORT:-9771}"
 WORKER_API_STATE_PATH="${VAR_DIR}/worker-api-state.json"
 
 export NO_ALBUMENTATIONS_UPDATE=1
@@ -83,7 +83,7 @@ start() {
         return 0
     fi
 
-    echo "Starting ${PACKAGE}..."
+    echo "Starting ${PACKAGE} on ${HOST}:${PORT}..."
     if ! ensure_core_python_packages; then
         echo "Failed to start ${PACKAGE}. Core Python packages are missing."
         return 1
