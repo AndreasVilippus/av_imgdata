@@ -30,6 +30,40 @@ function Protect-WorkerTokenFile {
   }
 }
 
+function Get-WorkerApiErrorDetail {
+  param([Parameter(Mandatory=$true)]$ErrorRecord)
+
+  $parts = New-Object System.Collections.Generic.List[string]
+  if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+    $parts.Add([string]$ErrorRecord.ErrorDetails.Message)
+  }
+
+  $response = $ErrorRecord.Exception.Response
+  if ($response) {
+    try {
+      $statusCode = [int]$response.StatusCode
+      $statusDescription = [string]$response.StatusDescription
+      $parts.Add("HTTP $statusCode $statusDescription".Trim())
+    } catch { }
+
+    try {
+      $stream = $response.GetResponseStream()
+      if ($stream) {
+        $reader = New-Object System.IO.StreamReader($stream)
+        $body = $reader.ReadToEnd()
+        $reader.Dispose()
+        if ($body) { $parts.Add($body) }
+      }
+    } catch { }
+  }
+
+  if ($parts.Count -eq 0) {
+    $parts.Add([string]$ErrorRecord.Exception.Message)
+  }
+
+  return ($parts | Select-Object -Unique) -join " | "
+}
+
 $token = ""
 if ((Test-Path -LiteralPath $TokenPath) -and -not $ForceEnroll) {
   $token = ([System.IO.File]::ReadAllText($TokenPath)).Trim()
@@ -102,7 +136,8 @@ try {
   }
   $manifest | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 (Join-Path $ModelDir "manifest.json")
 } catch {
-  throw "Worker token and configuration were saved, but model synchronization failed. Resolve the NAS model/license status and rerun this command; the existing worker.token will be reused. Details: $($_.Exception.Message)"
+  $details = Get-WorkerApiErrorDetail -ErrorRecord $_
+  throw "Worker token and configuration were saved, but model synchronization failed. Rerun this command after resolving the NAS-side condition; the existing worker.token will be reused. API details: $details"
 }
 
 Write-Host "Worker enrolled and model files synchronized."
