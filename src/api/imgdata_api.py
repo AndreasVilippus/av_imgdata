@@ -109,16 +109,23 @@ def _find_worker_archive(workers_root: Path, target: str) -> Optional[Path]:
     return None
 
 
+def _normalize_archive_member_name(value: str) -> str:
+    normalized = str(value or "").replace(os.sep, "/").strip("/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
 def _archive_contains_member(archive: Path, member: str) -> bool:
-    normalized = member.replace(os.sep, "/").strip("/")
+    normalized = _normalize_archive_member_name(member)
     try:
         if archive.name.endswith(".zip"):
             with zipfile.ZipFile(archive) as handle:
-                names = {name.strip("/") for name in handle.namelist()}
+                names = {_normalize_archive_member_name(name) for name in handle.namelist()}
                 return normalized in names
         if archive.name.endswith(".tar.gz") or archive.name.endswith(".tgz"):
             with tarfile.open(archive, mode="r:gz") as handle:
-                names = {name.name.strip("/") for name in handle.getmembers()}
+                names = {_normalize_archive_member_name(name.name) for name in handle.getmembers()}
                 return normalized in names
     except Exception:
         return False
@@ -146,11 +153,10 @@ def _external_worker_package_status() -> Dict[str, Any]:
         archive = _find_worker_archive(workers_root, target)
         download_ready = archive is not None
         bundle_exists = bundle_dir.is_dir()
-        archive_binary_member = f"{bundle_name}/{binary_relative}"
         if binary_path.is_file():
             binary_exists = True
             binary_location = "bundle"
-        elif archive is not None and _archive_contains_member(archive, archive_binary_member):
+        elif archive is not None and _archive_contains_member(archive, binary_relative):
             binary_exists = True
             binary_location = "archive"
         else:
@@ -2600,7 +2606,12 @@ async def external_worker_download(request: Request, target: str = ""):
             status_code=404,
             content={"success": False, "error": {"code": 404, "message": "worker_archive_not_found"}},
         )
-    return FileResponse(archive, filename=archive.name)
+    return FileResponse(
+        archive,
+        media_type="application/octet-stream",
+        filename=archive.name,
+        headers={"Content-Disposition": f'attachment; filename="{archive.name}"'},
+    )
 
 
 @router.post("/database_name_mappings")

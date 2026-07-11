@@ -71,9 +71,9 @@ package_external_worker_archives() {
 		fi
 		echo "Packaging external worker archive: $archive_path"
 		if [ "$archive_type" = "zip" ]; then
-			(cd dist && zip -qr "$archive_path" "$bundle_name")
+			(cd "$source_dir" && zip -qr "$archive_path" .)
 		else
-			tar -C dist -czf "$archive_path" "$bundle_name"
+			tar -C "$source_dir" -czf "$archive_path" .
 		fi
 	done
 }
