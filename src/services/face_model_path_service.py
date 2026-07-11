@@ -12,10 +12,10 @@ from services.native_face_processor_service import NativeFaceProcessorService
 class FaceModelPathService:
     """Resolve the model root/store/name used by local and external workers.
 
-    The configured native processor values have precedence.  When MODEL_ROOT is
-    empty, DSM installations use the package data directory's existing
-    ``insightface_models`` root, which is also the fallback supplied to the local
-    native processor.
+    ``MODEL_ROOT`` always denotes the InsightFace root. Model files live below
+    its ``models`` child. When ``MODEL_ROOT`` is empty, DSM installations use
+    the package data directory's existing ``insightface_models`` root, which is
+    also the fallback supplied to the local native processor.
     """
 
     DEFAULT_MODEL_NAME = "buffalo_l"
@@ -35,8 +35,17 @@ class FaceModelPathService:
         ).resolve()
         self.native_processor = native_processor or NativeFaceProcessorService(config_service)
 
+    def configured_model_root(self) -> Optional[Path]:
+        configured = str(self.native_processor.config().get("MODEL_ROOT") or "").strip()
+        if not configured:
+            return None
+        return Path(configured).expanduser().resolve()
+
     def default_model_root(self) -> Path:
         return (self.package_var / "insightface_models").resolve()
+
+    def model_root_source(self) -> str:
+        return "config" if self.configured_model_root() is not None else "package_var"
 
     def model_root(self) -> Path:
         return self.native_processor.model_root(self.default_model_root())
@@ -56,6 +65,7 @@ class FaceModelPathService:
         store = InsightFaceDetector.model_store_dir(root)
         return {
             "model_root": root,
+            "model_root_source": self.model_root_source(),
             "model_store": store,
             "model_name": name,
             "model_dir": (store / name).resolve(),
