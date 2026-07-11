@@ -16,29 +16,42 @@ The DSM package is the authority for:
 
 The external worker is an execution component only. It does not decide whether a model may be used. It only reports whether the configured model files and acknowledgement metadata are present.
 
+## Single source of truth
+
+All DSM-side consumers must resolve InsightFace paths through:
+
+```text
+src/services/face_model_path_service.py
+```
+
+This includes the local native processor, UI/status reporting, model distribution, and external-worker provisioning. Consumers must not introduce their own `.insightface`, `.models/face`, or `insightface_models` fallback logic.
+
+Resolution order:
+
+```text
+1. native_processors.FACE_PROCESSOR.MODEL_ROOT, when explicitly configured
+2. $SYNOPKG_PKGVAR/insightface_models
+```
+
+The model store is always `<MODEL_ROOT>/models`, and the active model directory is `<MODEL_ROOT>/models/<MODEL_NAME>`.
+
 ## Model store layout
 
-Default source-tree development layout when `SYNOPKG_PKGVAR` is not set:
+Default DSM package runtime layout:
 
 ```text
-.models/face/buffalo_l/
+$SYNOPKG_PKGVAR/insightface_models/models/buffalo_l/
   det_10g.onnx
   w600k_r50.onnx
   manifest.json
   LICENSE_ACK.json
 ```
 
-Default DSM package runtime layout when `SYNOPKG_PKGVAR` is set:
+A configured `native_processors.FACE_PROCESSOR.MODEL_ROOT` takes precedence. For example, `MODEL_ROOT=/volume1/models/insightface` resolves to:
 
 ```text
-$SYNOPKG_PKGVAR/.models/face/buffalo_l/
-  det_10g.onnx
-  w600k_r50.onnx
-  manifest.json
-  LICENSE_ACK.json
+/volume1/models/insightface/models/buffalo_l/
 ```
-
-A configured `native_processors.FACE_PROCESSOR.MODEL_ROOT` takes precedence over both defaults. The expected model pack directory is always `<MODEL_ROOT>/buffalo_l/` unless a different model pack is configured.
 
 `manifest.json` describes the model pack, source, file presence, hashes, and package compatibility.
 
@@ -62,6 +75,7 @@ Example acknowledgement shape:
 DSM-side implementation entry points:
 
 ```text
+src/services/face_model_path_service.py
 src/services/face_model_store_service.py
 tools/face-model-store.py
 ```
@@ -80,11 +94,11 @@ python3 tools/face-model-store.py acknowledge --accepted-by admin --package-vers
 
 `acknowledge` writes `LICENSE_ACK.json` and also sets the legacy config flag `native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED=true` for compatibility with the current native processor status gate.
 
-A manual import helper still exists for ad-hoc copies, but the preferred flow is to place model files directly in the configured model path and use `status`/`acknowledge`/manifest generation around that fixed path.
+A manual import helper still exists for ad-hoc copies, but the preferred flow is to place model files directly in the resolved model directory and use `status`/`acknowledge`/manifest generation around that fixed path.
 
 ## Worker-local model layout
 
-Workers use a hidden model directory as well:
+Workers use a hidden model directory after synchronization:
 
 ```text
 worker-runtime/.models/face/buffalo_l/
