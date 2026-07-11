@@ -100,6 +100,48 @@ def _class_method_definitions(class_node: ast.ClassDef) -> set[str]:
     }
 
 
+def _base_class_name(base: ast.expr) -> str:
+    if isinstance(base, ast.Name):
+        return base.id
+    if isinstance(base, ast.Attribute):
+        return base.attr
+    return ""
+
+
+def _class_base_names(class_node: ast.ClassDef) -> list[str]:
+    return [name for name in (_base_class_name(base) for base in class_node.bases) if name]
+
+
+def _class_method_index(trees: list[ast.AST]) -> tuple[dict[str, set[str]], dict[str, list[str]]]:
+    methods: dict[str, set[str]] = {}
+    bases: dict[str, list[str]] = {}
+    for tree in trees:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            methods[node.name] = _class_method_definitions(node)
+            bases[node.name] = _class_base_names(node)
+    return methods, bases
+
+
+def _class_method_definitions_with_bases(
+    class_name: str,
+    methods: dict[str, set[str]],
+    bases: dict[str, list[str]],
+    seen: set[str] | None = None,
+) -> set[str]:
+    if seen is None:
+        seen = set()
+    if class_name in seen:
+        return set()
+    seen.add(class_name)
+
+    definitions = set(methods.get(class_name, set()))
+    for base_name in bases.get(class_name, []):
+        definitions.update(_class_method_definitions_with_bases(base_name, methods, bases, seen))
+    return definitions
+
+
 def _class_self_method_calls(class_node: ast.ClassDef) -> set[str]:
     collector = _SelfCallCollector()
     for item in class_node.body:
@@ -108,23 +150,46 @@ def _class_self_method_calls(class_node: ast.ClassDef) -> set[str]:
     return collector.calls
 
 
+def test_backend_self_method_definition_helper_resolves_inherited_methods():
+    tree = ast.parse(
+        """
+class Base:
+    def inherited(self):
+        pass
+
+class Child(Base):
+    def local(self):
+        self.inherited()
+        self.local()
+"""
+    )
+    methods, bases = _class_method_index([tree])
+
+    assert _class_method_definitions_with_bases("Child", methods, bases) == {"inherited", "local"}
+
+
 def test_backend_self_method_calls_have_class_definitions():
     backend_files = sorted(Path("src").rglob("*.py"))
     assert backend_files, "No backend Python files found under src"
 
     failures: list[str] = []
+    parsed_files: list[tuple[Path, ast.AST]] = []
     for path in backend_files:
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError as exc:
             failures.append(f"{path}: syntax error: {exc}")
             continue
+        parsed_files.append((path, tree))
 
+    methods, bases = _class_method_index([tree for _, tree in parsed_files])
+
+    for path, tree in parsed_files:
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
 
-            definitions = _class_method_definitions(node)
+            definitions = _class_method_definitions_with_bases(node.name, methods, bases)
             calls = _class_self_method_calls(node)
             missing = sorted(calls - definitions - BACKEND_ALLOWED_MISSING_SELF_METHODS)
             if missing:
