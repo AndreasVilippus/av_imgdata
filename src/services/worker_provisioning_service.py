@@ -97,10 +97,24 @@ class WorkerProvisioningService:
         self.require_token(token=token, worker_id=worker_id, scope="models_read")
         store = self._model_store()
         status = store.status(model_pack)
-        if not status.get("license_ack_present"):
-            raise WorkerApiError("model_license_not_acknowledged")
+
+        # Existing installations may have accepted the license before LICENSE_ACK.json
+        # was introduced. Preserve that valid consent by materializing the new audit
+        # file in the configured model directory, but only when the required models
+        # are already present and the legacy config flag is explicitly true.
         if not status.get("models_present"):
             raise WorkerApiError("model_files_missing")
+        if not status.get("license_ack_present") and self._legacy_license_acknowledged():
+            store.acknowledge_usage(
+                model_pack=model_pack,
+                accepted_by="existing_package_configuration",
+                package_version="migration",
+                source="legacy_config_migration",
+            )
+            status = store.status(model_pack)
+        if not status.get("license_ack_present"):
+            raise WorkerApiError("model_license_not_acknowledged")
+
         manifest_path = Path(status["manifest_path"])
         if not manifest_path.is_file():
             store.write_manifest(model_pack=model_pack, source="worker_distribution")
@@ -120,8 +134,22 @@ class WorkerProvisioningService:
             raise WorkerApiError("model_file_not_found")
         return path
 
+    def _config_service(self) -> ConfigService:
+        return ConfigService(str(self.package_var / "config.json"))
+
     def _model_store(self) -> FaceModelStoreService:
-        return FaceModelStoreService(ConfigService(str(self.package_var / "config.json")), package_var=self.package_var)
+        return FaceModelStoreService(self._config_service(), package_var=self.package_var)
+
+    def _legacy_license_acknowledged(self) -> bool:
+        try:
+            config = self._config_service().readMergedConfig()
+        except Exception:
+            return False
+        if not isinstance(config, dict):
+            return False
+        native = config.get("native_processors") if isinstance(config.get("native_processors"), dict) else {}
+        face = native.get("FACE_PROCESSOR") if isinstance(native.get("FACE_PROCESSOR"), dict) else {}
+        return face.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED") is True
 
     def _read_state(self) -> Dict[str, Any]:
         if not self.state_path.is_file():
