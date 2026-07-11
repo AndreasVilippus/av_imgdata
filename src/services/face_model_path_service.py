@@ -44,6 +44,9 @@ class FaceModelPathService:
     def default_model_root(self) -> Path:
         return (self.package_var / "insightface_models").resolve()
 
+    def default_model_store(self) -> Path:
+        return InsightFaceDetector.model_store_dir(self.default_model_root())
+
     def model_root_source(self) -> str:
         return "config" if self.configured_model_root() is not None else "package_var"
 
