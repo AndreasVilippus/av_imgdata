@@ -47,9 +47,9 @@ class FaceModelStoreService:
             config_service,
             package_var=self.package_var,
         )
-        # Retained as a public compatibility field. It now means the canonical
-        # default model store, not an independently selected fallback.
-        self.fallback_root = self.path_service.model_store()
+        # Retained as a public compatibility field. It denotes the package
+        # default store even when an explicit MODEL_ROOT is active.
+        self.fallback_root = self.path_service.default_model_store()
         self._clock = clock if callable(clock) else lambda: datetime.now(timezone.utc)
 
     def model_root(self) -> Path:
