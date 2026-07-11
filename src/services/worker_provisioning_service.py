@@ -21,11 +21,13 @@ class UiConfiguredFaceModelStoreService(FaceModelStoreService):
 
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
-        self.fallback_root = InsightFaceDetector.model_store_dir()
+        self.fallback_root = (self.package_var / ".insightface" / "models").resolve()
 
     def model_root(self) -> Path:
         configured = self._configured_model_root()
-        return InsightFaceDetector.model_store_dir(configured)
+        if configured is not None:
+            return InsightFaceDetector.model_store_dir(configured)
+        return self.fallback_root
 
 
 class WorkerProvisioningService:
