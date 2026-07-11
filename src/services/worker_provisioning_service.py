@@ -11,8 +11,21 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from services.config_service import ConfigService
+from services.face_detector import InsightFaceDetector
 from services.face_model_store_service import FaceModelStoreService
 from services.worker_api_service import WorkerApiError
+
+
+class UiConfiguredFaceModelStoreService(FaceModelStoreService):
+    """Resolve models exactly like the existing External Libraries UI/runtime."""
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.fallback_root = InsightFaceDetector.model_store_dir()
+
+    def model_root(self) -> Path:
+        configured = self._configured_model_root()
+        return InsightFaceDetector.model_store_dir(configured)
 
 
 class WorkerProvisioningService:
@@ -138,7 +151,7 @@ class WorkerProvisioningService:
         return ConfigService(str(self.package_var / "config.json"))
 
     def _model_store(self) -> FaceModelStoreService:
-        return FaceModelStoreService(self._config_service(), package_var=self.package_var)
+        return UiConfiguredFaceModelStoreService(self._config_service(), package_var=self.package_var)
 
     def _legacy_license_acknowledged(self) -> bool:
         try:
