@@ -205,6 +205,7 @@ def test_external_worker_status_reports_ready_archive(monkeypatch, tmp_path):
     assert package["bundles"][0]["binary_location"] == "archive"
     assert package["bundles"][0]["download_ready"] is True
     assert package["bundles"][0]["archive_path"] == str(archive)
+    assert package["bundles"][0]["archive_name"] == "av-imgdata-worker-linux-x86_64.tar.gz"
     assert package["bundles"][0]["download_url"].endswith("target=linux-x86_64")
 
 
@@ -230,6 +231,23 @@ def test_external_worker_status_reports_ready_zip_archive(monkeypatch, tmp_path)
     assert bundle["download_ready"] is True
     assert bundle["binary_exists"] is True
     assert bundle["binary_location"] == "archive"
+    assert bundle["archive_name"] == "av-imgdata-worker-windows-x86_64.zip"
+
+
+def test_external_worker_download_sets_archive_filename_header(monkeypatch, tmp_path):
+    package_root = tmp_path / "target"
+    workers_root = package_root / "workers"
+    workers_root.mkdir(parents=True)
+    archive = workers_root / "av-imgdata-worker-windows-x86_64.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("bin/av-imgdata-worker.exe", b"MZ")
+    monkeypatch.setenv("SYNOPKG_PKGDEST", str(package_root))
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+
+    response = _run(imgdata_api.external_worker_download(object(), target="windows-x86_64"))
+
+    assert response.path == archive
+    assert "av-imgdata-worker-windows-x86_64.zip" in response.headers["content-disposition"]
 
 
 def test_external_worker_status_rejects_archive_with_legacy_top_level_directory(monkeypatch, tmp_path):

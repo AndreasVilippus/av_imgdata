@@ -177,6 +177,7 @@ def _external_worker_package_status() -> Dict[str, Any]:
             "binary_exists": binary_exists,
             "binary_location": binary_location,
             "archive_path": str(archive) if archive else "",
+            "archive_name": archive.name if archive else "",
             "download_ready": download_ready,
             "download_url": f"/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_download?target={target}" if download_ready else "",
             "reason": reason,

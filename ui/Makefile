@@ -27,7 +27,9 @@ clean: clean_JSCompress
 	rm -rf dist
 	rm -f style.css
 
-install: $(BUNDLE_JS) style.css $(SUBDIR) JSCompress install_JSCompress
+install: $(BUNDLE_JS) style.css $(SUBDIR)
+	$(MAKE) -f Makefile.js.inc JSCompress JS_NAMESPACE=\"$(JS_NAMESPACE)\" JS_DIR=$(JS_DIR)
+	$(MAKE) -f Makefile.js.inc install_JSCompress JS_NAMESPACE=\"$(JS_NAMESPACE)\" JS_DIR=$(JS_DIR)
 	[ -d $(INSTALLDIR)/texts ] || install -d $(INSTALLDIR)/texts
 	cp -a texts $(INSTALLDIR)
 	[ -d $(INSTALLDIR)/images ] || install -d $(INSTALLDIR)/images

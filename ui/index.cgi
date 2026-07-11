@@ -97,12 +97,16 @@ if [ -z "$status" ] || [ "$status" = "$status_line" ]; then
   status="502 Bad Gateway"
 fi
 content_type="$(awk 'tolower($1)=="content-type:" {print $0; exit}' "$hdr_file")"
+content_disposition="$(awk 'tolower($1)=="content-disposition:" {print $0; exit}' "$hdr_file")"
 
 echo "Status: $status"
 if [ -n "$content_type" ]; then
   echo "$content_type"
 else
   echo "Content-Type: application/json"
+fi
+if [ -n "$content_disposition" ]; then
+  echo "$content_disposition"
 fi
 echo
 cat "$out_file"

@@ -121,7 +121,14 @@
 						</div>
 						<div class="external-worker-bundle-actions">
 							<span class="external-worker-pill" :class="{ ok: bundle.download_ready, warn: !bundle.download_ready }">{{ statusLabel(bundle) }}</span>
-							<a v-if="bundle.download_ready" class="external-worker-download-link" :href="bundle.download_url" target="_blank" rel="noopener">{{ $avt('external_worker:download', 'Download') }}</a>
+							<a
+								v-if="bundle.download_ready"
+								class="external-worker-download-link"
+								:href="bundle.download_url"
+								:download="bundle.archive_name || undefined"
+								target="_blank"
+								rel="noopener"
+							>{{ $avt('external_worker:download', 'Download') }}</a>
 						</div>
 					</div>
 				</div>

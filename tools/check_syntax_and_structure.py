@@ -387,6 +387,10 @@ def check_cgi_curl_argument_safety() -> int:
             "expected quoted request-body forwarding not found",
         '"$curl_cmd" "$@" "$target"':
             "expected quoted curl invocation not found",
+        'content_disposition="$(awk \'tolower($1)=="content-disposition:" {print $0; exit}\' "$hdr_file")"':
+            "expected Content-Disposition response header extraction not found",
+        'echo "$content_disposition"':
+            "expected Content-Disposition response header forwarding not found",
     }
 
     for fragment, message in required_fragments.items():

@@ -241,7 +241,10 @@ def test_ui_makefile_uses_unquoted_dist_targets_and_utf8_snpm():
     assert 'BUNDLE_JS="dist/av-img-data.bundle.js"' not in makefile
     assert "PYTHONIOENCODING=utf-8 /usr/local/tool/snpm install" in makefile
     assert "PYTHONIOENCODING=utf-8 /usr/local/tool/snpm run build" in makefile
-    assert "install: $(BUNDLE_JS) style.css $(SUBDIR) JSCompress install_JSCompress" in makefile
+    assert "install: $(BUNDLE_JS) style.css $(SUBDIR)" in makefile
+    assert '$(MAKE) -f Makefile.js.inc JSCompress JS_NAMESPACE=\\"$(JS_NAMESPACE)\\" JS_DIR=$(JS_DIR)' in makefile
+    assert '$(MAKE) -f Makefile.js.inc install_JSCompress JS_NAMESPACE=\\"$(JS_NAMESPACE)\\" JS_DIR=$(JS_DIR)' in makefile
+    assert "install: $(BUNDLE_JS) style.css $(SUBDIR) JSCompress install_JSCompress" not in makefile
 
 
 def test_native_face_processor_packages_third_party_license_notices():
