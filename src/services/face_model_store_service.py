@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from services.face_model_path_service import FaceModelPathService
+
 
 class FaceModelStoreError(RuntimeError):
     pass
@@ -16,9 +18,10 @@ class FaceModelStoreError(RuntimeError):
 class FaceModelStoreService:
     """DSM-side model store and consent metadata for face models.
 
-    This service intentionally does not download or distribute model files. It owns
-    package-local paths, import/copy operations for admin-provided files, manifest
-    generation, and license/usage acknowledgement metadata.
+    Path resolution is delegated to :class:`FaceModelPathService`, the same
+    resolver used by the local native processor and external-worker model
+    distribution. This service owns only file operations, manifests, and
+    acknowledgement metadata.
     """
 
     DEFAULT_MODEL_PACK = "buffalo_l"
@@ -34,20 +37,27 @@ class FaceModelStoreService:
         *,
         package_var: Optional[Path] = None,
         clock: Optional[Callable[[], datetime]] = None,
+        path_service: Optional[FaceModelPathService] = None,
     ):
         self.config_service = config_service
-        self.package_var = Path(package_var) if package_var else Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
-        self.fallback_root = self.package_var / ".models" / "face"
+        self.package_var = Path(package_var) if package_var else Path(
+            os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")
+        )
+        self.path_service = path_service or FaceModelPathService(
+            config_service,
+            package_var=self.package_var,
+        )
+        # Retained as a public compatibility field. It now means the canonical
+        # default model store, not an independently selected fallback.
+        self.fallback_root = self.path_service.model_store()
         self._clock = clock if callable(clock) else lambda: datetime.now(timezone.utc)
 
     def model_root(self) -> Path:
-        configured = self._configured_model_root()
-        if configured is not None:
-            return configured
-        return self.fallback_root
+        """Return the canonical directory containing model-pack directories."""
+        return self.path_service.model_store()
 
     def model_dir(self, model_pack: str = DEFAULT_MODEL_PACK) -> Path:
-        return self.model_root() / self._normalize_model_pack(model_pack)
+        return self.path_service.model_dir(self._normalize_model_pack(model_pack))
 
     def required_paths(self, model_pack: str = DEFAULT_MODEL_PACK) -> Dict[str, Path]:
         directory = self.model_dir(model_pack)
@@ -60,15 +70,17 @@ class FaceModelStoreService:
 
     def status(self, model_pack: str = DEFAULT_MODEL_PACK) -> Dict[str, Any]:
         model_pack = self._normalize_model_pack(model_pack)
-        root = self.model_root()
+        resolved = self.path_service.resolve(model_pack)
+        root = resolved["model_store"]
         paths = self.required_paths(model_pack)
         required = {name: paths[name].is_file() for name in ("detector", "recognizer")}
         status = {
             "model_pack": model_pack,
             "root": str(root),
-            "root_source": "config" if self._configured_model_root() is not None else "package_var",
+            "root_source": resolved["model_root_source"],
             "fallback_root": str(self.fallback_root),
-            "model_dir": str(self.model_dir(model_pack)),
+            "insightface_root": str(resolved["model_root"]),
+            "model_dir": str(resolved["model_dir"]),
             "distributed_with_package": False,
             "usage_ack_required": True,
             "files": {
@@ -95,7 +107,8 @@ class FaceModelStoreService:
         usage_notice: Optional[str] = None,
     ) -> Dict[str, Any]:
         model_pack = self._normalize_model_pack(model_pack)
-        directory = self.model_dir(model_pack)
+        resolved = self.path_service.resolve(model_pack)
+        directory = resolved["model_dir"]
         directory.mkdir(parents=True, exist_ok=True)
         payload = {
             "model_pack": model_pack,
@@ -105,8 +118,9 @@ class FaceModelStoreService:
             "accepted_by": str(accepted_by or "admin"),
             "accepted_at": self._now_iso(),
             "package_version": str(package_version or "unknown"),
-            "model_root": str(self.model_root()),
-            "model_root_source": "config" if self._configured_model_root() is not None else "package_var",
+            "model_root": str(resolved["model_root"]),
+            "model_store": str(resolved["model_store"]),
+            "model_root_source": resolved["model_root_source"],
         }
         self._write_json_atomic(directory / "LICENSE_ACK.json", payload)
         manifest = None
@@ -171,7 +185,8 @@ class FaceModelStoreService:
         extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         model_pack = self._normalize_model_pack(model_pack)
-        directory = self.model_dir(model_pack)
+        resolved = self.path_service.resolve(model_pack)
+        directory = resolved["model_dir"]
         directory.mkdir(parents=True, exist_ok=True)
         file_names = files if isinstance(files, list) else list(self.REQUIRED_FILES)
         entries = []
@@ -186,8 +201,9 @@ class FaceModelStoreService:
             "model_pack": model_pack,
             "source": str(source or "manual"),
             "distributed_with_package": False,
-            "model_root": str(self.model_root()),
-            "model_root_source": "config" if self._configured_model_root() is not None else "package_var",
+            "model_root": str(resolved["model_root"]),
+            "model_store": str(resolved["model_store"]),
+            "model_root_source": resolved["model_root_source"],
             "generated_at": self._now_iso(),
             "files": entries,
         }
@@ -201,26 +217,8 @@ class FaceModelStoreService:
         return bool(paths["detector"].is_file() and paths["recognizer"].is_file())
 
     def _configured_model_root(self) -> Optional[Path]:
-        config_service = self.config_service
-        if config_service is None:
-            return None
-        try:
-            if hasattr(config_service, "readMergedConfig"):
-                config = config_service.readMergedConfig()
-            elif hasattr(config_service, "readConfig"):
-                config = config_service.readConfig()
-            else:
-                return None
-            if not isinstance(config, dict):
-                return None
-            native = config.get("native_processors") if isinstance(config.get("native_processors"), dict) else {}
-            face = native.get("FACE_PROCESSOR") if isinstance(native.get("FACE_PROCESSOR"), dict) else {}
-            configured = str(face.get("MODEL_ROOT") or "").strip()
-            if not configured:
-                return None
-            return Path(configured).expanduser().resolve()
-        except Exception:
-            return None
+        """Compatibility wrapper for callers that inspect configured root state."""
+        return self.path_service.configured_model_root()
 
     def _set_legacy_config_ack(self, acknowledged: bool) -> None:
         config_service = self.config_service
@@ -240,9 +238,11 @@ class FaceModelStoreService:
                 native["FACE_PROCESSOR"] = face
             face["INSIGHTFACE_LICENSE_ACKNOWLEDGED"] = bool(acknowledged)
             if not str(face.get("MODEL_NAME") or "").strip():
-                face["MODEL_NAME"] = self.DEFAULT_MODEL_PACK
+                face["MODEL_NAME"] = self.path_service.model_name()
+            # Persist the InsightFace root, never its ``models`` child. This
+            # prevents a later resolver pass from producing ``models/models``.
             if not str(face.get("MODEL_ROOT") or "").strip():
-                face["MODEL_ROOT"] = str(self.fallback_root)
+                face["MODEL_ROOT"] = str(self.path_service.model_root())
             config_service.writeConfig(config)
         except Exception:
             return
