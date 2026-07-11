@@ -45,6 +45,7 @@ def test_status_reports_missing_models_from_canonical_package_store(tmp_path: Pa
 
 def test_status_uses_configured_insightface_root_and_models_child(tmp_path: Path):
     configured_root = tmp_path / "configured-insightface"
+    package_var = tmp_path / "var"
     config = DummyConfigService()
     config.config = {
         "native_processors": {
@@ -54,15 +55,16 @@ def test_status_uses_configured_insightface_root_and_models_child(tmp_path: Path
             }
         }
     }
-    store = FaceModelStoreService(config, package_var=tmp_path / "var", clock=_clock)
+    store = FaceModelStoreService(config, package_var=package_var, clock=_clock)
 
     status = store.status("buffalo_l")
 
     expected_store = (configured_root / "models").resolve()
+    expected_fallback = (package_var / "insightface_models" / "models").resolve()
     assert status["insightface_root"] == str(configured_root.resolve())
     assert status["root"] == str(expected_store)
     assert status["root_source"] == "config"
-    assert status["fallback_root"] == str(expected_store)
+    assert status["fallback_root"] == str(expected_fallback)
     assert status["files"]["det_10g.onnx"]["path"] == str(
         expected_store / "buffalo_l" / "det_10g.onnx"
     )
