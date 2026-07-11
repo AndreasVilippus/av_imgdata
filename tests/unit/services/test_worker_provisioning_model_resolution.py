@@ -21,12 +21,13 @@ class DummyConfigService:
         return self.readMergedConfig()
 
 
-def test_worker_distribution_uses_ui_default_insightface_store(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    store = UiConfiguredFaceModelStoreService(DummyConfigService(), package_var=tmp_path / "var")
+def test_worker_distribution_uses_package_var_default_insightface_store(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("HOME", raising=False)
+    package_var = tmp_path / "var"
+    store = UiConfiguredFaceModelStoreService(DummyConfigService(), package_var=package_var)
 
-    assert store.model_root() == (tmp_path / "home" / ".insightface" / "models").resolve()
-    assert store.model_dir("buffalo_l") == (tmp_path / "home" / ".insightface" / "models" / "buffalo_l").resolve()
+    assert store.model_root() == (package_var / ".insightface" / "models").resolve()
+    assert store.model_dir("buffalo_l") == (package_var / ".insightface" / "models" / "buffalo_l").resolve()
 
 
 def test_worker_distribution_uses_ui_configured_insightface_store(tmp_path: Path):
