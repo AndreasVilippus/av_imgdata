@@ -11,21 +11,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from services.config_service import ConfigService
-from services.face_model_path_service import FaceModelPathService
 from services.face_model_store_service import FaceModelStoreService
 from services.worker_api_service import WorkerApiError
-
-
-class ResolvedFaceModelStoreService(FaceModelStoreService):
-    """Thin adapter from the shared model-path resolver to the model store."""
-
-    def __init__(self, config_service: Any, *, package_var: Path):
-        super().__init__(config_service, package_var=package_var)
-        self.path_service = FaceModelPathService(config_service, package_var=package_var)
-        self.fallback_root = self.path_service.model_store()
-
-    def model_root(self) -> Path:
-        return self.path_service.model_store()
 
 
 class WorkerProvisioningService:
@@ -147,7 +134,7 @@ class WorkerProvisioningService:
         return ConfigService(str(self.package_var / "config.json"))
 
     def _model_store(self) -> FaceModelStoreService:
-        return ResolvedFaceModelStoreService(self._config_service(), package_var=self.package_var)
+        return FaceModelStoreService(self._config_service(), package_var=self.package_var)
 
     def _legacy_license_acknowledged(self) -> bool:
         try:
