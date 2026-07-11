@@ -11,23 +11,21 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from services.config_service import ConfigService
-from services.face_detector import InsightFaceDetector
+from services.face_model_path_service import FaceModelPathService
 from services.face_model_store_service import FaceModelStoreService
 from services.worker_api_service import WorkerApiError
 
 
-class UiConfiguredFaceModelStoreService(FaceModelStoreService):
-    """Resolve models exactly like the existing External Libraries UI/runtime."""
+class ResolvedFaceModelStoreService(FaceModelStoreService):
+    """Thin adapter from the shared model-path resolver to the model store."""
 
-    def __init__(self, *args: Any, **kwargs: Any):
-        super().__init__(*args, **kwargs)
-        self.fallback_root = (self.package_var / ".insightface" / "models").resolve()
+    def __init__(self, config_service: Any, *, package_var: Path):
+        super().__init__(config_service, package_var=package_var)
+        self.path_service = FaceModelPathService(config_service, package_var=package_var)
+        self.fallback_root = self.path_service.model_store()
 
     def model_root(self) -> Path:
-        configured = self._configured_model_root()
-        if configured is not None:
-            return InsightFaceDetector.model_store_dir(configured)
-        return self.fallback_root
+        return self.path_service.model_store()
 
 
 class WorkerProvisioningService:
@@ -113,10 +111,6 @@ class WorkerProvisioningService:
         store = self._model_store()
         status = store.status(model_pack)
 
-        # Existing installations may have accepted the license before LICENSE_ACK.json
-        # was introduced. Preserve that valid consent by materializing the new audit
-        # file in the configured model directory, but only when the required models
-        # are already present and the legacy config flag is explicitly true.
         if not status.get("models_present"):
             raise WorkerApiError("model_files_missing")
         if not status.get("license_ack_present") and self._legacy_license_acknowledged():
@@ -153,7 +147,7 @@ class WorkerProvisioningService:
         return ConfigService(str(self.package_var / "config.json"))
 
     def _model_store(self) -> FaceModelStoreService:
-        return UiConfiguredFaceModelStoreService(self._config_service(), package_var=self.package_var)
+        return ResolvedFaceModelStoreService(self._config_service(), package_var=self.package_var)
 
     def _legacy_license_acknowledged(self) -> bool:
         try:
