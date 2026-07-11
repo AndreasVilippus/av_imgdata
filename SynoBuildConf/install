@@ -11,7 +11,8 @@ cleanup_native_build_artifacts() {
 		echo "Preserving native build artifacts after failed install for diagnostics."
 		return
 	fi
-	local native_root="build/native/${SYNO_PLATFORM:-local}"
+	local native_root
+	native_root="$(native_build_root)"
 	rm -rf \
 		"$native_root/deps/source-cache" \
 		"$native_root/libde265-build" \
@@ -26,6 +27,81 @@ trap cleanup_native_build_artifacts EXIT
 
 # load helper functions
 source /pkgscripts/include/pkg_util.sh
+
+native_platform_candidates() {
+	local platform="${SYNO_PLATFORM:-local}"
+	local lower_platform
+	lower_platform="$(printf '%s' "$platform" | tr '[:upper:]' '[:lower:]')"
+	printf '%s\n' "$platform"
+	if [ "$lower_platform" != "$platform" ]; then
+		printf '%s\n' "$lower_platform"
+	fi
+	printf '%s\n' "local"
+}
+
+native_build_root() {
+	local candidate
+	while IFS= read -r candidate; do
+		if [ -d "build/native/$candidate" ]; then
+			printf '%s\n' "build/native/$candidate"
+			return 0
+		fi
+	done <<EOF
+$(native_platform_candidates)
+EOF
+	printf '%s\n' "build/native/${SYNO_PLATFORM:-local}"
+}
+
+native_install_root() {
+	local install_name="$1"
+	local candidate
+	while IFS= read -r candidate; do
+		if [ -d "build/native/$candidate/$install_name/usr/local/AV_ImgData" ]; then
+			printf '%s\n' "build/native/$candidate/$install_name/usr/local/AV_ImgData"
+			return 0
+		fi
+	done <<EOF
+$(native_platform_candidates)
+EOF
+	printf '%s\n' "$(native_build_root)/$install_name/usr/local/AV_ImgData"
+}
+
+ensure_native_face_processor() {
+	local install_root
+	install_root="$(native_install_root face_processor-install)"
+	if [ -x "$install_root/bin/av-imgdata-face-processor" ]; then
+		return 0
+	fi
+	echo "Native face processor missing; building before package staging."
+	if ! ./tools/build-native-face-processor.sh; then
+		echo "ERROR: native ONNXRuntime face processor build failed."
+		return 1
+	fi
+	if ! ./tools/smoke-native-face-processor.sh; then
+		echo "ERROR: native ONNXRuntime face processor smoke checks failed."
+		return 1
+	fi
+	if ! ./tools/functional-native-face-processor.sh; then
+		echo "ERROR: native ONNXRuntime face processor functional checks failed."
+		return 1
+	fi
+}
+
+ensure_vips_image_processor() {
+	local install_root
+	if [ "${AV_IMGDATA_WITH_VIPS:-1}" != "1" ]; then
+		return 0
+	fi
+	install_root="$(native_install_root vips-image-processor-install)"
+	if [ -x "$install_root/bin/av-imgdata-image-processor" ]; then
+		return 0
+	fi
+	echo "Optional libvips image processor missing; building before package staging."
+	if ! ./tools/build-native-image-processor-vips.sh; then
+		echo "ERROR: native libvips image processor build failed."
+		return 1
+	fi
+}
 
 package_external_worker_archives() {
 	local package_tgz_dir="$1"
@@ -93,20 +169,21 @@ create_install() {
 	cp -av tools/worker-api-store.py "$package_tgz_dir/tools/"
 	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type d -name '__pycache__' -prune -exec rm -rf {} +
 	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-	make install DESTDIR="$package_tgz_dir" INSTALLDIR="$package_tgz_dir"
-	NATIVE_INSTALL="build/native/${SYNO_PLATFORM:-local}/face_processor-install/usr/local/AV_ImgData"
+	make install DESTDIR="$package_tgz_dir" INSTALLDIR="$package_tgz_dir" || return 1
+	ensure_native_face_processor || return 1
+	NATIVE_INSTALL="$(native_install_root face_processor-install)"
 	if [ ! -x "$NATIVE_INSTALL/bin/av-imgdata-face-processor" ]; then
 		echo "ERROR: native face processor missing: $NATIVE_INSTALL/bin/av-imgdata-face-processor"
 		echo "The native C++ face processor is required for this branch."
-		exit 1
+		return 1
 	fi
 	if ! strings "$NATIVE_INSTALL/bin/av-imgdata-face-processor" | grep -q 'onnxruntime-native'; then
 		echo "ERROR: native face processor does not report the onnxruntime-native backend."
-		exit 1
+		return 1
 	fi
 	if [ ! -e "$NATIVE_INSTALL/lib/libonnxruntime.so" ] && [ -z "$(find "$NATIVE_INSTALL/lib" -maxdepth 1 -name 'libonnxruntime.so*' -print -quit 2>/dev/null)" ]; then
 		echo "ERROR: native face processor libraries missing: libonnxruntime.so*"
-		exit 1
+		return 1
 	fi
 	mkdir -p "$package_tgz_dir/bin"
 	cp -av "$NATIVE_INSTALL/bin/av-imgdata-face-processor" "$package_tgz_dir/bin/"
@@ -118,17 +195,18 @@ create_install() {
 		mkdir -p "$package_tgz_dir/share"
 		cp -av "$NATIVE_INSTALL/share/licenses" "$package_tgz_dir/share/"
 	fi
-	VIPS_INSTALL="build/native/${SYNO_PLATFORM:-local}/vips-image-processor-install/usr/local/AV_ImgData"
+	ensure_vips_image_processor || return 1
+	VIPS_INSTALL="$(native_install_root vips-image-processor-install)"
 	if [ "${AV_IMGDATA_WITH_VIPS:-1}" = "1" ]; then
 		if [ ! -x "$VIPS_INSTALL/bin/av-imgdata-image-processor" ]; then
 			echo "ERROR: optional libvips image processor missing: $VIPS_INSTALL/bin/av-imgdata-image-processor"
-			exit 1
+			return 1
 		fi
 		mkdir -p "$package_tgz_dir/bin"
 		cp -av "$VIPS_INSTALL/bin/av-imgdata-image-processor" "$package_tgz_dir/bin/"
 		if [ ! -e "$VIPS_INSTALL/lib/libvips.so" ] && [ -z "$(find "$VIPS_INSTALL/lib" -maxdepth 1 -name 'libvips.so*' -print -quit 2>/dev/null)" ]; then
 			echo "ERROR: optional libvips image processor libraries missing: libvips.so*"
-			exit 1
+			return 1
 		fi
 		if [ -d "$VIPS_INSTALL/lib" ]; then
 			mkdir -p "$package_tgz_dir/lib"
@@ -144,9 +222,9 @@ create_install() {
 	if [ ! -f "$package_tgz_dir/ui/index.cgi" ]; then
 		echo "ERROR: ui/index.cgi missing in package staging dir."
 		echo "Check ui/Makefile install target and build artifacts."
-		exit 1
+		return 1
 	fi
-	make packageinstall DESTDIR="$package_tgz_dir" PKG_DIR="$PKG_DIR"
+	make packageinstall DESTDIR="$package_tgz_dir" PKG_DIR="$PKG_DIR" || return 1
 
 	# create package.tgz $1: source_dir $2: dest_dir
 	pkg_make_package $package_tgz_dir "${PKG_DIR}"
@@ -169,8 +247,9 @@ create_spk() {
 }
 
 main() {
-	create_install
-	create_spk
+	./INFO.sh > INFO
+	create_install || return 1
+	create_spk || return 1
 	INSTALL_SUCCEEDED=1
 }
 

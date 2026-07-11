@@ -30,7 +30,6 @@ SANITIZE_DIRS=(
 SANITIZE_NATIVE_BUILD_PATTERNS=(
   "build/worker/*"
   "build/native/*/face_processor-build"
-  "build/native/*/face_processor-install"
   "build/native/*/face_processor-source"
   "build/native/*/libde265-build"
   "build/native/*/libde265-source"
@@ -39,7 +38,6 @@ SANITIZE_NATIVE_BUILD_PATTERNS=(
   "build/native/*/libvips-build"
   "build/native/*/libvips-source"
   "build/native/*/vips-image-processor-build"
-  "build/native/*/vips-image-processor-install"
 )
 SANITIZE_BACKUP_ROOT=""
 SANITIZED_DIRS=()

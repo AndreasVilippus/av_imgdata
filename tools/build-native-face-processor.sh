@@ -31,9 +31,13 @@ resolve_onnxruntime_root() {
     return
   fi
 
+  local deps_target="${AV_IMGDATA_NATIVE_DEPS_TARGET:-linux-x86_64}"
   local candidates=(
     "${BUILD_ROOT}/deps/onnxruntime"
     "${PROJECT_DIR}/build/native/deps/onnxruntime"
+    "${PROJECT_DIR}/worker/native_deps/${deps_target}/onnxruntime"
+    "${PROJECT_DIR}/worker/native_deps/${deps_target}"/onnxruntime-linux-x64-*
+    "${PROJECT_DIR}/worker/native_deps/${deps_target}"/onnxruntime*
     "${PROJECT_DIR}/native_deps/onnxruntime"
     "${PROJECT_DIR}/third_party/onnxruntime"
     "/tmp/onnxruntime-capi"
@@ -122,9 +126,40 @@ resolve_heif_root() {
   echo "WARNING: libheif headers not found; native HEIC runtime loader will be disabled." >&2
 }
 
+resolve_synology_toolchain_compilers() {
+  if [ -n "${CC:-}" ] && [ -n "${CXX:-}" ]; then
+    return
+  fi
+
+  local cxx_candidate
+  local prefix
+  local gcc_candidate
+  for cxx_candidate in \
+    /usr/local/x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu-g++ \
+    "${TOOLKIT_DIR}"/build_env/ds."${PLATFORM}"-*/usr/local/x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu-g++ \
+    "${TOOLKIT_DIR}"/build_env/ds.*-*/usr/local/x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu-g++ \
+    /usr/local/*/bin/*-g++ \
+    "${TOOLKIT_DIR}"/build_env/ds."${PLATFORM}"-*/usr/local/*/bin/*-g++ \
+    "${TOOLKIT_DIR}"/build_env/ds.*-*/usr/local/*/bin/*-g++; do
+    [ -x "${cxx_candidate}" ] || continue
+    prefix="${cxx_candidate%-g++}"
+    gcc_candidate="${prefix}-gcc"
+    [ -x "${gcc_candidate}" ] || continue
+    if [ -z "${CXX:-}" ]; then
+      export CXX="${cxx_candidate}"
+    fi
+    if [ -z "${CC:-}" ]; then
+      export CC="${gcc_candidate}"
+    fi
+    echo "Using Synology toolchain compiler: CC=${CC} CXX=${CXX}"
+    return
+  done
+}
+
 resolve_onnxruntime_root
 resolve_jpeg_root
 resolve_heif_root
+resolve_synology_toolchain_compilers
 
 mkdir -p "${BUILD_DIR}" "${INSTALL_DIR}"
 

@@ -204,6 +204,14 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
 def test_synology_install_requires_native_face_processor_libraries():
     install_script = Path("SynoBuildConf/install").read_text(encoding="utf-8")
 
+    assert "ensure_native_face_processor" in install_script
+    assert "Native face processor missing; building before package staging." in install_script
+    assert "./tools/build-native-face-processor.sh" in install_script
+    assert "./tools/smoke-native-face-processor.sh" in install_script
+    assert "./tools/functional-native-face-processor.sh" in install_script
+    assert "ensure_native_face_processor || return 1" in install_script
+    assert "create_install || return 1" in install_script
+    assert "./INFO.sh > INFO" in install_script
     assert "onnxruntime-native" in install_script
     assert "libonnxruntime.so" in install_script
     assert "libjpeg.so" in install_script
@@ -213,10 +221,41 @@ def test_synology_install_requires_native_face_processor_libraries():
     assert "$NATIVE_INSTALL/share/licenses" in install_script
 
 
+def test_synology_install_can_build_missing_vips_processor_before_staging():
+    install_script = Path("SynoBuildConf/install").read_text(encoding="utf-8")
+
+    assert "ensure_vips_image_processor" in install_script
+    assert "Optional libvips image processor missing; building before package staging." in install_script
+    assert "./tools/build-native-image-processor-vips.sh" in install_script
+    assert install_script.index("ensure_vips_image_processor") < install_script.index("VIPS_INSTALL=\"$(native_install_root vips-image-processor-install)\"")
+
+
+def test_ui_makefile_uses_unquoted_dist_targets_and_utf8_snpm():
+    makefile = Path("ui/Makefile").read_text(encoding="utf-8")
+
+    assert "JS_DIR=dist" in makefile
+    assert "JS_NAMESPACE=SYNO.SDS.App.AV_ImgData" in makefile
+    assert "BUNDLE_JS=dist/av-img-data.bundle.js" in makefile
+    assert "BUNDLE_CSS=dist/style/av-img-data.bundle.css" in makefile
+    assert 'JS_DIR="dist"' not in makefile
+    assert 'BUNDLE_JS="dist/av-img-data.bundle.js"' not in makefile
+    assert "PYTHONIOENCODING=utf-8 /usr/local/tool/snpm install" in makefile
+    assert "PYTHONIOENCODING=utf-8 /usr/local/tool/snpm run build" in makefile
+    assert "install: $(BUNDLE_JS) style.css $(SUBDIR) JSCompress install_JSCompress" in makefile
+
+
 def test_native_face_processor_packages_third_party_license_notices():
     build_script = Path("tools/build-native-face-processor.sh").read_text(encoding="utf-8")
     install_script = Path("SynoBuildConf/install").read_text(encoding="utf-8")
 
+    assert "AV_IMGDATA_NATIVE_DEPS_TARGET:-linux-x86_64" in build_script
+    assert '"${PROJECT_DIR}/worker/native_deps/${deps_target}/onnxruntime"' in build_script
+    assert '"${PROJECT_DIR}/worker/native_deps/${deps_target}"/onnxruntime-linux-x64-*' in build_script
+    assert "resolve_synology_toolchain_compilers" in build_script
+    assert "/usr/local/x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu-g++" in build_script
+    assert "/usr/local/*/bin/*-g++" in build_script
+    assert 'export CXX="${cxx_candidate}"' in build_script
+    assert 'export CC="${gcc_candidate}"' in build_script
     assert "install_native_face_processor_license_files" in build_script
     assert "share/licenses/AV_ImgData/native-face-processor" in build_script
     assert "onnxruntime.LICENSE" in build_script
@@ -239,7 +278,7 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert '[[ -e "${target}" ]] || return 0' in build_package
     assert "Existing Toolkit link target cannot be removed" in build_package
     assert '"build/native/*/face_processor-build"' in build_package
-    assert '"build/native/*/face_processor-install"' in build_package
+    assert '"build/native/*/face_processor-install"' not in build_package
     assert '"build/native/*/libde265-build"' in build_package
     assert '"build/native/*/libde265-source"' in build_package
     assert '"build/native/*/libheif-build"' in build_package
@@ -247,7 +286,7 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert '"build/native/*/libvips-build"' in build_package
     assert '"build/native/*/libvips-source"' in build_package
     assert '"build/native/*/vips-image-processor-build"' in build_package
-    assert '"build/native/*/vips-image-processor-install"' in build_package
+    assert '"build/native/*/vips-image-processor-install"' not in build_package
     assert "build/native/*/deps" not in build_package
     assert '"ui/node_modules"' in build_package
     assert 'mktemp -d "${PACKAGE_ROOT}/../.av_imgdata-link-sanitize.XXXXXX"' in build_package
