@@ -74,3 +74,29 @@ async def external_worker_enrollment_status(request: Request):
     except WorkerApiError as exc:
         return {"success": False, "error": {"code": 500, "message": exc.code}}
     return {"success": True, "data": status}
+
+
+@router.post("/external_worker_delete")
+async def external_worker_delete(request: Request):
+    _session_ctx, error_response = await _prepare_session_request(request)
+    if error_response:
+        return error_response
+    body = await _read_request_body(request)
+    worker_id = str(body.get("worker_id") or "").strip()
+    try:
+        composition = _composition()
+        deleted = composition.worker_api.delete_worker(worker_id=worker_id)
+        status = composition.worker_api.admin_status()
+    except WorkerApiError as exc:
+        status_code = 404 if exc.code == "worker_not_found" else 400
+        return {"success": False, "error": {"code": status_code, "message": exc.code}}
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "worker_delete_failed",
+                "details": str(exc),
+            },
+        }
+    return {"success": True, "data": {"deleted": deleted, "status": status}}
