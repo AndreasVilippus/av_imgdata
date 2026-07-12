@@ -10,23 +10,25 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR / "src"))
 
-from services.worker_provisioning_service import WorkerProvisioningService
+from services.worker_api_composition_service import WorkerApiCompositionService
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package-var", default=os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
-    parser.add_argument("--state-path", default=os.getenv("AV_IMGDATA_WORKER_API_STATE_PATH", ""))
+    parser.add_argument("--state-path", default="", help="Explicit override; config and environment are used when omitted")
     parser.add_argument("--enrollment-id", required=True)
     parser.add_argument("--expires-minutes", type=int, default=15)
     args = parser.parse_args()
 
-    package_var = Path(args.package_var)
-    state_path = Path(args.state_path) if args.state_path else package_var / "worker-api-state.json"
-    if not state_path.is_absolute():
-        state_path = package_var / state_path
-    service = WorkerProvisioningService(package_var=package_var, state_path=state_path)
-    payload = service.create_enrollment(enrollment_id=args.enrollment_id, expires_minutes=args.expires_minutes)
+    composition = WorkerApiCompositionService(
+        package_var=Path(args.package_var),
+        state_path=Path(args.state_path) if str(args.state_path).strip() else None,
+    )
+    payload = composition.provisioning.create_enrollment(
+        enrollment_id=args.enrollment_id,
+        expires_minutes=args.expires_minutes,
+    )
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
