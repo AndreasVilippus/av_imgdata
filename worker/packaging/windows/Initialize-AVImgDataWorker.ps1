@@ -17,9 +17,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $RootCandidate "bin"))) {
 $BundleRoot = $RootCandidate
 if (-not $ConfigPath.Trim()) {
   $ConfigPath = Join-Path $BundleRoot "config\worker-config.example.json"
+} elseif (-not [System.IO.Path]::IsPathRooted($ConfigPath)) {
+  $ConfigPath = Join-Path $BundleRoot $ConfigPath
 }
 $ConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
 $TokenPath = Join-Path $BundleRoot "worker.token"
+$TokenMetadataPath = Join-Path $BundleRoot "worker.token.json"
 $ModelRoot = Join-Path $BundleRoot ".models\face"
 $ConfigureExe = Join-Path $BundleRoot "bin\av-imgdata-worker-configure.exe"
 $ModelSyncExe = Join-Path $BundleRoot "bin\av-imgdata-worker-model-sync.exe"
@@ -66,15 +69,35 @@ foreach ($required in @($ConfigureExe, $ModelSyncExe)) {
   }
 }
 
+$hasToken = Test-Path -LiteralPath $TokenPath
+$hasEnrollmentCode = [bool]$EnrollmentCode.Trim()
+if ($hasToken -and $hasEnrollmentCode -and -not $ForceEnroll) {
+  throw "An existing worker.token was found and an EnrollmentCode was supplied. The code was not used. Rerun with -ForceEnroll to replace the token, or omit -EnrollmentCode to reuse the existing token."
+}
+
 $token = ""
-if ((Test-Path -LiteralPath $TokenPath) -and -not $ForceEnroll) {
+if ($hasToken -and -not $ForceEnroll) {
   $token = ([System.IO.File]::ReadAllText($TokenPath)).Trim()
-  if ($token) { Write-Host "Using existing worker token from $TokenPath" }
+  if (-not $token) {
+    throw "The existing worker.token is empty. Remove it or rerun with -ForceEnroll and a new EnrollmentCode."
+  }
+  if (Test-Path -LiteralPath $TokenMetadataPath) {
+    try {
+      $tokenMetadata = Get-Content -LiteralPath $TokenMetadataPath -Raw | ConvertFrom-Json
+      if ($tokenMetadata.worker_id -and [string]$tokenMetadata.worker_id -ne $WorkerId) {
+        throw "The existing token belongs to worker '$($tokenMetadata.worker_id)', not '$WorkerId'. Rerun with -ForceEnroll and a new EnrollmentCode."
+      }
+    } catch {
+      if ($_.Exception.Message -like "The existing token belongs*") { throw }
+      Write-Warning "Token metadata could not be read; the backend will validate the token binding."
+    }
+  }
+  Write-Host "Using existing worker token from $TokenPath"
 }
 
 if (-not $token) {
-  if (-not $EnrollmentCode.Trim()) {
-    throw "EnrollmentCode is required because no reusable worker.token exists."
+  if (-not $hasEnrollmentCode) {
+    throw "EnrollmentCode is required because no reusable worker token was selected."
   }
   Write-Host "Enrolling worker '$WorkerId' against $ApiUrl"
   try {
@@ -88,9 +111,16 @@ if (-not $token) {
   if (-not $enrollment.token) { throw "Enrollment response did not contain a token." }
   $token = [string]$enrollment.token
   [System.IO.File]::WriteAllText($TokenPath, $token, [System.Text.UTF8Encoding]::new($false))
+  @{
+    worker_id = $WorkerId
+    api_url = $ApiUrl
+    token_id = [string]$enrollment.token_id
+    enrolled_at = [DateTime]::UtcNow.ToString("o")
+  } | ConvertTo-Json | Set-Content -LiteralPath $TokenMetadataPath -Encoding UTF8
 }
 
 Protect-WorkerTokenFile -Path $TokenPath
+if (Test-Path -LiteralPath $TokenMetadataPath) { Protect-WorkerTokenFile -Path $TokenMetadataPath }
 
 & $ConfigureExe `
   --config $ConfigPath `
@@ -109,7 +139,7 @@ if ($LASTEXITCODE -ne 0) {
   --model-root $ModelRoot `
   --model-pack $ModelPack
 if ($LASTEXITCODE -ne 0) {
-  throw "Worker token and configuration were saved, but model synchronization failed with exit code $LASTEXITCODE. Rerun this command after resolving the NAS-side condition; the existing worker.token will be reused."
+  throw "Worker token and configuration were saved, but model synchronization failed with exit code $LASTEXITCODE. Rerun without EnrollmentCode to reuse the token, or use -ForceEnroll with a new code to replace it."
 }
 
 Write-Host "Worker enrolled, configured and model files synchronized."
