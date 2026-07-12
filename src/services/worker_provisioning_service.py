@@ -23,15 +23,7 @@ from services.worker_runtime_service import (
 class WorkerProvisioningService:
     DEFAULT_SCOPES = WorkerProtocol.DEFAULT_TOKEN_SCOPES
 
-    def __init__(
-        self,
-        *,
-        package_var: Optional[Path] = None,
-        state_path: Optional[Path] = None,
-        clock: Optional[Callable[[], datetime]] = None,
-        config_service: Optional[ConfigService] = None,
-        state_store: Optional[WorkerStateStore] = None,
-    ):
+    def __init__(self, *, package_var: Optional[Path] = None, state_path: Optional[Path] = None, clock: Optional[Callable[[], datetime]] = None, config_service: Optional[ConfigService] = None, state_store: Optional[WorkerStateStore] = None):
         self.config_service = config_service or ConfigService(
             str(Path(package_var) / "config.json") if package_var is not None else None
         )
@@ -57,58 +49,51 @@ class WorkerProvisioningService:
             "used_at": None,
             "worker_id": None,
         }
-
-        def mutate(state):
-            state["enrollments"][enrollment_id] = entry
-
-        self.store.update(mutate)
+        self.store.update(lambda state: state["enrollments"].__setitem__(enrollment_id, entry))
         return {"enrollment_id": enrollment_id, "enrollment_code": code, "expires_at": entry["expires_at"]}
 
     def redeem_enrollment(self, *, enrollment_code: str, worker_id: str) -> Dict[str, Any]:
         enrollment_code = self.credentials.require_value(enrollment_code, "enrollment_code_required")
         worker_id = self.credentials.require_value(worker_id, "worker_id_required")
         digest = self.credentials.hash_value(enrollment_code)
-        state = self.store.read()
-        match_id = ""
-        match: Optional[Dict[str, Any]] = None
-        for enrollment_id, entry in state["enrollments"].items():
-            if isinstance(entry, dict) and entry.get("code_hash") == digest:
-                match_id, match = str(enrollment_id), entry
-                break
-        if match is None:
-            raise WorkerApiError("invalid_enrollment_code")
-        if match.get("used_at"):
-            raise WorkerApiError("enrollment_code_used")
-        if parse_time(match.get("expires_at")) <= utc_now(self._clock):
-            raise WorkerApiError("enrollment_code_expired")
-
         now = iso_time(utc_now(self._clock))
         token_id = "worker-%s-%s" % (worker_id, secrets.token_hex(4))
-        issued = self.credentials.issue_token(
-            token_id=token_id,
+        token = secrets.token_urlsafe(32)
+        token_entry = self.credentials.create_token_entry(
+            token=token,
             worker_id=worker_id,
             scopes=self.DEFAULT_SCOPES,
             issued_via="enrollment",
-            enrollment_id=match_id,
+            enrollment_id="",
             created_at=now,
         )
 
-        def mutate(current):
-            entry = current["enrollments"].get(match_id)
-            if not isinstance(entry, dict):
+        def mutate(state):
+            match_id = ""
+            match = None
+            for enrollment_id, entry in state["enrollments"].items():
+                if isinstance(entry, dict) and entry.get("code_hash") == digest:
+                    match_id, match = str(enrollment_id), entry
+                    break
+            if match is None:
                 raise WorkerApiError("invalid_enrollment_code")
-            if entry.get("used_at"):
+            if match.get("used_at"):
                 raise WorkerApiError("enrollment_code_used")
-            entry["used_at"] = now
-            entry["worker_id"] = worker_id
+            if parse_time(match.get("expires_at")) <= utc_now(self._clock):
+                raise WorkerApiError("enrollment_code_expired")
+            token_entry["enrollment_id"] = match_id
+            state["tokens"][token_id] = token_entry
+            match["used_at"] = now
+            match["worker_id"] = worker_id
+            return match_id
 
         self.store.update(mutate)
         return {
             "status": "enrolled",
             "worker_id": worker_id,
-            "token_id": issued["token_id"],
-            "token": issued["token"],
-            "scopes": issued["scopes"],
+            "token_id": token_id,
+            "token": token,
+            "scopes": list(token_entry["scopes"]),
         }
 
     def require_token(self, *, token: str, worker_id: str, scope: str) -> Dict[str, Any]:
@@ -121,12 +106,7 @@ class WorkerProvisioningService:
         if not status.get("models_present"):
             raise WorkerApiError("model_files_missing")
         if not status.get("license_ack_present") and self._legacy_license_acknowledged():
-            store.acknowledge_usage(
-                model_pack=model_pack,
-                accepted_by="existing_package_configuration",
-                package_version="migration",
-                source="legacy_config_migration",
-            )
+            store.acknowledge_usage(model_pack=model_pack, accepted_by="existing_package_configuration", package_version="migration", source="legacy_config_migration")
             status = store.status(model_pack)
         if not status.get("license_ack_present"):
             raise WorkerApiError("model_license_not_acknowledged")
