@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Local/DSM-compatible HTTP router for the AV ImgData worker API.
-
-This script is intentionally small and framework-free. It exposes the existing
-WorkerApiService endpoint adapter over HTTP for integration tests and can serve
-as the reference contract for the DSM routing layer.
-"""
+"""Local/DSM-compatible HTTP router for the AV ImgData worker API."""
 
 from __future__ import annotations
 
@@ -13,15 +8,15 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from services.worker_api_composition_service import WorkerApiCompositionService  # noqa: E402
 from services.worker_api_endpoints import handle_worker_api_request  # noqa: E402
-from services.worker_api_service import WorkerApiService  # noqa: E402
 
 
 ROUTE_PREFIX = "/worker-api"
@@ -60,13 +55,11 @@ def action_from_path(path: str) -> str:
     if not clean.startswith(prefix):
         return ""
     action = clean[len(prefix):]
-    if "/" in action:
-        return ""
-    return action
+    return "" if "/" in action else action
 
 
 class WorkerApiHttpHandler(BaseHTTPRequestHandler):
-    server_version = "AVImgDataWorkerApi/0.1"
+    server_version = "AVImgDataWorkerApi/1.0"
 
     def _send_json(self, status: int, payload: Dict[str, Any]) -> None:
         data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
@@ -77,15 +70,15 @@ class WorkerApiHttpHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def do_GET(self) -> None:  # noqa: N802 - stdlib method name
+    def do_GET(self) -> None:  # noqa: N802
         action = action_from_path(self.path)
         if action in ("", "status"):
-            service = WorkerApiService(package_var=self.server.package_var, state_path=self.server.state_path)  # type: ignore[attr-defined]
-            self._send_json(200, {"status": "ok", "service": service.status()})
+            composition = self.server.composition  # type: ignore[attr-defined]
+            self._send_json(200, {"status": "ok", "service": composition.worker_api.status()})
             return
         self._send_json(404, {"status": "error", "code": "unknown_worker_api_route"})
 
-    def do_POST(self) -> None:  # noqa: N802 - stdlib method name
+    def do_POST(self) -> None:  # noqa: N802
         action = action_from_path(self.path)
         if action not in VALID_POST_ACTIONS:
             self._send_json(404, {"status": "error", "code": "unknown_worker_api_route"})
@@ -95,12 +88,12 @@ class WorkerApiHttpHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._send_json(400, {"status": "error", "code": str(exc)})
             return
+        composition = self.server.composition  # type: ignore[attr-defined]
         status, payload = handle_worker_api_request(
             action,
             headers=parse_headers(self),
             body=body,
-            package_var=self.server.package_var,  # type: ignore[attr-defined]
-            state_path=self.server.state_path,  # type: ignore[attr-defined]
+            service=composition.worker_api,
         )
         self._send_json(status, payload)
 
@@ -111,10 +104,18 @@ class WorkerApiHttpHandler(BaseHTTPRequestHandler):
 
 
 class WorkerApiHttpServer(ThreadingHTTPServer):
-    def __init__(self, server_address: Tuple[str, int], package_var: Path, state_path: Path | None, quiet: bool):
+    def __init__(
+        self,
+        server_address: Tuple[str, int],
+        package_var: Path,
+        state_path: Optional[Path],
+        quiet: bool,
+    ):
         super().__init__(server_address, WorkerApiHttpHandler)
-        self.package_var = package_var
-        self.state_path = state_path
+        self.composition = WorkerApiCompositionService(
+            package_var=package_var,
+            state_path=state_path,
+        )
         self.quiet = quiet
 
 
@@ -128,13 +129,13 @@ def main() -> int:
     args = parser.parse_args()
 
     package_var = Path(args.package_var).resolve()
-    state_path = Path(args.state_path).resolve() if args.state_path else None
+    state_path = Path(args.state_path) if args.state_path else None
     server = WorkerApiHttpServer((args.host, args.port), package_var, state_path, args.quiet)
     print(json.dumps({
         "status": "listening",
         "base_url": f"http://{args.host}:{args.port}{ROUTE_PREFIX}",
-        "package_var": str(package_var),
-        "state_path": str(state_path) if state_path else str(package_var / "worker-api-state.json"),
+        "package_var": str(server.composition.package_var),
+        "state_path": str(server.composition.state_store.state_path),
     }, ensure_ascii=False), flush=True)
     try:
         server.serve_forever()
