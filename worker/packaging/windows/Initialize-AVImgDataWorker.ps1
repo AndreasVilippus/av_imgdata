@@ -4,13 +4,20 @@ param(
   [Parameter(Mandatory=$true)][string]$WorkerId,
   [Parameter(Mandatory=$true)][string]$PathBaseDir,
   [string]$ModelPack = "buffalo_l",
-  [string]$ConfigPath = "$PSScriptRoot\..\..\config\worker-config.example.json",
+  [string]$ConfigPath = "",
   [switch]$ForceEnroll
 )
 
 $ErrorActionPreference = "Stop"
 $ApiUrl = $ApiUrl.TrimEnd('/')
-$BundleRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+$RootCandidate = [System.IO.Path]::GetFullPath($PSScriptRoot)
+if (-not (Test-Path -LiteralPath (Join-Path $RootCandidate "bin"))) {
+  $RootCandidate = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+}
+$BundleRoot = $RootCandidate
+if (-not $ConfigPath.Trim()) {
+  $ConfigPath = Join-Path $BundleRoot "config\worker-config.example.json"
+}
 $ConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
 $TokenPath = Join-Path $BundleRoot "worker.token"
 $ModelRoot = Join-Path $BundleRoot ".models\face"
