@@ -23,7 +23,6 @@ class WorkerProtocol:
     TOKEN_SCOPE_WORKER_API = "worker_api"
     TOKEN_SCOPE_MODELS_READ = "models_read"
     DEFAULT_TOKEN_SCOPES = (TOKEN_SCOPE_WORKER_API, TOKEN_SCOPE_MODELS_READ)
-
     CAPABILITIES = (
         "face_native_detect",
         "face_native_embed",
@@ -77,11 +76,10 @@ class WorkerRuntimePathService:
         return (self.package_var / "worker-api-state.json").resolve()
 
     def _configured_state_path(self) -> str:
-        service = self.config_service
-        if service is None:
+        if self.config_service is None:
             return ""
         try:
-            config = service.readMergedConfig()
+            config = self.config_service.readMergedConfig()
         except Exception:
             return ""
         worker_api = config.get("worker_api") if isinstance(config, dict) and isinstance(config.get("worker_api"), dict) else {}
@@ -95,17 +93,16 @@ class WorkerRuntimePathService:
 class WorkerStateStore:
     """Single authority for worker runtime JSON state, migration and permissions."""
 
-    def __init__(
-        self,
-        *,
-        package_var: Optional[Path] = None,
-        state_path: Optional[Path] = None,
-        config_service: Optional[Any] = None,
-    ):
+    _locks_guard = threading.Lock()
+    _locks: Dict[str, threading.RLock] = {}
+
+    def __init__(self, *, package_var: Optional[Path] = None, state_path: Optional[Path] = None, config_service: Optional[Any] = None):
         self.paths = WorkerRuntimePathService(package_var=package_var, config_service=config_service)
         self.package_var = self.paths.package_var
         self.state_path = self.paths.state_path(state_path)
-        self._lock = threading.RLock()
+        key = str(self.state_path)
+        with self._locks_guard:
+            self._lock = self._locks.setdefault(key, threading.RLock())
 
     @staticmethod
     def default_state() -> Dict[str, Any]:
@@ -139,29 +136,32 @@ class WorkerStateStore:
                 result[key] = {}
         result["schema_version"] = WorkerProtocol.SCHEMA_VERSION
         for token in result["tokens"].values():
-            if not isinstance(token, dict):
-                continue
-            token.setdefault("revoked", False)
-            token.setdefault("scopes", list(WorkerProtocol.DEFAULT_TOKEN_SCOPES))
+            if isinstance(token, dict):
+                token.setdefault("revoked", False)
+                token.setdefault("scopes", list(WorkerProtocol.DEFAULT_TOKEN_SCOPES))
         return result
 
     def write(self, state: Dict[str, Any]) -> None:
         with self._lock:
             normalized = self.migrate(state)
-            self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_name = tempfile.mkstemp(prefix=self.state_path.name + ".", suffix=".tmp", dir=str(self.state_path.parent))
+            tmp_name = ""
             try:
+                self.state_path.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(prefix=self.state_path.name + ".", suffix=".tmp", dir=str(self.state_path.parent))
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
                     json.dump(normalized, handle, ensure_ascii=False, indent=2, sort_keys=True)
                     handle.write("\n")
                 self._apply_runtime_permissions(Path(tmp_name))
                 os.replace(tmp_name, str(self.state_path))
                 self._apply_runtime_permissions(self.state_path)
+            except OSError as exc:
+                raise WorkerApiError("state_write_failed", str(exc))
             finally:
-                try:
-                    os.unlink(tmp_name)
-                except FileNotFoundError:
-                    pass
+                if tmp_name:
+                    try:
+                        os.unlink(tmp_name)
+                    except FileNotFoundError:
+                        pass
 
     def update(self, mutator: Callable[[Dict[str, Any]], Any]) -> Any:
         with self._lock:
@@ -188,33 +188,23 @@ class WorkerCredentialService:
     def __init__(self, store: WorkerStateStore):
         self.store = store
 
-    def issue_token(
-        self,
-        *,
-        token_id: str,
-        worker_id: str = "",
-        scopes: Optional[Sequence[str]] = None,
-        issued_via: str = "admin",
-        enrollment_id: str = "",
-        created_at: str,
-    ) -> Dict[str, Any]:
+    def create_token_entry(self, *, token: str, worker_id: str = "", scopes: Optional[Sequence[str]] = None, issued_via: str = "admin", enrollment_id: str = "", created_at: str) -> Dict[str, Any]:
+        return {
+            "token_hash": self.hash_value(token),
+            "created_at": created_at,
+            "revoked": False,
+            "worker_id": str(worker_id or "").strip(),
+            "scopes": self.normalize_scopes(scopes),
+            "issued_via": str(issued_via or "admin"),
+            "enrollment_id": str(enrollment_id or "").strip(),
+        }
+
+    def issue_token(self, *, token_id: str, worker_id: str = "", scopes: Optional[Sequence[str]] = None, issued_via: str = "admin", enrollment_id: str = "", created_at: str) -> Dict[str, Any]:
         token_id = self.require_value(token_id, "token_id_required")
         token = secrets.token_urlsafe(32)
-        normalized_scopes = self.normalize_scopes(scopes)
-
-        def mutate(state):
-            state["tokens"][token_id] = {
-                "token_hash": self.hash_value(token),
-                "created_at": created_at,
-                "revoked": False,
-                "worker_id": str(worker_id or "").strip(),
-                "scopes": normalized_scopes,
-                "issued_via": str(issued_via or "admin"),
-                "enrollment_id": str(enrollment_id or "").strip(),
-            }
-
-        self.store.update(mutate)
-        return {"token_id": token_id, "token": token, "created_at": created_at, "scopes": normalized_scopes}
+        entry = self.create_token_entry(token=token, worker_id=worker_id, scopes=scopes, issued_via=issued_via, enrollment_id=enrollment_id, created_at=created_at)
+        self.store.update(lambda state: state["tokens"].__setitem__(token_id, entry))
+        return {"token_id": token_id, "token": token, "created_at": created_at, "scopes": list(entry["scopes"])}
 
     def authenticate(self, *, token: str, worker_id: str = "", scope: str = WorkerProtocol.TOKEN_SCOPE_WORKER_API) -> Dict[str, Any]:
         token = self.require_value(token, "token_required")
