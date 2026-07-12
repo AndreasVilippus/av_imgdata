@@ -30,11 +30,9 @@ struct FaceModelStatus {
     std::string detector_path;
     std::string recognizer_path;
     std::string manifest_path;
-    std::string license_ack_path;
     bool detector_present = false;
     bool recognizer_present = false;
     bool manifest_present = false;
-    bool license_ack_present = false;
 };
 
 struct ReadinessStatus {
@@ -99,11 +97,9 @@ FaceModelStatus inspect_face_models(const WorkerConfig& config) {
     status.detector_path = runtime::join_path(status.model_dir, "det_10g.onnx");
     status.recognizer_path = runtime::join_path(status.model_dir, "w600k_r50.onnx");
     status.manifest_path = runtime::join_path(status.model_dir, "manifest.json");
-    status.license_ack_path = runtime::join_path(status.model_dir, "LICENSE_ACK.json");
     status.detector_present = runtime::file_exists(status.detector_path);
     status.recognizer_present = runtime::file_exists(status.recognizer_path);
     status.manifest_present = runtime::file_exists(status.manifest_path);
-    status.license_ack_present = runtime::file_exists(status.license_ack_path);
     return status;
 }
 
@@ -250,8 +246,7 @@ int command_probe(const std::vector<std::string>& args) {
         << "    \"face_processor_config_present\": " << (status.has_face ? "true" : "false") << ",\n"
         << "    \"face_processor_binary_exists\": " << (status.face_binary_exists ? "true" : "false") << ",\n"
         << "    \"face_models_present\": " << (status.models_present ? "true" : "false") << ",\n"
-        << "    \"face_model_manifest_present\": " << (status.model_status.manifest_present ? "true" : "false") << ",\n"
-        << "    \"face_model_license_ack_present\": " << (status.model_status.license_ack_present ? "true" : "false") << "\n"
+        << "    \"face_model_manifest_present\": " << (status.model_status.manifest_present ? "true" : "false") << "\n"
         << "  },\n"
         << "  \"processors\": [{\n"
         << "    \"name\": \"av-imgdata-face-processor\",\n"
@@ -262,19 +257,17 @@ int command_probe(const std::vector<std::string>& args) {
         << "    \"version_ok\": " << (status.face_version_ok ? "true" : "false") << ",\n"
         << "    \"version_output\": \"" << runtime::json_escape(status.face_version.output) << "\",\n"
         << "    \"models\": {\n"
-        << "      \"managed_by\": \"dsm_or_manual\",\n"
+        << "      \"managed_by\": \"dsm\",\n"
         << "      \"distributed_with_worker\": false,\n"
-        << "      \"usage_ack_required\": true,\n"
+        << "      \"license_authority\": \"dsm\",\n"
         << "      \"model_dir\": \"" << runtime::json_escape(status.model_status.model_dir) << "\",\n"
         << "      \"detector_path\": \"" << runtime::json_escape(status.model_status.detector_path) << "\",\n"
         << "      \"recognizer_path\": \"" << runtime::json_escape(status.model_status.recognizer_path) << "\",\n"
         << "      \"manifest_path\": \"" << runtime::json_escape(status.model_status.manifest_path) << "\",\n"
-        << "      \"license_ack_path\": \"" << runtime::json_escape(status.model_status.license_ack_path) << "\",\n"
         << "      \"detector_present\": " << (status.model_status.detector_present ? "true" : "false") << ",\n"
         << "      \"recognizer_present\": " << (status.model_status.recognizer_present ? "true" : "false") << ",\n"
         << "      \"models_present\": " << (status.models_present ? "true" : "false") << ",\n"
-        << "      \"manifest_present\": " << (status.model_status.manifest_present ? "true" : "false") << ",\n"
-        << "      \"license_ack_present\": " << (status.model_status.license_ack_present ? "true" : "false") << "\n"
+        << "      \"manifest_present\": " << (status.model_status.manifest_present ? "true" : "false") << "\n"
         << "    },\n"
         << "    \"probe_ok\": " << (status.face_probe_ok ? "true" : "false") << ",\n"
         << "    \"probe_output\": \"" << runtime::json_escape(status.face_probe.output) << "\"\n"
@@ -408,7 +401,6 @@ int command_run(const std::vector<std::string>& args) {
             << ",\"checks\":{\"face_processor_binary_exists\":" << (status.face_binary_exists ? "true" : "false")
             << ",\"face_models_present\":" << (status.models_present ? "true" : "false")
             << ",\"face_probe_ok\":" << (status.face_probe_ok ? "true" : "false")
-            << ",\"license_ack_present\":" << (status.model_status.license_ack_present ? "true" : "false")
             << "}}" << std::endl;
         if (max_iterations > 0 && iteration >= max_iterations) break;
         std::this_thread::sleep_for(std::chrono::seconds(config.poll_interval_seconds));
