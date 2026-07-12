@@ -42,6 +42,13 @@ if(MINGW)
   endforeach()
 endif()
 
+if(AV_IMGDATA_WORKER_BUILD_TESTS)
+  enable_testing()
+  add_executable(av-imgdata-worker-runtime-test tests/runtime_test.cpp)
+  target_link_libraries(av-imgdata-worker-runtime-test PRIVATE av-imgdata-worker-runtime)
+  add_test(NAME av-imgdata-worker-runtime-test COMMAND av-imgdata-worker-runtime-test)
+endif()
+
 install(TARGETS ${AV_IMGDATA_WORKER_TARGETS} RUNTIME DESTINATION bin)
 install(FILES config/worker-config.example.json DESTINATION config)
 install(FILES config/worker-config.schema.json DESTINATION config)
