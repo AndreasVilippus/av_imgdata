@@ -1,0 +1,22 @@
+{
+  "protocol_version": "1.0",
+  "worker_version": "0.10.0",
+  "config_schema_version": 1,
+  "state_schema_version": 2,
+  "token_scopes": [
+    "worker_api",
+    "models_read"
+  ],
+  "capabilities": [
+    "face_native_detect",
+    "face_native_embed",
+    "face_native_detect_batch",
+    "face_native_embed_batch",
+    "face_native_rank_embeddings",
+    "face_native_profile_math",
+    "warm_processor_worker"
+  ],
+  "input_modes": [
+    "shared_path"
+  ]
+}
