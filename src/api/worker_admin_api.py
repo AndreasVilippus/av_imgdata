@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """DSM-authenticated administration endpoints for external worker enrollment."""
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -13,8 +14,12 @@ from services.worker_provisioning_service import WorkerProvisioningService
 router = APIRouter(prefix="/api")
 
 
+def _package_var() -> Path:
+    return Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
+
+
 def _services(package_var: Optional[Path] = None):
-    api = WorkerApiService(package_var=package_var)
+    api = WorkerApiService(package_var=package_var or _package_var())
     provisioning = WorkerProvisioningService(
         package_var=api.package_var,
         state_path=api.state_path,
@@ -22,6 +27,11 @@ def _services(package_var: Optional[Path] = None):
         state_store=api.store,
     )
     return api, provisioning
+
+
+def _admin_status():
+    api, _provisioning = _services()
+    return api.admin_status()
 
 
 @router.post("/external_worker_enrollment_start")
@@ -37,22 +47,12 @@ async def external_worker_enrollment_start(request: Request):
         expires_minutes = 15
     try:
         api, provisioning = _services()
-        result = provisioning.create_enrollment(
-            enrollment_id=enrollment_id,
-            expires_minutes=expires_minutes,
-        )
+        result = provisioning.create_enrollment(enrollment_id=enrollment_id, expires_minutes=expires_minutes)
         status = api.admin_status()
     except WorkerApiError as exc:
         return {"success": False, "error": {"code": 400, "message": exc.code}}
     except Exception as exc:
-        return {
-            "success": False,
-            "error": {
-                "code": 500,
-                "message": "worker_enrollment_start_failed",
-                "details": str(exc),
-            },
-        }
+        return {"success": False, "error": {"code": 500, "message": "worker_enrollment_start_failed", "details": str(exc)}}
     return {"success": True, "data": {"enrollment": result, "status": status}}
 
 
@@ -62,8 +62,7 @@ async def external_worker_enrollment_status(request: Request):
     if error_response:
         return error_response
     try:
-        api, _provisioning = _services()
-        status = api.admin_status()
+        status = _admin_status()
     except WorkerApiError as exc:
         return {"success": False, "error": {"code": 500, "message": exc.code}}
     return {"success": True, "data": status}
