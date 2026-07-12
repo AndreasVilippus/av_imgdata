@@ -22,7 +22,8 @@ inline constexpr std::array<const char*, 1> kInputModes = {
     "shared_path",
 };
 
-inline std::string json_string_array(const auto& values) {
+template <std::size_t N>
+inline std::string json_string_array(const std::array<const char*, N>& values) {
     std::string result = "[";
     bool first = true;
     for (const char* value : values) {
