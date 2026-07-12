@@ -1,13 +1,21 @@
 #pragma once
 
+// Generated from worker/protocol/worker-protocol.json. Do not edit manually.
 #include <array>
+#include <cstddef>
 #include <string>
 
 namespace av_imgdata::worker {
 
 inline constexpr const char* kProtocolVersion = "1.0";
 inline constexpr const char* kWorkerVersion = "0.10.0";
+inline constexpr int kConfigSchemaVersion = 1;
+inline constexpr int kStateSchemaVersion = 2;
 
+inline constexpr std::array<const char*, 2> kTokenScopes = {
+    "worker_api",
+    "models_read",
+};
 inline constexpr std::array<const char*, 7> kCapabilities = {
     "face_native_detect",
     "face_native_embed",
@@ -17,7 +25,6 @@ inline constexpr std::array<const char*, 7> kCapabilities = {
     "face_native_profile_math",
     "warm_processor_worker",
 };
-
 inline constexpr std::array<const char*, 1> kInputModes = {
     "shared_path",
 };
@@ -37,13 +44,8 @@ inline std::string json_string_array(const std::array<const char*, N>& values) {
     return result;
 }
 
-inline std::string capabilities_json() {
-    return json_string_array(kCapabilities);
-}
-
-inline std::string input_modes_json() {
-    return json_string_array(kInputModes);
-}
+inline std::string capabilities_json() { return json_string_array(kCapabilities); }
+inline std::string input_modes_json() { return json_string_array(kInputModes); }
 
 namespace config_key {
 inline constexpr const char* kSchemaVersion = "schema_version";
