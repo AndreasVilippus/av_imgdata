@@ -28,7 +28,7 @@ int usage() {
 int main(int argc, char** argv) {
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) args.push_back(argv[i]);
-    if (args.empty()) return usage();
+    if (args.empty() || runtime::has_arg(args, "--help") || runtime::has_arg(args, "-h")) return usage();
 
     const std::string config_path = runtime::arg_value(args, "--config");
     const std::string worker_id = runtime::arg_value(args, "--worker-id");
