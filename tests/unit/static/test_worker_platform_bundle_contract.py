@@ -24,6 +24,26 @@ def test_worker_cmake_builds_same_runtime_roles_for_both_platform_targets():
     assert "packaging/unix/initialize-av-imgdata-worker.sh" in cmake
 
 
+def test_all_worker_binary_roles_use_shared_protocol_and_runtime():
+    for filename in ("main.cpp", "api_loop.cpp", "configure.cpp", "model_sync.cpp"):
+        source = (PROJECT_ROOT / "worker" / "src" / filename).read_text(encoding="utf-8")
+        assert '#include "av_imgdata/worker_protocol.h"' in source
+        assert '#include "av_imgdata/worker_runtime.h"' in source
+        assert "0.1.0-phase-d" not in source
+        assert "0.1.0-phase-h1" not in source
+
+    main_source = (PROJECT_ROOT / "worker" / "src" / "main.cpp").read_text(encoding="utf-8")
+    api_source = (PROJECT_ROOT / "worker" / "src" / "api_loop.cpp").read_text(encoding="utf-8")
+    for duplicated_definition in (
+        "std::string shell_quote(",
+        "std::string json_escape(",
+        "std::string arg_value(",
+        "CommandResult run_command(",
+    ):
+        assert duplicated_definition not in main_source
+        assert duplicated_definition not in api_source
+
+
 def test_windows_initializer_delegates_config_and_model_sync():
     script = (PROJECT_ROOT / "worker" / "packaging" / "windows" / "Initialize-AVImgDataWorker.ps1").read_text(encoding="utf-8")
 
