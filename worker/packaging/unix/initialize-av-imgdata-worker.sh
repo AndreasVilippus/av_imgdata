@@ -45,7 +45,11 @@ fi
 
 API_URL=${API_URL%/}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-BUNDLE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+if [ -d "$SCRIPT_DIR/bin" ]; then
+  BUNDLE_ROOT=$SCRIPT_DIR
+else
+  BUNDLE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+fi
 TOKEN_PATH="$BUNDLE_ROOT/worker.token"
 MODEL_ROOT="$BUNDLE_ROOT/.models/face"
 CONFIG_PATH=${CONFIG_PATH:-$BUNDLE_ROOT/config/worker-config.example.json}
