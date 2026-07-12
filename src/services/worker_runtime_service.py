@@ -15,7 +15,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 class WorkerApiError(RuntimeError):
     def __init__(self, code: str, message: Optional[str] = None):
         self.code = str(code)
-        super().__init__(message or self.code)
+        detail = str(message or "").strip()
+        super().__init__(f"{self.code}: {detail}" if detail else self.code)
 
 
 class WorkerProtocol:

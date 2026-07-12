@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 import time
@@ -10,6 +11,12 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 PROJECT_DIR = Path(__file__).resolve().parents[3]
+
+
+def free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def request(method: str, url: str, payload: Dict[str, Any] | None = None, token: str = "") -> Tuple[int, Dict[str, Any]]:
@@ -38,7 +45,7 @@ def test_worker_api_http_router_lifecycle(tmp_path: Path) -> None:
     )
     token = json.loads(created.stdout)["token"]
 
-    port = 18765
+    port = free_port()
     router = subprocess.Popen(
         [
             sys.executable,
@@ -58,8 +65,24 @@ def test_worker_api_http_router_lifecycle(tmp_path: Path) -> None:
     try:
         assert router.stdout is not None
         line = router.stdout.readline().strip()
+        if not line:
+            try:
+                _, stderr = router.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                router.kill()
+                _, stderr = router.communicate(timeout=5)
+            raise AssertionError(f"worker api router did not start: {stderr.strip()}")
         assert json.loads(line)["status"] == "listening"
         base_url = f"http://127.0.0.1:{port}/worker-api"
+
+        status, payload = request(
+            "POST",
+            base_url + "/register",
+            {"worker_id": "worker-01", "version": "test"},
+            token,
+        )
+        assert status == 200
+        assert payload["status"] == "registered"
 
         status, payload = request("POST", base_url + "/heartbeat", {"worker_id": "worker-01", "status": "ready"}, token)
         assert status == 200

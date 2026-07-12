@@ -29,6 +29,13 @@ def test_worker_api_router_heartbeat_and_status_when_enabled(tmp_path, monkeypat
     client = _client(tmp_path, monkeypatch, enabled=True)
     token = WorkerApiService(package_var=tmp_path).create_token()["token"]
 
+    registered = client.post(
+        "/worker-api/register",
+        headers={"Authorization": "Bearer " + token},
+        json={"worker_id": "worker-01", "version": "test"},
+    )
+    assert registered.status_code == 200
+
     response = client.post(
         "/worker-api/heartbeat",
         headers={"Authorization": "Bearer " + token},
@@ -48,6 +55,13 @@ def test_worker_api_router_uses_state_path_env_override(tmp_path, monkeypatch) -
     monkeypatch.setenv("AV_IMGDATA_WORKER_API_STATE_PATH", str(custom_state))
     client = _client(tmp_path, monkeypatch, enabled=True)
     token = WorkerApiService(package_var=tmp_path, state_path=custom_state).create_token()["token"]
+
+    registered = client.post(
+        "/worker-api/register",
+        headers={"Authorization": "Bearer " + token},
+        json={"worker_id": "worker-01", "version": "test"},
+    )
+    assert registered.status_code == 200
 
     response = client.post(
         "/worker-api/heartbeat",
