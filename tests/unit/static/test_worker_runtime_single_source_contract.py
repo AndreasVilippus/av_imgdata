@@ -35,13 +35,30 @@ def test_worker_credentials_are_not_reimplemented_in_services():
     assert "def _hash" not in provisioning
 
 
-def test_worker_admin_api_delegates_status_semantics_to_backend():
+def test_worker_http_and_admin_routes_use_one_composition_root():
+    worker_api = _read("src/api/worker_api.py")
     admin_api = _read("src/api/worker_admin_api.py")
+    local_router = _read("tools/worker-api-http-router.py")
 
-    assert "api.admin_status()" in admin_api
+    assert "WorkerApiCompositionService" in worker_api
+    assert "WorkerApiCompositionService" in admin_api
+    assert "WorkerApiCompositionService" in local_router
+    assert "WorkerApiService(" not in worker_api
+    assert "WorkerProvisioningService(" not in worker_api
     assert "json.load" not in admin_api
     assert "datetime.fromisoformat" not in admin_api
     assert "code_hash" not in admin_api
+
+
+def test_worker_http_error_mapping_is_defined_once():
+    composition = _read("src/services/worker_api_composition_service.py")
+    fastapi_router = _read("src/api/worker_api.py")
+    endpoints = _read("src/services/worker_api_endpoints.py")
+
+    assert "def worker_error_http_status" in composition
+    assert "worker_error_http_status(exc.code)" in fastapi_router
+    assert "worker_error_http_status(exc.code)" in endpoints
+    assert 'status = 401 if' not in endpoints
 
 
 def test_worker_cli_uses_canonical_paths_and_store_permissions():
@@ -54,14 +71,27 @@ def test_worker_cli_uses_canonical_paths_and_store_permissions():
     assert "DSM_PACKAGE_VAR" not in cli
 
 
-def test_worker_protocol_is_the_only_capability_default_source():
+def test_worker_protocol_is_generated_from_one_descriptor():
     runtime = _read("src/services/worker_runtime_service.py")
-    api = _read("src/services/worker_api_service.py")
+    generated = _read("src/services/worker_protocol_generated.py")
+    generator = _read("tools/generate-worker-protocol.py")
 
-    assert "class WorkerProtocol" in runtime
+    assert "from services.worker_protocol_generated import" in runtime
+    assert "CAPABILITIES = (" in generated
+    assert "worker/protocol/worker-protocol.json" in generator
     assert "JOB_TYPES_BY_CAPABILITY" in runtime
-    assert "DEFAULT_CAPABILITIES = WorkerProtocol.CAPABILITIES" in api
-    assert "job_type_unsupported" in api
+
+
+def test_worker_cxx_binaries_use_one_shared_runtime_header():
+    for source_path in (
+        "worker/src/main.cpp",
+        "worker/src/api_loop.cpp",
+        "worker/src/configure.cpp",
+        "worker/src/model_sync.cpp",
+    ):
+        source = _read(source_path)
+        assert '#include "av_imgdata/worker_protocol.h"' in source
+        assert '#include "av_imgdata/worker_runtime.h"' in source
 
 
 def test_worker_status_remains_backend_owned_and_schema_versioned():
