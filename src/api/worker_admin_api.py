@@ -8,30 +8,28 @@ from typing import Optional
 from fastapi import APIRouter, Request
 
 from api.imgdata_api import _prepare_session_request, _read_request_body
-from services.worker_api_service import WorkerApiError, WorkerApiService
-from services.worker_provisioning_service import WorkerProvisioningService
+from services.worker_api_composition_service import WorkerApiCompositionService
+from services.worker_runtime_service import WorkerApiError
+
 
 router = APIRouter(prefix="/api")
 
 
 def _package_var() -> Path:
-    return Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
+    return Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")).resolve()
+
+
+def _composition(package_var: Optional[Path] = None) -> WorkerApiCompositionService:
+    return WorkerApiCompositionService(package_var=package_var or _package_var())
 
 
 def _services(package_var: Optional[Path] = None):
-    api = WorkerApiService(package_var=package_var or _package_var())
-    provisioning = WorkerProvisioningService(
-        package_var=api.package_var,
-        state_path=api.state_path,
-        config_service=api.config_service,
-        state_store=api.store,
-    )
-    return api, provisioning
+    composition = _composition(package_var)
+    return composition.worker_api, composition.provisioning
 
 
 def _admin_status():
-    api, _provisioning = _services()
-    return api.admin_status()
+    return _composition().worker_api.admin_status()
 
 
 @router.post("/external_worker_enrollment_start")
@@ -46,13 +44,23 @@ async def external_worker_enrollment_start(request: Request):
     except Exception:
         expires_minutes = 15
     try:
-        api, provisioning = _services()
-        result = provisioning.create_enrollment(enrollment_id=enrollment_id, expires_minutes=expires_minutes)
-        status = api.admin_status()
+        composition = _composition()
+        result = composition.provisioning.create_enrollment(
+            enrollment_id=enrollment_id,
+            expires_minutes=expires_minutes,
+        )
+        status = composition.worker_api.admin_status()
     except WorkerApiError as exc:
         return {"success": False, "error": {"code": 400, "message": exc.code}}
     except Exception as exc:
-        return {"success": False, "error": {"code": 500, "message": "worker_enrollment_start_failed", "details": str(exc)}}
+        return {
+            "success": False,
+            "error": {
+                "code": 500,
+                "message": "worker_enrollment_start_failed",
+                "details": str(exc),
+            },
+        }
     return {"success": True, "data": {"enrollment": result, "status": status}}
 
 
