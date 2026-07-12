@@ -11,6 +11,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from services.worker_protocol_generated import (
+    CAPABILITIES,
+    CONFIG_SCHEMA_VERSION,
+    INPUT_MODES,
+    PROTOCOL_VERSION,
+    STATE_SCHEMA_VERSION,
+    TOKEN_SCOPES,
+    WORKER_VERSION,
+)
+
 
 class WorkerApiError(RuntimeError):
     def __init__(self, code: str, message: Optional[str] = None):
@@ -20,19 +30,15 @@ class WorkerApiError(RuntimeError):
 
 
 class WorkerProtocol:
-    SCHEMA_VERSION = 2
+    PROTOCOL_VERSION = PROTOCOL_VERSION
+    WORKER_VERSION = WORKER_VERSION
+    CONFIG_SCHEMA_VERSION = CONFIG_SCHEMA_VERSION
+    SCHEMA_VERSION = STATE_SCHEMA_VERSION
     TOKEN_SCOPE_WORKER_API = "worker_api"
     TOKEN_SCOPE_MODELS_READ = "models_read"
-    DEFAULT_TOKEN_SCOPES = (TOKEN_SCOPE_WORKER_API, TOKEN_SCOPE_MODELS_READ)
-    CAPABILITIES = (
-        "face_native_detect",
-        "face_native_embed",
-        "face_native_detect_batch",
-        "face_native_embed_batch",
-        "face_native_rank_embeddings",
-        "face_native_profile_math",
-        "warm_processor_worker",
-    )
+    DEFAULT_TOKEN_SCOPES = TOKEN_SCOPES
+    CAPABILITIES = CAPABILITIES
+    INPUT_MODES = INPUT_MODES
     JOB_TYPES_BY_CAPABILITY = {capability: (capability,) for capability in CAPABILITIES}
 
     @classmethod
@@ -44,6 +50,18 @@ class WorkerProtocol:
         for item in capabilities:
             value = str(item or "").strip()
             if value and value in cls.JOB_TYPES_BY_CAPABILITY and value not in seen:
+                seen.add(value)
+                result.append(value)
+        return result
+
+    @classmethod
+    def normalize_input_modes(cls, input_modes: Optional[Sequence[str]]) -> List[str]:
+        values = input_modes or cls.INPUT_MODES
+        seen = set()
+        result = []
+        for item in values:
+            value = str(item or "").strip()
+            if value and value in cls.INPUT_MODES and value not in seen:
                 seen.add(value)
                 result.append(value)
         return result
