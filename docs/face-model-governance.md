@@ -14,7 +14,7 @@ The DSM package is the authority for:
 - making model files available to workers
 ```
 
-The external worker is an execution component only. It does not decide whether a model may be used. It only reports whether the configured model files and acknowledgement metadata are present.
+The external worker is an execution component only. It does not decide whether a model may be used and does not keep a second local acknowledgement record. A worker may use models only after the DSM package has authorized their distribution.
 
 ## Single source of truth
 
@@ -35,7 +35,7 @@ Resolution order:
 
 The model store is always `<MODEL_ROOT>/models`, and the active model directory is `<MODEL_ROOT>/models/<MODEL_NAME>`.
 
-## Model store layout
+## DSM model store layout
 
 Default DSM package runtime layout:
 
@@ -55,7 +55,7 @@ A configured `native_processors.FACE_PROCESSOR.MODEL_ROOT` takes precedence. For
 
 `manifest.json` describes the model pack, source, file presence, hashes, and package compatibility.
 
-`LICENSE_ACK.json` records that the DSM package showed the usage notice and that an administrator accepted it before model use.
+`LICENSE_ACK.json` exists only in the DSM-controlled model store. It records that the DSM package showed the usage notice and that an administrator accepted it before model use or distribution.
 
 Example acknowledgement shape:
 
@@ -92,21 +92,22 @@ Acknowledge usage terms after showing the notice to the administrator:
 python3 tools/face-model-store.py acknowledge --accepted-by admin --package-version "$SYNOPKG_PKGVER"
 ```
 
-`acknowledge` writes `LICENSE_ACK.json` and also sets the legacy config flag `native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED=true` for compatibility with the current native processor status gate.
+`acknowledge` writes the DSM-side `LICENSE_ACK.json` and also sets the legacy config flag `native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED=true` for compatibility with the current native processor status gate.
 
 A manual import helper still exists for ad-hoc copies, but the preferred flow is to place model files directly in the resolved model directory and use `status`/`acknowledge`/manifest generation around that fixed path.
 
 ## Worker-local model layout
 
-Workers use a hidden model directory after synchronization:
+Workers use a hidden model directory after authorized synchronization:
 
 ```text
 worker-runtime/.models/face/buffalo_l/
   det_10g.onnx
   w600k_r50.onnx
   manifest.json
-  LICENSE_ACK.json
 ```
+
+Workers do not create or require a local `LICENSE_ACK.json`. The DSM package validates acknowledgement before it serves the manifest or model files.
 
 The worker config default is:
 
@@ -153,17 +154,16 @@ The sync helper copies only to the requested worker runtime directory. It does n
 
 ## Probe contract
 
-The worker `probe` reports model state separately from processor state:
+The worker `probe` reports executable model state only:
 
 ```json
 {
   "models": {
-    "managed_by": "dsm_or_manual",
+    "managed_by": "dsm",
     "distributed_with_worker": false,
-    "usage_ack_required": true,
-    "models_present": false,
-    "manifest_present": false,
-    "license_ack_present": false
+    "license_authority": "dsm",
+    "models_present": true,
+    "manifest_present": true
   }
 }
 ```
@@ -177,4 +177,4 @@ Capabilities are advertised only when:
 - native processor probe succeeds
 ```
 
-`LICENSE_ACK.json` is reported but not enforced by the worker. Enforcement belongs to the DSM package because the DSM package owns user/admin consent and model lifecycle.
+Worker readiness never depends on a worker-local acknowledgement file. License enforcement belongs exclusively to the DSM package because it owns administrator consent and the model distribution endpoint.
