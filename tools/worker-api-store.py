@@ -10,21 +10,12 @@ sys.path.insert(0, str(PROJECT_DIR / "src"))
 
 from services.config_service import ConfigService
 from services.worker_api_service import WorkerApiError, WorkerApiService
-
-
-PACKAGE_NAME = "AV_ImgData"
-DSM_PACKAGE_VAR = Path("/var/packages") / PACKAGE_NAME / "var"
+from services.worker_runtime_service import WorkerRuntimePathService
 
 
 def default_package_var() -> Path:
     configured = os.getenv("SYNOPKG_PKGVAR", "").strip()
-    if configured:
-        return Path(configured)
-    return PROJECT_DIR
-
-
-def default_state_path() -> str:
-    return os.getenv("AV_IMGDATA_WORKER_API_STATE_PATH", "").strip()
+    return Path(configured) if configured else PROJECT_DIR
 
 
 def print_json(payload):
@@ -41,54 +32,26 @@ def load_json_arg(value: str):
     return json.loads(value)
 
 
-def resolve_state_path(args):
-    configured = str(args.state_path or "").strip()
-    package_var = Path(args.package_var)
-    if not configured:
-        return package_var / "worker-api-state.json"
-    path = Path(configured)
-    if path.is_absolute():
-        return path
-    return package_var / path
+def build_config_service(args):
+    return ConfigService(str(Path(args.package_var) / "config.json"))
 
 
-def repair_runtime_file_permissions(args):
-    """Keep root-run admin commands compatible with the DSM package user.
-
-    DSM administrators usually invoke this helper via sudo. Without repair, JSON
-    runtime files can become root-owned while the FastAPI service runs as the
-    package user. Use the package var directory owner as the authority and make
-    known runtime files readable/writable by that owner only.
-    """
-    if os.name != "posix":
-        return
-
-    package_var = Path(args.package_var)
-    try:
-        owner = package_var.stat()
-    except OSError:
-        return
-
-    paths = [package_var / "config.json", resolve_state_path(args)]
-    for path in paths:
-        try:
-            if not path.exists():
-                continue
-            if hasattr(os, "geteuid") and os.geteuid() == 0:
-                os.chown(str(path), owner.st_uid, owner.st_gid)
-            os.chmod(str(path), 0o600)
-        except PermissionError:
-            continue
-        except OSError:
-            continue
+def resolve_state_path(args, config_service=None):
+    paths = WorkerRuntimePathService(
+        package_var=Path(args.package_var),
+        config_service=config_service or build_config_service(args),
+    )
+    explicit = Path(args.state_path) if str(args.state_path or "").strip() else None
+    return paths.state_path(explicit)
 
 
 def build_service(args):
-    return WorkerApiService(package_var=Path(args.package_var), state_path=resolve_state_path(args))
-
-
-def build_config_service(args):
-    return ConfigService(str(Path(args.package_var) / "config.json"))
+    config = build_config_service(args)
+    return WorkerApiService(
+        package_var=Path(args.package_var),
+        state_path=resolve_state_path(args, config),
+        config_service=config,
+    )
 
 
 def configure_worker_api(args, *, enabled: bool):
@@ -98,28 +61,30 @@ def configure_worker_api(args, *, enabled: bool):
     worker_api["ENABLED"] = bool(enabled)
     if enabled:
         worker_api["STATE_PATH"] = str(args.config_state_path or "worker-api-state.json")
-    ok = service.writeConfig(config)
-    if not ok:
-        return {"status": "error", "code": "config_write_failed", "path": str(Path(args.package_var) / "config.json")}
-    repair_runtime_file_permissions(args)
+    if not service.writeConfig(config):
+        return {
+            "status": "error",
+            "code": "config_write_failed",
+            "path": str(Path(args.package_var) / "config.json"),
+        }
     return {
         "status": "ok",
         "worker_api": service.readMergedConfig().get("worker_api", {}),
         "config_path": str(Path(args.package_var) / "config.json"),
+        "state_path": str(resolve_state_path(args, service)),
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage AV ImgData DSM-side external worker API state")
     parser.add_argument("--package-var", default=str(default_package_var()), help="Package var/root directory")
-    parser.add_argument("--state-path", default=default_state_path(), help="Explicit state JSON path")
+    parser.add_argument("--state-path", default="", help="Explicit state JSON path override")
     sub = parser.add_subparsers(dest="command", required=True)
 
     enable_api = sub.add_parser("enable-api", help="Enable /worker-api in package config")
-    enable_api.add_argument("--config-state-path", default="worker-api-state.json", help="State path stored in config; relative paths are resolved below package var")
-
-    sub.add_parser("disable-api", help="Disable /worker-api in package config")
-    sub.add_parser("api-config", help="Show worker_api package config")
+    enable_api.add_argument("--config-state-path", default="worker-api-state.json")
+    sub.add_parser("disable-api")
+    sub.add_parser("api-config")
 
     create_token = sub.add_parser("create-token")
     create_token.add_argument("--token-id", default="worker-default")
@@ -141,7 +106,7 @@ def main() -> int:
     enqueue = sub.add_parser("enqueue")
     enqueue.add_argument("--job-id", required=True)
     enqueue.add_argument("--type", required=True)
-    enqueue.add_argument("--payload", default="{}", help="JSON string or JSON file path")
+    enqueue.add_argument("--payload", default="{}")
     enqueue.add_argument("--priority", type=int, default=100)
 
     claim = sub.add_parser("claim")
@@ -153,14 +118,13 @@ def main() -> int:
     result.add_argument("--token", required=True)
     result.add_argument("--worker-id", required=True)
     result.add_argument("--job-id", required=True)
-    result.add_argument("--result", default="{}", help="JSON string or JSON file path")
+    result.add_argument("--result", default="{}")
 
     fail = sub.add_parser("fail")
     fail.add_argument("--token", required=True)
     fail.add_argument("--worker-id", required=True)
     fail.add_argument("--job-id", required=True)
-    fail.add_argument("--error", default="{}", help="JSON string or JSON file path")
-
+    fail.add_argument("--error", default="{}")
     sub.add_parser("status")
 
     args = parser.parse_args()
@@ -170,53 +134,29 @@ def main() -> int:
         elif args.command == "disable-api":
             print_json(configure_worker_api(args, enabled=False))
         elif args.command == "api-config":
+            config = build_config_service(args)
             print_json({
                 "status": "ok",
                 "config_path": str(Path(args.package_var) / "config.json"),
-                "worker_api": build_config_service(args).readMergedConfig().get("worker_api", {}),
+                "state_path": str(resolve_state_path(args, config)),
+                "worker_api": config.readMergedConfig().get("worker_api", {}),
             })
         else:
             service = build_service(args)
             if args.command == "create-token":
-                payload = service.create_token(token_id=args.token_id)
-                repair_runtime_file_permissions(args)
-                print_json(payload)
+                print_json(service.create_token(token_id=args.token_id))
             elif args.command == "register":
-                payload = service.register_worker(
-                    token=args.token,
-                    worker_id=args.worker_id,
-                    version=args.version,
-                    capabilities=args.capability or None,
-                    metadata=load_json_arg(args.metadata),
-                )
-                repair_runtime_file_permissions(args)
-                print_json(payload)
+                print_json(service.register_worker(token=args.token, worker_id=args.worker_id, version=args.version, capabilities=args.capability or None, metadata=load_json_arg(args.metadata)))
             elif args.command == "heartbeat":
-                payload = service.heartbeat(
-                    token=args.token,
-                    worker_id=args.worker_id,
-                    status=args.status,
-                    capabilities=args.capability or None,
-                    metadata=load_json_arg(args.metadata),
-                )
-                repair_runtime_file_permissions(args)
-                print_json(payload)
+                print_json(service.heartbeat(token=args.token, worker_id=args.worker_id, status=args.status, capabilities=args.capability or None, metadata=load_json_arg(args.metadata)))
             elif args.command == "enqueue":
-                payload = service.enqueue_job(job_id=args.job_id, job_type=args.type, payload=load_json_arg(args.payload), priority=args.priority)
-                repair_runtime_file_permissions(args)
-                print_json(payload)
+                print_json(service.enqueue_job(job_id=args.job_id, job_type=args.type, payload=load_json_arg(args.payload), priority=args.priority))
             elif args.command == "claim":
-                payload = service.claim_job(token=args.token, worker_id=args.worker_id, capabilities=args.capability or None)
-                repair_runtime_file_permissions(args)
-                print_json(payload)
+                print_json(service.claim_job(token=args.token, worker_id=args.worker_id, capabilities=args.capability or None))
             elif args.command == "result":
-                payload = service.record_result(token=args.token, worker_id=args.worker_id, job_id=args.job_id, result=load_json_arg(args.result))
-                repair_runtime_file_permissions(args)
-                print_json(payload)
+                print_json(service.record_result(token=args.token, worker_id=args.worker_id, job_id=args.job_id, result=load_json_arg(args.result)))
             elif args.command == "fail":
-                payload = service.record_failure(token=args.token, worker_id=args.worker_id, job_id=args.job_id, error=load_json_arg(args.error))
-                repair_runtime_file_permissions(args)
-                print_json(payload)
+                print_json(service.record_failure(token=args.token, worker_id=args.worker_id, job_id=args.job_id, error=load_json_arg(args.error)))
             elif args.command == "status":
                 print_json(service.status())
         return 0
