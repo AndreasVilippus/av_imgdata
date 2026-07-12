@@ -147,6 +147,44 @@ class WorkerApiService:
     def record_failure(self, *, token: str, worker_id: str, job_id: str, error: Dict[str, Any]) -> Dict[str, Any]:
         return self._finish_job(token=token, worker_id=worker_id, job_id=job_id, status="failed", payload_key="error", payload=error)
 
+    def delete_worker(self, *, worker_id: str) -> Dict[str, Any]:
+        worker_id = self.credentials.require_value(worker_id, "worker_id_required")
+
+        def mutate(state):
+            workers = state["workers"]
+            if worker_id not in workers:
+                raise WorkerApiError("worker_not_found")
+            deleted_worker = workers.pop(worker_id)
+            deleted_tokens = []
+            for token_id, entry in list(state["tokens"].items()):
+                if isinstance(entry, dict) and str(entry.get("worker_id") or "").strip() == worker_id:
+                    deleted_tokens.append(str(token_id))
+                    del state["tokens"][token_id]
+            requeued_jobs = []
+            now = self._now_iso()
+            for job_id, job in state["jobs"].items():
+                if not isinstance(job, dict) or str(job.get("claimed_by") or "") != worker_id:
+                    continue
+                if job.get("status") == "claimed":
+                    job.update({"status": "queued", "updated_at": now})
+                    job.pop("claimed_by", None)
+                    job.pop("claimed_at", None)
+                    requeued_jobs.append(str(job_id))
+            return {
+                "worker": deleted_worker,
+                "deleted_token_ids": deleted_tokens,
+                "requeued_job_ids": requeued_jobs,
+            }
+
+        result = self.store.update(mutate)
+        return {
+            "status": "deleted",
+            "worker_id": worker_id,
+            "deleted_tokens": len(result["deleted_token_ids"]),
+            "requeued_jobs": len(result["requeued_job_ids"]),
+            **result,
+        }
+
     def status(self) -> Dict[str, Any]:
         state = self.store.read()
         by_status: Dict[str, int] = {}
