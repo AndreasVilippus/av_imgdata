@@ -52,7 +52,24 @@ inline int normalized_exit_code(int raw) {
     return raw;
 }
 
+inline bool is_windows_unc_path(const std::filesystem::path& path) {
+#ifdef _WIN32
+    const std::string value = path.string();
+    return value.size() >= 2 && value[0] == '\\' && value[1] == '\\';
+#else
+    (void)path;
+    return false;
+#endif
+}
+
 inline std::filesystem::path absolute_path(const std::filesystem::path& path) {
+#ifdef _WIN32
+    // Some MinGW/libstdc++ combinations treat a UNC path such as
+    // \\server\share as root-relative and prepend the current drive when
+    // std::filesystem::absolute() is called. A UNC path is already absolute
+    // for Windows and must be preserved verbatim.
+    if (is_windows_unc_path(path)) return path;
+#endif
     std::error_code error;
     const auto resolved = std::filesystem::absolute(path, error).lexically_normal();
     return error ? path.lexically_normal() : resolved;
@@ -60,7 +77,7 @@ inline std::filesystem::path absolute_path(const std::filesystem::path& path) {
 
 inline std::filesystem::path resolve_relative(const std::filesystem::path& base, const std::filesystem::path& value) {
     if (value.empty()) return value;
-    return absolute_path(value.is_absolute() ? value : base / value);
+    return absolute_path(value.is_absolute() || is_windows_unc_path(value) ? value : base / value);
 }
 
 inline std::string dirname_of(const std::string& path) {
@@ -74,6 +91,16 @@ inline std::string basename_of(const std::string& path) {
 
 inline std::string join_path(const std::string& base, const std::string& value) {
     if (value.empty()) return value;
+#ifdef _WIN32
+    if (base.size() >= 2 && base[0] == '\\' && base[1] == '\\') {
+        std::string joined = base;
+        while (!joined.empty() && (joined.back() == '\\' || joined.back() == '/')) joined.pop_back();
+        std::string relative = value;
+        while (!relative.empty() && (relative.front() == '\\' || relative.front() == '/')) relative.erase(relative.begin());
+        for (char& c : relative) if (c == '/') c = '\\';
+        return relative.empty() ? joined : joined + "\\" + relative;
+    }
+#endif
     return resolve_relative(std::filesystem::path(base), std::filesystem::path(value)).string();
 }
 
