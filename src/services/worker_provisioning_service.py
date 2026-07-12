@@ -81,19 +81,26 @@ class WorkerProvisioningService:
                 raise WorkerApiError("enrollment_code_used")
             if parse_time(match.get("expires_at")) <= utc_now(self._clock):
                 raise WorkerApiError("enrollment_code_expired")
+            replaced_token_ids = []
+            for existing_token_id, existing_entry in list(state["tokens"].items()):
+                if isinstance(existing_entry, dict) and str(existing_entry.get("worker_id") or "").strip() == worker_id:
+                    replaced_token_ids.append(str(existing_token_id))
+                    del state["tokens"][existing_token_id]
             token_entry["enrollment_id"] = match_id
             state["tokens"][token_id] = token_entry
             match["used_at"] = now
             match["worker_id"] = worker_id
-            return match_id
+            return match_id, replaced_token_ids
 
-        self.store.update(mutate)
+        enrollment_id, replaced_token_ids = self.store.update(mutate)
         return {
             "status": "enrolled",
             "worker_id": worker_id,
             "token_id": token_id,
             "token": token,
             "scopes": list(token_entry["scopes"]),
+            "enrollment_id": enrollment_id,
+            "replaced_tokens": len(replaced_token_ids),
         }
 
     def require_token(self, *, token: str, worker_id: str, scope: str) -> Dict[str, Any]:
