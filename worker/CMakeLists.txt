@@ -17,31 +17,35 @@ target_compile_definitions(av-imgdata-worker-runtime INTERFACE
   AV_IMGDATA_WORKER_VERSION="${AV_IMGDATA_WORKER_VERSION}"
 )
 
-add_executable(av-imgdata-worker
-  src/main.cpp
+add_executable(av-imgdata-worker src/main.cpp)
+add_executable(av-imgdata-worker-api-loop src/api_loop.cpp)
+add_executable(av-imgdata-worker-configure src/configure.cpp)
+add_executable(av-imgdata-worker-model-sync src/model_sync.cpp)
+
+set(AV_IMGDATA_WORKER_TARGETS
+  av-imgdata-worker
+  av-imgdata-worker-api-loop
+  av-imgdata-worker-configure
+  av-imgdata-worker-model-sync
 )
 
-add_executable(av-imgdata-worker-api-loop
-  src/api_loop.cpp
-)
-
-target_link_libraries(av-imgdata-worker PRIVATE av-imgdata-worker-runtime)
-target_link_libraries(av-imgdata-worker-api-loop PRIVATE av-imgdata-worker-runtime)
+foreach(target IN LISTS AV_IMGDATA_WORKER_TARGETS)
+  target_link_libraries(${target} PRIVATE av-imgdata-worker-runtime)
+endforeach()
 
 if(MINGW)
-  target_link_options(av-imgdata-worker PRIVATE
-    -static-libgcc
-    -static-libstdc++
-  )
-  target_link_options(av-imgdata-worker-api-loop PRIVATE
-    -static-libgcc
-    -static-libstdc++
-  )
+  foreach(target IN LISTS AV_IMGDATA_WORKER_TARGETS)
+    target_link_options(${target} PRIVATE
+      -static-libgcc
+      -static-libstdc++
+    )
+  endforeach()
 endif()
 
-install(TARGETS av-imgdata-worker av-imgdata-worker-api-loop RUNTIME DESTINATION bin)
+install(TARGETS ${AV_IMGDATA_WORKER_TARGETS} RUNTIME DESTINATION bin)
 install(FILES config/worker-config.example.json DESTINATION config)
 install(FILES config/worker-config.schema.json DESTINATION config)
+install(FILES protocol/worker-protocol.json DESTINATION share/worker_protocol)
 install(FILES jobs/sample-worker-job.json DESTINATION jobs)
 
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../processor_contract/schemas/face-native-job-input.schema.json")
@@ -51,4 +55,7 @@ endif()
 install(DIRECTORY packaging/ DESTINATION packaging)
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/packaging/windows/Initialize-AVImgDataWorker.ps1")
   install(FILES packaging/windows/Initialize-AVImgDataWorker.ps1 DESTINATION .)
+endif()
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/packaging/unix/initialize-av-imgdata-worker.sh")
+  install(PROGRAMS packaging/unix/initialize-av-imgdata-worker.sh DESTINATION .)
 endif()
