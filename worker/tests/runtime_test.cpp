@@ -31,6 +31,17 @@ int main() {
     assert(!runtime::safe_relative_path("/absolute.jpg", &normalized, &error));
     assert(error == "local_path_must_be_relative");
 
+    const auto command = runtime::build_process_command(
+        "C:\\Program Files\\AV ImgData\\processor.exe",
+        {"version"}
+    );
+#ifdef _WIN32
+    assert(command.find("cmd.exe /D /S /C \"\"C:\\Program Files\\AV ImgData\\processor.exe\"") == 0);
+    assert(command.find("\"version\" 2>&1\"") != std::string::npos);
+#else
+    assert(command.find("'C:\\Program Files\\AV ImgData\\processor.exe' 'version' 2>&1") == 0);
+#endif
+
     const auto temp = std::filesystem::temp_directory_path() / "av-imgdata-worker-runtime-test";
     std::error_code ec;
     std::filesystem::remove_all(temp, ec);
