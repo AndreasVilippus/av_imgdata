@@ -38,6 +38,11 @@ int main() {
 #ifdef _WIN32
     assert(command.find("cmd.exe /D /S /C \"\"C:\\Program Files\\AV ImgData\\processor.exe\"") == 0);
     assert(command.find("\"version\" 2>&1\"") != std::string::npos);
+
+    const std::string unc_root = "\\\\savy\\photo";
+    assert(runtime::is_windows_unc_path(std::filesystem::path(unc_root)));
+    assert(runtime::absolute_path(std::filesystem::path(unc_root)).string() == unc_root);
+    assert(runtime::join_path(unc_root, "folder/image.jpg") == "\\\\savy\\photo\\folder\\image.jpg");
 #else
     assert(command.find("'C:\\Program Files\\AV ImgData\\processor.exe' 'version' 2>&1") == 0);
 #endif
