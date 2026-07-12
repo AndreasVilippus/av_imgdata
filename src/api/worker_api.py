@@ -4,7 +4,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -55,7 +55,7 @@ def _bearer(request: Request) -> str:
     return value[7:].strip() if value.lower().startswith("bearer ") else ""
 
 
-def _worker_id(request: Request, body: Dict[str, Any] | None = None) -> str:
+def _worker_id(request: Request, body: Optional[Dict[str, Any]] = None) -> str:
     header = str(request.headers.get("x-worker-id") or "").strip()
     if header:
         return header
