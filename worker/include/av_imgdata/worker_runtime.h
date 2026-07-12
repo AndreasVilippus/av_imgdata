@@ -159,11 +159,25 @@ inline CommandResult run_shell_capture(const std::string& command) {
     return result;
 }
 
-inline CommandResult run_process_capture(const std::string& executable, const std::vector<std::string>& arguments) {
+inline std::string build_process_command(const std::string& executable, const std::vector<std::string>& arguments) {
+#ifdef _WIN32
+    // cmd.exe requires an additional outer quote pair when the command begins
+    // with a quoted executable path. Without it, paths containing spaces are
+    // parsed as a command name including the first argument.
+    std::string command = "cmd.exe /D /S /C \"\"" + executable + "\"";
+    for (const auto& argument : arguments) command += " " + shell_quote(argument);
+    command += " 2>&1\"";
+    return command;
+#else
     std::string command = shell_quote(executable);
     for (const auto& argument : arguments) command += " " + shell_quote(argument);
     command += " 2>&1";
-    return run_shell_capture(command);
+    return command;
+#endif
+}
+
+inline CommandResult run_process_capture(const std::string& executable, const std::vector<std::string>& arguments) {
+    return run_shell_capture(build_process_command(executable, arguments));
 }
 
 inline std::string extract_json_string(const std::string& json, const std::string& key) {
@@ -263,7 +277,7 @@ inline bool replace_json_string(std::string* json, const std::string& key, const
     if (pos == std::string::npos) return false;
     pos = json->find(':', pos + needle.size());
     if (pos == std::string::npos) return false;
-    const auto quote = json->find('"', pos + 1);
+    auto quote = json->find('"', pos + 1);
     if (quote == std::string::npos) return false;
     auto end = quote + 1;
     bool escaping = false;
@@ -279,27 +293,22 @@ inline bool replace_json_string(std::string* json, const std::string& key, const
 }
 
 inline bool safe_relative_path(const std::string& value, std::string* normalized, std::string* error) {
-    if (value.empty()) {
-        *error = "local_path_missing";
-        return false;
-    }
+    if (value.empty()) { *error = "local_path_missing"; return false; }
     const std::filesystem::path path(value);
-    if (path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
+    if (path.is_absolute() || (value.size() >= 2 && value[1] == ':')) {
         *error = "local_path_must_be_relative";
         return false;
     }
-    const auto clean = path.lexically_normal();
-    if (clean.empty() || clean == ".") {
-        *error = "local_path_empty";
-        return false;
+    std::filesystem::path portable;
+    std::string converted = value;
+    for (char& c : converted) if (c == '\\') c = '/';
+    for (const auto& part : std::filesystem::path(converted)) {
+        if (part == "." || part.empty()) continue;
+        if (part == "..") { *error = "local_path_escape"; return false; }
+        portable /= part;
     }
-    for (const auto& part : clean) {
-        if (part == "..") {
-            *error = "local_path_escape";
-            return false;
-        }
-    }
-    *normalized = clean.generic_string();
+    if (portable.empty()) { *error = "local_path_empty"; return false; }
+    *normalized = portable.generic_string();
     return true;
 }
 
