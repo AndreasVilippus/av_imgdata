@@ -1,103 +1,123 @@
 #!/usr/bin/env python3
 """Secure external-worker enrollment and licensed model distribution."""
 
-import hashlib
 import json
-import os
 import secrets
-import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from services.config_service import ConfigService
 from services.face_model_store_service import FaceModelStoreService
-from services.worker_api_service import WorkerApiError
+from services.worker_runtime_service import (
+    WorkerApiError,
+    WorkerCredentialService,
+    WorkerProtocol,
+    WorkerStateStore,
+    iso_time,
+    parse_time,
+    utc_now,
+)
 
 
 class WorkerProvisioningService:
-    DEFAULT_SCOPES = ("worker_api", "models_read")
+    DEFAULT_SCOPES = WorkerProtocol.DEFAULT_TOKEN_SCOPES
 
-    def __init__(self, *, package_var: Optional[Path] = None, state_path: Optional[Path] = None,
-                 clock: Optional[Callable[[], datetime]] = None):
-        self.package_var = Path(package_var) if package_var else Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
-        self.state_path = Path(state_path) if state_path else self.package_var / "worker-api-state.json"
-        self._clock = clock if callable(clock) else lambda: datetime.now(timezone.utc)
+    def __init__(
+        self,
+        *,
+        package_var: Optional[Path] = None,
+        state_path: Optional[Path] = None,
+        clock: Optional[Callable[[], datetime]] = None,
+        config_service: Optional[ConfigService] = None,
+        state_store: Optional[WorkerStateStore] = None,
+    ):
+        self.config_service = config_service or ConfigService(
+            str(Path(package_var) / "config.json") if package_var is not None else None
+        )
+        self.store = state_store or WorkerStateStore(
+            package_var=package_var,
+            state_path=state_path,
+            config_service=self.config_service,
+        )
+        self.package_var = self.store.package_var
+        self.state_path = self.store.state_path
+        self.credentials = WorkerCredentialService(self.store)
+        self._clock = clock
 
     def create_enrollment(self, *, enrollment_id: str, expires_minutes: int = 15) -> Dict[str, Any]:
-        enrollment_id = self._required(enrollment_id, "enrollment_id_required")
+        enrollment_id = self.credentials.require_value(enrollment_id, "enrollment_id_required")
         expires_minutes = max(1, min(int(expires_minutes), 1440))
         code = secrets.token_urlsafe(24)
-        state = self._read_state()
+        now = utc_now(self._clock)
         entry = {
-            "code_hash": self._hash(code),
-            "created_at": self._iso(self._now()),
-            "expires_at": self._iso(self._now() + timedelta(minutes=expires_minutes)),
+            "code_hash": self.credentials.hash_value(code),
+            "created_at": iso_time(now),
+            "expires_at": iso_time(now + timedelta(minutes=expires_minutes)),
             "used_at": None,
             "worker_id": None,
         }
-        state.setdefault("enrollments", {})[enrollment_id] = entry
-        self._write_state(state)
+
+        def mutate(state):
+            state["enrollments"][enrollment_id] = entry
+
+        self.store.update(mutate)
         return {"enrollment_id": enrollment_id, "enrollment_code": code, "expires_at": entry["expires_at"]}
 
     def redeem_enrollment(self, *, enrollment_code: str, worker_id: str) -> Dict[str, Any]:
-        enrollment_code = self._required(enrollment_code, "enrollment_code_required")
-        worker_id = self._required(worker_id, "worker_id_required")
-        state = self._read_state()
-        digest = self._hash(enrollment_code)
-        match_id = None
-        match = None
-        for enrollment_id, entry in state.setdefault("enrollments", {}).items():
-            if entry.get("code_hash") == digest:
-                match_id, match = enrollment_id, entry
+        enrollment_code = self.credentials.require_value(enrollment_code, "enrollment_code_required")
+        worker_id = self.credentials.require_value(worker_id, "worker_id_required")
+        digest = self.credentials.hash_value(enrollment_code)
+        state = self.store.read()
+        match_id = ""
+        match: Optional[Dict[str, Any]] = None
+        for enrollment_id, entry in state["enrollments"].items():
+            if isinstance(entry, dict) and entry.get("code_hash") == digest:
+                match_id, match = str(enrollment_id), entry
                 break
         if match is None:
             raise WorkerApiError("invalid_enrollment_code")
         if match.get("used_at"):
             raise WorkerApiError("enrollment_code_used")
-        if self._parse_iso(match.get("expires_at")) <= self._now():
+        if parse_time(match.get("expires_at")) <= utc_now(self._clock):
             raise WorkerApiError("enrollment_code_expired")
 
-        token = secrets.token_urlsafe(32)
+        now = iso_time(utc_now(self._clock))
         token_id = "worker-%s-%s" % (worker_id, secrets.token_hex(4))
-        now = self._iso(self._now())
-        state.setdefault("tokens", {})[token_id] = {
-            "token_hash": self._hash(token),
-            "created_at": now,
-            "revoked": False,
+        issued = self.credentials.issue_token(
+            token_id=token_id,
+            worker_id=worker_id,
+            scopes=self.DEFAULT_SCOPES,
+            issued_via="enrollment",
+            enrollment_id=match_id,
+            created_at=now,
+        )
+
+        def mutate(current):
+            entry = current["enrollments"].get(match_id)
+            if not isinstance(entry, dict):
+                raise WorkerApiError("invalid_enrollment_code")
+            if entry.get("used_at"):
+                raise WorkerApiError("enrollment_code_used")
+            entry["used_at"] = now
+            entry["worker_id"] = worker_id
+
+        self.store.update(mutate)
+        return {
+            "status": "enrolled",
             "worker_id": worker_id,
-            "scopes": list(self.DEFAULT_SCOPES),
-            "issued_via": "enrollment",
-            "enrollment_id": match_id,
+            "token_id": issued["token_id"],
+            "token": issued["token"],
+            "scopes": issued["scopes"],
         }
-        match["used_at"] = now
-        match["worker_id"] = worker_id
-        self._write_state(state)
-        return {"status": "enrolled", "worker_id": worker_id, "token_id": token_id, "token": token,
-                "scopes": list(self.DEFAULT_SCOPES)}
 
     def require_token(self, *, token: str, worker_id: str, scope: str) -> Dict[str, Any]:
-        token = self._required(token, "token_required")
-        worker_id = self._required(worker_id, "worker_id_required")
-        digest = self._hash(token)
-        state = self._read_state()
-        for token_id, entry in state.get("tokens", {}).items():
-            if entry.get("token_hash") != digest or entry.get("revoked"):
-                continue
-            bound_worker = str(entry.get("worker_id") or "").strip()
-            if bound_worker and bound_worker != worker_id:
-                raise WorkerApiError("token_worker_mismatch")
-            scopes = entry.get("scopes") if isinstance(entry.get("scopes"), list) else ["worker_api", "models_read"]
-            if scope not in scopes:
-                raise WorkerApiError("token_scope_missing")
-            return {"token_id": token_id, "worker_id": bound_worker or worker_id, "scopes": scopes}
-        raise WorkerApiError("unauthorized")
+        return self.credentials.authenticate(token=token, worker_id=worker_id, scope=scope)
 
     def model_manifest(self, *, token: str, worker_id: str, model_pack: str = "buffalo_l") -> Dict[str, Any]:
-        self.require_token(token=token, worker_id=worker_id, scope="models_read")
+        self.require_token(token=token, worker_id=worker_id, scope=WorkerProtocol.TOKEN_SCOPE_MODELS_READ)
         store = self._model_store()
         status = store.status(model_pack)
-
         if not status.get("models_present"):
             raise WorkerApiError("model_files_missing")
         if not status.get("license_ack_present") and self._legacy_license_acknowledged():
@@ -110,7 +130,6 @@ class WorkerProvisioningService:
             status = store.status(model_pack)
         if not status.get("license_ack_present"):
             raise WorkerApiError("model_license_not_acknowledged")
-
         manifest_path = Path(status["manifest_path"])
         if not manifest_path.is_file():
             store.write_manifest(model_pack=model_pack, source="worker_distribution")
@@ -130,73 +149,14 @@ class WorkerProvisioningService:
             raise WorkerApiError("model_file_not_found")
         return path
 
-    def _config_service(self) -> ConfigService:
-        return ConfigService(str(self.package_var / "config.json"))
-
     def _model_store(self) -> FaceModelStoreService:
-        return FaceModelStoreService(self._config_service(), package_var=self.package_var)
+        return FaceModelStoreService(self.config_service, package_var=self.package_var)
 
     def _legacy_license_acknowledged(self) -> bool:
         try:
-            config = self._config_service().readMergedConfig()
+            config = self.config_service.readMergedConfig()
         except Exception:
             return False
-        if not isinstance(config, dict):
-            return False
-        native = config.get("native_processors") if isinstance(config.get("native_processors"), dict) else {}
+        native = config.get("native_processors") if isinstance(config, dict) and isinstance(config.get("native_processors"), dict) else {}
         face = native.get("FACE_PROCESSOR") if isinstance(native.get("FACE_PROCESSOR"), dict) else {}
         return face.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED") is True
-
-    def _read_state(self) -> Dict[str, Any]:
-        if not self.state_path.is_file():
-            return {"schema_version": 2, "tokens": {}, "workers": {}, "jobs": {}, "enrollments": {}}
-        with self.state_path.open("r", encoding="utf-8") as handle:
-            state = json.load(handle)
-        if not isinstance(state, dict):
-            raise WorkerApiError("state_invalid")
-        state.setdefault("tokens", {})
-        state.setdefault("workers", {})
-        state.setdefault("jobs", {})
-        state.setdefault("enrollments", {})
-        state["schema_version"] = max(2, int(state.get("schema_version", 1)))
-        return state
-
-    def _write_state(self, state: Dict[str, Any]) -> None:
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=self.state_path.name + ".", suffix=".tmp", dir=str(self.state_path.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(state, handle, ensure_ascii=False, indent=2, sort_keys=True)
-                handle.write("\n")
-            os.replace(tmp, str(self.state_path))
-        finally:
-            try:
-                os.unlink(tmp)
-            except FileNotFoundError:
-                pass
-
-    def _now(self) -> datetime:
-        value = self._clock()
-        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
-
-    @staticmethod
-    def _iso(value: datetime) -> str:
-        return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-    @staticmethod
-    def _parse_iso(value: Any) -> datetime:
-        try:
-            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
-        except Exception:
-            return datetime.fromtimestamp(0, tz=timezone.utc)
-
-    @staticmethod
-    def _hash(value: str) -> str:
-        return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _required(value: Any, code: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise WorkerApiError(code)
-        return text
