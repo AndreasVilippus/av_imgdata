@@ -168,10 +168,11 @@ LocalJobResult make_local_job(const std::string& claimed, const LoopConfig& conf
     return result;
 }
 
-std::string worker_command(const LoopConfig& config, const std::string& job_path) {
-    return runtime::shell_quote(config.worker_bin) +
-        " once --config " + runtime::shell_quote(config.config_path) +
-        " --job " + runtime::shell_quote(job_path) + " 2>&1";
+CommandResult run_worker(const LoopConfig& config, const std::string& job_path) {
+    return runtime::run_process_capture(
+        config.worker_bin,
+        {"once", "--config", config.config_path, "--job", job_path}
+    );
 }
 
 std::string result_body(const LoopConfig& config, const std::string& id, const std::string& result) {
@@ -278,7 +279,7 @@ int main(int argc, char** argv) {
                     id + ".json"
                 );
                 runtime::write_file(job_path, local.job_json);
-                const CommandResult worker_result = runtime::run_shell_capture(worker_command(config, job_path));
+                const CommandResult worker_result = run_worker(config, job_path);
                 if (worker_success(worker_result)) {
                     api_post(config, "result", token, result_body(config, id, worker_result.output));
                     std::cout << ",\"job_id\":\"" << runtime::json_escape(id)
