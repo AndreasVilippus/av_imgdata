@@ -1,148 +1,63 @@
-# Optional Worker Concept
+# Optional External Worker Concept
 
 ## Purpose
 
-This document describes the optional worker architecture for `av_imgdata` after the first external Worker API path has been validated.
+This document defines the target architecture and implementation plan for optional external workers in `av_imgdata`.
 
-Version `0.10.0` is the development line for turning the validated Worker API
-path into a maintained external-worker implementation.
+The primary objective is to move compute-intensive image and face processing from the NAS to a Windows or Linux host while the DSM package remains the authoritative controller.
 
-The DSM package remains the authority for:
+The external worker is optional. The package-internal processor path remains available as the local execution path and fallback.
 
-```text
-- package configuration through ConfigService
-- authentication and worker token management
-- DSM and Synology Photos integration
-- job ownership and queue state
-- worker registration and heartbeat state
-- result validation before final commit
-- status ownership
-- progress ordering
-- conflict handling
-- final writes
-- persistence
-```
+## Current Status
 
-Expensive processing may run through:
+The first complete Windows `shared_path` round trip has been validated with version `0.10.0`:
 
 ```text
-- package-shipped local native C++ face processor
-- package-shipped optional native libvips image processor
-- local persistent C++ face processor subprocess mode
-- optional external worker runtime executing compatible processor binaries/modules
+DSM Worker API
+→ worker registration
+→ heartbeat
+→ job claim
+→ UNC path resolution
+→ HEIC image decode
+→ native face detection
+→ structured result upload
+→ completed server-side job state
 ```
 
-The external worker is an optional offload path. It does not replace the package-internal processor path. The package-internal native processor remains part of the DSM package and remains available as local execution path, fallback path, and baseline production path for DSM-local processing.
-
-## Current Architecture
+Validated test job:
 
 ```text
-DSM package
-  = controller, config owner, job owner, token owner, status owner, final write owner
-
-Local native C++ face processor
-  = package-shipped av-imgdata-face-processor
-  = built through Synology Toolkit for the DSM package platform
-  = executes ProcessorContract jobs locally on the NAS/package host
-  = supports single-image, batch, ranking, profile math and persistent stdin/stdout mode
-
-Optional local native image processor
-  = package-shipped av-imgdata-image-processor when AV_IMGDATA_WITH_VIPS=1
-  = executes libvips-based image operations and batch operations
-
-Optional external worker runtime
-  = separate runtime outside the DSM backend process
-  = current targets: Windows and Linux
-  = optional execution target for compute offload
-  = registers/heartbeats/claims jobs through Worker API
-  = executes compatible local processor binaries/modules
-  = reports structured result/fail payloads back to DSM
+job_id: unc-face-test-004
+job type: face_native_detect
+input mode: shared_path
+worker path base: \\savy\photo
+input: 2026/2026.02/20260301_152542.heic
+worker exit code: 0
+server report: result
 ```
 
-The architecture is not “NAS or external”. It is:
+The Windows API-loop process launch defect was fixed by replacing manual shell-command assembly with the runtime process launcher that passes executable and arguments separately.
 
-```text
-DSM package
-├── internal package processor path remains available
-└── optional external worker mode for selected offloaded tasks
-    ├── Windows worker
-    ├── Linux worker
-    └── later Docker/cloud/GPU workers
-```
+## Current Implemented Components
 
-## Current Implemented State
-
-Implemented and validated:
+### DSM package
 
 ```text
 - optional FastAPI Worker API mounted at /worker-api
-- Worker API enable/disable through package config worker_api.ENABLED
-- Worker API config read through ConfigService from ${SYNOPKG_PKGVAR}/config.json
-- Worker API state stored in ${SYNOPKG_PKGVAR}/worker-api-state.json
-- worker token creation through tools/worker-api-store.py
-- heartbeat, claim, result and fail flow
-- DSM start script exports AV_IMGDATA_WORKER_API_STATE_PATH
-- DSM backend remains bound to 127.0.0.1 by default
-- backend bind can be overridden with AV_IMGDATA_BACKEND_HOST and AV_IMGDATA_BACKEND_PORT
-- external access is expected through DSM Reverse Proxy/nginx, not by default external bind
-- package build can build external worker bundles
-- Windows worker API loop has been validated through DSM Reverse Proxy
-- Windows worker successfully claimed and completed a face_native_embed job
+- token authentication
+- worker registration
+- heartbeat handling
+- job enqueue
+- priority queue
+- capability-based job-type filtering
+- claim ownership
+- result and failure recording
+- package-local worker state persistence
+- worker and queue status
+- worker deletion with claimed-job requeue
 ```
 
-Validated external flow:
-
-```text
-DSM package FastAPI
-→ /worker-api
-→ DSM Reverse Proxy
-→ Windows worker API loop
-→ heartbeat
-→ claim
-→ local processor execution
-→ result upload
-```
-
-The current successful Windows worker command shape is:
-
-```powershell
-.\bin\av-imgdata-worker-api-loop.exe `
-  --config .\config\worker-config.example.json `
-  --api-url http://savy:8088/worker-api `
-  --path-base-dir Q:\Projekte\Synology\toolkit\source\av_imgdata `
-  --max-iterations 1
-```
-
-For real photo processing, `--path-base-dir` must point to a worker-local view of the NAS photo share, for example `P:\photo`, `\\savy\photo`, or `/mnt/savy/photo`.
-
-## Build And Artifact Policy
-
-The DSM package build remains based on Synology Toolkit and the package scripts.
-
-External worker bundles are generated artifacts. They are built from the same repository but are not source files.
-
-```text
-build/                local build artifacts, not tracked
-/dist/                generated worker bundles, not tracked
-.models/              local model files, not tracked
-worker/native_deps/   local third-party binary dependencies, not tracked
-```
-
-`.gitignore` already excludes these directories. Generated `dist/` content may be removed locally and regenerated through the build scripts.
-
-Current external worker targets:
-
-```text
-linux-x86_64
-windows-x86_64
-docker-linux-x86_64
-```
-
-The package includes generated worker archives under the installed package target so that administrators can download them for external hosts. Linux and Docker worker targets are packaged as `.tar.gz`; Windows worker targets are packaged as `.zip`. The package must not install the unpacked worker bundle directories; those remain generated build inputs under `dist/`, not package contents.
-
-## Worker API Endpoint Model
-
-Current implemented API path:
+Current endpoints:
 
 ```text
 GET  /worker-api/status
@@ -153,482 +68,709 @@ POST /worker-api/result
 POST /worker-api/fail
 ```
 
-Current endpoint model is intentionally simple:
+### External worker bundle
 
 ```text
-- token auth through Authorization: Bearer <token>
-- package-local JSON state
-- one job state store
-- worker reports result/fail after local execution
+- Windows and Linux bundle targets
+- worker configuration and token files
+- API loop executable
+- worker executable
+- native face processor
+- ONNX Runtime and HEIF support
+- face model bundle
+- shared_path resolution through --path-base-dir
+- structured processor results
 ```
 
-Future API extensions for file transfer should stay under `/worker-api` and use the same worker token auth model.
+### Validated processor path
+
+```text
+av-imgdata-worker-api-loop
+→ av-imgdata-worker once
+→ av-imgdata-face-processor
+→ processor-result JSON
+→ Worker API result endpoint
+```
+
+## Authority And Responsibility
+
+The DSM package remains responsible for:
+
+```text
+- package configuration
+- authentication and token management
+- worker enrollment and revocation
+- Synology Photos integration
+- source-file selection
+- job creation
+- job ownership and queue state
+- execution-target selection
+- result validation
+- retries and timeout decisions
+- final database and metadata writes
+- user-visible status and progress
+- conflict handling
+- persistence
+```
+
+The external worker is responsible for:
+
+```text
+- registration and heartbeat
+- claiming compatible jobs
+- resolving or downloading inputs
+- executing compatible processors
+- reporting structured results or failures
+- maintaining its local workspace
+- exposing operational diagnostics
+```
+
+The worker must never write directly into Synology Photos databases or package-owned state.
+
+## Target Runtime Flow
+
+```text
+DSM application operation
+→ JobDispatcher
+→ create external-worker job
+→ WorkerApiService.enqueue_job
+→ worker heartbeat and claim
+→ worker executes processor
+→ POST result or fail
+→ DSM result consumer validates response
+→ domain service applies result
+→ original operation/progress state advances
+```
+
+The existing Worker API currently covers the middle section. The missing production work is primarily the integration before enqueue and after result recording.
+
+## Continuous Worker Operation
+
+For production use, the worker API loop must run continuously rather than with `--max-iterations 1`.
+
+Interactive Windows command:
+
+```powershell
+$Bundle = "C:\Program Files\AV ImgData Worker"
+
+& "$Bundle\bin\av-imgdata-worker-api-loop.exe" `
+  --config "$Bundle\config\worker.json" `
+  --worker-bin "$Bundle\bin\av-imgdata-worker.exe" `
+  --path-base-dir "\\savy\photo"
+```
+
+Omitting `--max-iterations` means the loop continues polling according to `poll_interval_seconds`.
+
+The worker must eventually be installed as a managed background service:
+
+```text
+Windows:
+- Windows Service preferred
+- automatic start
+- restart on failure
+- dedicated service account with SMB permissions
+- stdout/stderr redirected to rotating logs
+
+Linux:
+- systemd unit
+- Restart=on-failure
+- dedicated user
+- mounted NAS share
+- journal or rotating file logs
+```
+
+A mapped drive letter must not be assumed for a Windows Service. UNC paths should be the default because drive mappings are normally user-session specific.
+
+## Worker Liveness Model
+
+A worker is considered available only when:
+
+```text
+- registered
+- last heartbeat is within the configured timeout
+- advertised capabilities match the job
+- required input mode is supported
+- worker is not administratively disabled
+```
+
+Recommended initial values:
+
+```text
+poll interval:       2 seconds
+heartbeat interval:  10 seconds or less
+stale timeout:       30 seconds
+claim lease:         5 minutes initially
+```
+
+The current API loop sends a heartbeat before each claim. The production implementation should keep this behavior but separate heartbeat freshness from job execution duration where long-running jobs require it.
+
+## Job Lifecycle
+
+Target states:
+
+```text
+queued
+claimed
+running
+completed
+failed
+retry_wait
+cancelled
+expired
+```
+
+The current implementation uses:
+
+```text
+queued
+claimed
+completed
+failed
+```
+
+The additional states are required before general production use.
+
+Required timestamps and ownership fields:
+
+```text
+created_at
+updated_at
+claimed_at
+started_at
+finished_at
+claimed_by
+attempts
+lease_expires_at
+next_retry_at
+```
+
+## Claim Lease And Recovery
+
+A claimed job must not remain permanently blocked when a worker crashes or loses network access.
+
+Required behavior:
+
+```text
+1. server assigns a claim lease
+2. worker periodically renews the lease while processing
+3. server detects expired leases
+4. expired jobs return to queued or failed according to retry policy
+5. late results from an expired claim are rejected unless they match the active attempt token
+```
+
+Each claim should receive an immutable attempt identifier:
+
+```text
+job_id
+attempt_id
+claimed_by
+lease_expires_at
+```
+
+Result and failure requests must include `attempt_id` to prevent stale workers from overwriting a newer attempt.
 
 ## Execution Target Selection
 
-The DSM package selects where a task runs. The worker does not decide final ownership or final writes.
-
-Target model:
+Target abstraction:
 
 ```text
 JobDispatcher
-  -> LocalNativeProcessorAdapter
-  -> ExternalWorkerProcessorAdapter
+├── LocalNativeProcessorAdapter
+└── ExternalWorkerProcessorAdapter
 ```
 
-Default order should remain conservative:
+Recommended policy options:
 
 ```text
-1. local_native when available and configured as standard path
-2. external_worker when enabled, compatible and selected/preferred
-3. fail with actionable status if no compatible target exists
+local_only
+external_preferred
+external_required
+local_preferred
 ```
 
-When external offload is preferred:
+Default production policy should initially be:
 
 ```text
-1. external_worker if enabled, compatible and a suitable worker/input path exists
-2. local_native fallback if configured
-3. fail with actionable status if neither path is possible
+local_preferred
 ```
 
-This preserves the internal package path and makes external processing optional.
-
-## Image Input Strategies For External Workers
-
-External workers need access to the input image. There are two supported conceptual modes:
+During controlled rollout, selected job types or operations can use:
 
 ```text
-1. shared_path
-2. download
+external_preferred
 ```
 
-Both modes use the same Worker API for job control, heartbeat, claim and result reporting. They differ only in how the worker obtains the image bytes.
+Fallback decisions must be explicit. A failed external job must not silently execute locally when duplicate processing could cause conflicting writes.
 
-### shared_path Mode
+## Input Modes
 
-`shared_path` is the fast LAN-oriented mode.
+### shared_path
 
-The DSM package converts a NAS source path into a relative path under a configured NAS root. The worker resolves that relative path against its own local `--path-base-dir`.
+`shared_path` is the preferred LAN mode.
 
-Example NAS path:
+DSM stores a relative path under a configured NAS path profile. Each worker resolves it against its own local path base.
 
-```text
-/volume1/photo/Urlaub/IMG_001.jpg
-```
-
-Example job payload:
+Example payload:
 
 ```json
 {
   "input_mode": "shared_path",
   "path_profile": "photos",
-  "source_path": "/volume1/photo/Urlaub/IMG_001.jpg",
-  "local_path": "Urlaub/IMG_001.jpg",
+  "local_path": "2026/2026.02/20260301_152542.heic",
   "min_confidence": 0.5,
-  "max_faces": 1,
+  "max_faces": 10,
   "det_size": [640, 640]
 }
 ```
 
-Windows worker examples:
-
-```powershell
---path-base-dir P:\photo
-```
-
-or:
-
-```powershell
---path-base-dir \\savy\photo
-```
-
-Linux worker example:
-
-```bash
---path-base-dir /mnt/savy/photo
-```
-
-Resolved worker-local input path:
+Worker configuration examples:
 
 ```text
-P:\photo\Urlaub\IMG_001.jpg
-/mnt/savy/photo/Urlaub/IMG_001.jpg
-```
-
-Advantages:
-
-```text
-- fastest normal LAN option
-- avoids routing large files through the DSM backend process
-- uses SMB/NFS/local sync mechanisms designed for file access
-- avoids temporary HTTP download copies
-- best for mass processing and large libraries
-```
-
-Disadvantages:
-
-```text
-- worker needs access to the NAS share or synced data
-- administrator must configure SMB/NFS/VPN/local mount permissions
-- path mapping must be correct
-- not suitable for isolated cloud workers without storage access
-```
-
-`shared_path` should be the default for Windows/Linux workers in the same LAN.
-
-### download Mode
-
-`download` is the fallback/remote mode for workers that do not have direct file-system access to the NAS share.
-
-The worker claims a job and then downloads the input file from the DSM package through the Worker API. The worker stores the file in its local workspace, executes the processor against the temporary local copy, and then reports the result.
-
-Example job payload:
-
-```json
-{
-  "input_mode": "download",
-  "path_profile": "photos",
-  "source_path": "/volume1/photo/Urlaub/IMG_001.jpg",
-  "input_ref": {
-    "type": "worker_api_file",
-    "job_id": "job-123",
-    "filename": "IMG_001.jpg",
-    "size_hint": 7340032
-  },
-  "min_confidence": 0.5,
-  "max_faces": 1,
-  "det_size": [640, 640]
-}
-```
-
-Proposed endpoint:
-
-```text
-GET /worker-api/jobs/{job_id}/input
-Authorization: Bearer <token>
-```
-
-Optional later endpoint for multiple assets/batches:
-
-```text
-GET /worker-api/jobs/{job_id}/input/{asset_id}
-```
-
-Worker-local flow:
-
-```text
-1. heartbeat
-2. claim job
-3. see input_mode=download
-4. GET /worker-api/jobs/{job_id}/input
-5. store bytes under work/input-cache/<job_id>/input-file
-6. build ProcessorContract input with worker-local image_path
-7. execute av-imgdata-face-processor
-8. POST /worker-api/result or /worker-api/fail
-9. cleanup according to local retention policy
-```
-
-Advantages:
-
-```text
-- works without SMB/UNC/NFS access
-- useful for cloud workers or isolated external machines
-- avoids per-worker path mapping
-- uses the same HTTPS/token-authenticated Worker API
-- simpler initial setup for remote workers
-```
-
-Disadvantages:
-
-```text
-- slower for many images than shared_path
-- DSM package backend becomes a file-transfer path
-- Reverse Proxy and FastAPI must stream potentially large files
-- local temporary copies are required on the worker
-- timeout, size limit, retry and cleanup policy are required
-```
-
-`download` should be optional, not the only mode. It solves the “no path access” case, but it is not the preferred high-throughput LAN mode.
-
-## shared_path Versus download Performance
-
-For single images in a LAN, the difference may be acceptable. A 3–15 MB image can usually be downloaded through HTTP quickly enough for occasional jobs.
-
-For large batches and library scans, `shared_path` should be materially better:
-
-```text
-shared_path:
-  Worker reads through SMB/NFS/local file system.
-  DSM backend stays mostly out of the data plane.
-
-download:
-  DSM backend streams every image through FastAPI/nginx.
-  Worker writes a temporary copy before processing.
-  Backend, reverse proxy and worker disk I/O become part of every job.
-```
-
-Decision:
-
-```text
-- shared_path = default for LAN Windows/Linux workers
-- download = optional fallback for workers without share access
-```
-
-Do not remove the shared path mode unless measurements later show that the HTTP download path is fast enough under realistic batch load and does not overload the DSM package backend.
-
-## Path Profile Concept For shared_path
-
-The DSM package should not store Windows-specific or Linux-specific absolute worker paths in the package config as the global truth. Different workers may mount the same NAS root differently.
-
-The DSM package should store NAS-side path profiles:
-
-```json
-{
-  "external_workers": {
-    "ENABLED": true,
-    "PREFERRED": false,
-    "DEFAULT_INPUT_MODE": "shared_path",
-    "ALLOW_DOWNLOAD_INPUT": true,
-    "PATH_PROFILES": {
-      "photos": {
-        "ENABLED": true,
-        "NAS_ROOT": "/volume1/photo",
-        "DEFAULT_INPUT_MODE": "shared_path",
-        "ALLOW_DOWNLOAD_INPUT": true
-      }
-    }
-  }
-}
-```
-
-For `shared_path`, the package converts:
-
-```text
-/volume1/photo/Album/Bild.jpg
-```
-
-into:
-
-```text
-Album/Bild.jpg
+Windows: \\savy\photo
+Linux:   /mnt/savy/photo
 ```
 
 Rules:
 
 ```text
-- source path must be absolute on the NAS
-- source path must resolve below the selected NAS_ROOT
-- payload path separator is always /
-- generated local_path must be relative
-- ../ path escapes are forbidden
-- symlink/realpath escapes must be rejected where possible
-- source_path may be kept for diagnostics, but workers should process local_path/input_ref only
+- local_path is always relative
+- payload separator is /
+- absolute paths are rejected
+- drive-qualified paths are rejected
+- path traversal is rejected
+- resolved files must remain below the configured base
 ```
 
-## Worker Capabilities For Input Modes
+### download
 
-Workers must advertise what input modes they can handle.
+`download` remains the planned fallback for workers without NAS-share access.
 
-Shared path worker:
+Proposed endpoint:
+
+```text
+GET /worker-api/jobs/{job_id}/input
+```
+
+Required controls:
+
+```text
+- worker token authentication
+- active claim ownership
+- attempt validation
+- server-controlled source path
+- path-profile validation
+- streaming response
+- size limits
+- timeout and cleanup policy
+```
+
+`download` is not required for the first productive LAN rollout.
+
+## Capabilities
+
+Workers must advertise processor and input capabilities separately.
+
+Example:
 
 ```json
 {
-  "worker_id": "windows-pc-1",
+  "worker_id": "windows-worker-01",
   "capabilities": [
+    "face_native_detect",
     "face_native_embed",
     "input_shared_path"
   ]
 }
 ```
 
-Download worker:
+Claim matching must check:
+
+```text
+- job type
+- input mode
+- protocol version
+- processor/model availability where relevant
+```
+
+Future metadata may include:
+
+```text
+CPU architecture
+logical CPU count
+RAM
+GPU backend
+GPU memory
+model versions
+processor versions
+maximum concurrency
+current load
+```
+
+## Result Contract And Server Processing
+
+Recording a result in `worker-api-state.json` is not the final business operation.
+
+The server requires a result-consumer layer:
+
+```text
+ExternalWorkerResultConsumer
+→ load completed worker job
+→ validate contract version
+→ validate job type and attempt
+→ validate processor status
+→ validate expected result schema
+→ map result to originating domain operation
+→ execute package-owned final write
+→ update progress/status
+→ mark result consumed
+```
+
+Each external job should store origin metadata such as:
 
 ```json
 {
-  "worker_id": "cloud-worker-1",
-  "capabilities": [
-    "face_native_embed",
-    "input_download"
-  ]
-}
-```
-
-A worker may support both:
-
-```json
-{
-  "worker_id": "linux-box-1",
-  "capabilities": [
-    "face_native_embed",
-    "input_shared_path",
-    "input_download"
-  ]
-}
-```
-
-Claim logic should prevent incompatible assignments:
-
-```text
-input_mode=shared_path -> worker must have input_shared_path
-input_mode=download    -> worker must have input_download
-```
-
-This avoids assigning a shared-path job to a cloud worker that cannot read the NAS share.
-
-## Security Requirements For download Mode
-
-Download mode makes the DSM package a controlled file server for worker jobs. It must not become a generic file-read API.
-
-Server-side checks:
-
-```text
-- valid worker token required
-- job must exist
-- job must be claimed by the requesting worker, or claim ownership must be otherwise verified
-- source_path must be derived from package job state, not from arbitrary request query parameters
-- source_path must match an enabled PATH_PROFILE
-- source_path must resolve below the profile NAS_ROOT
-- path traversal and symlink escape must be rejected where possible
-- optional max file size policy should be enforced
-- content should be streamed, not loaded fully into memory
-```
-
-Recommended response:
-
-```text
-200 OK
-Content-Type: application/octet-stream
-Content-Length: <size if known>
-Content-Disposition: attachment; filename="IMG_001.jpg"
-```
-
-Error model:
-
-```text
-401 unauthorized
-403 worker_not_assigned_to_job
-404 job_or_input_not_found
-409 job_input_mode_not_download
-413 input_file_too_large
-500 input_stream_failed
-```
-
-## Worker Workspace And Cache
-
-For `download`, the worker should store input files under a worker-local workspace:
-
-```text
-work/input-cache/<job_id>/<filename>
-```
-
-First implementation may delete inputs after each job. Later, workers may keep a bounded cache using a key such as:
-
-```text
-source_id + size + mtime + optional sha256
-```
-
-Cache is optional. It should not be required for correctness.
-
-## Job Payload Standard
-
-For single-image face jobs, external worker payloads should contain common processing options plus input metadata.
-
-Shared path example:
-
-```json
-{
-  "job_id": "job-photo-1",
-  "type": "face_native_embed",
-  "payload": {
-    "input_mode": "shared_path",
-    "path_profile": "photos",
-    "source_path": "/volume1/photo/Album/Bild.jpg",
-    "local_path": "Album/Bild.jpg",
-    "min_confidence": 0.5,
-    "max_faces": 1,
-    "det_size": [640, 640]
+  "origin": {
+    "operation_id": "scan-2026-001",
+    "task_id": "photo-12345-face-detect",
+    "service": "face_indexing",
+    "entity_type": "photo",
+    "entity_id": "12345"
   }
 }
 ```
 
-Download example:
+The server must support idempotent result consumption. Reprocessing the same completed result must not create duplicate records or corrupt progress counters.
 
-```json
-{
-  "job_id": "job-photo-2",
-  "type": "face_native_embed",
-  "payload": {
-    "input_mode": "download",
-    "path_profile": "photos",
-    "source_path": "/volume1/photo/Album/Bild.jpg",
-    "input_ref": {
-      "type": "worker_api_file",
-      "job_id": "job-photo-2",
-      "filename": "Bild.jpg"
-    },
-    "min_confidence": 0.5,
-    "max_faces": 1,
-    "det_size": [640, 640]
-  }
-}
-```
-
-The worker transforms either form into ProcessorContract input with a worker-local `input.image_path`.
-
-## Implementation Roadmap From Current State
-
-### Phase H1: shared_path path mapping
+Recommended additional fields:
 
 ```text
-- add external_workers config defaults through ConfigService
-- add PATH_PROFILES config model
-- add service for NAS source path -> relative worker local_path
-- add tests for relative path creation and escape rejection
-- add worker-api-store.py helper for enqueue-path test jobs
-- keep workers resolving relative local_path against --path-base-dir
+result_consumed_at
+result_consumer_version
+result_apply_status
+result_apply_error
 ```
 
-### Phase H2: input capability matching
+## Automatic Job Dispatch
+
+Manual calls to `WorkerApiService.enqueue_job` are suitable for tests only.
+
+Production job creation must be integrated into the normal services that currently invoke processors locally.
+
+Initial integration target:
 
 ```text
-- add input_shared_path and input_download capability names
-- make jobs declare required input capability
-- make claim logic skip jobs incompatible with worker capabilities
-- add tests for claim filtering
+face_native_detect for one image
 ```
 
-### Phase H3: download input mode
+Required adapter behavior:
 
 ```text
-- add GET /worker-api/jobs/{job_id}/input
-- stream source_path from NAS after PATH_PROFILE validation
-- require token and claimed-worker ownership
-- add worker-side file download into work/input-cache
-- run processor against downloaded local file
-- report result/fail as today
+1. receive the same logical processor request as the local adapter
+2. select a path profile
+3. convert the NAS source path to relative local_path
+4. attach origin metadata
+5. enqueue the worker job
+6. return an asynchronous task reference
+7. allow status polling or event-driven continuation
 ```
 
-### Phase H4: UI and documentation
+After the single-image flow is reliable, extend to:
 
 ```text
-- expose external worker enablement separately from internal package processor config
-- show Shared Path as recommended LAN mode
-- show Download as fallback mode for workers without NAS share access
-- document Windows path-base-dir examples
-- document Linux mount examples
-- document Reverse Proxy setup for Worker API
+face_native_embed
+face batch operations
+ranking/profile operations where suitable
+optional image processor jobs
 ```
 
-## Final Decision
+## Persistence
+
+The current JSON state store is acceptable for protocol development and controlled single-worker testing.
+
+Before high-volume production use, assess migration to SQLite or the package database because the system will require:
 
 ```text
-- The internal package processor remains part of the package.
-- External workers are optional offload targets.
-- Current focus is Windows and Linux external workers.
-- shared_path is the preferred high-throughput LAN mode.
-- download is the planned fallback for workers without direct NAS path access.
-- Both modes must use the same Worker API control plane.
-- DSM remains the authority for configuration, queue ownership, validation and final writes.
-- Workers only execute processor jobs and report structured results.
+- atomic claims
+- multiple concurrent workers
+- leases
+- retry scheduling
+- indexed queue selection
+- result-consumption state
+- retention and cleanup
+- operational history
+```
+
+A staged rollout may retain JSON initially if only one worker and one API process are allowed.
+
+## Concurrency
+
+Initial safe mode:
+
+```text
+- one worker process
+- one active job at a time
+- one Worker API backend process controlling the JSON state file
+```
+
+Later concurrency model:
+
+```text
+- worker declares max_concurrency
+- server allows multiple claims per worker or worker slots
+- processor/model reuse is enabled where safe
+- queue storage provides atomic transactions
+```
+
+Concurrency must not be increased until queue claims and final result application are transaction-safe.
+
+## Security
+
+Required production controls:
+
+```text
+- Worker API disabled by default
+- HTTPS through DSM Reverse Proxy
+- unique token per worker
+- token revocation
+- scoped tokens
+- worker ID bound to token
+- no arbitrary source paths accepted from workers
+- no direct package database credentials on workers
+- no Synology Photos database writes from workers
+- request and result size limits
+- audit log for registration, claims, results and failures
+```
+
+Tokens should not be committed to the repository or included in redistributable bundles.
+
+## Logging And Diagnostics
+
+Server logs should include:
+
+```text
+job_id
+attempt_id
+worker_id
+job type
+queue duration
+claim duration
+execution duration
+result application duration
+final status
+error code
+```
+
+Worker logs should include:
+
+```text
+registration status
+heartbeat failures
+claim status
+resolved input path
+worker command
+processor exit code
+processor timing
+result upload status
+retry decisions
+```
+
+Secrets and full authorization headers must never be logged.
+
+## Packaging And Administration
+
+The DSM package should provide:
+
+```text
+- downloadable Windows worker ZIP
+- downloadable Linux worker archive
+- generated configuration template
+- worker enrollment/token workflow
+- path-profile configuration
+- worker list and last-seen status
+- revoke/remove action
+- queue counts
+- recent failures
+```
+
+The worker bundle should provide:
+
+```text
+- install/start/stop scripts
+- service installation helper
+- configuration validation command
+- connectivity probe
+- path-access probe
+- processor/model probe
+- log directory
+- upgrade instructions
+```
+
+## Implementation Plan
+
+### Phase 1: Persistent worker runtime
+
+Goal: keep the validated Windows worker running and ready for jobs.
+
+```text
+- run API loop without --max-iterations
+- define production worker.json
+- verify repeated empty claims and later job pickup
+- add graceful shutdown handling
+- add reconnect/backoff behavior
+- add rotating worker logs
+- package Windows Service installation and removal scripts
+- run service under an account with UNC share access
+- document firewall, Reverse Proxy and SMB requirements
+```
+
+Acceptance criteria:
+
+```text
+- worker starts automatically after Windows reboot
+- worker appears online in DSM status
+- worker survives temporary API/network interruption
+- a job queued after worker startup is claimed without manual restart
+- completed result reaches the DSM Worker API
+```
+
+### Phase 2: Automatic server dispatch
+
+Goal: normal DSM processing creates external jobs without test scripts.
+
+```text
+- introduce JobDispatcher abstraction
+- implement ExternalWorkerProcessorAdapter
+- add path-profile configuration
+- implement NAS path to relative local_path conversion
+- integrate face_native_detect single-image flow
+- attach operation/task/entity origin metadata
+- expose asynchronous task status
+- preserve local processor adapter as fallback
+```
+
+Acceptance criteria:
+
+```text
+- a normal DSM operation queues a worker job
+- no manual Python enqueue command is required
+- only compatible online workers can claim the job
+- the originating DSM task remains traceable through job_id
+```
+
+### Phase 3: Result consumption and final writes
+
+Goal: returned worker results affect the real package workflow.
+
+```text
+- implement ExternalWorkerResultConsumer
+- validate ProcessorContract and worker result schemas
+- map result to originating task/entity
+- apply results through existing package/domain services
+- make result application idempotent
+- mark results consumed
+- update progress and final operation status
+- route worker failures into user-visible operation errors
+```
+
+Acceptance criteria:
+
+```text
+- detected faces are applied through the same domain path as local processing
+- duplicate result delivery does not duplicate writes
+- malformed results are rejected and retained for diagnostics
+- originating operation completes or fails correctly
+```
+
+### Phase 4: Reliability and recovery
+
+Goal: tolerate crashes, disconnects and retries safely.
+
+```text
+- add running state
+- add claim leases and attempt IDs
+- add lease renewal
+- requeue expired claims
+- implement retry policy and backoff
+- reject stale results
+- add cancellation
+- add queue and history cleanup
+- define server restart recovery
+```
+
+Acceptance criteria:
+
+```text
+- killing a worker does not permanently block a job
+- a retried job cannot be overwritten by the previous worker attempt
+- server and worker restarts preserve correct job state
+```
+
+### Phase 5: Administration and observability
+
+Goal: make the feature operable without command-line inspection.
+
+```text
+- worker administration API/UI
+- enrollment and token rotation
+- worker online/offline/stale status
+- queue and failure views
+- per-job diagnostics
+- configuration validation
+- health metrics and structured logs
+```
+
+### Phase 6: Scale and additional input modes
+
+Goal: support broader deployments after the LAN worker path is stable.
+
+```text
+- input capability matching
+- download input endpoint and worker cache
+- Linux service packaging
+- multiple workers
+- worker concurrency slots
+- transactional queue storage
+- batch jobs
+- optional Docker/cloud/GPU workers
+```
+
+## Immediate Next Steps
+
+The next implementation sequence is:
+
+```text
+1. install the Windows API loop as a continuously running service
+2. verify that it claims a job queued after service startup
+3. add server path-profile configuration for /volume1/photo
+4. implement ExternalWorkerProcessorAdapter for face_native_detect
+5. enqueue jobs from the normal face-processing workflow
+6. implement result-consumer mapping and final writes
+7. add leases, retries and stale-worker recovery
+8. add administration/status UI
+```
+
+The first vertical production slice is complete only when this flow works without manual commands:
+
+```text
+user/package operation
+→ automatic enqueue
+→ persistent Windows worker claim
+→ face processing
+→ result return
+→ server validation
+→ package-owned final write
+→ operation completion
+```
+
+## Final Decisions
+
+```text
+- DSM remains the authoritative controller and final-write owner.
+- The internal processor remains available.
+- External workers are optional execution targets.
+- Windows shared_path is the first production target.
+- UNC paths are preferred for Windows background services.
+- Manual enqueue commands remain test tooling only.
+- Automatic dispatch and result consumption are the next core milestones.
+- download mode, multiple workers and GPU/cloud execution follow after the first complete production slice.
 ```
