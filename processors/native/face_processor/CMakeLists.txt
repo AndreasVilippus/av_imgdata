@@ -28,10 +28,12 @@ add_executable(av-imgdata-face-processor src/main.cpp)
 find_path(JPEG_INCLUDE_DIR
     NAMES jpeglib.h
     PATHS "${JPEG_ROOT}/include" "${JPEG_ROOT}/usr/include"
+    NO_DEFAULT_PATH
 )
 find_library(JPEG_LIBRARY
     NAMES jpeg
     PATHS "${JPEG_ROOT}/lib" "${JPEG_ROOT}/lib64" "${JPEG_ROOT}/usr/lib" "${JPEG_ROOT}/usr/lib64"
+    NO_DEFAULT_PATH
 )
 if(NOT JPEG_INCLUDE_DIR OR NOT JPEG_LIBRARY)
     message(FATAL_ERROR "libjpeg not found; set JPEG_ROOT to a sysroot containing jpeglib.h and libjpeg")
@@ -54,6 +56,7 @@ message(STATUS "libjpeg include: ${JPEG_INCLUDE_DIR}; library: ${JPEG_LIBRARY_RE
 find_path(HEIF_INCLUDE_DIR
     NAMES libheif/heif.h
     PATHS "${HEIF_ROOT}/include" "${HEIF_ROOT}/usr/include" "${JPEG_ROOT}/include" "${JPEG_ROOT}/usr/include"
+    NO_DEFAULT_PATH
 )
 target_include_directories(av-imgdata-face-processor PRIVATE "${ONNXRUNTIME_INCLUDE_DIR}" "${JPEG_INCLUDE_DIR}")
 if(HEIF_INCLUDE_DIR)

@@ -1,6 +1,9 @@
 # Windows Worker Bundle
 
-Phase A creates a local Windows x86_64 bundle through MinGW-w64 from the Debian build host.
+The Windows x86_64 bundle is built through MinGW-w64 from the Debian build host.
+It includes the worker binaries and requires the native face processor plus the
+libvips image processor runtime so HEIC/HEIF and RAW-capable image decoding is
+available by default.
 
 Expected build command from repository root:
 
@@ -25,7 +28,17 @@ dist/av-imgdata-worker-windows-x86_64/
   logs/
 ```
 
-Phase A does not bundle ONNXRuntime, libjpeg, libvips, or the face processor yet. Those are Phase B/C processor execution requirements.
+The Windows libvips runtime is built by
+`tools/build-native-image-processor-vips-windows.sh` and installed under
+`worker/native_deps/windows-x86_64/vips` by default. `VIPS_ROOT` can override
+that output/cache location, but it is not a required input dependency. The
+build uses a reduced `avimgdata` libvips profile with libde265 HEIC decoding and
+without the x265 encoder. It fails if the libvips image processor cannot be
+built or bundled, because the worker config enables `image_vips` by default.
+
+If the libvips image processor artifact already exists, use
+`AV_IMGDATA_BUILD_WORKER_VIPS=0 ./tools/build-worker.sh --target windows-x86_64`
+to rebuild the worker bundle without rebuilding libvips itself.
 
 Local smoke commands on Windows:
 

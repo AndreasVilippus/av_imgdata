@@ -687,7 +687,7 @@ class NativeFaceProcessorService:
             root = {}
         files = root.get("files") if isinstance(root.get("files"), dict) else {}
         raw = files.get("IMAGE_DECODER_EXTENSIONS")
-        source = raw if isinstance(raw, list) else ["heic", "heif"]
+        source = raw if isinstance(raw, list) else ["heic", "heif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "rw2", "raf", "pef"]
         normalized: List[str] = []
         for item in source:
             text = str(item or "").strip().lower().lstrip(".")
@@ -697,11 +697,11 @@ class NativeFaceProcessorService:
         vips = processors.get("IMAGE_PROCESSOR_VIPS") if isinstance(processors.get("IMAGE_PROCESSOR_VIPS"), dict) else {}
         if bool(vips.get("ENABLED", False)) and bool(vips.get("PREFERRED", True)):
             formats = vips.get("SUPPORTED_FORMATS")
-            for item in (formats if isinstance(formats, list) else ["jpeg", "jpg", "png", "webp", "tiff"]):
+            for item in (formats if isinstance(formats, list) else ["jpeg", "jpg", "png", "webp", "tiff", "heic", "heif"]):
                 text = str(item or "").strip().lower().lstrip(".")
                 if text and text not in normalized:
                     normalized.append(text)
-        return normalized or ["heic", "heif"]
+        return normalized or ["heic", "heif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "rw2", "raf", "pef"]
 
     def _vips_fallback_allowed(self) -> bool:
         try:

@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
         << "  \"processors\": {\n"
         << "    \"face\": {\"path\": \"" << face_processor
         << "\", \"model_root\": \"../.models/face\", \"model_name\": \"" << runtime::json_escape(model_pack) << "\"},\n"
-        << "    \"image_vips\": {\"enabled\": false, \"path\": \"" << image_processor << "\"}\n"
+        << "    \"image_vips\": {\"enabled\": true, \"path\": \"" << image_processor << "\"}\n"
         << "  },\n"
         << "  \"poll_interval_seconds\": 2,\n"
         << "  \"max_parallel_jobs\": 1,\n"

@@ -35,16 +35,18 @@ LIBVIPS_SOURCE_PARENT="${BUILD_ROOT}/libvips-source"
 LIBVIPS_SOURCE_DIR="${LIBVIPS_SOURCE_PARENT}/vips-${LIBVIPS_VERSION}"
 LIBVIPS_ORIGINAL_SOURCE_DIR="${LIBVIPS_SOURCE_PARENT}/vips-${LIBVIPS_VERSION}.orig"
 
-rm -rf \
-  "${BUILD_DIR}" \
-  "${LIBDE265_BUILD_DIR}" \
-  "${LIBDE265_SOURCE_PARENT}" \
-  "${LIBHEIF_BUILD_DIR}" \
-  "${LIBHEIF_SOURCE_PARENT}" \
-  "${LIBVIPS_BUILD_DIR}" \
-  "${INSTALL_DIR}" \
-  "${LIBVIPS_SOURCE_PARENT}"
-mkdir -p "${BUILD_DIR}" "${LIBDE265_BUILD_DIR}" "${LIBHEIF_BUILD_DIR}" "${LIBVIPS_BUILD_DIR}" "${INSTALL_DIR}" "${SOURCE_CACHE}"
+prepare_build_dirs() {
+  rm -rf \
+    "${BUILD_DIR}" \
+    "${LIBDE265_BUILD_DIR}" \
+    "${LIBDE265_SOURCE_PARENT}" \
+    "${LIBHEIF_BUILD_DIR}" \
+    "${LIBHEIF_SOURCE_PARENT}" \
+    "${LIBVIPS_BUILD_DIR}" \
+    "${INSTALL_DIR}" \
+    "${LIBVIPS_SOURCE_PARENT}"
+  mkdir -p "${BUILD_DIR}" "${LIBDE265_BUILD_DIR}" "${LIBHEIF_BUILD_DIR}" "${LIBVIPS_BUILD_DIR}" "${INSTALL_DIR}" "${SOURCE_CACHE}"
+}
 
 require_tool() {
   local tool="$1"
@@ -52,6 +54,27 @@ require_tool() {
     echo "ERROR: required tool not found: ${tool}" >&2
     exit 1
   fi
+}
+
+require_pkg_config_package() {
+  local package="$1"
+  local debian_package="$2"
+  if ! pkg-config --exists "${package}"; then
+    echo "ERROR: required pkg-config package not found: ${package}" >&2
+    echo "Install the Debian build host requirements, for example:" >&2
+    echo "  sudo apt-get install -y libglib2.0-dev libexpat1-dev" >&2
+    echo "Or set PKG_CONFIG_PATH to a directory containing ${package}.pc." >&2
+    echo "Missing Debian package hint: ${debian_package}" >&2
+    exit 1
+  fi
+}
+
+require_libvips_host_dependencies() {
+  require_tool pkg-config
+  require_pkg_config_package glib-2.0 libglib2.0-dev
+  require_pkg_config_package gio-2.0 libglib2.0-dev
+  require_pkg_config_package gobject-2.0 libglib2.0-dev
+  require_pkg_config_package expat libexpat1-dev
 }
 
 download_source_tarball() {
@@ -286,6 +309,7 @@ build_heif_stack() {
   (
     cd "${LIBHEIF_SOURCE_DIR}"
     CPPFLAGS="-I${VIPS_PREFIX}/include${synology_include_dir:+ -I${synology_include_dir}}" \
+    CXXFLAGS="${CXXFLAGS:-} -Wno-error=maybe-uninitialized" \
     LDFLAGS="-L${VIPS_PREFIX}/lib" \
     PKG_CONFIG_PATH="${VIPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" \
     LD_LIBRARY_PATH="${VIPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
@@ -740,6 +764,8 @@ strip_native_binary() {
   "${strip_tool}" --strip-unneeded "${binary}" || "${strip_tool}" "${binary}" || true
 }
 
+require_libvips_host_dependencies
+prepare_build_dirs
 build_heif_stack
 build_libvips
 copy_libvips_runtime_dependencies

@@ -67,13 +67,13 @@ class ConfigService:
                     "STATUS_CACHE_SECONDS": 60,
                 },
                 "IMAGE_PROCESSOR_VIPS": {
-                    "ENABLED": False,
+                    "ENABLED": True,
                     "PREFERRED": True,
                     "PATH": "bin/av-imgdata-image-processor",
                     "TIMEOUT_SECONDS": 120,
                     "STATUS_CACHE_SECONDS": 60,
                     "MAX_IMAGE_BYTES": 268435456,
-                    "SUPPORTED_FORMATS": ["jpeg", "jpg", "png", "webp", "tiff"],
+                    "SUPPORTED_FORMATS": ["jpeg", "jpg", "png", "webp", "tiff", "heic", "heif"],
                     "ALLOW_FALLBACK_TO_DEFAULT": True,
                 },
             },
@@ -101,7 +101,7 @@ class ConfigService:
                 "EXIFTOOL_PERSISTENT_ENABLED": True,
                 "EXIFTOOL_PERSISTENT_TIMEOUT_SECONDS": 30,
                 "IMAGE_DECODER_ENABLED": True,
-                "IMAGE_DECODER_EXTENSIONS": ["heic", "heif"],
+                "IMAGE_DECODER_EXTENSIONS": ["heic", "heif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "rw2", "raf", "pef"],
                 "IMAGE_DECODER_ORDER": ["pillow-heif", "heif-convert", "magick", "ffmpeg", "convert"],
                 "IMAGE_DECODER_MAX_EDGE": 4096,
                 "RECOGNITION_IMAGE_MAX_EDGE": 4096,
@@ -267,7 +267,7 @@ class ConfigService:
         )
         files["IMAGE_DECODER_EXTENSIONS"] = cls._normalizeStringList(
             files.get("IMAGE_DECODER_EXTENSIONS"),
-            default=["heic", "heif"],
+            default=["heic", "heif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "rw2", "raf", "pef"],
             lowercase=True,
             strip_prefix=".",
         )
@@ -276,7 +276,7 @@ class ConfigService:
             default=["pillow-heif", "heif-convert", "magick", "ffmpeg", "convert"],
             lowercase=True,
         )
-        allowed_decoders = {"pillow-heif", "heif-convert", "magick", "ffmpeg", "convert"}
+        allowed_decoders = {"libvips", "vips", "pillow-heif", "heif-convert", "magick", "ffmpeg", "convert"}
         files["IMAGE_DECODER_ORDER"] = [decoder for decoder in decoder_order if decoder in allowed_decoders]
 
         photos = config.get("photos", {}) if isinstance(config.get("photos"), dict) else {}
@@ -338,7 +338,7 @@ class ConfigService:
         )
         image_processor_vips["SUPPORTED_FORMATS"] = cls._normalizeStringList(
             image_processor_vips.get("SUPPORTED_FORMATS"),
-            default=["jpeg", "jpg", "png", "webp", "tiff"],
+            default=["jpeg", "jpg", "png", "webp", "tiff", "heic", "heif"],
             lowercase=True,
             strip_prefix=".",
         )

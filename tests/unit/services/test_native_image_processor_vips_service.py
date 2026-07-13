@@ -59,28 +59,28 @@ raise SystemExit(2)
     path.chmod(0o755)
 
 
-def test_vips_image_processor_disabled_by_default(tmp_path):
+def test_vips_image_processor_enabled_by_default_reports_missing_binary(tmp_path):
     service = NativeImageProcessorVipsService(ConfigService(str(tmp_path / "config.json")), package_root=tmp_path)
-
-    status = service.status()
-
-    assert status["enabled"] is False
-    assert status["available"] is False
-    assert status["reason"] == "vips_disabled"
-    assert status["fallback"] == "default_image_backend"
-
-
-def test_vips_image_processor_reports_missing_binary_when_enabled(tmp_path):
-    config_path = tmp_path / "config.json"
-    config = ConfigService(str(config_path))
-    config.writeConfig({"native_processors": {"IMAGE_PROCESSOR_VIPS": {"ENABLED": True}}})
-    service = NativeImageProcessorVipsService(config, package_root=tmp_path)
 
     status = service.status()
 
     assert status["enabled"] is True
     assert status["available"] is False
     assert status["reason"] == "vips_binary_missing"
+    assert status["fallback"] == "default_image_backend"
+
+
+def test_vips_image_processor_can_be_disabled_explicitly(tmp_path):
+    config_path = tmp_path / "config.json"
+    config = ConfigService(str(config_path))
+    config.writeConfig({"native_processors": {"IMAGE_PROCESSOR_VIPS": {"ENABLED": False}}})
+    service = NativeImageProcessorVipsService(config, package_root=tmp_path)
+
+    status = service.status()
+
+    assert status["enabled"] is False
+    assert status["available"] is False
+    assert status["reason"] == "vips_disabled"
 
 
 def test_vips_image_processor_skeleton_is_not_available(tmp_path):
@@ -216,6 +216,7 @@ def test_vips_image_processor_background_status_returns_stale_cache(monkeypatch,
 def test_vips_process_image_disabled_returns_error(tmp_path):
     """Test that disabled processor returns error."""
     config = ConfigService(str(tmp_path / "config.json"))
+    config.writeConfig({"native_processors": {"IMAGE_PROCESSOR_VIPS": {"ENABLED": False}}})
     service = NativeImageProcessorVipsService(config, package_root=tmp_path)
     
     # Create dummy image path

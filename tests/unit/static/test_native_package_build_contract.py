@@ -27,7 +27,35 @@ def test_native_face_processor_build_uses_runtime_heif_loader():
     assert "HEIF_LIBRARY" not in cmake
     assert "AV_FACE_PROCESSOR_WITH_HEIF" in cmake
     assert "dlopen" in source
+    assert "LoadLibraryA" in source
+    assert "GetProcAddress" in source
     assert "heif_have_decoder_for_format" in source
+    assert 'candidates.push_back("libheif.dll")' in source
+    assert 'candidates.push_back("libheif.so.1")' in source
+
+
+def test_native_face_processor_cmake_does_not_mix_host_headers_into_cross_builds():
+    cmake = Path("processors/native/face_processor/CMakeLists.txt").read_text(encoding="utf-8")
+    windows_build = Path("tools/build-native-face-processor-windows.sh").read_text(encoding="utf-8")
+
+    assert 'PATHS "${JPEG_ROOT}/include" "${JPEG_ROOT}/usr/include"\n    NO_DEFAULT_PATH' in cmake
+    assert 'PATHS "${JPEG_ROOT}/lib" "${JPEG_ROOT}/lib64" "${JPEG_ROOT}/usr/lib" "${JPEG_ROOT}/usr/lib64"\n    NO_DEFAULT_PATH' in cmake
+    assert 'PATHS "${HEIF_ROOT}/include" "${HEIF_ROOT}/usr/include" "${JPEG_ROOT}/include" "${JPEG_ROOT}/usr/include"\n    NO_DEFAULT_PATH' in cmake
+    assert "^JPEG_INCLUDE_DIR:PATH=/usr/include$" in windows_build
+    assert "-UJPEG_INCLUDE_DIR" in windows_build
+    assert "-UJPEG_LIBRARY" in windows_build
+    assert "-UHEIF_INCLUDE_DIR" in windows_build
+    assert "Windows face processor build directory is not writable" in windows_build
+    assert "AV_IMGDATA_FACE_PROCESSOR_WINDOWS_BUILD_ROOT" in windows_build
+    assert "AV_IMGDATA_FACE_PROCESSOR_WINDOWS_DIST_DIR" in windows_build
+    assert '"${DEPS_ROOT}/vips"' in windows_build
+    assert 'copy_matching_files "${HEIF_ROOT}/bin" "${DIST_DIR}/bin"' in windows_build
+    assert '"libheif*.dll"' in windows_build
+    assert '"libde265*.dll"' in windows_build
+    assert '"libaom*.dll"' in windows_build
+    assert '"libsharpyuv*.dll"' in windows_build
+    assert "cp -L" in windows_build
+    assert "cp -aL" not in windows_build
 
 
 def test_native_face_processor_release_build_strips_binary_by_default():
@@ -106,11 +134,17 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "curl -fkL" in build_vips
     assert "sha256sum -c" in build_vips
     assert "build_heif_stack" in build_vips
+    assert "require_libvips_host_dependencies" in build_vips
+    assert "require_pkg_config_package glib-2.0 libglib2.0-dev" in build_vips
+    assert "require_pkg_config_package gio-2.0 libglib2.0-dev" in build_vips
+    assert "require_pkg_config_package gobject-2.0 libglib2.0-dev" in build_vips
+    assert "require_pkg_config_package expat libexpat1-dev" in build_vips
     assert "--disable-x265" in build_vips
     assert "--disable-aom" in build_vips
     assert "--disable-rav1e" in build_vips
     assert "--disable-gdk-pixbuf" in build_vips
     assert "--disable-examples" in build_vips
+    assert "-Wno-error=maybe-uninitialized" in build_vips
     assert 'LDFLAGS="-L${VIPS_PREFIX}/lib"' in build_vips
     assert 'LDFLAGS="-L${VIPS_PREFIX}/lib${synology_lib_dir' not in build_vips
     assert "builtin_h265_decoder=yes" in build_vips
@@ -170,6 +204,7 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "meson setup" in build_vips
     assert "-Dheif=enabled" in build_vips
     assert "-Dheif=disabled" not in build_vips
+    assert "-Draw=enabled" not in build_vips
     assert "require_tool strings" in build_vips
     assert "copy_libvips_runtime_dependencies" in build_vips
     assert '"libheif.so*"' in build_vips
@@ -189,6 +224,8 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "find_library(VIPS_SHARED_LIBRARY" in cmake
     assert "VIPS_DIRECT_RUNTIME_LIBS" in cmake
     assert 'VIPS_LIB MATCHES "^(glib-2.0|gobject-2.0|gio-2.0)$"' in cmake
+    assert "find_library(VIPS_DIRECT_${VIPS_LIB_VAR}_LIBRARY" in cmake
+    assert "libvips direct runtime library not found" in cmake
     assert "target_link_libraries(av-imgdata-image-processor PRIVATE ${VIPS_SHARED_LIBRARY} ${VIPS_DIRECT_RUNTIME_LIBS})" in cmake
     assert "target_link_libraries(av-imgdata-image-processor PRIVATE ${VIPS_LIBRARIES})" not in cmake
     assert "-Wl,--allow-shlib-undefined" in cmake
@@ -275,6 +312,7 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert "restore_local_build_artifacts" in build_package
     assert '".test-venv"' in build_package
     assert '"build"' not in build_package
+    assert '"build/chroot/*"' in build_package
     assert "SANITIZE_NATIVE_BUILD_PATTERNS" in build_package
     assert "cleanup_existing_toolkit_link_target" in build_package
     assert 'target="${WORKSPACE_ROOT}/build_env/ds.${platform}-${version}/source/${PACKAGE_NAME}"' in build_package

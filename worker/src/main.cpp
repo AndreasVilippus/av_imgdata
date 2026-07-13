@@ -22,6 +22,8 @@ struct WorkerConfig {
     std::string face_path;
     std::string face_model_root;
     std::string face_model_name;
+    bool image_vips_enabled = true;
+    std::string image_vips_path;
     int poll_interval_seconds = 2;
 };
 
@@ -43,9 +45,14 @@ struct ReadinessStatus {
     bool models_present = false;
     bool face_version_ok = false;
     bool face_probe_ok = false;
+    bool image_vips_configured = false;
+    bool image_vips_enabled = true;
+    bool image_vips_binary_exists = false;
+    bool image_vips_probe_ok = false;
     FaceModelStatus model_status;
     CommandResult face_version;
     CommandResult face_probe;
+    CommandResult image_vips_probe;
 };
 
 WorkerConfig parse_worker_config(const std::string& config_path, const std::string& config_json) {
@@ -69,8 +76,16 @@ WorkerConfig parse_worker_config(const std::string& config_path, const std::stri
     config.face_path = runtime::extract_json_string(face.empty() ? config_json : face, "path");
     config.face_model_root = runtime::extract_json_string(face.empty() ? config_json : face, av_imgdata::worker::config_key::kModelRoot);
     config.face_model_name = runtime::extract_json_string(face.empty() ? config_json : face, av_imgdata::worker::config_key::kModelName);
+    const std::string image_vips = runtime::extract_json_object(
+        processors.empty() ? config_json : processors,
+        av_imgdata::worker::config_key::kImageVips
+    );
+    config.image_vips_path = runtime::extract_json_string(image_vips.empty() ? config_json : image_vips, "path");
+    const std::string image_vips_enabled = runtime::extract_json_scalar(image_vips.empty() ? config_json : image_vips, "enabled", "true");
+    config.image_vips_enabled = image_vips_enabled != "false" && image_vips_enabled != "0";
 
     config.face_path = runtime::join_path(config.config_dir, config.face_path);
+    config.image_vips_path = runtime::join_path(config.config_dir, config.image_vips_path);
     config.face_model_root = runtime::join_path(config.config_dir, config.face_model_root);
     config.workspace_root = runtime::join_path(config.config_dir, config.workspace_root);
     return config;
@@ -180,6 +195,13 @@ ReadinessStatus check_readiness(const WorkerConfig& config, const std::string& c
     status.has_processors = !runtime::extract_json_object(config_json, av_imgdata::worker::config_key::kProcessors).empty();
     status.has_face = !config.face_path.empty();
     status.face_binary_exists = runtime::file_exists(config.face_path);
+    status.image_vips_configured = !config.image_vips_path.empty();
+    status.image_vips_enabled = config.image_vips_enabled;
+    status.image_vips_binary_exists = status.image_vips_configured && runtime::file_exists(config.image_vips_path);
+    if (status.image_vips_enabled && status.image_vips_binary_exists) {
+        status.image_vips_probe = runtime::run_process_capture(config.image_vips_path, {"probe"});
+        status.image_vips_probe_ok = status.image_vips_probe.exit_code == 0;
+    }
     if (status.face_binary_exists) {
         status.face_version = runtime::run_process_capture(config.face_path, {"version"});
         status.face_version_ok = status.face_version.exit_code == 0;
@@ -246,7 +268,11 @@ int command_probe(const std::vector<std::string>& args) {
         << "    \"face_processor_config_present\": " << (status.has_face ? "true" : "false") << ",\n"
         << "    \"face_processor_binary_exists\": " << (status.face_binary_exists ? "true" : "false") << ",\n"
         << "    \"face_models_present\": " << (status.models_present ? "true" : "false") << ",\n"
-        << "    \"face_model_manifest_present\": " << (status.model_status.manifest_present ? "true" : "false") << "\n"
+        << "    \"face_model_manifest_present\": " << (status.model_status.manifest_present ? "true" : "false") << ",\n"
+        << "    \"image_vips_configured\": " << (status.image_vips_configured ? "true" : "false") << ",\n"
+        << "    \"image_vips_enabled\": " << (status.image_vips_enabled ? "true" : "false") << ",\n"
+        << "    \"image_vips_binary_exists\": " << (status.image_vips_binary_exists ? "true" : "false") << ",\n"
+        << "    \"image_vips_probe_ok\": " << (status.image_vips_probe_ok ? "true" : "false") << "\n"
         << "  },\n"
         << "  \"processors\": [{\n"
         << "    \"name\": \"av-imgdata-face-processor\",\n"
@@ -256,10 +282,11 @@ int command_probe(const std::vector<std::string>& args) {
         << "    \"binary_exists\": " << (status.face_binary_exists ? "true" : "false") << ",\n"
         << "    \"version_ok\": " << (status.face_version_ok ? "true" : "false") << ",\n"
         << "    \"version_output\": \"" << runtime::json_escape(status.face_version.output) << "\",\n"
-        << "    \"models\": {\n"
-        << "      \"managed_by\": \"dsm\",\n"
-        << "      \"distributed_with_worker\": false,\n"
-        << "      \"license_authority\": \"dsm\",\n"
+        << R"(    "models": {
+      "managed_by": "dsm",
+      "distributed_with_worker": false,
+      "license_authority": "dsm",
+)"
         << "      \"model_dir\": \"" << runtime::json_escape(status.model_status.model_dir) << "\",\n"
         << "      \"detector_path\": \"" << runtime::json_escape(status.model_status.detector_path) << "\",\n"
         << "      \"recognizer_path\": \"" << runtime::json_escape(status.model_status.recognizer_path) << "\",\n"
@@ -271,6 +298,14 @@ int command_probe(const std::vector<std::string>& args) {
         << "    },\n"
         << "    \"probe_ok\": " << (status.face_probe_ok ? "true" : "false") << ",\n"
         << "    \"probe_output\": \"" << runtime::json_escape(status.face_probe.output) << "\"\n"
+        << "  },{\n"
+        << "    \"name\": \"av-imgdata-image-processor\",\n"
+        << "    \"backend\": \"libvips\",\n"
+        << "    \"enabled\": " << (status.image_vips_enabled ? "true" : "false") << ",\n"
+        << "    \"path\": \"" << runtime::json_escape(config.image_vips_path) << "\",\n"
+        << "    \"binary_exists\": " << (status.image_vips_binary_exists ? "true" : "false") << ",\n"
+        << "    \"probe_ok\": " << (status.image_vips_probe_ok ? "true" : "false") << ",\n"
+        << "    \"probe_output\": \"" << runtime::json_escape(status.image_vips_probe.output) << "\"\n"
         << "  }],\n"
         << "  \"capabilities\": " << (ready ? av_imgdata::worker::capabilities_json() : "[]") << ",\n"
         << "  \"input_modes\": " << av_imgdata::worker::input_modes_json() << ",\n"

@@ -77,6 +77,14 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
 
     def test_optional_vips_image_processor_config_defaults_and_normalization(self):
         service = ConfigService(str(self.config_file))
+        default_config = service.readMergedConfig()
+        default_vips = default_config["native_processors"]["IMAGE_PROCESSOR_VIPS"]
+
+        self.assertTrue(default_vips["ENABLED"])
+        self.assertIn("heic", default_vips["SUPPORTED_FORMATS"])
+        self.assertNotIn("dng", default_vips["SUPPORTED_FORMATS"])
+        self.assertIn("arw", default_config["files"]["IMAGE_DECODER_EXTENSIONS"])
+
         service.writeConfig({
             "native_processors": {
                 "IMAGE_PROCESSOR_VIPS": {

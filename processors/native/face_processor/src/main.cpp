@@ -19,7 +19,14 @@
 
 #include <jpeglib.h>
 #ifdef AV_FACE_PROCESSOR_WITH_HEIF
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <libheif/heif.h>
 #endif
 #include <onnxruntime_c_api.h>
@@ -438,6 +445,36 @@ bool decode_jpeg(const std::string& path, Image* image, std::string* error) {
 }
 
 #ifdef AV_FACE_PROCESSOR_WITH_HEIF
+std::string windows_library_error_message() {
+#ifdef _WIN32
+    DWORD error_code = GetLastError();
+    if (error_code == 0) {
+        return "Windows loader failed";
+    }
+    char* message = NULL;
+    DWORD length = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL,
+        error_code,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPSTR>(&message),
+        0,
+        NULL
+    );
+    std::string result = "Windows loader error " + std::to_string(static_cast<unsigned long>(error_code));
+    if (length && message) {
+        result += ": ";
+        result += message;
+    }
+    if (message) {
+        LocalFree(message);
+    }
+    return result;
+#else
+    return "";
+#endif
+}
+
 std::string heif_error_message(const std::string& prefix, const heif_error& heif_error_value) {
     std::ostringstream out;
     out << prefix << ": code=" << static_cast<int>(heif_error_value.code)
@@ -448,8 +485,26 @@ std::string heif_error_message(const std::string& prefix, const heif_error& heif
     return out.str();
 }
 
+#ifdef _WIN32
+typedef HMODULE HeifLibraryHandle;
+
 template <typename T>
-bool load_heif_symbol(void* handle, const char* name, T* target, std::string* error) {
+bool load_heif_symbol(HeifLibraryHandle handle, const char* name, T* target, std::string* error) {
+    FARPROC symbol = GetProcAddress(handle, name);
+    if (!symbol) {
+        if (error) {
+            *error = std::string("missing libheif symbol ") + name + ": " + windows_library_error_message();
+        }
+        return false;
+    }
+    *target = reinterpret_cast<T>(symbol);
+    return true;
+}
+#else
+typedef void* HeifLibraryHandle;
+
+template <typename T>
+bool load_heif_symbol(HeifLibraryHandle handle, const char* name, T* target, std::string* error) {
     dlerror();
     void* symbol = dlsym(handle, name);
     const char* symbol_error = dlerror();
@@ -462,6 +517,7 @@ bool load_heif_symbol(void* handle, const char* name, T* target, std::string* er
     *target = reinterpret_cast<T>(symbol);
     return true;
 }
+#endif
 
 struct HeifApi {
     typedef heif_context* (*ContextAllocFn)(void);
@@ -476,7 +532,7 @@ struct HeifApi {
     typedef void (*ImageReleaseFn)(heif_image*);
     typedef int (*HaveDecoderForFormatFn)(heif_compression_format);
 
-    void* handle;
+    HeifLibraryHandle handle;
     bool attempted;
     std::string load_error;
     ContextAllocFn context_alloc;
@@ -513,15 +569,29 @@ struct HeifApi {
         if (configured && *configured) {
             candidates.push_back(configured);
         }
+#ifdef _WIN32
+        candidates.push_back("libheif.dll");
+        candidates.push_back("heif.dll");
+#else
         candidates.push_back("libheif.so.1");
         candidates.push_back("libheif.so");
+#endif
 
         std::ostringstream errors;
         for (std::size_t i = 0; i < candidates.size(); ++i) {
-            void* candidate = dlopen(candidates[i].c_str(), RTLD_LAZY | RTLD_LOCAL);
+            HeifLibraryHandle candidate = NULL;
+#ifdef _WIN32
+            candidate = LoadLibraryA(candidates[i].c_str());
+#else
+            candidate = dlopen(candidates[i].c_str(), RTLD_LAZY | RTLD_LOCAL);
+#endif
             if (!candidate) {
+#ifdef _WIN32
+                errors << candidates[i] << ": " << windows_library_error_message() << "; ";
+#else
                 const char* open_error = dlerror();
                 errors << candidates[i] << ": " << (open_error ? open_error : "dlopen failed") << "; ";
+#endif
                 continue;
             }
 
@@ -540,7 +610,11 @@ struct HeifApi {
                 handle = candidate;
                 return true;
             }
+#ifdef _WIN32
+            FreeLibrary(candidate);
+#else
             dlclose(candidate);
+#endif
             errors << candidates[i] << ": " << symbol_error << "; ";
         }
 

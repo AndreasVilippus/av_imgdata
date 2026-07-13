@@ -72,7 +72,7 @@ class NativeImageProcessorVipsService:
 
     def supported_formats(self) -> List[str]:
         source = self.config().get("SUPPORTED_FORMATS")
-        raw = source if isinstance(source, list) else ["jpeg", "jpg", "png", "webp", "tiff"]
+        raw = source if isinstance(source, list) else ["jpeg", "jpg", "png", "webp", "tiff", "heic", "heif"]
         formats: List[str] = []
         for item in raw:
             text = str(item or "").strip().lower().lstrip(".")

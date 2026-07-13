@@ -157,6 +157,28 @@ bash tools/build-native-face-processor-windows.sh --clean
 bash tools/build-worker.sh --target windows-x86_64 --clean
 ```
 
+Worker bundles build and bundle the libvips image processor by default. The
+processor is enabled in the generated worker config so HEIC/HEIF and RAW-capable
+image decoding can be used by worker-side image jobs. Linux and Docker worker
+targets use `tools/build-native-image-processor-vips-linux-chroot.sh` by default
+so Linux libvips build dependencies stay out of the host system. The chroot lives
+under `build/chroot/linux-x86_64` unless `AV_IMGDATA_LINUX_CHROOT_ROOT` is set.
+Set `AV_IMGDATA_LINUX_CHROOT=0` to run the Linux libvips build directly on the
+host. Windows uses `tools/build-native-image-processor-vips-windows.sh`, which
+builds a reduced build-win64-mxe `avimgdata` profile with libde265 HEIC decoding
+and without the x265 encoder, then installs it under
+`worker/native_deps/windows-x86_64/vips` by default.
+
+`AV_IMGDATA_BUILD_WORKER_VIPS=0` skips only the libvips rebuild step. The worker
+build still bundles an existing `av-imgdata-image-processor` artifact when one is
+available. `AV_IMGDATA_BUNDLE_WORKER_VIPS=0` skips integration entirely. The
+worker config still defaults `image_vips.enabled=true`, but the worker probe and
+runtime stay usable when the image processor binary is absent.
+Windows worker bundles require a libvips image processor by default. The Windows
+libvips root is built locally. To intentionally build a worker bundle without
+libvips, set `AV_IMGDATA_REQUIRE_WORKER_VIPS=0` and
+`AV_IMGDATA_BUNDLE_WORKER_VIPS=0`.
+
 ## Worker API HTTP router integration test
 
 The framework-free local router exposes the same endpoint adapter that DSM routing should call later:
@@ -227,10 +249,15 @@ sudo apt-get install -y \
   build-essential \
   cmake \
   ninja-build \
+  meson \
+  pkg-config \
+  libglib2.0-dev \
+  libexpat1-dev \
   git \
   zip \
   unzip \
   curl \
+  binutils \
   dpkg
 ```
 
@@ -243,6 +270,14 @@ sudo apt-get install -y \
 ```
 
 Docker image build requires Docker only when `--docker-build` is used.
+
+The Linux libvips chroot path requires host `sudo`, `debootstrap`, `mount` and
+`chroot`. The build dependencies listed above are installed inside the chroot,
+not on the host. To rebuild the chroot from scratch:
+
+```bash
+bash tools/build-native-image-processor-vips-linux-chroot.sh --clean-chroot
+```
 
 ## Output layout
 

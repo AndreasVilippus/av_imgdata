@@ -19,7 +19,17 @@ endif()
 set(VIPS_DIRECT_RUNTIME_LIBS "")
 foreach(VIPS_LIB ${VIPS_LIBRARIES})
     if(VIPS_LIB MATCHES "^(glib-2.0|gobject-2.0|gio-2.0)$")
-        list(APPEND VIPS_DIRECT_RUNTIME_LIBS ${VIPS_LIB})
+        string(REPLACE "." "_" VIPS_LIB_VAR "${VIPS_LIB}")
+        string(REPLACE "-" "_" VIPS_LIB_VAR "${VIPS_LIB_VAR}")
+        find_library(VIPS_DIRECT_${VIPS_LIB_VAR}_LIBRARY
+            NAMES ${VIPS_LIB}
+            PATHS ${VIPS_LIBRARY_DIRS}
+            NO_DEFAULT_PATH
+        )
+        if(NOT VIPS_DIRECT_${VIPS_LIB_VAR}_LIBRARY)
+            message(FATAL_ERROR "libvips direct runtime library not found: ${VIPS_LIB} in ${VIPS_LIBRARY_DIRS}")
+        endif()
+        list(APPEND VIPS_DIRECT_RUNTIME_LIBS ${VIPS_DIRECT_${VIPS_LIB_VAR}_LIBRARY})
     endif()
 endforeach()
 

@@ -29,6 +29,7 @@ SANITIZE_DIRS=(
 )
 SANITIZE_NATIVE_BUILD_PATTERNS=(
   "build/worker/*"
+  "build/chroot/*"
   "build/native/*/face_processor-build"
   "build/native/*/face_processor-source"
   "build/native/*/libde265-build"
@@ -200,6 +201,9 @@ Environment overrides:
   AV_IMGDATA_WORKER_TARGETS="..."       Worker targets to build
   AV_IMGDATA_BUILD_WINDOWS_FACE_PROCESSOR=0
                                       Skip Windows face processor build
+  AV_IMGDATA_BUILD_WORKER_VIPS=0      Skip rebuilding worker libvips image processor and use existing artifacts only
+  AV_IMGDATA_BUNDLE_WORKER_VIPS=0     Skip worker libvips image processor integration entirely
+  AV_IMGDATA_LINUX_CHROOT=0           Build Linux worker libvips on the host instead of in build/chroot/linux-x86_64
   AV_IMGDATA_WORKER_CLEAN=0             Reuse worker build directories
 EOF
 }

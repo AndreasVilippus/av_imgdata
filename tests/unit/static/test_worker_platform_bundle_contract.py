@@ -77,6 +77,8 @@ def test_worker_example_config_matches_schema_contract():
     assert set(schema["required"]).issubset(config)
     assert config["input_modes"] == ["shared_path"]
     assert config["processors"]["face"]["model_root"] == "../.models/face"
+    assert config["processors"]["image_vips"]["enabled"] is True
+    assert config["processors"]["image_vips"]["path"] == "../bin/av-imgdata-image-processor"
     assert "dsm_base_url" not in config
 
 
@@ -85,8 +87,93 @@ def test_config_writer_owns_platform_specific_executable_names():
 
     assert "av-imgdata-face-processor.exe" in source
     assert "av-imgdata-face-processor\"" in source
+    assert '\\"image_vips\\": {\\"enabled\\": true' in source
     assert "kConfigSchemaVersion" in source
     assert "input_modes_json()" in source
+
+
+def test_worker_bundle_builds_and_integrates_vips_image_processor_by_default_with_opt_out():
+    cmake = (PROJECT_ROOT / "worker" / "CMakeLists.txt").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "tools" / "build-worker.sh").read_text(encoding="utf-8")
+    windows_script = (PROJECT_ROOT / "tools" / "build-native-image-processor-vips-windows.sh").read_text(encoding="utf-8")
+    linux_chroot_script = (PROJECT_ROOT / "tools" / "build-native-image-processor-vips-linux-chroot.sh").read_text(encoding="utf-8")
+    readme = (PROJECT_ROOT / "worker" / "README.md").read_text(encoding="utf-8")
+
+    assert 'AV_IMGDATA_WORKER_BUNDLE_VIPS_PROCESSOR "Bundle av-imgdata-image-processor with the worker artifact" ON' in cmake
+    assert 'AV_IMGDATA_BUNDLE_WORKER_VIPS="${AV_IMGDATA_BUNDLE_WORKER_VIPS:-${AV_IMGDATA_WORKER_BUNDLE_VIPS_PROCESSOR:-1}}"' in script
+    assert 'AV_IMGDATA_BUILD_WORKER_VIPS="${AV_IMGDATA_BUILD_WORKER_VIPS:-1}"' in script
+    assert 'AV_IMGDATA_REQUIRE_WORKER_VIPS="${AV_IMGDATA_REQUIRE_WORKER_VIPS:-1}"' in script
+    assert "bundle_vips_processor" in script
+    assert "require_worker_vips_build_tools" in script
+    assert 'AV_IMGDATA_LINUX_CHROOT="${AV_IMGDATA_LINUX_CHROOT:-1}"' in script
+    assert "build-native-image-processor-vips-linux-chroot.sh" in script
+    assert "AV_IMGDATA_LINUX_CHROOT=0" in readme
+    assert "build/chroot/linux-x86_64" in linux_chroot_script
+    assert "debootstrap" in linux_chroot_script
+    assert "chroot --userspec" in linux_chroot_script
+    assert "mount --bind" in linux_chroot_script
+    assert "meson" in readme
+    assert "pkg-config" in readme
+    assert "build-native-image-processor-vips.sh" in script
+    assert "build-native-image-processor-vips-windows.sh" in script
+    assert "Skipping libvips image processor integration because AV_IMGDATA_BUNDLE_WORKER_VIPS=0." in script
+    assert "Skipping libvips image processor rebuild because AV_IMGDATA_BUILD_WORKER_VIPS=0." in script
+    assert "worker probe will report image_vips_binary_exists=false" in script
+    assert "required libvips image processor binary not found" in script
+    assert "worker build directory is not writable" in script
+    assert "worker dist directory is not writable" in script
+    assert "generated worker path cannot be removed" in script
+    assert "build-win64-mxe" in windows_script
+    assert "AV_IMGDATA_WINDOWS_VIPS_REPO_TAG" in windows_script
+    assert 'MXE_TMPDIR="${AV_IMGDATA_WINDOWS_VIPS_TMPDIR:-${BUILD_ROOT}/mxe-tmp}"' in windows_script
+    assert 'MXE_PODMAN_RUNTIME_DIR="${AV_IMGDATA_WINDOWS_VIPS_PODMAN_RUNTIME_DIR:-}"' in windows_script
+    assert 'MXE_PODMAN_HOME="${AV_IMGDATA_WINDOWS_VIPS_PODMAN_HOME:-}"' in windows_script
+    assert 'MXE_CONTAINER_USER_ARGS="${AV_IMGDATA_WINDOWS_VIPS_CONTAINER_USER_ARGS:--u $(id -u):$(id -g)}"' in windows_script
+    assert 'MXE_BUILD_ARGS="${AV_IMGDATA_WINDOWS_VIPS_BUILD_ARGS:---tmpdir ${MXE_TMPDIR} avimgdata --with-jpeg-turbo --without-llvm}"' in windows_script
+    assert 'export HOME="${MXE_PODMAN_HOME}"' in windows_script
+    assert 'export XDG_DATA_HOME="${MXE_PODMAN_HOME}/.local/share"' in windows_script
+    assert 'export XDG_RUNTIME_DIR="${MXE_PODMAN_RUNTIME_DIR}"' in windows_script
+    assert "write_avimgdata_mxe_profile" in windows_script
+    assert "patch_build_win64_mxe_runner" in windows_script
+    assert 'AV_IMGDATA_WINDOWS_VIPS_CONTAINER_USER_ARGS' in windows_script
+    assert "vips-avimgdata" in windows_script
+    assert "glib expat libjpeg-turbo" in windows_script
+    assert '"expat": "$(expat_VERSION)"' in windows_script
+    assert "libheif libde265" in windows_script
+    assert "-DWITH_LIBDE265=1" in windows_script
+    assert "-DWITH_X265=0" in windows_script
+    assert "x265" not in windows_script.split("cat >\"${profile}\"", 1)[1].split("PROFILE_EOF", 1)[0]
+    assert "worker/native_deps/windows-x86_64/vips" in windows_script
+    assert "ensure_vips_root" in windows_script
+    assert "find_built_vips_zip" in windows_script
+    assert "extract_built_vips_zip" in windows_script
+    assert "normalize_vips_pkgconfig_prefix" in windows_script
+    assert 'sed -i "s|^prefix=.*|prefix=${VIPS_ROOT}|" "${pc_file}"' in windows_script
+    assert 'ensure_vips_root\nselect_pkg_config\nrm -rf "${BUILD_DIR}"' in windows_script
+    assert "vips-dev-w64-*.zip" in windows_script
+    assert '"${MXE_BUILD_ROOT}"/build/vips-dev-*' in windows_script
+    assert '"${MXE_BUILD_ROOT}"/build/mxe/usr/x86_64-w64-mingw32.shared.win32.avimgdata' in windows_script
+    assert "build-win64-mxe packaging failed, but a usable Windows libvips root was produced; continuing." in windows_script
+    assert "lib/pkgconfig/vips.pc" in windows_script
+    assert "av-imgdata-image-processor.exe" in windows_script
+
+
+def test_worker_probe_reports_vips_without_requiring_it_for_readiness():
+    source = (PROJECT_ROOT / "worker" / "src" / "main.cpp").read_text(encoding="utf-8")
+
+    assert "image_vips_binary_exists" in source
+    assert "image_vips_probe_ok" in source
+    assert "ready_for_face_jobs" in source
+    ready_block = source.split("bool ready_for_face_jobs", 1)[1].split("int print_usage", 1)[0]
+    assert "image_vips" not in ready_block
+
+
+def test_worker_vips_build_preflight_checks_host_pkg_config_dependencies():
+    build_script = (PROJECT_ROOT / "tools" / "build-worker.sh").read_text(encoding="utf-8")
+
+    assert "pkg-config --exists" in build_script
+    assert "glib-2.0 gio-2.0 gobject-2.0 expat" in build_script
+    assert "libglib2.0-dev libexpat1-dev" in build_script
 
 
 def test_model_sync_owns_manifest_hash_and_atomic_install_logic():

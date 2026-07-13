@@ -140,7 +140,10 @@ class ImageDecodeService:
         return order
 
     def _decoder_extensions(self, root_config: Dict[str, Any], files_config: Dict[str, Any]) -> List[str]:
-        extensions = self._string_list(files_config.get("IMAGE_DECODER_EXTENSIONS"), default=["heic", "heif"])
+        extensions = self._string_list(
+            files_config.get("IMAGE_DECODER_EXTENSIONS"),
+            default=["heic", "heif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "rw2", "raf", "pef"],
+        )
         if self._vips_preferred(root_config):
             for item in self._vips_supported_formats(root_config):
                 if item not in extensions:
@@ -159,7 +162,10 @@ class ImageDecodeService:
 
     def _vips_supported_formats(self, root_config: Dict[str, Any]) -> List[str]:
         config = self._vips_config(root_config)
-        return self._string_list(config.get("SUPPORTED_FORMATS"), default=["jpeg", "jpg", "png", "webp", "tiff"])
+        return self._string_list(
+            config.get("SUPPORTED_FORMATS"),
+            default=["jpeg", "jpg", "png", "webp", "tiff", "heic", "heif"],
+        )
 
     def _vips_fallback_allowed(self, root_config: Dict[str, Any]) -> bool:
         config = self._vips_config(root_config)

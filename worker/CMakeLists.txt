@@ -9,7 +9,7 @@ set(AV_IMGDATA_WORKER_VERSION "0.10.0" CACHE STRING "External worker bundle vers
 
 option(AV_IMGDATA_WORKER_BUILD_TESTS "Build external worker tests" OFF)
 option(AV_IMGDATA_WORKER_BUNDLE_FACE_PROCESSOR "Bundle av-imgdata-face-processor with the worker artifact" ON)
-option(AV_IMGDATA_WORKER_BUNDLE_VIPS_PROCESSOR "Bundle av-imgdata-image-processor with the worker artifact" OFF)
+option(AV_IMGDATA_WORKER_BUNDLE_VIPS_PROCESSOR "Bundle av-imgdata-image-processor with the worker artifact" ON)
 
 add_library(av-imgdata-worker-runtime INTERFACE)
 target_include_directories(av-imgdata-worker-runtime INTERFACE include)

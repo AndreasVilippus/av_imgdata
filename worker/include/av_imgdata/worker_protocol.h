@@ -58,6 +58,7 @@ inline constexpr const char* kAuth = "auth";
 inline constexpr const char* kTokenFile = "token_file";
 inline constexpr const char* kProcessors = "processors";
 inline constexpr const char* kFace = "face";
+inline constexpr const char* kImageVips = "image_vips";
 inline constexpr const char* kModelRoot = "model_root";
 inline constexpr const char* kModelName = "model_name";
 }  // namespace config_key

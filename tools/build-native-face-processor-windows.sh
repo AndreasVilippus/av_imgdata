@@ -4,11 +4,11 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="windows-x86_64"
 DEPS_ROOT="${PROJECT_DIR}/worker/native_deps/${TARGET}"
-BUILD_ROOT="${PROJECT_DIR}/build/native/${TARGET}"
+BUILD_ROOT="${AV_IMGDATA_FACE_PROCESSOR_WINDOWS_BUILD_ROOT:-${PROJECT_DIR}/build/native/${TARGET}}"
 PATCHED_SOURCE_DIR="${BUILD_ROOT}/face_processor-source"
 BUILD_DIR="${BUILD_ROOT}/face_processor-build"
 INSTALL_DIR="${BUILD_ROOT}/face_processor-install"
-DIST_DIR="${PROJECT_DIR}/dist/av-imgdata-face-processor-${TARGET}"
+DIST_DIR="${AV_IMGDATA_FACE_PROCESSOR_WINDOWS_DIST_DIR:-${PROJECT_DIR}/dist/av-imgdata-face-processor-${TARGET}}"
 CLEAN=0
 
 usage() {
@@ -24,12 +24,13 @@ Dependency defaults:
   worker/native_deps/windows-x86_64/onnxruntime-win-x64-*
   worker/native_deps/windows-x86_64/jpeg
   worker/native_deps/windows-x86_64/libjpeg*
-  worker/native_deps/windows-x86_64/heif       optional
+  worker/native_deps/windows-x86_64/vips       optional HEIF/libheif source
+  worker/native_deps/windows-x86_64/heif       optional HEIF/libheif source
 
 Environment overrides:
   ONNXRUNTIME_ROOT   Optional. Windows ONNXRuntime C API root containing include/ and lib/ or bin/.
   JPEG_ROOT          Optional. Windows JPEG/libjpeg root containing include/ and lib/ or bin/.
-  HEIF_ROOT          Optional. Windows libheif root containing include/libheif/heif.h.
+  HEIF_ROOT          Optional. Windows libheif root containing include/libheif/heif.h and bin/libheif.dll.
   CC                 Optional. Defaults to x86_64-w64-mingw32-gcc.
   CXX                Optional. Defaults to x86_64-w64-mingw32-g++.
   STRIP              Optional. Defaults to x86_64-w64-mingw32-strip.
@@ -89,7 +90,7 @@ copy_matching_files() {
   for pattern in "$@"; do
     for source in "${source_dir}"/${pattern}; do
       [ -e "${source}" ] || continue
-      cp -aL "${source}" "${target_dir}/"
+      cp -L "${source}" "${target_dir}/"
     done
   done
 }
@@ -99,7 +100,7 @@ copy_optional_license_file() {
   local target="$2"
   if [ -f "${source}" ]; then
     mkdir -p "$(dirname "${target}")"
-    cp -a "${source}" "${target}"
+    cp -L "${source}" "${target}"
   fi
 }
 
@@ -132,6 +133,7 @@ resolve_deps() {
   fi
   if [ -z "${HEIF_ROOT:-}" ]; then
     HEIF_ROOT="$(first_existing_dir \
+      "${DEPS_ROOT}/vips" \
       "${DEPS_ROOT}/heif" \
       "${DEPS_ROOT}"/libheif* \
       "${DEPS_ROOT}"/heif* \
@@ -253,6 +255,20 @@ require_file "${JPEG_ROOT}/include/jpeglib.h"
 if [ "${CLEAN}" = "1" ]; then
   rm -rf "${PATCHED_SOURCE_DIR}" "${BUILD_DIR}" "${INSTALL_DIR}" "${DIST_DIR}"
 fi
+if [ -e "${BUILD_DIR}" ] && [ ! -w "${BUILD_DIR}" ]; then
+  echo "ERROR: Windows face processor build directory is not writable: ${BUILD_DIR}" >&2
+  echo "       Remove or chown this generated directory, then rerun the build." >&2
+  exit 1
+fi
+if [ -f "${BUILD_DIR}/CMakeCache.txt" ] && grep -Eq '^JPEG_INCLUDE_DIR:PATH=/usr/include$' "${BUILD_DIR}/CMakeCache.txt"; then
+  if [ ! -w "${BUILD_DIR}" ]; then
+    echo "ERROR: stale Windows face processor CMake cache uses host JPEG include path, but build dir is not writable: ${BUILD_DIR}" >&2
+    echo "       Remove or chown this generated build directory, then rerun the build." >&2
+    exit 1
+  fi
+  echo "Removing stale Windows face processor CMake cache with host JPEG include path: ${BUILD_DIR}"
+  rm -rf "${BUILD_DIR}"
+fi
 mkdir -p "${BUILD_DIR}" "${INSTALL_DIR}" "${DIST_DIR}"
 prepare_windows_source_tree
 
@@ -266,6 +282,9 @@ CMAKE_ARGS=(
   -DCMAKE_CXX_COMPILER="${CXX:-x86_64-w64-mingw32-g++}"
   -DONNXRUNTIME_ROOT="${ONNXRUNTIME_ROOT}"
   -DJPEG_ROOT="${JPEG_ROOT}"
+  -UJPEG_INCLUDE_DIR
+  -UJPEG_LIBRARY
+  -UHEIF_INCLUDE_DIR
 )
 
 if command -v ninja >/dev/null 2>&1; then
@@ -295,12 +314,22 @@ if [ "${AV_IMGDATA_NATIVE_STRIP:-1}" != "0" ]; then
 fi
 
 mkdir -p "${DIST_DIR}/bin" "${DIST_DIR}/lib" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor"
-cp -a "${NATIVE_BINARY}" "${DIST_DIR}/bin/av-imgdata-face-processor.exe"
+cp -L "${NATIVE_BINARY}" "${DIST_DIR}/bin/av-imgdata-face-processor.exe"
 
 copy_matching_files "${ONNXRUNTIME_ROOT}/lib" "${DIST_DIR}/lib" "onnxruntime.dll" "onnxruntime*.dll" "*.dll"
 copy_matching_files "${ONNXRUNTIME_ROOT}/bin" "${DIST_DIR}/bin" "onnxruntime.dll" "onnxruntime*.dll" "*.dll"
 copy_matching_files "${JPEG_ROOT}/bin" "${DIST_DIR}/bin" "*.dll"
 copy_matching_files "${JPEG_ROOT}/lib" "${DIST_DIR}/lib" "*.dll" "libjpeg*.a" "jpeg*.a"
+if [ -n "${HEIF_ROOT:-}" ]; then
+  copy_matching_files "${HEIF_ROOT}/bin" "${DIST_DIR}/bin" \
+    "libheif*.dll" \
+    "libde265*.dll" \
+    "libaom*.dll" \
+    "libsharpyuv*.dll" \
+    "libstdc++-6.dll" \
+    "libgcc_s_seh-1.dll" \
+    "libwinpthread-1.dll"
+fi
 
 cat > "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/README.txt" <<EOF
 AV_ImgData Windows native face processor bundle.
@@ -308,11 +337,18 @@ AV_ImgData Windows native face processor bundle.
 Bundled runtime libraries may include:
 - ONNXRuntime from ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT}
 - JPEG/libjpeg runtime from JPEG_ROOT=${JPEG_ROOT}
+- HEIF/libheif runtime from HEIF_ROOT=${HEIF_ROOT:-not configured}
 EOF
 copy_optional_license_file "${ONNXRUNTIME_ROOT}/LICENSE" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/onnxruntime.LICENSE"
 copy_optional_license_file "${ONNXRUNTIME_ROOT}/ThirdPartyNotices.txt" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/onnxruntime.ThirdPartyNotices.txt"
 copy_optional_license_file "${JPEG_ROOT}/LICENSE" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/jpeg.LICENSE"
 copy_optional_license_file "${JPEG_ROOT}/share/licenses/libjpeg-turbo/LICENSE.md" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/libjpeg-turbo.LICENSE.md"
+if [ -n "${HEIF_ROOT:-}" ]; then
+  copy_optional_license_file "${HEIF_ROOT}/LICENSE" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/libheif.LICENSE"
+  copy_optional_license_file "${HEIF_ROOT}/COPYING" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/libheif.COPYING"
+  copy_optional_license_file "${HEIF_ROOT}/share/doc/libheif/COPYING" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/libheif.COPYING"
+  copy_optional_license_file "${HEIF_ROOT}/share/doc/libde265/COPYING" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/libde265.COPYING"
+fi
 
 cat > "${DIST_DIR}/README.txt" <<'README_EOF'
 AV_ImgData Windows native face processor bundle.
