@@ -144,11 +144,147 @@ DSM application operation
 
 The existing Worker API currently covers the middle section. The missing production work is primarily the integration before enqueue and after result recording.
 
+## Windows Worker Application
+
+### Decision
+
+The preferred Windows operating model is a desktop application that starts, stops and supervises the existing worker runtime.
+
+A Windows Service is not required for the first production rollout. It may remain an optional later operating mode for unattended servers.
+
+The desktop application is preferred initially because it provides:
+
+```text
+- explicit user control over start and stop
+- visible connection and worker state
+- simpler SMB access under the logged-in user account
+- no separate Windows service-account setup
+- direct access to user-session UNC credentials
+- easier configuration, diagnostics and log inspection
+- safer controlled rollout while the protocol is still evolving
+```
+
+### Architecture
+
+The application should not duplicate worker or processor logic.
+
+Preferred first implementation:
+
+```text
+av-imgdata-worker-gui.exe
+→ validates configuration and dependencies
+→ starts av-imgdata-worker-api-loop.exe through QProcess
+→ reads structured JSON output from stdout/stderr
+→ displays connection, claim, job and error state
+→ stops the API loop gracefully
+```
+
+This follows the separate Qt GUI concept in `docs/qt6-worker-gui-lgpl-concept.md`.
+
+The existing executables remain independently usable from the command line.
+
+### Required application functions
+
+Initial application surface:
+
+```text
+- Start Worker
+- Stop Worker
+- Restart Worker
+- connection status: disconnected, connecting, online, degraded
+- worker state: stopped, idle, processing, stopping, failed
+- current worker ID and API URL
+- configured shared-path root
+- last heartbeat time
+- current job ID and type
+- latest processor timing/result summary
+- recent errors
+- open log directory
+- run connectivity probe
+- run path-access probe
+- run processor/model probe
+```
+
+Configuration screen:
+
+```text
+- Worker API URL
+- worker ID
+- token file or enrollment workflow
+- worker configuration file
+- shared-path base directory
+- polling interval
+- log directory and retention
+- start minimized
+- start worker when application opens
+- optional launch application at Windows sign-in
+```
+
+Secrets must not be shown in logs or normal status views.
+
+### Process ownership
+
+The GUI owns the API-loop child process it starts.
+
+Required behavior:
+
+```text
+- prevent two API-loop instances for the same worker configuration
+- use absolute executable and configuration paths
+- pass executable and arguments separately through QProcess
+- capture stdout and stderr continuously
+- retain the real child exit code
+- provide graceful stop before forced termination
+- show unexpected child-process termination as a visible error
+- allow restart without closing the GUI
+```
+
+The API loop must also remain capable of running independently for Linux, automation and diagnostics.
+
+### Closing and session behavior
+
+Default behavior:
+
+```text
+- closing the main window minimizes the application to the notification area
+- choosing Exit stops the worker after confirmation when a job is active
+- Windows sign-out or shutdown requests a graceful worker stop
+- the application must not silently abandon an active child process
+```
+
+A setting may allow immediate exit when no job is active.
+
+### Autostart policy
+
+Autostart is optional and user-controlled:
+
+```text
+1. launch GUI manually and start worker manually
+2. launch GUI manually and auto-start worker
+3. launch GUI at Windows sign-in and auto-start worker
+```
+
+The first release should not silently install a Windows Service.
+
+For machines that must process jobs without an interactive login, an optional service mode can be designed later using the same worker binaries and configuration contract.
+
+### UNC and SMB access
+
+The worker should continue using UNC paths such as:
+
+```text
+\\savy\photo
+```
+
+Because the GUI and child process run in the logged-in user session, they inherit that user's SMB access. The application must include a path-access probe and show a clear error when the configured share or test file is unavailable.
+
+Mapped drive letters may be supported for interactive use but UNC paths remain the recommended configuration because they are unambiguous and also usable by future service or unattended modes.
+
 ## Continuous Worker Operation
 
-For production use, the worker API loop must run continuously rather than with `--max-iterations 1`.
+The API loop runs continuously whenever the user has started the worker in the application.
 
-Interactive Windows command:
+Equivalent command-line form:
 
 ```powershell
 $Bundle = "C:\Program Files\AV ImgData Worker"
@@ -161,25 +297,7 @@ $Bundle = "C:\Program Files\AV ImgData Worker"
 
 Omitting `--max-iterations` means the loop continues polling according to `poll_interval_seconds`.
 
-The worker must eventually be installed as a managed background service:
-
-```text
-Windows:
-- Windows Service preferred
-- automatic start
-- restart on failure
-- dedicated service account with SMB permissions
-- stdout/stderr redirected to rotating logs
-
-Linux:
-- systemd unit
-- Restart=on-failure
-- dedicated user
-- mounted NAS share
-- journal or rotating file logs
-```
-
-A mapped drive letter must not be assumed for a Windows Service. UNC paths should be the default because drive mappings are normally user-session specific.
+The GUI should supervise this process and present its structured output rather than implement a second polling loop.
 
 ## Worker Liveness Model
 
@@ -228,9 +346,7 @@ completed
 failed
 ```
 
-The additional states are required before general production use.
-
-Required timestamps and ownership fields:
+Required ownership and timing fields:
 
 ```text
 created_at
@@ -240,34 +356,34 @@ started_at
 finished_at
 claimed_by
 attempts
+attempt_id
 lease_expires_at
 next_retry_at
 ```
 
 ## Claim Lease And Recovery
 
-A claimed job must not remain permanently blocked when a worker crashes or loses network access.
+A claimed job must not remain permanently blocked when the application is closed, the worker crashes or network access is lost.
 
 Required behavior:
 
 ```text
-1. server assigns a claim lease
-2. worker periodically renews the lease while processing
+1. server assigns a claim lease and immutable attempt_id
+2. worker renews the lease while processing
 3. server detects expired leases
 4. expired jobs return to queued or failed according to retry policy
-5. late results from an expired claim are rejected unless they match the active attempt token
+5. late results from an expired attempt are rejected
 ```
 
-Each claim should receive an immutable attempt identifier:
+When the user requests Stop while a job is active, the GUI should initially offer:
 
 ```text
-job_id
-attempt_id
-claimed_by
-lease_expires_at
+- wait for current job, then stop
+- cancel/abort worker process and let the server recover the lease
+- keep running
 ```
 
-Result and failure requests must include `attempt_id` to prevent stale workers from overwriting a newer attempt.
+Graceful completion should be the default.
 
 ## Execution Target Selection
 
@@ -279,7 +395,7 @@ JobDispatcher
 └── ExternalWorkerProcessorAdapter
 ```
 
-Recommended policy options:
+Policy options:
 
 ```text
 local_only
@@ -288,17 +404,13 @@ external_required
 local_preferred
 ```
 
-Default production policy should initially be:
+Initial default:
 
 ```text
 local_preferred
 ```
 
-During controlled rollout, selected job types or operations can use:
-
-```text
-external_preferred
-```
+Controlled external rollout can use `external_preferred` for selected operations or job types.
 
 Fallback decisions must be explicit. A failed external job must not silently execute locally when duplicate processing could cause conflicting writes.
 
@@ -307,8 +419,6 @@ Fallback decisions must be explicit. A failed external job must not silently exe
 ### shared_path
 
 `shared_path` is the preferred LAN mode.
-
-DSM stores a relative path under a configured NAS path profile. Each worker resolves it against its own local path base.
 
 Example payload:
 
@@ -351,24 +461,11 @@ Proposed endpoint:
 GET /worker-api/jobs/{job_id}/input
 ```
 
-Required controls:
-
-```text
-- worker token authentication
-- active claim ownership
-- attempt validation
-- server-controlled source path
-- path-profile validation
-- streaming response
-- size limits
-- timeout and cleanup policy
-```
-
 `download` is not required for the first productive LAN rollout.
 
 ## Capabilities
 
-Workers must advertise processor and input capabilities separately.
+Workers advertise processor and input capabilities separately.
 
 Example:
 
@@ -383,28 +480,9 @@ Example:
 }
 ```
 
-Claim matching must check:
+Claim matching must check job type, input mode, protocol version and relevant processor/model availability.
 
-```text
-- job type
-- input mode
-- protocol version
-- processor/model availability where relevant
-```
-
-Future metadata may include:
-
-```text
-CPU architecture
-logical CPU count
-RAM
-GPU backend
-GPU memory
-model versions
-processor versions
-maximum concurrency
-current load
-```
+Future worker metadata may include CPU, RAM, GPU, model versions, processor versions, maximum concurrency and current load.
 
 ## Result Contract And Server Processing
 
@@ -417,15 +495,14 @@ ExternalWorkerResultConsumer
 → load completed worker job
 → validate contract version
 → validate job type and attempt
-→ validate processor status
-→ validate expected result schema
+→ validate processor status and result schema
 → map result to originating domain operation
 → execute package-owned final write
 → update progress/status
 → mark result consumed
 ```
 
-Each external job should store origin metadata such as:
+Each external job stores origin metadata:
 
 ```json
 {
@@ -439,20 +516,11 @@ Each external job should store origin metadata such as:
 }
 ```
 
-The server must support idempotent result consumption. Reprocessing the same completed result must not create duplicate records or corrupt progress counters.
-
-Recommended additional fields:
-
-```text
-result_consumed_at
-result_consumer_version
-result_apply_status
-result_apply_error
-```
+Result application must be idempotent. Reprocessing a completed result must not create duplicate records or corrupt progress counters.
 
 ## Automatic Job Dispatch
 
-Manual calls to `WorkerApiService.enqueue_job` are suitable for tests only.
+Manual calls to `WorkerApiService.enqueue_job` are test tooling only.
 
 Production job creation must be integrated into the normal services that currently invoke processors locally.
 
@@ -474,54 +542,21 @@ Required adapter behavior:
 7. allow status polling or event-driven continuation
 ```
 
-After the single-image flow is reliable, extend to:
+After the single-image flow is reliable, extend to embeddings, batch operations and suitable image-processor jobs.
 
-```text
-face_native_embed
-face batch operations
-ranking/profile operations where suitable
-optional image processor jobs
-```
-
-## Persistence
+## Persistence And Concurrency
 
 The current JSON state store is acceptable for protocol development and controlled single-worker testing.
-
-Before high-volume production use, assess migration to SQLite or the package database because the system will require:
-
-```text
-- atomic claims
-- multiple concurrent workers
-- leases
-- retry scheduling
-- indexed queue selection
-- result-consumption state
-- retention and cleanup
-- operational history
-```
-
-A staged rollout may retain JSON initially if only one worker and one API process are allowed.
-
-## Concurrency
 
 Initial safe mode:
 
 ```text
-- one worker process
+- one Worker API backend process
+- one external worker application
 - one active job at a time
-- one Worker API backend process controlling the JSON state file
 ```
 
-Later concurrency model:
-
-```text
-- worker declares max_concurrency
-- server allows multiple claims per worker or worker slots
-- processor/model reuse is enabled where safe
-- queue storage provides atomic transactions
-```
-
-Concurrency must not be increased until queue claims and final result application are transaction-safe.
+Before high-volume or multi-worker use, migrate or evaluate migration to transactional storage such as SQLite for atomic claims, leases, retries, indexed queue selection, result-consumption state and cleanup.
 
 ## Security
 
@@ -531,106 +566,87 @@ Required production controls:
 - Worker API disabled by default
 - HTTPS through DSM Reverse Proxy
 - unique token per worker
-- token revocation
-- scoped tokens
+- token revocation and rotation
 - worker ID bound to token
 - no arbitrary source paths accepted from workers
-- no direct package database credentials on workers
+- no package database credentials on workers
 - no Synology Photos database writes from workers
 - request and result size limits
 - audit log for registration, claims, results and failures
 ```
 
-Tokens should not be committed to the repository or included in redistributable bundles.
+Tokens must not be committed to the repository or included in redistributable bundles.
 
 ## Logging And Diagnostics
 
-Server logs should include:
+Server logs should include job ID, attempt ID, worker ID, queue duration, claim duration, execution duration, result application duration, final status and error code.
+
+Worker application logs should include:
 
 ```text
-job_id
-attempt_id
-worker_id
-job type
-queue duration
-claim duration
-execution duration
-result application duration
-final status
-error code
+- application start and stop
+- child-process command without secrets
+- registration status
+- heartbeat failures
+- claim status
+- resolved input path
+- processor exit code and timing
+- result upload status
+- child-process exit status
+- retry and reconnect decisions
 ```
 
-Worker logs should include:
-
-```text
-registration status
-heartbeat failures
-claim status
-resolved input path
-worker command
-processor exit code
-processor timing
-result upload status
-retry decisions
-```
-
-Secrets and full authorization headers must never be logged.
+The GUI should display a bounded recent-event view while writing full rotating logs to disk.
 
 ## Packaging And Administration
 
-The DSM package should provide:
+The Windows bundle should provide:
 
 ```text
-- downloadable Windows worker ZIP
-- downloadable Linux worker archive
-- generated configuration template
-- worker enrollment/token workflow
-- path-profile configuration
-- worker list and last-seen status
-- revoke/remove action
-- queue counts
-- recent failures
-```
-
-The worker bundle should provide:
-
-```text
-- install/start/stop scripts
-- service installation helper
-- configuration validation command
-- connectivity probe
-- path-access probe
-- processor/model probe
+- av-imgdata-worker-gui.exe
+- existing API-loop, worker and processor executables
+- Qt shared libraries and required plugins
+- configuration template
+- enrollment/token workflow
+- connectivity, path and processor probes
 - log directory
-- upgrade instructions
+- upgrade and licensing information
 ```
+
+The GUI should use Qt 6 shared libraries under the policy documented in `docs/qt6-worker-gui-lgpl-concept.md`.
+
+The DSM package should provide worker enrollment, path-profile configuration, worker online/offline status, queue counts, recent failures and revoke/remove controls.
 
 ## Implementation Plan
 
-### Phase 1: Persistent worker runtime
+### Phase 1: Windows worker control application
 
-Goal: keep the validated Windows worker running and ready for jobs.
+Goal: make the validated worker controllable and continuously usable without PowerShell.
 
 ```text
-- run API loop without --max-iterations
-- define production worker.json
-- verify repeated empty claims and later job pickup
-- add graceful shutdown handling
-- add reconnect/backoff behavior
-- add rotating worker logs
-- package Windows Service installation and removal scripts
-- run service under an account with UNC share access
-- document firewall, Reverse Proxy and SMB requirements
+- create Qt Widgets application target
+- supervise av-imgdata-worker-api-loop through QProcess
+- implement Start, Stop and Restart
+- parse structured API-loop JSON events
+- show stopped, connecting, idle, processing and failed states
+- implement configuration editor
+- add connectivity, UNC path and processor/model probes
+- add graceful stop and active-job warning
+- add reconnect/backoff visibility
+- add rotating logs and recent-event view
+- add optional start-at-login and start-worker-on-open settings
 ```
 
 Acceptance criteria:
 
 ```text
-- worker starts automatically after Windows reboot
-- worker appears online in DSM status
-- worker survives temporary API/network interruption
-- a job queued after worker startup is claimed without manual restart
+- user can start and stop the worker from the application
+- no PowerShell command is required
+- worker remains idle and later claims a newly queued job
+- worker status and current job are visible
+- temporary API/network interruption is visible and recoverable
 - completed result reaches the DSM Worker API
+- application restart does not require reconfiguration
 ```
 
 ### Phase 2: Automatic server dispatch
@@ -672,18 +688,7 @@ Goal: returned worker results affect the real package workflow.
 - route worker failures into user-visible operation errors
 ```
 
-Acceptance criteria:
-
-```text
-- detected faces are applied through the same domain path as local processing
-- duplicate result delivery does not duplicate writes
-- malformed results are rejected and retained for diagnostics
-- originating operation completes or fails correctly
-```
-
 ### Phase 4: Reliability and recovery
-
-Goal: tolerate crashes, disconnects and retries safely.
 
 ```text
 - add running state
@@ -692,25 +697,15 @@ Goal: tolerate crashes, disconnects and retries safely.
 - requeue expired claims
 - implement retry policy and backoff
 - reject stale results
-- add cancellation
+- add cancellation semantics
 - add queue and history cleanup
-- define server restart recovery
-```
-
-Acceptance criteria:
-
-```text
-- killing a worker does not permanently block a job
-- a retried job cannot be overwritten by the previous worker attempt
-- server and worker restarts preserve correct job state
+- define server and application restart recovery
 ```
 
 ### Phase 5: Administration and observability
 
-Goal: make the feature operable without command-line inspection.
-
 ```text
-- worker administration API/UI
+- DSM worker administration API/UI
 - enrollment and token rotation
 - worker online/offline/stale status
 - queue and failure views
@@ -719,14 +714,12 @@ Goal: make the feature operable without command-line inspection.
 - health metrics and structured logs
 ```
 
-### Phase 6: Scale and additional input modes
-
-Goal: support broader deployments after the LAN worker path is stable.
+### Phase 6: Scale and additional operating modes
 
 ```text
-- input capability matching
-- download input endpoint and worker cache
-- Linux service packaging
+- download input mode
+- Linux systemd packaging
+- optional Windows Service mode for unattended hosts
 - multiple workers
 - worker concurrency slots
 - transactional queue storage
@@ -736,17 +729,17 @@ Goal: support broader deployments after the LAN worker path is stable.
 
 ## Immediate Next Steps
 
-The next implementation sequence is:
-
 ```text
-1. install the Windows API loop as a continuously running service
-2. verify that it claims a job queued after service startup
-3. add server path-profile configuration for /volume1/photo
-4. implement ExternalWorkerProcessorAdapter for face_native_detect
-5. enqueue jobs from the normal face-processing workflow
-6. implement result-consumer mapping and final writes
-7. add leases, retries and stale-worker recovery
-8. add administration/status UI
+1. implement the Qt Windows worker control application as a QProcess supervisor
+2. add Start, Stop, status display and persistent configuration
+3. run the API loop continuously from the application
+4. verify that a job queued after application startup is claimed without restart
+5. add server path-profile configuration for /volume1/photo
+6. implement ExternalWorkerProcessorAdapter for face_native_detect
+7. enqueue jobs from the normal face-processing workflow
+8. implement result-consumer mapping and final writes
+9. add leases, retries and stale-worker recovery
+10. add DSM administration/status UI
 ```
 
 The first vertical production slice is complete only when this flow works without manual commands:
@@ -754,7 +747,7 @@ The first vertical production slice is complete only when this flow works withou
 ```text
 user/package operation
 → automatic enqueue
-→ persistent Windows worker claim
+→ running Windows worker application claims job
 → face processing
 → result return
 → server validation
@@ -769,7 +762,10 @@ user/package operation
 - The internal processor remains available.
 - External workers are optional execution targets.
 - Windows shared_path is the first production target.
-- UNC paths are preferred for Windows background services.
+- A controllable desktop application is the preferred first Windows operating mode.
+- The GUI supervises the existing API loop instead of duplicating worker logic.
+- UNC paths remain the recommended Windows path configuration.
+- Windows Service mode is optional and deferred to unattended deployments.
 - Manual enqueue commands remain test tooling only.
 - Automatic dispatch and result consumption are the next core milestones.
 - download mode, multiple workers and GPU/cloud execution follow after the first complete production slice.
