@@ -156,6 +156,11 @@ copy_mingw_runtime_file() {
   local compiler="${CXX:-x86_64-w64-mingw32-g++}"
   local resolved=""
 
+  if [ -f "${target_dir}/${dll_name}" ]; then
+    echo "Keeping bundled runtime DLL already provided by processor bundle: ${dll_name}"
+    return 0
+  fi
+
   if command -v "${compiler}" >/dev/null 2>&1; then
     resolved="$(${compiler} -print-file-name="${dll_name}" 2>/dev/null || true)"
     if [ -n "${resolved}" ] && [ "${resolved}" != "${dll_name}" ] && [ -f "${resolved}" ]; then
@@ -337,6 +342,10 @@ bundle_vips_processor() {
     copied=1
   fi
 
+  if [ "${copied}" = "0" ] && [ "${AV_IMGDATA_BUILD_WORKER_VIPS}" != "0" ]; then
+    build_vips_processor_if_missing "${processor_target}"
+  fi
+
   local binary_candidates=(
     "${PROJECT_DIR}/build/native/${processor_target}/vips-image-processor-install/usr/local/AV_ImgData/bin/${target_binary_name}"
     "${PROJECT_DIR}/build/native/local/vips-image-processor-install/usr/local/AV_ImgData/bin/${target_binary_name}"
@@ -359,15 +368,6 @@ bundle_vips_processor() {
   if [ "${copied}" = "0" ]; then
     if [ "${AV_IMGDATA_BUILD_WORKER_VIPS}" = "0" ]; then
       echo "Skipping libvips image processor rebuild because AV_IMGDATA_BUILD_WORKER_VIPS=0."
-    else
-      build_vips_processor_if_missing "${processor_target}"
-      for candidate in "${binary_candidates[@]}"; do
-        if copy_if_exists "${candidate}" "${DIST_DIR}/bin/${target_binary_name}"; then
-          source_base="$(dirname "$(dirname "${candidate}")")"
-          copied=1
-          break
-        fi
-      done
     fi
   fi
 

@@ -116,6 +116,8 @@ def test_worker_bundle_builds_and_integrates_vips_image_processor_by_default_wit
     assert "pkg-config" in readme
     assert "build-native-image-processor-vips.sh" in script
     assert "build-native-image-processor-vips-windows.sh" in script
+    vips_bundle_block = script.split("bundle_vips_processor()", 1)[1].split("write_worker_model_readme()", 1)[0]
+    assert vips_bundle_block.index('if [ "${copied}" = "0" ] && [ "${AV_IMGDATA_BUILD_WORKER_VIPS}" != "0" ]; then') < vips_bundle_block.index("local binary_candidates=(")
     assert "Skipping libvips image processor integration because AV_IMGDATA_BUNDLE_WORKER_VIPS=0." in script
     assert "Skipping libvips image processor rebuild because AV_IMGDATA_BUILD_WORKER_VIPS=0." in script
     assert "worker probe will report image_vips_binary_exists=false" in script
@@ -125,6 +127,8 @@ def test_worker_bundle_builds_and_integrates_vips_image_processor_by_default_wit
     assert "generated worker path cannot be removed" in script
     assert "build-win64-mxe" in windows_script
     assert "AV_IMGDATA_WINDOWS_VIPS_REPO_TAG" in windows_script
+    assert "Keeping bundled runtime DLL already provided by dependency root" in windows_script
+    assert "Keeping bundled runtime DLL already provided by processor bundle" in script
     assert 'MXE_TMPDIR="${AV_IMGDATA_WINDOWS_VIPS_TMPDIR:-${BUILD_ROOT}/mxe-tmp}"' in windows_script
     assert 'MXE_PODMAN_RUNTIME_DIR="${AV_IMGDATA_WINDOWS_VIPS_PODMAN_RUNTIME_DIR:-}"' in windows_script
     assert 'MXE_PODMAN_HOME="${AV_IMGDATA_WINDOWS_VIPS_PODMAN_HOME:-}"' in windows_script

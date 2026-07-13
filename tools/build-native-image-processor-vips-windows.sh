@@ -404,6 +404,11 @@ copy_mingw_runtime_file() {
   local compiler="${CXX:-x86_64-w64-mingw32-g++}"
   local resolved=""
 
+  if [ -f "${target_dir}/${dll_name}" ]; then
+    echo "Keeping bundled runtime DLL already provided by dependency root: ${dll_name}"
+    return 0
+  fi
+
   if command -v "${compiler}" >/dev/null 2>&1; then
     resolved="$(${compiler} -print-file-name="${dll_name}" 2>/dev/null || true)"
     if [ -n "${resolved}" ] && [ "${resolved}" != "${dll_name}" ] && [ -f "${resolved}" ]; then
