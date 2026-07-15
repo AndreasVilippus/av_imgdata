@@ -190,8 +190,11 @@ class ExternalWorkerProcessorService:
         if already_consumed and stored_faces is not None:
             return [dict(face) for face in stored_faces if isinstance(face, dict)]
 
-        raw_result = job.get("result") if isinstance(job.get("result"), dict) else {}
-        faces = self.native_processor._normalize_faces(raw_result)
+        worker_result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        processor_result = worker_result.get("processor_result") if isinstance(worker_result.get("processor_result"), dict) else {}
+        if not processor_result:
+            raise ExternalWorkerProcessorUnavailable("external_worker_processor_result_missing")
+        faces = self.native_processor._normalize_faces(processor_result)
         now = self._now_iso()
 
         def mutate(state: Dict[str, Any]):
