@@ -27,6 +27,9 @@ if SRC_DIR not in sys.path:
 from api.imgdata_api import IMGDATA, backend_debug_log, is_backend_debug_enabled, router as imgdata_router  # noqa: E402
 from api.worker_admin_api import router as worker_admin_router  # noqa: E402
 from api.worker_api import router as worker_api_router  # noqa: E402
+from services.external_worker_gui_integration import install_external_worker_gui_integration  # noqa: E402
+
+install_external_worker_gui_integration()
 
 
 @app.on_event("startup")
