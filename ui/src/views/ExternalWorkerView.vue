@@ -68,30 +68,30 @@
 			</section>
 
 			<section class="config-card">
-				<div class="sm-section-title">{{ $avt('external_worker:face_detect_title', 'Process image on external worker') }}</div>
-				<div class="config-card-desc">{{ $avt('external_worker:face_detect_desc', 'Enter an absolute image path below the Synology Photos shared folder. The backend creates a face_native_detect job, waits for the worker result and normalizes the returned faces.') }}</div>
+				<div class="sm-section-title">{{ $avt('external_worker:title', 'External worker') }}</div>
+				<div class="config-card-desc">{{ $avt('external_worker:description', 'Configure the optional Worker API, register workers and inspect packaged worker downloads.') }}</div>
 				<div class="config-form-grid">
 					<label class="config-field cleanup-wide-field">
-						<span class="config-field-label">{{ $avt('external_worker:face_detect_image_path', 'Image path on NAS') }}</span>
+						<span class="config-field-label">{{ $avt('cleanup:label_current_path', 'Current file') }}</span>
 						<input v-model="faceDetectForm.image_path" type="text" class="config-text-input" :disabled="faceDetectRunning" placeholder="/volume1/photo/2026/2026.02/image.heic" />
 					</label>
 					<label class="config-field">
-						<span class="config-field-label">{{ $avt('external_worker:face_detect_threshold', 'Minimum confidence') }}</span>
+						<span class="config-field-label">{{ $avt('cleanup:face_frames_det_threshold', 'Minimum detection confidence') }}</span>
 						<input v-model.number="faceDetectForm.det_thresh" type="number" min="0" max="1" step="0.05" class="config-text-input" :disabled="faceDetectRunning" />
 					</label>
 					<label class="config-field">
-						<span class="config-field-label">{{ $avt('external_worker:face_detect_max_faces', 'Maximum faces') }}</span>
+						<span class="config-field-label">{{ $avt('cleanup:face_frames_max_faces', 'Maximum faces per image') }}</span>
 						<input v-model.number="faceDetectForm.max_num" type="number" min="0" step="1" class="config-text-input" :disabled="faceDetectRunning" />
 					</label>
 				</div>
 				<div class="config-actions">
-					<v-button @click="runFaceDetect" :disabled="faceDetectRunning || !faceDetectForm.image_path.trim() || !workerRows.length" style="width: 240px;">{{ faceDetectRunning ? $avt('external_worker:face_detect_running', 'Processing...') : $avt('external_worker:face_detect_start', 'Process on external worker') }}</v-button>
+					<v-button @click="runFaceDetect" :disabled="faceDetectRunning || !faceDetectForm.image_path.trim() || !workerRows.length" style="width: 240px;">{{ faceDetectRunning ? $avt('external_worker:loading', 'Processing...') : $avt('cleanup:button_start', 'Start') }}</v-button>
 				</div>
 				<div v-if="faceDetectResult.job_id" class="external-worker-result-box">
 					<div class="face-match-status-stats">
-						<span>{{ $avt('external_worker:face_detect_job', 'Job') }}: {{ faceDetectResult.job_id }}</span>
-						<span>{{ $avt('external_worker:face_detect_faces', 'Faces') }}: {{ faceDetectResult.faces_count || 0 }}</span>
-						<span>{{ $avt('external_worker:face_detect_target', 'Target') }}: {{ faceDetectResult.execution_target || '-' }}</span>
+						<span>{{ $avt('checks:label_index', 'Entry') }} {{ faceDetectResult.job_id }}</span>
+						<span>{{ $avt('face_match:label_faces', 'Faces') }}: {{ faceDetectResult.faces_count || 0 }}</span>
+						<span>{{ $avt('cleanup:face_frames_standardization_title', 'Standardization') }}: {{ faceDetectResult.execution_target || '-' }}</span>
 					</div>
 					<pre>{{ formatFaceDetectResult(faceDetectResult.faces) }}</pre>
 				</div>
@@ -166,7 +166,7 @@ export default {
 		async startEnrollment() { this.enrolling = true; this.message = ''; try { const response = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_enrollment_start', this.enrollmentForm); this.activeEnrollment = (response.data && response.data.enrollment) || {}; this.enrollmentStatus = (response.data && response.data.status) || { enrollments: [], workers: [] }; this.message = this.$avt('external_worker:registration_started', 'Registration started. Copy the one-time code to the worker.'); } catch (err) { this.message = `Error: ${err.message}`; } finally { this.enrolling = false; } },
 		async copyEnrollmentCode() { try { await navigator.clipboard.writeText(String(this.activeEnrollment.enrollment_code || '')); this.message = this.$avt('external_worker:code_copied', 'Registration code copied.'); } catch (err) { this.message = `Error: ${err.message}`; } },
 		async deleteWorker(worker) { const workerId = String(worker && worker.worker_id || '').trim(); if (!workerId) return; const prompt = this.$avt('external_worker:delete_confirm', 'Delete worker {worker}? Its bound tokens will be revoked and claimed jobs will be requeued.', { worker: workerId }); if (!window.confirm(prompt)) return; this.deletingWorkerId = workerId; this.message = ''; try { const response = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_delete', { worker_id: workerId }); this.enrollmentStatus = (response.data && response.data.status) || { enrollments: [], workers: [] }; this.message = this.$avt('external_worker:deleted', 'Worker deleted. Bound tokens were removed.'); } catch (err) { this.message = `Error: ${err.message}`; } finally { this.deletingWorkerId = ''; } },
-		async runFaceDetect() { this.faceDetectRunning = true; this.message = ''; this.faceDetectResult = {}; try { const response = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_face_detect', this.faceDetectForm); this.faceDetectResult = (response && response.data) || {}; this.message = this.$avt('external_worker:face_detect_finished', 'External worker processing finished.'); await this.loadEnrollmentStatus(); } catch (err) { this.message = `Error: ${err.message}`; } finally { this.faceDetectRunning = false; } },
+		async runFaceDetect() { this.faceDetectRunning = true; this.message = ''; this.faceDetectResult = {}; try { const response = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_face_detect', this.faceDetectForm); this.faceDetectResult = (response && response.data) || {}; this.message = this.$avt('cleanup:status_finished', 'Cleanup finished.'); await this.loadEnrollmentStatus(); } catch (err) { this.message = `Error: ${err.message}`; } finally { this.faceDetectRunning = false; } },
 		async loadEnrollmentStatus() { const response = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_enrollment_status'); this.enrollmentStatus = (response && response.data) || { enrollments: [], workers: [] }; },
 		async loadStatusOnly() { const statusResponse = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_status'); this.packageStatus = this.normalizePackageStatus(statusResponse && statusResponse.data && statusResponse.data.package); },
 	},
