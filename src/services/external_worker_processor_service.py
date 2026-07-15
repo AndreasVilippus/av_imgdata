@@ -52,7 +52,11 @@ class ExternalWorkerProcessorService:
         self.wait_timeout_seconds = max(1, int(wait_timeout_seconds))
         self.poll_interval_seconds = max(0.05, float(poll_interval_seconds))
         self._clock = clock
-        self._sleeper = sleeper or time.sleep
+        if sleeper is not None:
+            self._sleeper = sleeper
+
+    def _sleeper(self, seconds: float) -> None:
+        time.sleep(seconds)
 
     def execute_face_detect(
         self,
