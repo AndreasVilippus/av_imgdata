@@ -2,7 +2,7 @@
 """Install external-worker dispatch into existing GUI-driven face workflows.
 
 The integration deliberately wraps the established detector boundary instead of
-copying cleanup, status, findings, or write logic.  A compatible external worker
+copying cleanup, status, findings, or write logic. A compatible external worker
 is preferred when the Worker API is enabled; otherwise the existing local native
 detector remains the fallback.
 """
@@ -13,9 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-from services.external_worker_processor_service import (
-    ExternalWorkerProcessorUnavailable,
-)
+from services.external_worker_processor_service import ExternalWorkerProcessorUnavailable
 from services.face_frame_standardization_service import FaceFrameStandardizationService
 from services.worker_api_composition_service import WorkerApiCompositionService
 
@@ -40,7 +38,10 @@ class ExternalWorkerFaceDetectorAdapter:
 
     def detect(self, image_path: Path) -> List[Dict[str, Any]]:
         source = Path(image_path).expanduser().resolve()
-        composition = self.composition_factory()
+        if self._requires_local_size_filtering():
+            return self._detect_local(source)
+
+        composition = self._build_composition()
         if not composition.enabled():
             return self._detect_local(source)
 
@@ -64,16 +65,29 @@ class ExternalWorkerFaceDetectorAdapter:
             faces = result.get("faces") if isinstance(result, dict) else []
             return [dict(face) for face in faces if isinstance(face, dict)]
         except ExternalWorkerProcessorUnavailable:
-            # Availability can change between the compatibility check and claim.
-            # No local fallback is performed after a job was enqueued by the shared
-            # dispatcher; before enqueue, external_preferred already falls back.
+            # No local retry is started after the shared dispatcher has enqueued a
+            # job. Before enqueue, external_preferred already performs its fallback.
             raise
+
+    def _build_composition(self) -> WorkerApiCompositionService:
+        factory = self.composition_factory
+        return factory()
+
+    def _build_local_detector(self) -> Any:
+        factory = self.local_detector_factory
+        return factory()
 
     def _detect_local(self, source: Path) -> List[Dict[str, Any]]:
         if self._local_detector is None:
-            self._local_detector = self.local_detector_factory()
+            self._local_detector = self._build_local_detector()
         detections = self._local_detector.detect(source)
         return [dict(item) for item in detections if isinstance(item, dict)]
+
+    def _requires_local_size_filtering(self) -> bool:
+        return any(
+            float(self.options.get(key, 0.0) or 0.0) > 0.0
+            for key in ("min_width_ratio", "min_height_ratio", "min_area_ratio")
+        )
 
     @staticmethod
     def _photos_root(source: Path) -> Path:
