@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from services.config_service import ConfigService
+from services.external_worker_processor_service import ExternalWorkerProcessorService
+from services.native_face_processor_service import NativeFaceProcessorService
 from services.worker_api_service import WorkerApiService
 from services.worker_provisioning_service import WorkerProvisioningService
 from services.worker_runtime_service import WorkerRuntimePathService, WorkerStateStore
@@ -69,9 +71,31 @@ class WorkerApiCompositionService:
             config_service=self.config_service,
             state_store=self.state_store,
         )
+        self.native_face_processor = NativeFaceProcessorService(self.config_service)
 
     def enabled(self) -> bool:
         return self.configuration.enabled()
+
+    def external_face_processor(
+        self,
+        *,
+        nas_root: Path,
+        path_profile: str = "photos",
+        stale_after_seconds: int = 30,
+        wait_timeout_seconds: int = 300,
+        poll_interval_seconds: float = 0.5,
+    ) -> ExternalWorkerProcessorService:
+        """Build the shared face dispatch/result service from the composition root."""
+
+        return ExternalWorkerProcessorService(
+            self.worker_api,
+            self.native_face_processor,
+            nas_root=nas_root,
+            path_profile=path_profile,
+            stale_after_seconds=stale_after_seconds,
+            wait_timeout_seconds=wait_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
 
 
 def worker_error_http_status(code: str) -> int:
