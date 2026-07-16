@@ -82,6 +82,20 @@ class TestExternalWorkerProcessorService(unittest.TestCase):
         self.assertEqual(payload["origin"]["operation_id"], "op-2")
         self.assertEqual(payload["origin"]["entity_id"], "42")
 
+    def test_embed_enqueue_uses_existing_worker_capability_and_identity(self):
+        queued = self.service.enqueue_face_embed(
+            image_path=self.image_path,
+            operation="cleanup",
+            action="recognition_build_profiles",
+            mode="scan",
+            operation_id="op-embed",
+            job_id="embed-1",
+        )
+        job = queued["job"]
+        self.assertEqual(job["type"], "face_native_embed")
+        self.assertEqual(job["payload"]["local_path"], "2026/test.heic")
+        self.assertEqual(job["payload"]["origin"]["action"], "recognition_build_profiles")
+
     def test_external_required_rejects_missing_worker_without_local_fallback(self):
         calls = []
         with self.assertRaises(ExternalWorkerProcessorUnavailable):
@@ -126,6 +140,37 @@ class TestExternalWorkerProcessorService(unittest.TestCase):
         self.assertEqual(stored["result_apply_status"], "consumed")
         self.assertEqual(stored["result_consumer_version"], "1.0")
         self.assertTrue(stored["result_consumed_at"])
+
+    def test_embed_result_keeps_embedding_vector(self):
+        self.service.enqueue_face_embed(
+            image_path=self.image_path,
+            operation="cleanup",
+            action="recognition_build_profiles",
+            mode="scan",
+            operation_id="op-5",
+            job_id="embed-2",
+        )
+
+        def complete(state):
+            job = state["jobs"]["embed-2"]
+            job["status"] = "completed"
+            job["result"] = {
+                "processor_execution": "completed",
+                "processor_result": {
+                    "status": "completed",
+                    "result": {
+                        "faces": [{
+                            "bbox": {"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.4},
+                            "embedding": [0.1, 0.2, 0.3],
+                        }]
+                    },
+                },
+            }
+            return job
+
+        self.api.store.update(complete)
+        faces = self.service.consume_face_embed_result("embed-2")
+        self.assertEqual(faces[0]["embedding"], [0.1, 0.2, 0.3])
 
     def test_source_outside_profile_is_rejected(self):
         outside = self.package_var / "outside.heic"
