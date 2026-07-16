@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Shared dispatch and result-consumption path for local and external processors.
 
-The local native processor remains the default execution path. External execution
-is selected only through an explicit policy and returns the same normalized face
-shape used by ``NativeFaceProcessorService``.
+The service owns target selection, Worker API job creation, waiting and normalized
+result consumption. Domain workflows keep their existing status, findings and write
+logic and only call processor-shaped adapters.
 """
 
 from __future__ import annotations
@@ -24,10 +24,11 @@ class ExternalWorkerProcessorUnavailable(RuntimeError):
 
 
 class ExternalWorkerProcessorService:
-    """Create external jobs and consume their results without duplicating domain writes."""
+    """Create external jobs and consume results without duplicating domain writes."""
 
     POLICIES = {"local_only", "local_preferred", "external_preferred", "external_required"}
     FACE_DETECT_CAPABILITY = "face_native_detect"
+    FACE_EMBED_CAPABILITY = "face_native_embed"
     INPUT_CAPABILITY = "input_shared_path"
 
     def __init__(
@@ -76,26 +77,96 @@ class ExternalWorkerProcessorService:
         det_size: Any = (640, 640),
         priority: int = 100,
     ) -> Dict[str, Any]:
-        """Execute one detect request while preserving the established local path.
+        return self._execute_image_faces(
+            capability=self.FACE_DETECT_CAPABILITY,
+            job_prefix="face-detect",
+            image_path=image_path,
+            local_execute=local_execute,
+            policy=policy,
+            operation=operation,
+            action=action,
+            mode=mode,
+            operation_id=operation_id,
+            source_id=source_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            det_thresh=det_thresh,
+            max_num=max_num,
+            det_size=det_size,
+            priority=priority,
+        )
 
-        ``local_preferred`` is intentionally conservative and executes locally.
-        ``external_preferred`` falls back locally only before an external job has
-        been enqueued. Once a job exists, no duplicate local execution is started.
-        """
+    def execute_face_embed(
+        self,
+        *,
+        image_path: Path,
+        local_execute: Callable[[], List[Dict[str, Any]]],
+        policy: str = "local_preferred",
+        operation: str,
+        action: str,
+        mode: str,
+        operation_id: str,
+        source_id: str = "",
+        entity_type: str = "image",
+        entity_id: str = "",
+        det_thresh: float = 0.5,
+        max_num: int = 0,
+        det_size: Any = (640, 640),
+        priority: int = 100,
+    ) -> Dict[str, Any]:
+        """Execute detection plus embeddings using the existing native contract."""
+        return self._execute_image_faces(
+            capability=self.FACE_EMBED_CAPABILITY,
+            job_prefix="face-embed",
+            image_path=image_path,
+            local_execute=local_execute,
+            policy=policy,
+            operation=operation,
+            action=action,
+            mode=mode,
+            operation_id=operation_id,
+            source_id=source_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            det_thresh=det_thresh,
+            max_num=max_num,
+            det_size=det_size,
+            priority=priority,
+        )
 
+    def _execute_image_faces(
+        self,
+        *,
+        capability: str,
+        job_prefix: str,
+        image_path: Path,
+        local_execute: Callable[[], List[Dict[str, Any]]],
+        policy: str,
+        operation: str,
+        action: str,
+        mode: str,
+        operation_id: str,
+        source_id: str,
+        entity_type: str,
+        entity_id: str,
+        det_thresh: float,
+        max_num: int,
+        det_size: Any,
+        priority: int,
+    ) -> Dict[str, Any]:
         selected_policy = str(policy or "local_preferred").strip().lower()
         if selected_policy not in self.POLICIES:
             raise ValueError("invalid_external_worker_policy")
-
         if selected_policy in {"local_only", "local_preferred"}:
             return {"execution_target": "local_native", "faces": local_execute(), "job_id": None}
-
-        if not self.has_compatible_worker():
+        if not self.has_compatible_worker(capability):
             if selected_policy == "external_preferred":
                 return {"execution_target": "local_native", "faces": local_execute(), "job_id": None}
             raise ExternalWorkerProcessorUnavailable("external_worker_unavailable")
 
-        queued = self.enqueue_face_detect(
+        queued = self._enqueue_image_faces(
+            capability=capability,
+            job_prefix=job_prefix,
             image_path=image_path,
             operation=operation,
             action=action,
@@ -110,12 +181,28 @@ class ExternalWorkerProcessorService:
             priority=priority,
         )
         job_id = str(queued["job"]["job_id"])
-        faces = self.wait_and_consume_face_detect(job_id)
+        faces = self.wait_and_consume_faces(job_id, capability=capability)
         return {"execution_target": "external_worker", "faces": faces, "job_id": job_id}
 
-    def enqueue_face_detect(
+    def enqueue_face_detect(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._enqueue_image_faces(
+            capability=self.FACE_DETECT_CAPABILITY,
+            job_prefix="face-detect",
+            **kwargs,
+        )
+
+    def enqueue_face_embed(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._enqueue_image_faces(
+            capability=self.FACE_EMBED_CAPABILITY,
+            job_prefix="face-embed",
+            **kwargs,
+        )
+
+    def _enqueue_image_faces(
         self,
         *,
+        capability: str,
+        job_prefix: str,
         image_path: Path,
         operation: str,
         action: str,
@@ -135,7 +222,7 @@ class ExternalWorkerProcessorService:
         size = list(det_size or (640, 640))
         if len(size) != 2:
             raise ValueError("invalid_det_size")
-        identifier = str(job_id or f"face-detect-{uuid.uuid4().hex}")
+        identifier = str(job_id or f"{job_prefix}-{uuid.uuid4().hex}")
         payload = {
             "contract_version": self.native_processor.CONTRACT_VERSION,
             "input_mode": "shared_path",
@@ -153,18 +240,28 @@ class ExternalWorkerProcessorService:
         }
         return self.worker_api.enqueue_job(
             job_id=identifier,
-            job_type=self.FACE_DETECT_CAPABILITY,
+            job_type=capability,
             payload=payload,
             priority=priority,
         )
 
     def wait_and_consume_face_detect(self, job_id: str) -> List[Dict[str, Any]]:
+        return self.wait_and_consume_faces(job_id, capability=self.FACE_DETECT_CAPABILITY)
+
+    def wait_and_consume_face_embed(self, job_id: str) -> List[Dict[str, Any]]:
+        return self.wait_and_consume_faces(job_id, capability=self.FACE_EMBED_CAPABILITY)
+
+    def wait_and_consume_faces(self, job_id: str, *, capability: str) -> List[Dict[str, Any]]:
+        self._wait_for_completed_job(job_id)
+        return self.consume_faces_result(job_id, capability=capability)
+
+    def _wait_for_completed_job(self, job_id: str) -> Dict[str, Any]:
         deadline = time.monotonic() + self.wait_timeout_seconds
         while True:
             job = self.get_job(job_id)
             status = str(job.get("status") or "")
             if status == "completed":
-                return self.consume_face_detect_result(job_id)
+                return job
             if status == "failed":
                 error = job.get("error") if isinstance(job.get("error"), dict) else {}
                 raise ExternalWorkerProcessorUnavailable(
@@ -177,14 +274,15 @@ class ExternalWorkerProcessorService:
             self._sleeper(self.poll_interval_seconds)
 
     def consume_face_detect_result(self, job_id: str) -> List[Dict[str, Any]]:
-        """Normalize a completed result and mark it consumed atomically.
+        return self.consume_faces_result(job_id, capability=self.FACE_DETECT_CAPABILITY)
 
-        The returned faces use the native processor's existing normalization path,
-        so downstream domain services do not need separate local/external logic.
-        """
+    def consume_face_embed_result(self, job_id: str) -> List[Dict[str, Any]]:
+        return self.consume_faces_result(job_id, capability=self.FACE_EMBED_CAPABILITY)
 
+    def consume_faces_result(self, job_id: str, *, capability: str) -> List[Dict[str, Any]]:
+        """Normalize a completed face result and mark it consumed atomically."""
         job = self.get_job(job_id)
-        if str(job.get("type") or "") != self.FACE_DETECT_CAPABILITY:
+        if str(job.get("type") or "") != capability:
             raise WorkerApiError("job_type_unsupported")
         if str(job.get("status") or "") != "completed":
             raise WorkerApiError("job_not_completed")
@@ -229,15 +327,17 @@ class ExternalWorkerProcessorService:
             raise WorkerApiError("job_not_found")
         return dict(job)
 
-    def has_compatible_worker(self) -> bool:
+    def has_compatible_worker(self, capability: str = FACE_DETECT_CAPABILITY) -> bool:
+        expected = str(capability or self.FACE_DETECT_CAPABILITY)
         state = self.store.read()
         now = self._now()
         for raw in state.get("workers", {}).values():
             worker = raw if isinstance(raw, dict) else {}
             capabilities = {str(item) for item in worker.get("capabilities", []) if str(item)}
-            if self.FACE_DETECT_CAPABILITY not in capabilities:
+            if expected not in capabilities:
                 continue
-            input_modes = worker.get("metadata", {}).get("input_modes", []) if isinstance(worker.get("metadata"), dict) else []
+            metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
+            input_modes = metadata.get("input_modes", []) if isinstance(metadata.get("input_modes"), list) else []
             supports_input = self.INPUT_CAPABILITY in capabilities or "shared_path" in input_modes
             if not supports_input:
                 continue
