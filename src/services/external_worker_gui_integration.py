@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
-from services.external_worker_processor_service import ExternalWorkerProcessorUnavailable
 from services.face_frame_standardization_service import FaceFrameStandardizationService
 from services.face_recognition_service import FaceRecognitionService
 from services.worker_api_composition_service import WorkerApiCompositionService
@@ -24,12 +23,16 @@ class _ExternalWorkerFaceBase:
         self,
         *,
         options: Dict[str, Any],
-        local_processor_factory: Callable[[], Any],
-        action: str,
+        local_processor_factory: Optional[Callable[[], Any]] = None,
+        local_detector_factory: Optional[Callable[[], Any]] = None,
+        action: str = "standardize_face_frames",
         composition_factory: Callable[[], WorkerApiCompositionService] = WorkerApiCompositionService,
     ):
+        factory = local_processor_factory or local_detector_factory
+        if not callable(factory):
+            raise ValueError("local_processor_factory_required")
         self.options = dict(options or {})
-        self.local_processor_factory = local_processor_factory
+        self.local_processor_factory = factory
         self.composition_factory = composition_factory
         self.action = str(action or "face_processing")
         self._local_processor = None
@@ -137,11 +140,8 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
         return [face for face in normalized if isinstance(face.get("embedding"), list)]
 
     def detect_and_embed_many(self, image_paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
-        """Keep the current workflow batch contract without adding pipeline semantics."""
-        return {
-            str(Path(path)): self.detect_and_embed(Path(path))
-            for path in list(image_paths or [])
-        }
+        """Keep the existing batch interface without introducing pipeline state."""
+        return {str(Path(path)): self.detect_and_embed(Path(path)) for path in list(image_paths or [])}
 
     def detect_and_embed_bytes(self, image_bytes: bytes) -> List[Dict[str, Any]]:
         """Byte previews are not shared-path assets and therefore remain local."""
