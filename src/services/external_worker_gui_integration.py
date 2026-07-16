@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from imgdata import ImgDataService
 from services.face_frame_standardization_service import FaceFrameStandardizationService
 from services.face_recognition_service import FaceRecognitionService
 from services.worker_api_composition_service import WorkerApiCompositionService
@@ -41,12 +42,10 @@ class _ExternalWorkerFaceBase:
         """Preparation stays lazy so external-only runs do not load NAS models."""
 
     def _build_composition(self) -> WorkerApiCompositionService:
-        factory = self.composition_factory
-        return factory()
+        return self.composition_factory()
 
     def _build_local_processor(self) -> Any:
-        factory = self.local_processor_factory
-        return factory()
+        return self.local_processor_factory()
 
     def _local(self) -> Any:
         if self._local_processor is None:
@@ -92,7 +91,7 @@ class ExternalWorkerFaceDetectorAdapter(_ExternalWorkerFaceBase):
             image_path=source,
             local_execute=lambda: self._detect_local(source),
             policy="external_preferred",
-            operation="cleanup",
+            operation="cleanup" if self.action != "search_missing_faces_insightface" else "face_match",
             action=self.action,
             mode="scan",
             operation_id=f"{self.action}-detect-{uuid.uuid4().hex}",
@@ -124,7 +123,7 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
             image_path=source,
             local_execute=lambda: self._embed_local(source),
             policy="external_preferred",
-            operation="cleanup",
+            operation="cleanup" if self.action != "search_missing_faces_insightface" else "face_match",
             action=self.action,
             mode="scan",
             operation_id=f"{self.action}-embed-{uuid.uuid4().hex}",
@@ -171,6 +170,7 @@ def install_external_worker_gui_integration() -> None:
     """Patch shared processor seams once for GUI-started face workflows."""
     _install_face_frame_integration()
     _install_face_recognition_integration()
+    _install_face_match_insightface_integration()
 
 
 def _install_face_frame_integration() -> None:
@@ -215,3 +215,53 @@ def _install_face_recognition_integration() -> None:
     service_class._run = _run
     service_class._prepared_embedder = _prepared_embedder
     service_class._external_worker_gui_integration_installed = True
+
+
+def _install_face_match_insightface_integration() -> None:
+    service_class = ImgDataService
+    if getattr(service_class, "_external_worker_face_match_integration_installed", False):
+        return
+    original_search = service_class.searchMissingPhotosFacesWithInsightFace
+
+    def searchMissingPhotosFacesWithInsightFace(self: ImgDataService, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        original_detector_factory = self._createFaceDetector
+        original_embedder_factory = self._createFaceEmbedder
+
+        def create_detector(**factory_options: Any) -> ExternalWorkerFaceDetectorAdapter:
+            options = _normalized_factory_options(factory_options)
+            return ExternalWorkerFaceDetectorAdapter(
+                options=options,
+                action="search_missing_faces_insightface",
+                local_processor_factory=lambda: original_detector_factory(**factory_options),
+            )
+
+        def create_embedder(**factory_options: Any) -> ExternalWorkerFaceEmbedderAdapter:
+            options = _normalized_factory_options(factory_options)
+            return ExternalWorkerFaceEmbedderAdapter(
+                options=options,
+                action="search_missing_faces_insightface",
+                local_processor_factory=lambda: original_embedder_factory(**factory_options),
+            )
+
+        self._createFaceDetector = create_detector
+        self._createFaceEmbedder = create_embedder
+        try:
+            return original_search(self, *args, **kwargs)
+        finally:
+            self._createFaceDetector = original_detector_factory
+            self._createFaceEmbedder = original_embedder_factory
+
+    service_class.searchMissingPhotosFacesWithInsightFace = searchMissingPhotosFacesWithInsightFace
+    service_class._external_worker_face_match_integration_installed = True
+
+
+def _normalized_factory_options(factory_options: Dict[str, Any]) -> Dict[str, Any]:
+    source = dict(factory_options or {})
+    return {
+        "det_size": list(source.get("det_size") or [640, 640]),
+        "det_thresh": float(source.get("det_thresh", 0.5)),
+        "max_num": int(source.get("max_num", 0)),
+        "min_width_ratio": float(source.get("min_width_ratio", source.get("min_face_width_ratio", 0.0)) or 0.0),
+        "min_height_ratio": float(source.get("min_height_ratio", source.get("min_face_height_ratio", 0.0)) or 0.0),
+        "min_area_ratio": float(source.get("min_area_ratio", source.get("min_face_area_ratio", 0.0)) or 0.0),
+    }
