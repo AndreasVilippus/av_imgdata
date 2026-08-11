@@ -3,6 +3,7 @@ export default {
 		return {
 			statusLoading: false,
 			statusLoaded: false,
+			statusRefreshTimer: null,
 			fileAnalysisProgress: {},
 				fileAnalysisProgressTimer: null,
 				fileAnalysisProgressRequestId: 0,
@@ -46,6 +47,10 @@ export default {
 			this.fetchExiftoolStatus();
 		},
 	beforeDestroy() {
+		if (this.statusRefreshTimer && typeof window !== 'undefined') {
+			window.clearTimeout(this.statusRefreshTimer);
+			this.statusRefreshTimer = null;
+		}
 		this.stopFileAnalysisProgressPolling();
 	},
 	methods: {
@@ -114,7 +119,7 @@ export default {
 		},
 		startFileAnalysisProgressPolling() {
 			this.startNamedPolling('fileAnalysisProgressTimer', () => {
-				this.fetchFileAnalysisProgress();
+				return this.fetchFileAnalysisProgress();
 			}, 1000, { skipIfPending: true });
 		},
 		stopFileAnalysisProgressPolling() {
@@ -340,17 +345,37 @@ export default {
 				sharedFolder: String(systemSource.shared_folder || ''),
 			};
 		},
-			async callStatusApi(apiPath, { auto = false, updatePersons = true } = {}) {
-				this.statusLoading = true;
-				if (!auto) {
-					this.output = 'start synocredential resume flow...';
+		statusPayloadRefreshing(payload) {
+			const data = this.getResponseData(payload);
+			const persons = (data.persons && typeof data.persons === 'object') ? data.persons : {};
+			const system = (data.system && typeof data.system === 'object') ? data.system : {};
+			return !!(persons.refreshing || system.refreshing);
+		},
+		scheduleStatusRefresh() {
+			if (typeof window === 'undefined' || this.statusRefreshTimer) {
+				return;
+			}
+			this.statusRefreshTimer = window.setTimeout(() => {
+				this.statusRefreshTimer = null;
+				if (!this.statusLoading) {
+					this.getStatus({ auto: true });
 				}
-				try {
-					const data = await this.callDsmApi(apiPath, {}, { resume: false, requireSynoToken: false, timeoutMs: auto ? 8000 : 120000 });
-					if (updatePersons) {
-						this.persons = this.extractPersonsFromPayload(data);
-						this.system = this.extractSystemFromPayload(data);
-					this.statusLoaded = true;
+			}, 1500);
+		},
+		async callStatusApi(apiPath, { auto = false, updatePersons = true } = {}) {
+			this.statusLoading = true;
+			if (!auto) {
+				this.output = 'start synocredential resume flow...';
+			}
+			try {
+				const data = await this.callDsmApi(apiPath, {}, { resume: false, requireSynoToken: false, timeoutMs: auto ? 8000 : 120000 });
+				if (updatePersons) {
+					this.persons = this.extractPersonsFromPayload(data);
+					this.system = this.extractSystemFromPayload(data);
+					this.statusLoaded = !this.statusPayloadRefreshing(data);
+					if (!this.statusLoaded) {
+						this.scheduleStatusRefresh();
+					}
 				}
 				this.output = JSON.stringify(data, null, 2);
 			} catch (err) {

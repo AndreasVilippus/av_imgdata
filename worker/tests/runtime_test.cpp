@@ -21,6 +21,11 @@ int main() {
     assert(runtime::extract_json_scalar(json, "poll_interval_seconds", "2") == "5");
     assert(runtime::extract_json_array(json, "values") == "[1,2]");
     assert(runtime::extract_json_string(runtime::extract_json_object(json, "nested"), "name") == "x");
+    assert(runtime::json_escape(std::string("a\b\f\x01", 4)) == "a\\b\\f\\u0001");
+    assert(runtime::extract_first_json_object("log line\n{\"job_id\":\"job-1\",\"result\":{\"faces\":[]}}\ntrailer") == "{\"job_id\":\"job-1\",\"result\":{\"faces\":[]}}");
+    assert(runtime::extract_first_json_object("{\"message\":\"brace } in string\",\"ok\":true}") == "{\"message\":\"brace } in string\",\"ok\":true}");
+    assert(runtime::extract_first_json_object("no json here").empty());
+    assert(runtime::extract_first_json_object("{\"job_id\":\"broken\"").empty());
 
     std::string normalized;
     std::string error;

@@ -8,8 +8,8 @@
 		</div>
 
 		<div class="config-actions config-actions-right">
-			<v-button @click="loadAll" :disabled="loading || saving || enrolling || deletingWorkerId || faceDetectRunning" style="width: 160px;">{{ $avt('config:button_reload', 'Reload') }}</v-button>
-			<v-button @click="saveConfig" :disabled="loading || saving || enrolling || deletingWorkerId || faceDetectRunning" style="width: 160px;">{{ $avt('config:button_save', 'Save') }}</v-button>
+			<v-button @click="loadAll" :disabled="loading || saving || enrolling || deletingWorkerId" style="width: 160px;">{{ $avt('config:button_reload', 'Reload') }}</v-button>
+			<v-button @click="saveConfig" :disabled="loading || saving || enrolling || deletingWorkerId" style="width: 160px;">{{ $avt('config:button_save', 'Save') }}</v-button>
 		</div>
 
 		<div v-if="message" class="config-message">{{ message }}</div>
@@ -36,7 +36,7 @@
 					<label class="config-field"><span class="config-field-label">{{ $avt('external_worker:worker_name', 'Worker name') }}</span><input v-model="enrollmentForm.enrollment_id" type="text" class="config-text-input" :disabled="enrolling" placeholder="windows-worker-01" /></label>
 					<label class="config-field"><span class="config-field-label">{{ $avt('external_worker:expires_minutes', 'Code validity in minutes') }}</span><input v-model.number="enrollmentForm.expires_minutes" type="number" min="1" max="1440" class="config-text-input" :disabled="enrolling" /></label>
 				</div>
-				<div class="config-actions"><v-button @click="startEnrollment" :disabled="enrolling || !enrollmentForm.enrollment_id.trim()" style="width: 190px;">{{ enrolling ? $avt('external_worker:registering', 'Starting...') : $avt('external_worker:start_registration', 'Register worker') }}</v-button></div>
+				<div class="config-actions config-actions-right"><v-button @click="startEnrollment" :disabled="enrolling || !enrollmentForm.enrollment_id.trim()" style="width: 190px;">{{ enrolling ? $avt('external_worker:registering', 'Starting...') : $avt('external_worker:start_registration', 'Register worker') }}</v-button></div>
 				<div v-if="activeEnrollment.enrollment_code" class="external-worker-code-box">
 					<div>
 						<div class="config-field-label">{{ $avt('external_worker:registration_code', 'Registration code') }}</div>
@@ -64,36 +64,6 @@
 							<v-button @click="deleteWorker(worker)" :disabled="Boolean(deletingWorkerId)" style="width: 120px;">{{ deletingWorkerId === worker.worker_id ? $avt('external_worker:deleting', 'Deleting...') : $avt('external_worker:delete', 'Delete') }}</v-button>
 						</div>
 					</div>
-				</div>
-			</section>
-
-			<section class="config-card">
-				<div class="sm-section-title">{{ $avt('external_worker:title', 'External worker') }}</div>
-				<div class="config-card-desc">{{ $avt('external_worker:description', 'Configure the optional Worker API, register workers and inspect packaged worker downloads.') }}</div>
-				<div class="config-form-grid">
-					<label class="config-field cleanup-wide-field">
-						<span class="config-field-label">{{ $avt('cleanup:label_current_path', 'Current file') }}</span>
-						<input v-model="faceDetectForm.image_path" type="text" class="config-text-input" :disabled="faceDetectRunning" placeholder="/volume1/photo/2026/2026.02/image.heic" />
-					</label>
-					<label class="config-field">
-						<span class="config-field-label">{{ $avt('cleanup:face_frames_det_threshold', 'Minimum detection confidence') }}</span>
-						<input v-model.number="faceDetectForm.det_thresh" type="number" min="0" max="1" step="0.05" class="config-text-input" :disabled="faceDetectRunning" />
-					</label>
-					<label class="config-field">
-						<span class="config-field-label">{{ $avt('cleanup:face_frames_max_faces', 'Maximum faces per image') }}</span>
-						<input v-model.number="faceDetectForm.max_num" type="number" min="0" step="1" class="config-text-input" :disabled="faceDetectRunning" />
-					</label>
-				</div>
-				<div class="config-actions">
-					<v-button @click="runFaceDetect" :disabled="faceDetectRunning || !faceDetectForm.image_path.trim() || !workerRows.length" style="width: 240px;">{{ faceDetectRunning ? $avt('external_worker:loading', 'Processing...') : $avt('cleanup:button_start', 'Start') }}</v-button>
-				</div>
-				<div v-if="faceDetectResult.job_id" class="external-worker-result-box">
-					<div class="face-match-status-stats">
-						<span>{{ $avt('checks:label_index', 'Entry') }} {{ faceDetectResult.job_id }}</span>
-						<span>{{ $avt('face_match:label_faces', 'Faces') }}: {{ faceDetectResult.faces_count || 0 }}</span>
-						<span>{{ $avt('cleanup:face_frames_standardization_title', 'Standardization') }}: {{ faceDetectResult.execution_target || '-' }}</span>
-					</div>
-					<pre>{{ formatFaceDetectResult(faceDetectResult.faces) }}</pre>
 				</div>
 			</section>
 
@@ -127,7 +97,6 @@ export default {
 			saving: false,
 			enrolling: false,
 			deletingWorkerId: '',
-			faceDetectRunning: false,
 			message: '',
 			configModel: this.createDefaultConfig(),
 			workerApi: this.createDefaultWorkerApiConfig(),
@@ -135,8 +104,6 @@ export default {
 			enrollmentStatus: { enrollments: [], workers: [] },
 			enrollmentForm: { enrollment_id: 'windows-worker-01', expires_minutes: 15 },
 			activeEnrollment: {},
-			faceDetectForm: { image_path: '', det_thresh: 0.5, max_num: 0, det_size: [640, 640] },
-			faceDetectResult: {},
 		};
 	},
 	computed: {
@@ -160,13 +127,11 @@ export default {
 		statusLabel(bundle) { if (bundle.download_ready) return this.$avt('external_worker:status_archive_ready', 'Archive ready'); if (bundle.bundle_exists) return this.$avt('external_worker:status_archive_missing', 'Archive missing'); return this.$avt('external_worker:status_bundle_missing', 'Bundle missing'); },
 		binaryStatusLabel(bundle) { if (!bundle.binary_exists) return this.$avt('external_worker:status_missing', 'missing'); if (bundle.binary_location === 'archive') return this.$avt('external_worker:status_present_in_archive', 'present in archive'); return this.$avt('external_worker:status_present', 'present'); },
 		enrollmentStatusLabel(status) { if (status === 'enrolled') return this.$avt('external_worker:enrolled', 'Enrolled'); if (status === 'expired') return this.$avt('external_worker:expired', 'Expired'); return this.$avt('external_worker:waiting', 'Waiting'); },
-		formatFaceDetectResult(faces) { return JSON.stringify(Array.isArray(faces) ? faces : [], null, 2); },
 		async loadAll() { this.loading = true; this.message = ''; try { const configResponse = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/config_get'); const config = (configResponse && configResponse.data && configResponse.data.config) || {}; this.configModel = { ...config, worker_api: this.normalizeWorkerApi(config.worker_api) }; this.workerApi = this.normalizeWorkerApi(this.configModel.worker_api); await Promise.all([this.loadStatusOnly(), this.loadEnrollmentStatus()]); } catch (err) { this.message = `Error: ${err.message}`; } finally { this.loading = false; } },
 		async saveConfig() { this.saving = true; this.message = ''; try { const payloadConfig = { ...this.configModel, worker_api: this.normalizeWorkerApi(this.workerApi) }; const data = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/config_save', { config: payloadConfig }); const config = (data && data.data && data.data.config) || payloadConfig; this.configModel = { ...config, worker_api: this.normalizeWorkerApi(config.worker_api) }; this.workerApi = this.normalizeWorkerApi(this.configModel.worker_api); this.message = this.$avt('external_worker:message_saved', 'External worker settings saved. Restart the package if the Worker API activation changed.'); await this.loadStatusOnly(); } catch (err) { this.message = `Error: ${err.message}`; } finally { this.saving = false; } },
 		async startEnrollment() { this.enrolling = true; this.message = ''; try { const response = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_enrollment_start', this.enrollmentForm); this.activeEnrollment = (response.data && response.data.enrollment) || {}; this.enrollmentStatus = (response.data && response.data.status) || { enrollments: [], workers: [] }; this.message = this.$avt('external_worker:registration_started', 'Registration started. Copy the one-time code to the worker.'); } catch (err) { this.message = `Error: ${err.message}`; } finally { this.enrolling = false; } },
 		async copyEnrollmentCode() { try { await navigator.clipboard.writeText(String(this.activeEnrollment.enrollment_code || '')); this.message = this.$avt('external_worker:code_copied', 'Registration code copied.'); } catch (err) { this.message = `Error: ${err.message}`; } },
 		async deleteWorker(worker) { const workerId = String(worker && worker.worker_id || '').trim(); if (!workerId) return; const prompt = this.$avt('external_worker:delete_confirm', 'Delete worker {worker}? Its bound tokens will be revoked and claimed jobs will be requeued.', { worker: workerId }); if (!window.confirm(prompt)) return; this.deletingWorkerId = workerId; this.message = ''; try { const response = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_delete', { worker_id: workerId }); this.enrollmentStatus = (response.data && response.data.status) || { enrollments: [], workers: [] }; this.message = this.$avt('external_worker:deleted', 'Worker deleted. Bound tokens were removed.'); } catch (err) { this.message = `Error: ${err.message}`; } finally { this.deletingWorkerId = ''; } },
-		async runFaceDetect() { this.faceDetectRunning = true; this.message = ''; this.faceDetectResult = {}; try { const response = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_face_detect', this.faceDetectForm); this.faceDetectResult = (response && response.data) || {}; this.message = this.$avt('cleanup:status_finished', 'Cleanup finished.'); await this.loadEnrollmentStatus(); } catch (err) { this.message = `Error: ${err.message}`; } finally { this.faceDetectRunning = false; } },
 		async loadEnrollmentStatus() { const response = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_enrollment_status'); this.enrollmentStatus = (response && response.data) || { enrollments: [], workers: [] }; },
 		async loadStatusOnly() { const statusResponse = await this.callApi('/webman/3rdparty/AV_ImgData/index.cgi/api/external_worker_status'); this.packageStatus = this.normalizePackageStatus(statusResponse && statusResponse.data && statusResponse.data.package); },
 	},
@@ -188,7 +153,5 @@ export default {
 .external-worker-pill.warn { background: #fff6e5; border-color: #e6c371; color: #7a5512; }
 .external-worker-download-link { color: #1266b0; text-decoration: none; }
 .external-worker-download-link:hover { text-decoration: underline; }
-.external-worker-result-box { border: 1px solid #d7dde5; border-radius: 8px; margin-top: 14px; padding: 12px; }
-.external-worker-result-box pre { max-height: 360px; overflow: auto; white-space: pre-wrap; }
 @media (max-width: 720px) { .external-worker-registration-form { grid-template-columns: 1fr; } .external-worker-code-box { align-items: stretch; flex-direction: column; gap: 10px; } }
 </style>

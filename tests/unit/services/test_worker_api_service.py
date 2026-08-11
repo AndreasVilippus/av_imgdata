@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from datetime import datetime, timezone
 import os
 import sys
 import tempfile
@@ -9,6 +10,14 @@ sys.path.insert(0, os.path.abspath("src"))
 
 from services.worker_api_endpoints import handle_worker_api_request
 from services.worker_api_service import WorkerApiError, WorkerApiService
+
+
+class MutableClock:
+    def __init__(self, value):
+        self.value = value
+
+    def __call__(self):
+        return self.value
 
 
 class TestWorkerApiService(unittest.TestCase):
@@ -56,6 +65,51 @@ class TestWorkerApiService(unittest.TestCase):
         )
         self.assertEqual(completed["status"], "completed")
         self.assertEqual(completed["job"]["result"], {"faces": []})
+
+    def test_claim_and_result_refresh_worker_last_seen(self):
+        clock = MutableClock(datetime(2026, 8, 9, 18, 0, 0, tzinfo=timezone.utc))
+        service = WorkerApiService(package_var=self.package_var, clock=clock)
+        token = service.create_token(token_id="fresh-worker")["token"]
+        service.register_worker(
+            token=token,
+            worker_id="worker-01",
+            version="0.10.0",
+            capabilities=["face_native_embed"],
+        )
+
+        clock.value = datetime(2026, 8, 9, 18, 1, 0, tzinfo=timezone.utc)
+        service.enqueue_job(job_id="job-1", job_type="face_native_embed", payload={})
+        claimed = service.claim_job(
+            token=token,
+            worker_id="worker-01",
+            capabilities=["face_native_embed"],
+        )
+        state = service.store.read()
+        self.assertEqual(claimed["status"], "claimed")
+        self.assertEqual(state["workers"]["worker-01"]["last_seen_at"], "2026-08-09T18:01:00Z")
+        self.assertEqual(state["workers"]["worker-01"]["status"], "processing")
+
+        clock.value = datetime(2026, 8, 9, 18, 3, 0, tzinfo=timezone.utc)
+        service.record_result(
+            token=token,
+            worker_id="worker-01",
+            job_id="job-1",
+            result={"faces": []},
+        )
+        state = service.store.read()
+        self.assertEqual(state["workers"]["worker-01"]["last_seen_at"], "2026-08-09T18:03:00Z")
+        self.assertEqual(state["workers"]["worker-01"]["status"], "ready")
+
+        clock.value = datetime(2026, 8, 9, 18, 4, 0, tzinfo=timezone.utc)
+        empty = service.claim_job(
+            token=token,
+            worker_id="worker-01",
+            capabilities=["face_native_embed"],
+        )
+        state = service.store.read()
+        self.assertEqual(empty["status"], "empty")
+        self.assertEqual(state["workers"]["worker-01"]["last_seen_at"], "2026-08-09T18:04:00Z")
+        self.assertEqual(state["workers"]["worker-01"]["status"], "ready")
 
     def test_claim_respects_capabilities(self):
         self.service.enqueue_job(job_id="job-1", job_type="face_native_detect", payload={})

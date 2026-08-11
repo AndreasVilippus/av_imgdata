@@ -3,7 +3,7 @@
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from services.config_service import ConfigService
 from services.external_worker_processor_service import ExternalWorkerProcessorService
@@ -84,6 +84,7 @@ class WorkerApiCompositionService:
         stale_after_seconds: int = 30,
         wait_timeout_seconds: int = 300,
         poll_interval_seconds: float = 0.5,
+        debug_logger: Optional[Callable[..., None]] = None,
     ) -> ExternalWorkerProcessorService:
         """Build the shared face dispatch/result service from the composition root."""
 
@@ -95,6 +96,7 @@ class WorkerApiCompositionService:
             stale_after_seconds=stale_after_seconds,
             wait_timeout_seconds=wait_timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
+            debug_logger=debug_logger,
         )
 
 

@@ -30,7 +30,14 @@ def mixin_runtime_script(mixin_path: str, test_body: str) -> str:
 
         const source = fs.readFileSync('{mixin_path}', 'utf8')
           .replace('export default', 'module.exports =');
-        const sandbox = {{ module: {{ exports: {{}} }}, exports: {{}} }};
+        const sandbox = {{
+          module: {{ exports: {{}} }},
+          exports: {{}},
+          window: {{
+            setTimeout: () => 1,
+            clearTimeout: () => {{}},
+          }},
+        }};
         vm.runInNewContext(source, sandbox, {{ filename: '{mixin_path}' }});
         const mixin = sandbox.module.exports;
 
@@ -279,6 +286,36 @@ def test_checks_save_only_scan_with_stored_findings_uses_restart_label_runtime()
     assert result == {"label": "Restart"}
 
 
+def test_checks_stopped_backend_progress_releases_stop_button_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/checksMixin.js",
+            """
+            const component = createComponent({
+              selectedChecksAction: 'scan',
+              checksStopRequested: true,
+              checksStopRequestInFlight: true,
+              checksProgress: {
+                running: false,
+                active: false,
+                stop_requested: true,
+                status_phase: 'stopped',
+              },
+            });
+
+            assert.strictEqual(component.isChecksReviewStopping, false);
+            assert.strictEqual(component.checksPrimaryButtonLabel, 'Start');
+            console.log(JSON.stringify({
+              stopping: component.isChecksReviewStopping,
+              label: component.checksPrimaryButtonLabel,
+            }));
+            """
+        )
+    )
+
+    assert result == {"stopping": False, "label": "Start"}
+
+
 def test_cleanup_counter_only_headline_is_detected_runtime():
     result = run_node(
         mixin_runtime_script(
@@ -311,6 +348,45 @@ def test_cleanup_counter_only_headline_is_detected_runtime():
     )
 
     assert result == {"counterOnly": True}
+
+
+def test_cleanup_stopped_backend_progress_releases_stop_button_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const calls = [];
+            const component = createComponent({
+              cleanupLoading: true,
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                stop_requested: true,
+                status_phase: 'stopped',
+              },
+              stopCleanupRun: async () => calls.push('stop'),
+              startCleanupRun: async () => calls.push('start'),
+            });
+
+            assert.strictEqual(component.cleanupActionActive, false);
+            assert.strictEqual(component.cleanupPrimaryButtonLabel, 'Start');
+
+            await component.handleCleanupAction();
+
+            assert.deepStrictEqual(calls, ['start']);
+            console.log(JSON.stringify({
+              active: component.cleanupActionActive,
+              label: component.cleanupPrimaryButtonLabel,
+              calls,
+            }));
+            """
+        )
+    )
+
+    assert result == {"active": False, "label": "Start", "calls": ["start"]}
 
 
 def test_cleanup_running_action_rejects_foreign_idle_progress_runtime():
@@ -626,6 +702,70 @@ def test_file_analysis_poll_error_keeps_backend_owned_running_state_runtime():
     )
 
     assert result == {"running": True, "events": []}
+
+
+def test_status_pending_person_counts_keep_status_refreshing_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/statusMixin.js",
+            """
+            const component = createComponent({
+              callDsmApi: async () => ({
+                success: true,
+                data: {
+                  persons: { total: 0, known: 0, refreshing: true },
+                  system: { shared_folder: '/volume1/photo' },
+                },
+              }),
+            });
+
+            await component.callStatusApi('/status', { auto: true });
+
+            assert.strictEqual(component.persons.total, 0);
+            assert.strictEqual(component.statusLoaded, false);
+            assert.strictEqual(component.statusRefreshTimer, 1);
+            console.log(JSON.stringify({
+              loaded: component.statusLoaded,
+              refreshTimer: component.statusRefreshTimer,
+            }));
+            """
+        )
+    )
+
+    assert result == {"loaded": False, "refreshTimer": 1}
+
+
+def test_status_person_counts_mark_status_loaded_when_fresh_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/statusMixin.js",
+            """
+            const component = createComponent({
+              callDsmApi: async () => ({
+                success: true,
+                data: {
+                  persons: { total: 4, known: 3, unknown: 1, refreshing: false },
+                  system: { shared_folder: '/volume1/photo', refreshing: false },
+                },
+              }),
+            });
+
+            await component.callStatusApi('/status', { auto: true });
+
+            assert.strictEqual(component.persons.total, 4);
+            assert.strictEqual(component.persons.known, 3);
+            assert.strictEqual(component.statusLoaded, true);
+            assert.strictEqual(component.statusRefreshTimer, null);
+            console.log(JSON.stringify({
+              total: component.persons.total,
+              known: component.persons.known,
+              loaded: component.statusLoaded,
+            }));
+            """
+        )
+    )
+
+    assert result == {"total": 4, "known": 3, "loaded": True}
 
 
 def test_file_analysis_final_backend_progress_stops_polling_runtime():

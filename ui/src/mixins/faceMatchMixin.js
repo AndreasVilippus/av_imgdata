@@ -19,6 +19,7 @@ export default {
 						faceMatchRecognizeMissingInsightFacePersons: false,
 						faceMatchSkipUnknownInsightFacePersons: false,
 						faceMatchAutoApplySafeInsightFacePersons: false,
+						faceMatchMissingFacesChangedSinceDays: 30,
 						faceMatchTransferredCount: 0,
 			faceMatchProgressBase: {
 				persons_read: 0,
@@ -174,7 +175,7 @@ export default {
 			return !!(
 				progress.active === true
 				|| progress.running === true
-				|| progress.stop_requested === true
+				|| (progress.stop_requested === true && (progress.active === true || progress.running === true || phase === 'stopping'))
 				|| phase === 'preparing'
 				|| phase === 'running'
 				|| phase === 'stopping'
@@ -404,7 +405,7 @@ export default {
 				&& (
 					progress.active === true
 					|| progress.running === true
-					|| progress.stop_requested === true
+					|| (progress.stop_requested === true && (progress.active === true || progress.running === true || phase === 'stopping'))
 					|| phase === 'preparing'
 					|| phase === 'running'
 					|| phase === 'stopping'
@@ -1153,7 +1154,9 @@ export default {
 			}
 			const payload = this.getResponseDataObject(data, 'face_matches');
 			const entries = this.filterSkippedFaceMatchFindings(Array.isArray(payload.entries) ? payload.entries : []);
-			const remainingCount = Number(payload.count) || entries.length;
+			const remainingCount = Number.isFinite(Number(payload.count))
+				? Math.max(0, Number(payload.count))
+				: entries.length;
 			const transferredCount = Math.max(0, Number(payload.transferred_count) || 0);
 			this.faceMatchFindingEntries = entries;
 			this.faceMatchFindingIndex = 0;
@@ -2339,6 +2342,9 @@ export default {
 						skip_unknown_persons: this.selectedFaceMatchingAction === 'search_missing_faces_insightface'
 							&& this.faceMatchRecognizeMissingInsightFacePersons
 							&& this.faceMatchSkipUnknownInsightFacePersons,
+						changed_since_days: ['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(this.selectedFaceMatchingAction)
+							? Math.max(0, Number(this.faceMatchMissingFacesChangedSinceDays) || 0)
+							: 0,
 						resume_from_progress: resumeFromProgress,
 						skip_face_ids: this.faceMatchSkippedFaceIds,
 						skip_targets: this.faceMatchSkippedTargets,

@@ -95,6 +95,15 @@ def test_face_match_findings_transfer_keeps_zero_remaining_count():
     assert "Number(findingsUpdate.remaining_count) || remainingEntries.length" not in advance
 
 
+def test_face_match_findings_load_keeps_zero_remaining_count():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+
+    load = _watch_method(source, "loadStoredFaceMatchFindings")
+    assert "Number.isFinite(Number(payload.count))" in load
+    assert "Math.max(0, Number(payload.count))" in load
+    assert "Number(payload.count) || entries.length" not in load
+
+
 def test_face_match_stored_findings_can_skip_false_detection_persistently():
     source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
     view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")

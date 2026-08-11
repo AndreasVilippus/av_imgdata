@@ -2,6 +2,8 @@
 """Optional FastAPI router for external AV ImgData workers."""
 
 import os
+import sys
+import asyncio
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -37,7 +39,16 @@ def _composition() -> WorkerApiCompositionService:
 async def _json_body(request: Request) -> Dict[str, Any]:
     try:
         body = await request.json()
-    except Exception:
+    except Exception as exc:
+        _backend_debug_log(
+            "worker_api_json_body_invalid",
+            method=str(getattr(request, "method", "")),
+            path=str(getattr(getattr(request, "url", None), "path", "")),
+            content_type=str(request.headers.get("content-type") or ""),
+            content_length=str(request.headers.get("content-length") or ""),
+            worker_id=str(request.headers.get("x-worker-id") or ""),
+            error_type=type(exc).__name__,
+        )
         return {}
     return body if isinstance(body, dict) else {}
 
@@ -66,6 +77,37 @@ def _error_response(exc: WorkerApiError) -> JSONResponse:
     return JSONResponse(
         status_code=worker_error_http_status(exc.code),
         content={"status": "error", "code": exc.code, "message": str(exc)},
+    )
+
+
+async def _run_worker_api_call(func):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func)
+
+
+def _backend_debug_log(event: str, **fields: Any) -> None:
+    module = sys.modules.get("api.imgdata_api")
+    logger = getattr(module, "backend_debug_log", None) if module is not None else None
+    if not callable(logger):
+        return
+    try:
+        logger(event, **fields)
+    except Exception:
+        pass
+
+
+def _log_worker_api_response(action: str, status_code: int, payload: Dict[str, Any], body: Dict[str, Any], request: Request) -> None:
+    if status_code < 400:
+        return
+    _backend_debug_log(
+        "worker_api_action_failed",
+        action=action,
+        status_code=status_code,
+        response_status=payload.get("status"),
+        response_code=payload.get("code"),
+        response_message=payload.get("message"),
+        worker_id=_worker_id(request, body),
+        job_id=str(body.get("job_id") or ""),
     )
 
 
@@ -134,10 +176,13 @@ async def worker_action(action: str, request: Request) -> JSONResponse:
     if not composition.enabled():
         return _disabled_response()
     body = await _json_body(request)
-    status_code, payload = handle_worker_api_request(
-        action,
-        headers=_headers(request),
-        body=body,
-        service=composition.worker_api,
+    status_code, payload = await _run_worker_api_call(
+        lambda: handle_worker_api_request(
+            action,
+            headers=_headers(request),
+            body=body,
+            service=composition.worker_api,
+        )
     )
+    _log_worker_api_response(action, status_code, payload, body, request)
     return JSONResponse(status_code=status_code, content=payload)

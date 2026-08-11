@@ -50,6 +50,22 @@ export default {
 			const progress = this.checksProgress && typeof this.checksProgress === 'object'
 				? this.checksProgress
 				: {};
+			const status = progress.status && typeof progress.status === 'object'
+				? progress.status
+				: {};
+			const phase = String(status.phase || progress.status_phase || progress.phase || progress.status || '').trim().toLowerCase();
+			const terminalProgress = !!(
+				Object.keys(progress).length
+				&& progress.running !== true
+				&& progress.active !== true
+				&& (
+					progress.finished === true
+					|| ['finished', 'stopped', 'failed', 'idle'].includes(phase)
+				)
+			);
+			if (terminalProgress) {
+				return false;
+			}
 			return !!(
 				this.checksStopRequested
 				|| this.checksStopRequestInFlight
@@ -79,7 +95,10 @@ export default {
 		},
 		checksPrimaryButtonLabel() {
 			if (this.isInsightFaceAssignmentCheck) {
-				if (this.cleanupLoading) {
+				const cleanupActive = typeof this.cleanupActionActive === 'boolean'
+					? this.cleanupActionActive
+					: this.cleanupLoading;
+				if (cleanupActive) {
 					return this.$avt('checks:button_stop', 'Stop');
 				}
 				if (this.selectedChecksAction === 'findings') {
@@ -1183,7 +1202,7 @@ export default {
 		},
 		startChecksProgressPolling() {
 			this.startNamedPolling('checksProgressTimer', () => {
-				this.fetchChecksProgress();
+				return this.fetchChecksProgress();
 			}, 1000, { skipIfPending: true });
 		},
 		stopChecksProgressPolling() {

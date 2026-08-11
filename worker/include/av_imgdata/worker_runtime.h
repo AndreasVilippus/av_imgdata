@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -146,14 +147,23 @@ inline std::string abbreviate(const std::string& value, std::size_t limit) {
 
 inline std::string json_escape(const std::string& value) {
     std::ostringstream out;
-    for (char c : value) {
+    for (unsigned char c : value) {
         switch (c) {
             case '\\': out << "\\\\"; break;
             case '"': out << "\\\""; break;
+            case '\b': out << "\\b"; break;
+            case '\f': out << "\\f"; break;
             case '\n': out << "\\n"; break;
             case '\r': out << "\\r"; break;
             case '\t': out << "\\t"; break;
-            default: out << c;
+            default:
+                if (c < 0x20) {
+                    out << "\\u"
+                        << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c)
+                        << std::dec << std::setfill(' ');
+                } else {
+                    out << static_cast<char>(c);
+                }
         }
     }
     return out.str();
@@ -277,6 +287,33 @@ inline std::string extract_json_object(const std::string& json, const std::strin
 
 inline std::string extract_json_array(const std::string& json, const std::string& key) {
     return extract_block(json, key, '[', ']');
+}
+
+inline std::string extract_first_json_object(const std::string& text) {
+    const auto start = text.find('{');
+    if (start == std::string::npos) return "";
+    int depth = 0;
+    bool in_string = false;
+    bool escaping = false;
+    for (std::size_t i = start; i < text.size(); ++i) {
+        const char c = text[i];
+        if (escaping) {
+            escaping = false;
+            continue;
+        }
+        if (c == '\\') {
+            escaping = true;
+            continue;
+        }
+        if (c == '"') {
+            in_string = !in_string;
+            continue;
+        }
+        if (in_string) continue;
+        if (c == '{') ++depth;
+        else if (c == '}' && --depth == 0) return text.substr(start, i - start + 1);
+    }
+    return "";
 }
 
 inline std::string extract_json_scalar(const std::string& json, const std::string& key, const std::string& fallback) {

@@ -576,6 +576,33 @@ def test_face_match_candidate_paths_cache_is_owned_by_workflow_service():
     assert listed_paths == []
 
 
+def test_face_match_candidate_paths_changed_since_days_uses_image_and_sidecar_mtime():
+    service = make_service()
+    paths = [
+        "/volume1/photo/a.jpg",
+        "/volume1/photo/b.jpg",
+        "/volume1/photo/c.jpg",
+    ]
+    sidecars = {
+        "/volume1/photo/b.jpg": "/volume1/photo/b.xmp",
+        "/volume1/photo/c.jpg": "/volume1/photo/c.xmp",
+    }
+    service.files.listImageFiles = lambda shared_folder: paths
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: sidecars.get(image_path)
+    service._fileChangedSince = lambda path, cutoff: path in {
+        "/volume1/photo/b.xmp",
+        "/volume1/photo/c.jpg",
+    }
+
+    assert service._getFaceMatchCandidatePaths(
+        user_key="user",
+        action="search_missing_faces_insightface",
+        shared_folder="/volume1/photo",
+        changed_since_days=7,
+        use_cache=False,
+    ) == ["/volume1/photo/b.jpg", "/volume1/photo/c.jpg"]
+
+
 def test_face_match_stop_request_is_owned_by_workflow_service():
     service = make_service()
     service._setFaceMatchingProgress(
@@ -856,12 +883,74 @@ def test_start_face_matching_discovery_passes_insightface_skip_unknown_options_t
             action="search_missing_faces_insightface",
             recognize_persons=True,
             skip_unknown_persons=True,
+            changed_since_days=14,
         )
 
     assert progress["resume_cursor"]["recognize_persons"] is True
     assert progress["resume_cursor"]["skip_unknown_persons"] is True
+    assert progress["resume_cursor"]["changed_since_days"] == 14
     assert captured["kwargs"]["kwargs"]["recognize_persons"] is True
     assert captured["kwargs"]["kwargs"]["skip_unknown_persons"] is True
+    assert captured["kwargs"]["kwargs"]["changed_since_days"] == 14
+
+
+def test_start_face_matching_discovery_passes_mark_missing_changed_since_days_to_worker():
+    service = make_service()
+    captured = {}
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return False
+
+    with patch("services.face_match_workflow_service.Thread", FakeThread):
+        progress = service.startFaceMatchingDiscovery(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            action="mark_missing_photos_faces",
+            changed_since_days=21,
+        )
+
+    assert progress["resume_cursor"]["changed_since_days"] == 21
+    assert captured["kwargs"]["kwargs"]["changed_since_days"] == 21
+
+
+def test_start_face_matching_discovery_passes_photo_and_file_search_changed_since_days_to_worker():
+    for user_key, action, days in (
+        ("user-photo", "search_photo_face_in_file", 9),
+        ("user-file", "search_file_face_in_sources", 11),
+    ):
+        service = make_service()
+        captured = {}
+
+        class FakeThread:
+            def __init__(self, *args, **kwargs):
+                captured["kwargs"] = kwargs
+
+            def start(self):
+                return None
+
+            def is_alive(self):
+                return False
+
+        with patch("services.face_match_workflow_service.Thread", FakeThread):
+            progress = service.startFaceMatchingDiscovery(
+                user_key=user_key,
+                cookies={},
+                base_url="https://example.test",
+                action=action,
+                changed_since_days=days,
+            )
+
+        assert progress["resume_cursor"]["changed_since_days"] == days
+        assert captured["kwargs"]["kwargs"]["action"] == action
+        assert captured["kwargs"]["kwargs"]["changed_since_days"] == days
 
 
 def test_run_checks_scan_preserves_latest_progress_on_session_error():
@@ -1060,6 +1149,37 @@ def test_run_face_matching_publishes_success_result_with_terminal_state_atomical
         "findings_count": 1,
         "transferred_count": 0,
     })]
+
+
+def test_run_face_matching_passes_changed_since_days_to_backend_actions():
+    actions = {
+        "search_photo_face_in_file": "searchPhotoFaceInFile",
+        "search_file_face_in_sources": "searchFileFaceInSources",
+        "mark_missing_photos_faces": "searchMissingPhotosFaces",
+        "search_missing_faces_insightface": "searchMissingPhotosFacesWithInsightFace",
+    }
+    for action, method_name in actions.items():
+        service = make_service()
+        backend_method = Mock(return_value={"searched": True})
+        service.session_manager.keepalive = lambda *args, **kwargs: {}
+        service._setFaceMatchingProgress = Mock()
+        setattr(service, method_name, backend_method)
+
+        service._runFaceMatching(
+            user_key=f"user-{action}",
+            cookies={},
+            base_url="https://example.test",
+            action=action,
+            limit=0,
+            offset=0,
+            skip_face_ids=[],
+            skip_targets=[],
+            auto=False,
+            save_only=False,
+            changed_since_days=5,
+        )
+
+        assert backend_method.call_args.kwargs["changed_since_days"] == 5
 
 
 def test_run_face_matching_bootstrap_failure_requests_login():

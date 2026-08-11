@@ -44,6 +44,41 @@ def test_profile_math_builds_normalized_centroid_and_medoid():
     assert FaceRecognitionService._medoid_index([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2]]) == 1
 
 
+def test_recognition_preparing_progress_resets_stale_image_counters():
+    updates = []
+    service, _findings = _service()
+    service.backend._setCleanupProgress = lambda *args, **kwargs: updates.append(kwargs)
+
+    service._set_progress(
+        "user-1",
+        service.ACTION_SUGGEST,
+        {"operation_mode": "immediate"},
+        running=True,
+        finished=False,
+        phase="preparing",
+        message_key="cleanup:recognition_preparing",
+        message="Preparing face recognition.",
+        persons_scanned=0,
+        persons_total=0,
+        images_scanned=0,
+        images_total=0,
+        images_analyzed=0,
+        images_skipped_unchanged=0,
+        faces_scanned=0,
+        references_count=0,
+        profiles_built=0,
+        findings_count=0,
+        transferred_count=0,
+        errors_count=0,
+    )
+
+    assert updates[-1]["images_scanned"] == 0
+    assert updates[-1]["images_total"] == 0
+    counters = {counter["key"]: counter for counter in updates[-1]["status"]["counters"]}
+    assert counters["images"]["value"] == 0
+    assert counters["images_skipped_unchanged"]["value"] == 0
+
+
 def test_review_updates_only_persisted_recognition_finding():
     service, findings = _service()
     findings.values[service.FINDING_OUTLIERS] = {
@@ -411,6 +446,173 @@ def test_assignment_scan_finishes_stopped_when_cleanup_stop_requested():
     assert progress_updates[-1][1]["status"]["phase"] == "stopped"
 
 
+def test_assignment_scan_finishes_stopped_after_native_rank_returns():
+    service, findings = _service()
+    progress_updates = []
+    options = service.normalize_options({"operation_mode": "immediate", "review_score": 0.1, "min_margin": 0.0})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {
+                "person_id": 1,
+                "person_name": "Current",
+                "used_count": 3,
+                "centroid_embedding": [1.0, 0.0],
+                "medoid": {},
+            },
+            {
+                "person_id": 2,
+                "person_name": "Suggested",
+                "used_count": 3,
+                "centroid_embedding": [0.0, 1.0],
+                "medoid": {},
+            },
+        ],
+    }
+    stop_requested = {"value": False}
+    service.backend._shouldStopCleanup = lambda _user_key, _action: stop_requested["value"]
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
+    service.backend.photos = SimpleNamespace(listFotoTeamPersonKnown=lambda **_kwargs: [{"id": 1, "name": "Current"}])
+    service._prepared_embedder = lambda _options: SimpleNamespace()
+    service._person_references = lambda **_kwargs: [{
+        "face_id": 11,
+        "image_id": 22,
+        "image_path": "/volume1/photo/a.jpg",
+        "bbox": {},
+        "embedding": [0.0, 1.0],
+    }]
+
+    def rank_profiles(*_args, **_kwargs):
+        stop_requested["value"] = True
+        return [(0.9, {"person_id": 2, "person_name": "Suggested"}, 0.0, {}, 0.9)]
+
+    service._rank_profiles = rank_profiles
+
+    service._build_assignment_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    assert progress_updates[-1][1]["phase"] == "stopped"
+    assert progress_updates[-1][1]["stop_requested"] is True
+    assert progress_updates[-1][1]["status"]["phase"] == "stopped"
+    assert findings.values.get(service.FINDING_ASSIGNMENTS, {}).get("entries") is None
+
+
+def test_unknown_face_scan_finishes_stopped_when_cleanup_stop_requested():
+    service, findings = _service()
+    progress_updates = []
+    options = service.normalize_options({"operation_mode": "immediate"})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [{
+            "person_id": 1,
+            "person_name": "One",
+            "used_count": 3,
+            "centroid_embedding": [1.0, 0.0],
+            "medoid": {},
+        }],
+    }
+    stop_requested = {"value": False}
+    service.backend._shouldStopCleanup = lambda _user_key, _action: stop_requested["value"]
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
+    service.backend.photos = SimpleNamespace(listFotoTeamPersonUnknown=lambda **_kwargs: [{"id": 99, "name": ""}])
+    service._prepared_embedder = lambda _options: SimpleNamespace()
+
+    def references(**_kwargs):
+        stop_requested["value"] = True
+        return [{"face_id": 7, "embedding": [1.0, 0.0], "image_path": "/volume1/photo/a.jpg", "image_id": 12, "bbox": {}}]
+
+    service._person_references = references
+    service._rank_profiles = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("ranking must not run after stop"))
+
+    service._build_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    assert progress_updates[-1][1]["phase"] == "stopped"
+    assert progress_updates[-1][1]["stop_requested"] is True
+    assert progress_updates[-1][1]["status"]["phase"] == "stopped"
+
+
+def test_profile_build_stops_after_reference_scan_before_profile_math():
+    service, _findings = _service()
+    progress_updates = []
+    options = service.normalize_options({"operation_mode": "immediate"})
+    stop_requested = {"value": False}
+    service.backend._shouldStopCleanup = lambda _user_key, _action: stop_requested["value"]
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
+    service.backend.photos = SimpleNamespace(listFotoTeamPersonKnown=lambda **_kwargs: [{"id": 1, "name": "One"}])
+    service._prepared_embedder = lambda _options: SimpleNamespace()
+
+    def references(**_kwargs):
+        stop_requested["value"] = True
+        return [{"face_id": 7, "embedding": [1.0, 0.0], "image_path": "/volume1/photo/a.jpg", "image_id": 12, "bbox": {}}]
+
+    service._person_references = references
+    service._profile_math = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("profile math must not run after stop"))
+
+    service._build_profiles(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    assert progress_updates[-1][1]["phase"] == "stopped"
+    assert progress_updates[-1][1]["stop_requested"] is True
+    assert progress_updates[-1][1]["status"]["phase"] == "stopped"
+
+
+def test_outlier_scan_finishes_stopped_after_native_rank_returns():
+    service, findings = _service()
+    progress_updates = []
+    options = service.normalize_options({"operation_mode": "immediate"})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {
+                "person_id": 1,
+                "person_name": "One",
+                "used_count": 3,
+                "centroid_embedding": [1.0, 0.0],
+                "medoid": {},
+                "references": [{"face_id": 7, "embedding": [0.0, 1.0], "image_path": "/a.jpg", "image_id": 12, "bbox": {}}],
+            },
+            {
+                "person_id": 2,
+                "person_name": "Two",
+                "used_count": 3,
+                "centroid_embedding": [0.0, 1.0],
+                "medoid": {},
+                "references": [],
+            },
+        ],
+    }
+    stop_requested = {"value": False}
+    service.backend._shouldStopCleanup = lambda _user_key, _action: stop_requested["value"]
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+    service._prepared_embedder = lambda _options: SimpleNamespace()
+
+    def rank_profiles(*_args, **_kwargs):
+        stop_requested["value"] = True
+        return [(0.9, {"person_id": 2, "person_name": "Two"}, 0.0, {}, 0.9)]
+
+    service._rank_profiles = rank_profiles
+
+    service._build_outliers(user_key="u", options=options)
+
+    assert progress_updates[-1][1]["phase"] == "stopped"
+    assert progress_updates[-1][1]["stop_requested"] is True
+    assert progress_updates[-1][1]["status"]["phase"] == "stopped"
+    assert findings.values.get(service.FINDING_OUTLIERS, {}).get("entries") is None
+
+
 def test_excluding_outlier_updates_persisted_profile_immediately():
     service, findings = _service()
     options = service.normalize_options({})
@@ -608,6 +810,57 @@ def test_person_reference_scan_reports_image_counter_progress_without_current_fi
     assert counter_values["images_skipped_unchanged"] == 0
     assert "faces" not in counter_values
     assert counter_values["references"] == 1
+
+
+def test_person_reference_native_batch_advances_visible_image_progress(tmp_path):
+    service, _findings = _service()
+    paths = {}
+    for name in ("image-1.jpg", "image-2.jpg", "image-3.jpg"):
+        path = tmp_path / name
+        path.write_bytes(b"jpeg")
+        paths[name] = str(path)
+    progress_updates = []
+    service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: None)
+    service.backend._debugLog = lambda *_args, **_kwargs: None
+    service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [
+        {"id": 10, "folder_id": 20, "filename": "image-1.jpg"},
+        {"id": 11, "folder_id": 20, "filename": "image-2.jpg"},
+        {"id": 12, "folder_id": 20, "filename": "image-3.jpg"},
+    ]
+    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda **_kwargs: [])
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+    service._item_path = lambda item, **_kwargs: paths[item["filename"]]
+
+    def detect_many(image_paths):
+        return {str(path): [] for path in image_paths}
+
+    embedder = SimpleNamespace(
+        detect_and_embed_many=detect_many,
+        detect_and_embed=lambda _path: (_ for _ in ()).throw(AssertionError("batch path expected")),
+        _iou=lambda _left, _right: 0.0,
+    )
+
+    references = service._person_references(
+        user_key="u", cookies={}, base_url="https://dsm", shared_folder=str(tmp_path),
+        person={"id": 1, "name": "Ada"}, embedder=embedder, options=service.normalize_options({}), folder_cache={},
+        progress_context={
+            "action": service.ACTION_ASSIGNMENT,
+            "phase": "reading_unknown_images",
+            "persons_scanned": 0,
+            "persons_total": 1,
+        },
+    )
+
+    assert references == []
+    image_progress = [update for _user_key, update in progress_updates if update.get("images_total") == 3]
+    assert image_progress
+    assert max(update["images_scanned"] for update in image_progress) == 3
+    assert image_progress[-1]["images_scanned"] == 3
+    assert image_progress[-1]["images_analyzed"] == 3
+    assert image_progress[-1]["status"]["progress"]["current"] == 3
 
 
 def test_person_reference_scan_separates_list_progress_from_changed_date_skip(tmp_path):

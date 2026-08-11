@@ -46,6 +46,7 @@ class ExternalWorkerProcessorService:
         poll_interval_seconds: float = 0.5,
         clock: Optional[Callable[[], datetime]] = None,
         sleeper: Optional[Callable[[float], None]] = None,
+        debug_logger: Optional[Callable[..., None]] = None,
     ):
         self.worker_api = worker_api
         self.store = worker_api.store
@@ -56,11 +57,21 @@ class ExternalWorkerProcessorService:
         self.wait_timeout_seconds = max(1, int(wait_timeout_seconds))
         self.poll_interval_seconds = max(0.05, float(poll_interval_seconds))
         self._clock = clock
+        self._debug_logger = debug_logger if callable(debug_logger) else None
         if sleeper is not None:
             self._sleeper = sleeper
 
     def _sleeper(self, seconds: float) -> None:
         time.sleep(seconds)
+
+    def _debug_log(self, event: str, **fields: Any) -> None:
+        logger = self._debug_logger
+        if not callable(logger):
+            return
+        try:
+            logger(event, **fields)
+        except Exception:
+            pass
 
     def execute_face_detect(self, *, image_path: Path, local_execute: Callable[[], List[Dict[str, Any]]], policy: str = "local_preferred", operation: str, action: str, mode: str, operation_id: str, source_id: str = "", entity_type: str = "image", entity_id: str = "", det_thresh: float = 0.5, max_num: int = 0, det_size: Any = (640, 640), priority: int = 100) -> Dict[str, Any]:
         return self._execute_image_faces(
@@ -133,9 +144,11 @@ class ExternalWorkerProcessorService:
     def _execute_image_faces(self, *, capability: str, job_prefix: str, image_path: Path, local_execute: Callable[[], List[Dict[str, Any]]], policy: str, operation: str, action: str, mode: str, operation_id: str, source_id: str, entity_type: str, entity_id: str, det_thresh: float, max_num: int, det_size: Any, priority: int) -> Dict[str, Any]:
         selected_policy = self._selected_policy(policy)
         if selected_policy in {"local_only", "local_preferred"}:
+            self._debug_log("external_worker_dispatch_local", capability=capability, policy=selected_policy, reason="policy")
             return {"execution_target": "local_native", "faces": local_execute(), "job_id": None}
         if not self.has_compatible_worker(capability):
             if selected_policy == "external_preferred":
+                self._debug_log("external_worker_dispatch_local", capability=capability, policy=selected_policy, reason="compatible_worker_unavailable")
                 return {"execution_target": "local_native", "faces": local_execute(), "job_id": None}
             raise ExternalWorkerProcessorUnavailable("external_worker_unavailable")
         queued = self._enqueue_image_faces(
@@ -155,15 +168,19 @@ class ExternalWorkerProcessorService:
             priority=priority,
         )
         job_id = str(queued["job"]["job_id"])
+        self._debug_log("external_worker_dispatch_enqueued", capability=capability, job_id=job_id, action=action, operation=operation, mode=mode)
         faces = self.wait_and_consume_faces(job_id, capability=capability)
+        self._debug_log("external_worker_dispatch_completed", capability=capability, job_id=job_id, faces_count=len(faces))
         return {"execution_target": "external_worker", "faces": faces, "job_id": job_id}
 
     def _execute_vector_result(self, *, capability: str, job_prefix: str, payload: Dict[str, Any], local_execute: Callable[[], Any], policy: str, operation: str, action: str, mode: str, operation_id: str, priority: int) -> Dict[str, Any]:
         selected_policy = self._selected_policy(policy)
         if selected_policy in {"local_only", "local_preferred"}:
+            self._debug_log("external_worker_dispatch_local", capability=capability, policy=selected_policy, reason="policy")
             return {"execution_target": "local_native", "result": local_execute(), "job_id": None}
         if not self.has_compatible_worker(capability):
             if selected_policy == "external_preferred":
+                self._debug_log("external_worker_dispatch_local", capability=capability, policy=selected_policy, reason="compatible_worker_unavailable")
                 return {"execution_target": "local_native", "result": local_execute(), "job_id": None}
             raise ExternalWorkerProcessorUnavailable("external_worker_unavailable")
         queued = self._enqueue_vector_job(
@@ -177,7 +194,9 @@ class ExternalWorkerProcessorService:
             priority=priority,
         )
         job_id = str(queued["job"]["job_id"])
+        self._debug_log("external_worker_dispatch_enqueued", capability=capability, job_id=job_id, action=action, operation=operation, mode=mode)
         result = self.wait_and_consume_result(job_id, capability=capability)
+        self._debug_log("external_worker_dispatch_completed", capability=capability, job_id=job_id)
         return {"execution_target": "external_worker", "result": result, "job_id": job_id}
 
     def _selected_policy(self, policy: str) -> str:
@@ -308,8 +327,10 @@ class ExternalWorkerProcessorService:
                 "result_consumed_at": now,
                 "result_consumer_version": "1.0",
                 "result_apply_status": "consumed",
+                "raw_result_purged_at": now,
                 "updated_at": now,
             })
+            current.pop("result", None)
             return value
 
         return self.store.update(mutate)

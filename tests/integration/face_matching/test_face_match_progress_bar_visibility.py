@@ -28,7 +28,7 @@ def test_face_match_progress_visibility_includes_preparing_or_running_state():
 
     assert "faceMatchHasActiveProgressState()" in mixin
     assert "progress.running === true" in method
-    assert "progress.stop_requested === true" in method
+    assert "progress.stop_requested === true &&" in method
     assert "this.faceMatchLoading" in method
     assert "faceMatchStatusPhase()" in mixin
     assert "phase === 'preparing'" in method

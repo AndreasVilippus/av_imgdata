@@ -106,7 +106,92 @@ def test_face_matching_action_normalizes_request_and_starts_discovery(monkeypatc
         resume_from_progress=True,
         recognize_persons=True,
         skip_unknown_persons=True,
+        changed_since_days=0,
     )
+
+
+def test_face_matching_action_passes_changed_since_days_for_insightface_missing_faces(monkeypatch):
+    async def request_body(_request):
+        return {
+            "action": "search_missing_faces_insightface",
+            "changed_since_days": "14",
+        }
+
+    start_discovery = Mock(return_value={"running": True})
+
+    _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getRuntimeConfig", Mock(return_value={"photos": {"MAX_PHOTOS_PERSONS": 50}}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "startFaceMatchingDiscovery", start_discovery)
+
+    payload = _run(imgdata_api.face_matching_action(object()))
+
+    assert payload["success"] is True
+    assert start_discovery.call_args.kwargs["changed_since_days"] == 14
+
+
+def test_face_matching_action_passes_changed_since_days_for_mark_missing_faces(monkeypatch):
+    async def request_body(_request):
+        return {
+            "action": "mark_missing_photos_faces",
+            "changed_since_days": "21",
+        }
+
+    start_discovery = Mock(return_value={"running": True})
+
+    _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getRuntimeConfig", Mock(return_value={"photos": {"MAX_PHOTOS_PERSONS": 50}}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "startFaceMatchingDiscovery", start_discovery)
+
+    payload = _run(imgdata_api.face_matching_action(object()))
+
+    assert payload["success"] is True
+    assert start_discovery.call_args.kwargs["changed_since_days"] == 21
+
+
+def test_face_matching_action_passes_changed_since_days_for_photo_face_searches(monkeypatch):
+    async def request_body(_request):
+        return {
+            "action": "search_photo_face_in_file",
+            "changed_since_days": "9",
+        }
+
+    start_discovery = Mock(return_value={"running": True})
+
+    _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getRuntimeConfig", Mock(return_value={"photos": {"MAX_PHOTOS_PERSONS": 50}}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "startFaceMatchingDiscovery", start_discovery)
+
+    payload = _run(imgdata_api.face_matching_action(object()))
+
+    assert payload["success"] is True
+    assert start_discovery.call_args.kwargs["changed_since_days"] == 9
+
+
+def test_face_matching_action_passes_changed_since_days_for_file_face_searches(monkeypatch):
+    async def request_body(_request):
+        return {
+            "action": "search_file_face_in_sources",
+            "changed_since_days": "11",
+        }
+
+    start_discovery = Mock(return_value={"running": True})
+
+    _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getRuntimeConfig", Mock(return_value={"photos": {"MAX_PHOTOS_PERSONS": 50}}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "startFaceMatchingDiscovery", start_discovery)
+
+    payload = _run(imgdata_api.face_matching_action(object()))
+
+    assert payload["success"] is True
+    assert start_discovery.call_args.kwargs["changed_since_days"] == 11
 
 
 def test_face_matching_action_rejects_unsupported_action_before_service_call(monkeypatch):
@@ -531,6 +616,7 @@ def test_file_image_decodes_heic_preview_before_returning_original(monkeypatch, 
     monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": str(tmp_path)}))
     monkeypatch.setattr(imgdata_api.IMGDATA.files, "extractEmbeddedJpegPreview", Mock(return_value=None))
     monkeypatch.setattr(imgdata_api.IMGDATA.image_decoder, "decode_to_jpeg", Mock(return_value=decoded))
+    monkeypatch.setattr(imgdata_api, "backend_debug_log", Mock())
 
     response = _run(imgdata_api.file_image(object(), path=str(image_path)))
 
@@ -539,6 +625,77 @@ def test_file_image_decodes_heic_preview_before_returning_original(monkeypatch, 
     assert response.body == b"\xff\xd8decoded"
     assert len(calls) == 2
     imgdata_api.IMGDATA.image_decoder.decode_to_jpeg.assert_called_once_with(str(image_path))
+    imgdata_api.backend_debug_log.assert_called_once_with(
+        "file_image_served",
+        path=str(image_path),
+        source="pillow-heif",
+    )
+
+
+def test_file_image_prefers_heic_decoder_over_embedded_preview(monkeypatch, tmp_path):
+    calls = _install_backend_call_recorder(monkeypatch)
+    image_path = tmp_path / "image.heic"
+    image_path.write_bytes(b"\x00\x00\x00\x18ftypheic")
+    embedded_preview = b"\xff\xd8embedded-preview"
+    decoded = type("Decoded", (), {"success": True, "image_bytes": b"\xff\xd8decoded-full", "source": "pillow-heif", "error": ""})()
+    extract_preview = Mock(return_value=embedded_preview)
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": str(tmp_path)}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.files, "extractEmbeddedJpegPreview", extract_preview)
+    monkeypatch.setattr(imgdata_api.IMGDATA.image_decoder, "decode_to_jpeg", Mock(return_value=decoded))
+    monkeypatch.setattr(imgdata_api, "backend_debug_log", Mock())
+
+    response = _run(imgdata_api.file_image(object(), path=str(image_path)))
+
+    assert response.status_code == 200
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"\xff\xd8decoded-full"
+    assert len(calls) == 2
+    imgdata_api.IMGDATA.image_decoder.decode_to_jpeg.assert_called_once_with(str(image_path))
+    extract_preview.assert_not_called()
+    imgdata_api.backend_debug_log.assert_called_once_with(
+        "file_image_served",
+        path=str(image_path),
+        source="pillow-heif",
+    )
+
+
+def test_file_image_uses_heic_embedded_preview_when_decoder_fails(monkeypatch, tmp_path):
+    calls = _install_backend_call_recorder(monkeypatch)
+    image_path = tmp_path / "image.heic"
+    image_path.write_bytes(b"\x00\x00\x00\x18ftypheic")
+    decoded = type("Decoded", (), {
+        "success": False,
+        "image_bytes": b"",
+        "source": "pillow-heif",
+        "error": "decoder_not_installed",
+    })()
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": str(tmp_path)}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.files, "extractEmbeddedJpegPreview", Mock(return_value=b"\xff\xd8embedded-preview"))
+    monkeypatch.setattr(imgdata_api.IMGDATA.image_decoder, "decode_to_jpeg", Mock(return_value=decoded))
+    monkeypatch.setattr(imgdata_api, "backend_debug_log", Mock())
+
+    response = _run(imgdata_api.file_image(object(), path=str(image_path)))
+
+    assert response.status_code == 200
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"\xff\xd8embedded-preview"
+    assert len(calls) == 2
+    imgdata_api.backend_debug_log.assert_any_call(
+        "file_image_decoder_failed",
+        path=str(image_path),
+        source="pillow-heif",
+        error="decoder_not_installed",
+    )
+    imgdata_api.backend_debug_log.assert_any_call(
+        "file_image_served",
+        path=str(image_path),
+        source="embedded_preview",
+        reason="decoder_failed_or_unavailable",
+    )
 
 
 def test_file_image_returns_browser_compatible_jpeg_without_embedded_preview(monkeypatch, tmp_path):
@@ -550,6 +707,7 @@ def test_file_image_returns_browser_compatible_jpeg_without_embedded_preview(mon
     monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
     monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": str(tmp_path)}))
     monkeypatch.setattr(imgdata_api.IMGDATA.files, "extractEmbeddedJpegPreview", extract_preview)
+    monkeypatch.setattr(imgdata_api, "backend_debug_log", Mock())
 
     response = _run(imgdata_api.file_image(object(), path=str(image_path)))
 
@@ -557,6 +715,11 @@ def test_file_image_returns_browser_compatible_jpeg_without_embedded_preview(mon
     assert getattr(response, "path", "") == str(image_path)
     extract_preview.assert_not_called()
     assert len(calls) == 1
+    imgdata_api.backend_debug_log.assert_called_once_with(
+        "file_image_served",
+        path=str(image_path),
+        source="original",
+    )
 
 
 def test_file_image_returns_placeholder_for_incompatible_image_when_preview_fails(monkeypatch, tmp_path):
@@ -583,7 +746,18 @@ def test_file_image_returns_placeholder_for_incompatible_image_when_preview_fail
     assert b"Preview unavailable" in response.body
     assert b"ftypheic" not in response.body
     assert len(calls) == 2
-    imgdata_api.backend_debug_log.assert_called_once()
+    imgdata_api.backend_debug_log.assert_any_call(
+        "file_image_decoder_failed",
+        path=str(image_path),
+        source="pillow-heif",
+        error="decoder_not_installed",
+    )
+    imgdata_api.backend_debug_log.assert_any_call(
+        "file_image_served",
+        path=str(image_path),
+        source="placeholder",
+        reason="preview_unavailable",
+    )
 
 
 def test_face_assign_match_assigns_removes_finding_and_saves_mapping(monkeypatch):

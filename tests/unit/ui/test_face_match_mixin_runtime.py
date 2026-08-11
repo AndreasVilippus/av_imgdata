@@ -1177,6 +1177,7 @@ def test_insightface_missing_face_start_sends_auto_only_for_safe_apply_runtime()
 	              faceMatchRecognizeMissingInsightFacePersons: true,
 	              faceMatchSkipUnknownInsightFacePersons: true,
 	              faceMatchAutoApplySafeInsightFacePersons: true,
+              faceMatchMissingFacesChangedSinceDays: 14,
               insightFaceStatus: {
                 native_processors: {
                   FACE_PROCESSOR: {
@@ -1210,6 +1211,7 @@ def test_insightface_missing_face_start_sends_auto_only_for_safe_apply_runtime()
 	            assert.strictEqual(requestBody.auto, true);
 	            assert.strictEqual(requestBody.recognize_persons, true);
 	            assert.strictEqual(requestBody.skip_unknown_persons, true);
+	            assert.strictEqual(requestBody.changed_since_days, 14);
             console.log(JSON.stringify({ requestBody }));
             """
         )
@@ -1219,6 +1221,102 @@ def test_insightface_missing_face_start_sends_auto_only_for_safe_apply_runtime()
     assert result["requestBody"]["auto"] is True
     assert result["requestBody"]["recognize_persons"] is True
     assert result["requestBody"]["skip_unknown_persons"] is True
+    assert result["requestBody"]["changed_since_days"] == 14
+
+
+def test_mark_missing_photos_faces_start_sends_changed_since_days_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let requestBody = null;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'mark_missing_photos_faces',
+              faceMatchMissingFacesChangedSinceDays: 21,
+              callDsmApi: async (_path, body) => {
+                requestBody = body;
+                return {
+                  success: true,
+                  data: {
+                    face_matches: {
+                      running: true,
+                      action: 'mark_missing_photos_faces',
+                    },
+                  },
+                };
+              },
+              applyFaceMatchingProgress: () => true,
+              fetchFaceMatchFindingsStatus: async () => {},
+              syncFaceMatchTransferredCountFromProgress: () => {},
+              startFaceMatchProgressPolling: () => {},
+              stopFaceMatchProgressPolling: () => {},
+            });
+
+            await component.startFaceMatchingAction();
+
+            assert.strictEqual(requestBody.action, 'mark_missing_photos_faces');
+            assert.strictEqual(requestBody.changed_since_days, 21);
+            console.log(JSON.stringify({ requestBody }));
+            """
+        )
+    )
+
+    assert result["requestBody"]["action"] == "mark_missing_photos_faces"
+    assert result["requestBody"]["changed_since_days"] == 21
+
+
+def test_photo_and_file_face_search_start_sends_changed_since_days_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const requests = [];
+            for (const [action, days] of [
+              ['search_photo_face_in_file', 9],
+              ['search_file_face_in_sources', 11],
+            ]) {
+              const component = createComponent({
+                selectedFaceMatchingAction: action,
+                faceMatchMissingFacesChangedSinceDays: days,
+                callDsmApi: async (_path, body) => {
+                  requests.push(body);
+                  return {
+                    success: true,
+                    data: {
+                      face_matches: {
+                        running: true,
+                        action,
+                      },
+                    },
+                  };
+                },
+                applyFaceMatchingProgress: () => true,
+                fetchFaceMatchFindingsStatus: async () => {},
+                syncFaceMatchTransferredCountFromProgress: () => {},
+                startFaceMatchProgressPolling: () => {},
+                stopFaceMatchProgressPolling: () => {},
+              });
+
+              await component.startFaceMatchingAction();
+            }
+
+            assert.deepStrictEqual(
+              requests.map((body) => [body.action, body.changed_since_days]),
+              [
+                ['search_photo_face_in_file', 9],
+                ['search_file_face_in_sources', 11],
+              ],
+            );
+            console.log(JSON.stringify({ requests }));
+            """
+        )
+    )
+
+    assert [
+        [entry["action"], entry["changed_since_days"]]
+        for entry in result["requests"]
+    ] == [
+        ["search_photo_face_in_file", 9],
+        ["search_file_face_in_sources", 11],
+    ]
 
 
 def test_followup_start_accepts_authoritative_response_with_older_revision_runtime():
@@ -1786,3 +1884,44 @@ def test_primary_button_stops_recognition_when_cleanup_progress_is_running_runti
 
     assert result["label"] == "Stop"
     assert [entry["type"] for entry in result["calls"]] == ["sync", "stop-cleanup"]
+
+
+def test_primary_button_starts_recognition_when_cleanup_progress_is_stopped_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const calls = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              faceMatchRecognitionActionSelected: true,
+              cleanupLoading: false,
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                stop_requested: true,
+                status: {
+                  phase: 'stopped',
+                },
+              },
+              syncFaceMatchRecognitionOptions: () => calls.push({ type: 'sync' }),
+              stopCleanupRun: async (options) => calls.push({ type: 'stop-cleanup', options }),
+              startCleanupRun: async () => calls.push({ type: 'start-cleanup' }),
+            });
+
+            assert.strictEqual(component.faceMatchRecognitionCleanupActive, false);
+            assert.strictEqual(component.faceMatchPrimaryButtonLabel, 'Start');
+
+            await component.handlePrimaryFaceMatchButton();
+
+            assert.deepStrictEqual(calls.map((entry) => entry.type), ['sync', 'start-cleanup']);
+            console.log(JSON.stringify({
+              label: component.faceMatchPrimaryButtonLabel,
+              calls,
+            }));
+            """
+        )
+    )
+
+    assert result["label"] == "Start"
+    assert [entry["type"] for entry in result["calls"]] == ["sync", "start-cleanup"]

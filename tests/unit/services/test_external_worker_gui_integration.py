@@ -20,7 +20,9 @@ def test_face_frame_detector_prefers_compatible_external_worker():
     faces = adapter.detect(Path("/volume1/photo/album/image.jpg"))
 
     assert faces[0]["score"] == 0.9
-    composition.external_face_processor.assert_called_once_with(nas_root=Path("/volume1/photo"))
+    composition.external_face_processor.assert_called_once()
+    assert composition.external_face_processor.call_args.kwargs["nas_root"] == Path("/volume1/photo")
+    assert callable(composition.external_face_processor.call_args.kwargs["debug_logger"])
     kwargs = processor.execute_face_detect.call_args.kwargs
     assert kwargs["policy"] == "external_preferred"
     assert kwargs["operation"] == "cleanup"

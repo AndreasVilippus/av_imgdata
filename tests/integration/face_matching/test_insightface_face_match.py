@@ -156,6 +156,32 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
         self.assertEqual(result["metadata_face"]["name"], "Alice")
         self.assertTrue(result["resume_cursor"]["recognize_persons"])
 
+    def test_insightface_missing_face_stop_after_detection_prevents_match_work(self):
+        class FakeDetector:
+            def detect(self, image_path):
+                return [{
+                    "bbox": {"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.5},
+                    "center": {"x": 0.2, "y": 0.35},
+                }]
+
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.files.listImageFiles = lambda base_path: ["/volume1/photo/tests/image.jpg"]
+
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceDetector", return_value=FakeDetector()), \
+             patch.object(self.service, "_shouldStopFaceMatching", side_effect=[False, True]), \
+             patch.object(self.service.photos, "findFotoTeamItemByPath", side_effect=AssertionError("must stop before Photos lookup")):
+            result = self.service.searchMissingPhotosFacesWithInsightFace(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+            )
+
+        self.assertFalse(result["searched"])
+        self.assertTrue(result["stopped"])
+        progress = self.service.getFaceMatchingProgress("user")
+        self.assertEqual(progress["message_key"], "face_match:progress_stopped")
+
     def test_insightface_missing_face_auto_applies_safe_recognition_profile(self):
         class FakeEmbedder:
             @classmethod

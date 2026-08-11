@@ -92,6 +92,14 @@
 								<input :value="vm.recognitionOptions.min_faces_per_person" type="number" min="2" step="1" class="checks-number-input" :disabled="vm.cleanupLoading || vm.faceMatchUseStoredFindings" @input="vm.updateRecognitionOption('min_faces_per_person', Number($event.target.value))" />
 							</label>
 							<label
+								v-if="['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(vm.selectedFaceMatchingAction)"
+								class="checks-number-field"
+								:title="vm.$avt('checks:hint_changed_since_days', 'Only images whose file or sidecar changed within the selected number of days are checked. 0 checks all images.')"
+							>
+								<span class="face-match-switch-label">{{ vm.$avt('checks:label_changed_since_days', 'Changed in days') }}</span>
+								<input v-model.number="vm.faceMatchMissingFacesChangedSinceDays" type="number" min="0" step="1" class="checks-number-input" :disabled="vm.faceMatchLoading || vm.faceMatchUseStoredFindings" />
+							</label>
+							<label
 								v-if="vm.selectedFaceMatchingAction === 'search_missing_faces_insightface'"
 								class="face-match-switch"
 								:title="vm.$avt('face_match:hint_recognize_missing_faces', 'Detected missing faces are compared with existing InsightFace person profiles and suggested for a Photos person when matched.')"

@@ -569,6 +569,8 @@ class FaceFrameStandardizationService:
                             photos_lookup_cache=photos_cache,
                         ))
                     detections = detector.detect(Path(path))
+                    if backend._shouldStopCleanup(user_key, self.ACTION):
+                        break
                     detection_boxes = [self._detection_box(item) for item in detections]
                     for source_index, source in enumerate(sources):
                         if not detection_boxes:

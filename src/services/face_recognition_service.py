@@ -80,6 +80,10 @@ class FaceRecognitionService:
             stop_requested=False,
             phase="preparing", message_key="cleanup:recognition_preparing",
             message="Preparing face recognition.",
+            persons_scanned=0, persons_total=0,
+            images_scanned=0, images_total=0, images_analyzed=0, images_skipped_unchanged=0,
+            faces_scanned=0, references_count=0,
+            profiles_built=0, findings_count=0, transferred_count=0, errors_count=0,
         )
         worker = Thread(
             target=self._run,
@@ -383,6 +387,8 @@ class FaceRecognitionService:
         resume_after_image_seen = not bool(resume_after_image_id)
         reference_limit = int(options.get("max_profile_reference_faces_per_person") or 0) if str(context.get("action") or "") == self.ACTION_BUILD else 0
         reference_limit_reached = False
+        progress_images_scanned_floor = 0
+        progress_images_analyzed_floor = 0
         for item_index, item in enumerate(items):
             if reference_limit > 0 and len(references) >= reference_limit:
                 reference_limit_reached = True
@@ -436,11 +442,11 @@ class FaceRecognitionService:
                     running=True, finished=False, phase=str(context.get("phase") or "reading_reference_images"),
                     message_key=str(context.get("message_key") or "cleanup:recognition_reading_reference_images"),
                     message=str(context.get("message") or "Reading recognition reference images."),
-                    progress_kind=str(context.get("progress_kind") or "images"), images_scanned=item_index + 1, images_total=len(items),
+                    progress_kind=str(context.get("progress_kind") or "images"), images_scanned=max(progress_images_scanned_floor, item_index + 1), images_total=len(items),
                     persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
                     profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
                     faces_scanned=faces_scanned,
-                    images_analyzed=images_analyzed,
+                    images_analyzed=max(progress_images_analyzed_floor, images_analyzed),
                     images_skipped_unchanged=images_skipped_unchanged,
                     references_count=len(references),
                     **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
@@ -455,11 +461,11 @@ class FaceRecognitionService:
                             running=True, finished=False, phase=str(context.get("phase") or "reading_reference_images"),
                             message_key=str(context.get("message_key") or "cleanup:recognition_reading_reference_images"),
                             message=str(context.get("message") or "Reading recognition reference images."),
-                            progress_kind=str(context.get("progress_kind") or "images"), images_scanned=item_index + 1, images_total=len(items),
+                            progress_kind=str(context.get("progress_kind") or "images"), images_scanned=max(progress_images_scanned_floor, item_index + 1), images_total=len(items),
                             persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
                             profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
                             faces_scanned=faces_scanned,
-                            images_analyzed=images_analyzed,
+                            images_analyzed=max(progress_images_analyzed_floor, images_analyzed),
                             images_skipped_unchanged=images_skipped_unchanged,
                             references_count=len(references),
                             **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
@@ -472,22 +478,22 @@ class FaceRecognitionService:
                     running=True, finished=False, phase=str(context.get("phase") or "reading_reference_images"),
                     message_key=str(context.get("message_key") or "cleanup:recognition_reading_reference_images"),
                     message=str(context.get("message") or "Reading recognition reference images."),
-                    progress_kind=str(context.get("progress_kind") or "images"), images_scanned=item_index + 1, images_total=len(items),
+                    progress_kind=str(context.get("progress_kind") or "images"), images_scanned=max(progress_images_scanned_floor, item_index + 1), images_total=len(items),
                     persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
                     profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
                     faces_scanned=faces_scanned,
-                    images_analyzed=images_analyzed,
+                    images_analyzed=max(progress_images_analyzed_floor, images_analyzed),
                     images_skipped_unchanged=images_skipped_unchanged,
                     references_count=len(references),
                     **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
                 )
             if image_path not in self._image_embedding_cache:
                 try:
-                    batch_paths = [image_path]
+                    batch_items = [(item_index, image_path)]
                     detect_many = getattr(embedder, "detect_and_embed_many", None)
                     if callable(detect_many):
                         cutoff = datetime.now(timezone.utc) - timedelta(days=options["changed_since_days"]) if options["changed_since_days"] > 0 else None
-                        for lookahead in items[item_index + 1:item_index + 8]:
+                        for lookahead_offset, lookahead in enumerate(items[item_index + 1:item_index + 8], start=item_index + 1):
                             try:
                                 lookahead_id = int(lookahead.get("id"))
                             except (AttributeError, TypeError, ValueError):
@@ -500,17 +506,35 @@ class FaceRecognitionService:
                                 continue
                             if cutoff is not None and datetime.fromtimestamp(Path(lookahead_path).stat().st_mtime, timezone.utc) < cutoff:
                                 continue
-                            batch_paths.append(lookahead_path)
+                            batch_items.append((lookahead_offset, lookahead_path))
+                        batch_paths = [path for _batch_index, path in batch_items]
                         if len(batch_paths) > 1:
                             batch_result = detect_many([Path(path) for path in batch_paths])
                             for batch_path in batch_paths:
                                 self._image_embedding_cache[batch_path] = batch_result.get(batch_path, [])
+                            progress_images_scanned_floor = max(progress_images_scanned_floor, max(batch_index for batch_index, _path in batch_items) + 1)
+                            progress_images_analyzed_floor = max(progress_images_analyzed_floor, images_analyzed + len(batch_paths) - 1)
                             self._debug_log(
                                 "recognition_native_image_batch_cached",
                                 action=action,
                                 images_count=len(batch_paths),
                                 faces_count=sum(len(self._image_embedding_cache.get(path, [])) for path in batch_paths),
                             )
+                            if context:
+                                self._set_progress(
+                                    user_key, str(context.get("action") or self.ACTION_BUILD), options,
+                                    running=True, finished=False, phase=str(context.get("phase") or "reading_reference_images"),
+                                    message_key=str(context.get("message_key") or "cleanup:recognition_reading_reference_images"),
+                                    message=str(context.get("message") or "Reading recognition reference images."),
+                                    progress_kind=str(context.get("progress_kind") or "images"), images_scanned=progress_images_scanned_floor, images_total=len(items),
+                                    persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
+                                    profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
+                                    faces_scanned=faces_scanned,
+                                    images_analyzed=progress_images_analyzed_floor,
+                                    images_skipped_unchanged=images_skipped_unchanged,
+                                    references_count=len(references),
+                                    **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
+                                )
                         else:
                             self._image_embedding_cache[image_path] = embedder.detect_and_embed(Path(image_path))
                     else:
@@ -576,11 +600,11 @@ class FaceRecognitionService:
                         running=True, finished=False, phase=str(context.get("phase") or "reading_reference_images"),
                         message_key=str(context.get("message_key") or "cleanup:recognition_reading_reference_images"),
                         message=str(context.get("message") or "Reading recognition reference images."),
-                        progress_kind=str(context.get("progress_kind") or "images"), images_scanned=item_index + 1, images_total=len(items),
+                        progress_kind=str(context.get("progress_kind") or "images"), images_scanned=max(progress_images_scanned_floor, item_index + 1), images_total=len(items),
                         persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
                         profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
                         faces_scanned=faces_scanned,
-                        images_analyzed=images_analyzed,
+                        images_analyzed=max(progress_images_analyzed_floor, images_analyzed),
                         images_skipped_unchanged=images_skipped_unchanged,
                         references_count=len(references),
                         **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
@@ -609,11 +633,11 @@ class FaceRecognitionService:
                         running=True, finished=False, phase=str(context.get("phase") or "reading_reference_images"),
                         message_key=str(context.get("message_key") or "cleanup:recognition_reading_reference_images"),
                         message=str(context.get("message") or "Reading recognition reference images."),
-                        progress_kind=str(context.get("progress_kind") or "images"), images_scanned=item_index + 1, images_total=len(items),
+                        progress_kind=str(context.get("progress_kind") or "images"), images_scanned=max(progress_images_scanned_floor, item_index + 1), images_total=len(items),
                         persons_scanned=int(context.get("persons_scanned") or 0), persons_total=int(context.get("persons_total") or 0),
                         profiles_built=int(context.get("profiles_built") or 0), findings_count=int(context.get("findings_count") or 0),
                         faces_scanned=faces_scanned,
-                        images_analyzed=images_analyzed,
+                        images_analyzed=max(progress_images_analyzed_floor, images_analyzed),
                         images_skipped_unchanged=images_skipped_unchanged,
                         references_count=len(references),
                         **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
@@ -627,7 +651,7 @@ class FaceRecognitionService:
             items_total=len(items),
             invalid_items=invalid_items,
             faces_scanned=faces_scanned,
-            images_analyzed=images_analyzed,
+            images_analyzed=max(progress_images_analyzed_floor, images_analyzed),
             images_skipped_unchanged=images_skipped_unchanged,
             references_count=len(references),
             unreadable_images=unreadable_images_after - unreadable_images_before,
@@ -876,6 +900,17 @@ class FaceRecognitionService:
                     "current_name": str(person.get("name") or ""),
                 },
             )
+            if self.backend._shouldStopCleanup(user_key, self.ACTION_BUILD):
+                stopped = True
+                self._debug_log(
+                    "recognition_profiles_build_stop_requested",
+                    persons_scanned=index,
+                    persons_total=len(persons),
+                    profiles_built=len(profiles),
+                    quality_count=len(quality),
+                    phase="after_reference_scan",
+                )
+                break
             raw_reference_count = len(references)
             references = [reference for reference in references if int(reference.get("face_id") or 0) not in excluded_face_ids]
             embeddings = [entry["embedding"] for entry in references]
@@ -946,8 +981,11 @@ class FaceRecognitionService:
                 stopped=stopped,
             )
         self._set_progress(
-            user_key, self.ACTION_BUILD, options, running=False, finished=True, phase="finished",
-            message_key="cleanup:recognition_profiles_finished", message="Person profiles built.",
+            user_key, self.ACTION_BUILD, options, running=False, finished=True,
+            stop_requested=stopped,
+            phase="stopped" if stopped else "finished",
+            message_key="cleanup:progress_stopped" if stopped else "cleanup:recognition_profiles_finished",
+            message="Cleanup stopped." if stopped else "Person profiles built.",
             persons_scanned=len(persons), persons_total=len(persons), profiles_built=len(profiles), findings_count=quality_count,
         )
 
@@ -970,6 +1008,9 @@ class FaceRecognitionService:
             except (TypeError, ValueError):
                 continue
         for profile in profiles if isinstance(profiles, list) else []:
+            if self._should_stop(user_key, self.ACTION_OUTLIERS):
+                self._finish_stopped_scan(user_key, self.ACTION_OUTLIERS, options, entries)
+                return
             centroid = profile.get("centroid_embedding") or []
             medoid = profile.get("medoid") if isinstance(profile.get("medoid"), dict) else {}
             candidate_references = []
@@ -988,7 +1029,13 @@ class FaceRecognitionService:
                 [reference.get("embedding") or [] for reference, _similarity in candidate_references],
                 other_profiles,
             )
+            if self._should_stop(user_key, self.ACTION_OUTLIERS):
+                self._finish_stopped_scan(user_key, self.ACTION_OUTLIERS, options, entries)
+                return
             for index, (reference, similarity) in enumerate(candidate_references):
+                if self._should_stop(user_key, self.ACTION_OUTLIERS):
+                    self._finish_stopped_scan(user_key, self.ACTION_OUTLIERS, options, entries)
+                    return
                 nearest_other_score, nearest_other = (ranks[index][0], ranks[index][1]) if index < len(ranks) else (0.0, {})
                 entries.append({
                     "outlier_id": f"out-{reference.get('face_id')}", "image_path": reference.get("image_path"),
@@ -1054,8 +1101,13 @@ class FaceRecognitionService:
             user_key, self.ACTION_SUGGEST, options, running=True, finished=False, phase="unknown_loaded",
             message_key="cleanup:recognition_unknown_loaded", message="Unknown Photos faces loaded.",
             persons_scanned=0, persons_total=len(unknown), findings_count=len(entries),
+            images_scanned=0, images_total=0, images_analyzed=0, images_skipped_unchanged=0,
+            faces_scanned=0, references_count=0, transferred_count=0, errors_count=0,
         )
         for index, person in enumerate(unknown):
+            if self._should_stop(user_key, self.ACTION_SUGGEST):
+                self._finish_stopped_scan(user_key, self.ACTION_SUGGEST, options, entries)
+                return
             references = self._person_references(
                 user_key=user_key, cookies=cookies, base_url=base_url, shared_folder=shared_folder,
                 person=person, embedder=embedder, options=options, folder_cache=folder_cache,
@@ -1069,10 +1121,16 @@ class FaceRecognitionService:
                     "findings_count": len(entries),
                 },
             )
+            if self._should_stop(user_key, self.ACTION_SUGGEST):
+                self._finish_stopped_scan(user_key, self.ACTION_SUGGEST, options, entries)
+                return
             candidate_references = [
                 reference for reference in references
                 if int(reference.get("face_id") or 0) not in resolved_face_ids
             ]
+            if self._should_stop(user_key, self.ACTION_SUGGEST):
+                self._finish_stopped_scan(user_key, self.ACTION_SUGGEST, options, entries)
+                return
             ranks = self._rank_profiles(
                 embedder,
                 [reference["embedding"] for reference in candidate_references if reference.get("embedding")],
@@ -1080,6 +1138,9 @@ class FaceRecognitionService:
             )
             rank_index = 0
             for reference in candidate_references:
+                if self._should_stop(user_key, self.ACTION_SUGGEST):
+                    self._finish_stopped_scan(user_key, self.ACTION_SUGGEST, options, entries)
+                    return
                 if not reference.get("embedding"):
                     continue
                 if rank_index >= len(ranks):
@@ -1231,7 +1292,13 @@ class FaceRecognitionService:
                 [reference["embedding"] for _face_id, reference in candidate_references],
                 profiles,
             )
+            if self._should_stop(user_key, self.ACTION_ASSIGNMENT):
+                self._finish_stopped_scan(user_key, self.ACTION_ASSIGNMENT, options, entries)
+                return
             for index, (face_id, reference) in enumerate(candidate_references):
+                if self._should_stop(user_key, self.ACTION_ASSIGNMENT):
+                    self._finish_stopped_scan(user_key, self.ACTION_ASSIGNMENT, options, entries)
+                    return
                 if index >= len(ranks):
                     break
                 best_score, best, second_score, second, margin = ranks[index]

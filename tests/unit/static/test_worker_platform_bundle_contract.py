@@ -21,6 +21,8 @@ def test_worker_cmake_builds_same_runtime_roles_for_both_platform_targets():
     assert "protocol/worker-protocol.json" in cmake
     assert "config/worker-config.schema.json" in cmake
     assert "packaging/windows/Initialize-AVImgDataWorker.ps1" in cmake
+    assert "packaging/windows/Initialize-AVImgDataWorker.cmd" in cmake
+    assert "packaging/windows/Start-AVImgDataWorker.cmd" in cmake
     assert "packaging/unix/initialize-av-imgdata-worker.sh" in cmake
 
 
@@ -55,6 +57,16 @@ def test_windows_initializer_delegates_config_and_model_sync_from_both_locations
     assert "Invoke-WebRequest" not in script
     assert "$config.processors.face" not in script
     assert "manifest.files" not in script
+
+
+def test_windows_cmd_wrappers_run_powershell_with_process_local_execution_policy_bypass():
+    for filename in ("Initialize-AVImgDataWorker.cmd", "Start-AVImgDataWorker.cmd"):
+        script = (PROJECT_ROOT / "worker" / "packaging" / "windows" / filename).read_text(encoding="utf-8")
+
+        assert "powershell.exe -NoProfile -ExecutionPolicy Bypass -File" in script
+        assert "%SCRIPT_DIR%" in script
+        assert "%*" in script
+        assert "Set-ExecutionPolicy" not in script
 
 
 def test_unix_initializer_delegates_config_and_model_sync_from_both_locations():
@@ -170,6 +182,21 @@ def test_worker_probe_reports_vips_without_requiring_it_for_readiness():
     assert "ready_for_face_jobs" in source
     ready_block = source.split("bool ready_for_face_jobs", 1)[1].split("int print_usage", 1)[0]
     assert "image_vips" not in ready_block
+
+
+def test_worker_normalizes_heif_face_inputs_with_vips_before_face_processor():
+    source = (PROJECT_ROOT / "worker" / "src" / "main.cpp").read_text(encoding="utf-8")
+
+    assert "normalize_image_for_face_processor" in source
+    assert 'extension == "heic" || extension == "heif"' in source
+    assert '\\"operation\\":\\"auto-orient\\"' in source
+    assert '\\"output_format\\":\\"jpeg\\"' in source
+    assert "config.image_vips_path" in source
+    assert '"process", "--input", normalized.input_path, "--output", normalized.output_path, "--workdir", job_dir' in source
+    assert 'processor_command == "detect" || processor_command == "embed"' in source
+    assert "normalized_input.ok ? normalized_input.image_path : \"\"" in source
+    assert "image_normalization_failed" in source
+    assert "image_normalization_unavailable" in source
 
 
 def test_worker_vips_build_preflight_checks_host_pkg_config_dependencies():

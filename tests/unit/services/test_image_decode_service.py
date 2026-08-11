@@ -45,8 +45,11 @@ def test_pillow_heif_decoder_returns_jpeg_bytes(monkeypatch, tmp_path):
         def save(self, output, **_kwargs):
             output.write(b"\xff\xd8jpeg")
 
-    fake_image_module = SimpleNamespace(open=lambda _path: _Image())
-    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=fake_image_module))
+    image = _Image()
+    transposed = []
+    fake_image_module = SimpleNamespace(open=lambda _path: image)
+    fake_image_ops = SimpleNamespace(exif_transpose=lambda value: transposed.append(value) or value)
+    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=fake_image_module, ImageOps=fake_image_ops))
     monkeypatch.setitem(sys.modules, "pillow_heif", SimpleNamespace(register_heif_opener=lambda: registered.append(True)))
     service = ImageDecodeService(_Config({
         "IMAGE_DECODER_ENABLED": True,
@@ -60,6 +63,7 @@ def test_pillow_heif_decoder_returns_jpeg_bytes(monkeypatch, tmp_path):
     assert result.source == "pillow-heif"
     assert result.image_bytes == b"\xff\xd8jpeg"
     assert registered == [True]
+    assert transposed == [image]
 
 
 def test_vips_preferred_decoder_runs_before_configured_fallback(tmp_path):
@@ -179,7 +183,8 @@ def test_vips_preferred_decoder_skips_heic_when_probe_reports_no_heif(monkeypatc
             output.write(b"\xff\xd8pillow-heif")
 
     fake_image_module = SimpleNamespace(open=lambda _path: _Image())
-    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=fake_image_module))
+    fake_image_ops = SimpleNamespace(exif_transpose=lambda value: value)
+    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=fake_image_module, ImageOps=fake_image_ops))
     monkeypatch.setitem(sys.modules, "pillow_heif", SimpleNamespace(register_heif_opener=lambda: registered.append(True)))
     service = ImageDecodeService(
         _Config(
@@ -265,8 +270,9 @@ def test_pillow_heif_decoder_limits_image_edge(monkeypatch, tmp_path):
         def save(self, output, **_kwargs):
             output.write(b"\xff\xd8jpeg")
 
+    fake_image_ops = SimpleNamespace(exif_transpose=lambda value: value)
     fake_image_module = SimpleNamespace(open=lambda _path: _Image(), Resampling=SimpleNamespace(LANCZOS="lanczos"))
-    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=fake_image_module))
+    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=fake_image_module, ImageOps=fake_image_ops))
     monkeypatch.setitem(sys.modules, "pillow_heif", SimpleNamespace(register_heif_opener=lambda: None))
     service = ImageDecodeService(_Config({
         "IMAGE_DECODER_ENABLED": True,

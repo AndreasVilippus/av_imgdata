@@ -93,7 +93,7 @@ std::string api_post(const LoopConfig& config, const std::string& action, const 
     const std::string body_path = runtime::join_path(config.workspace_root, ".api-" + action + "-request.json");
     runtime::write_file(body_path, body);
     const std::string command =
-        "curl -fSsL -X POST -H " + runtime::shell_quote("Content-Type: application/json") +
+        "curl -SsL -X POST -H " + runtime::shell_quote("Content-Type: application/json") +
         " -H " + runtime::shell_quote("Authorization: Bearer " + token) +
         " -H " + runtime::shell_quote("X-Worker-Id: " + config.worker_id) +
         " --data-binary @" + runtime::shell_quote(body_path) +
@@ -134,6 +134,22 @@ std::string claim_body(const LoopConfig& config) {
 LocalJobResult make_local_job(const std::string& claimed, const LoopConfig& config) {
     LocalJobResult result;
     std::string payload = runtime::extract_json_object(claimed, "payload");
+    const std::string job_id = runtime::extract_json_string(claimed, "job_id");
+    const std::string type = runtime::extract_json_string(claimed, "type");
+    const bool vector_job = type == "face_native_rank_embeddings" || type == "face_native_profile_math";
+    if (vector_job) {
+        std::ostringstream job;
+        job << "{\"job_id\":\"" << runtime::json_escape(job_id)
+            << "\",\"type\":\"" << runtime::json_escape(type) << "\"";
+        if (payload.size() >= 2) {
+            const std::string inner = runtime::trim(payload.substr(1, payload.size() - 2));
+            if (!inner.empty()) job << ',' << inner;
+        }
+        job << '}';
+        result.ok = true;
+        result.job_json = job.str();
+        return result;
+    }
     const std::string mode = runtime::extract_json_string(payload, "input_mode");
     if (mode != "shared_path") {
         result.code = "unsupported_input_mode";
@@ -153,8 +169,6 @@ LocalJobResult make_local_job(const std::string& claimed, const LoopConfig& conf
         result.message = "payload local_path could not be replaced";
         return result;
     }
-    const std::string job_id = runtime::extract_json_string(claimed, "job_id");
-    const std::string type = runtime::extract_json_string(claimed, "type");
     std::ostringstream job;
     job << "{\"job_id\":\"" << runtime::json_escape(job_id)
         << "\",\"type\":\"" << runtime::json_escape(type) << "\"";
@@ -181,6 +195,17 @@ std::string result_body(const LoopConfig& config, const std::string& id, const s
         "\",\"result\":" + (result.empty() ? "{}" : result) + "}";
 }
 
+std::string normalized_result_payload(const std::string& worker_output) {
+    const std::string worker_json = runtime::extract_first_json_object(worker_output);
+    if (worker_json.empty()) return "";
+    const std::string processor_result = runtime::extract_json_object(worker_json, "processor_result");
+    if (processor_result.empty()) return "";
+    std::string execution = runtime::extract_json_string(worker_json, "processor_execution");
+    if (execution.empty()) execution = "completed";
+    return "{\"processor_execution\":\"" + runtime::json_escape(execution) +
+        "\",\"processor_result\":" + processor_result + "}";
+}
+
 std::string fail_body(
     const LoopConfig& config,
     const std::string& id,
@@ -192,7 +217,8 @@ std::string fail_body(
         "\",\"job_id\":\"" + runtime::json_escape(id) +
         "\",\"error\":{\"code\":\"" + runtime::json_escape(code) +
         "\",\"message\":\"" + runtime::json_escape(message) + "\"";
-    if (!detail.empty() && detail.find('{') != std::string::npos) output += ",\"worker_result\":" + detail;
+    const std::string detail_json = runtime::extract_first_json_object(detail);
+    if (!detail_json.empty()) output += ",\"worker_result\":" + detail_json;
     return output + "}}";
 }
 
@@ -202,6 +228,13 @@ bool worker_success(const CommandResult& result) {
 
 bool response_ok(const std::string& response, const std::string& expected_status) {
     return runtime::extract_json_string(response, "status") == expected_status;
+}
+
+void append_report_fields(std::ostream& out, const std::string& response, const std::string& prefix = "report_response") {
+    out << ",\"" << prefix << "_status\":\"" << runtime::json_escape(runtime::extract_json_string(response, "status")) << "\""
+        << ",\"" << prefix << "_code\":\"" << runtime::json_escape(runtime::extract_json_string(response, "code")) << "\""
+        << ",\"" << prefix << "_message\":\""
+        << runtime::json_escape(runtime::abbreviate(runtime::extract_json_string(response, "message"), 600)) << "\"";
 }
 
 int usage() {
@@ -270,9 +303,11 @@ int main(int argc, char** argv) {
             const std::string id = runtime::extract_json_string(claimed, "job_id");
             const LocalJobResult local = make_local_job(claimed, config);
             if (!local.ok) {
-                api_post(config, "fail", token, fail_body(config, id, local.code, local.message));
+                const std::string report = api_post(config, "fail", token, fail_body(config, id, local.code, local.message));
                 std::cout << ",\"job_id\":\"" << runtime::json_escape(id)
-                          << "\",\"reported\":\"fail\",\"error_code\":\"" << runtime::json_escape(local.code) << "\"";
+                          << "\",\"reported\":\"" << (response_ok(report, "failed") ? "fail" : "fail_report_failed") << "\""
+                          << ",\"error_code\":\"" << runtime::json_escape(local.code) << "\"";
+                if (!response_ok(report, "failed")) append_report_fields(std::cout, report);
             } else {
                 const std::string job_path = runtime::join_path(
                     runtime::join_path(config.workspace_root, "claimed-jobs"),
@@ -281,16 +316,49 @@ int main(int argc, char** argv) {
                 runtime::write_file(job_path, local.job_json);
                 const CommandResult worker_result = run_worker(config, job_path);
                 if (worker_success(worker_result)) {
-                    api_post(config, "result", token, result_body(config, id, worker_result.output));
+                    const std::string worker_result_json = normalized_result_payload(worker_result.output);
+                    const bool worker_result_valid = !worker_result_json.empty();
+                    const std::string report = worker_result_valid
+                        ? api_post(config, "result", token, result_body(config, id, worker_result_json))
+                        : api_post(
+                            config,
+                            "fail",
+                            token,
+                            fail_body(config, id, "worker_result_invalid_json", "worker completed without a valid processor_result JSON", worker_result.output)
+                        );
+                    const bool reported = worker_result_valid && response_ok(report, "completed");
                     std::cout << ",\"job_id\":\"" << runtime::json_escape(id)
-                              << "\",\"reported\":\"result\",\"resolved_path\":\"" << runtime::json_escape(local.resolved_path)
+                              << "\",\"reported\":\""
+                              << (reported ? "result" : (worker_result_valid ? "result_report_failed" : "fail")) << "\""
+                              << ",\"resolved_path\":\"" << runtime::json_escape(local.resolved_path)
                               << "\",\"worker_exit_code\":" << worker_result.exit_code;
+                    if (!worker_result_valid) {
+                        append_report_fields(std::cout, report);
+                    } else if (!reported) {
+                        append_report_fields(std::cout, report);
+                        const std::string failure = api_post(
+                            config,
+                            "fail",
+                            token,
+                            fail_body(config, id, "result_report_failed", "worker result was rejected by DSM", report)
+                        );
+                        std::cout << ",\"failure_report_status\":\""
+                                  << (response_ok(failure, "failed") ? "failed" : "failed_report_failed") << "\"";
+                        if (!response_ok(failure, "failed")) append_report_fields(std::cout, failure, "failure_report_response");
+                    }
                 } else {
-                    api_post(config, "fail", token, fail_body(config, id, "worker_execution_failed", worker_result.output, worker_result.output));
+                    const std::string report = api_post(
+                        config,
+                        "fail",
+                        token,
+                        fail_body(config, id, "worker_execution_failed", worker_result.output, worker_result.output)
+                    );
                     std::cout << ",\"job_id\":\"" << runtime::json_escape(id)
-                              << "\",\"reported\":\"fail\",\"resolved_path\":\"" << runtime::json_escape(local.resolved_path)
+                              << "\",\"reported\":\"" << (response_ok(report, "failed") ? "fail" : "fail_report_failed") << "\""
+                              << ",\"resolved_path\":\"" << runtime::json_escape(local.resolved_path)
                               << "\",\"worker_exit_code\":" << worker_result.exit_code
                               << ",\"worker_output_preview\":\"" << runtime::json_escape(runtime::abbreviate(worker_result.output, 600)) << "\"";
+                    if (!response_ok(report, "failed")) append_report_fields(std::cout, report);
                 }
             }
         }

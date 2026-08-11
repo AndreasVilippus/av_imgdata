@@ -2,6 +2,7 @@
 import traceback
 from contextlib import nullcontext
 from copy import deepcopy
+from datetime import datetime, timezone
 from threading import Lock
 from threading import Thread
 from time import monotonic
@@ -9,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from api.session_manager import SessionBootstrapRequired, SessionManagerError
+from handler.file_handler import SidecarLookupCache
 
 
 class FaceMatchWorkflowService:
@@ -18,13 +20,16 @@ class FaceMatchWorkflowService:
         self._candidate_paths_cache_lock = Lock()
 
     @staticmethod
-    def candidate_paths_cache_key(user_key: str, action: Any) -> str:
-        return f"{str(user_key or '').strip()}:{str(action or '').strip().lower()}"
+    def candidate_paths_cache_key(user_key: str, action: Any, changed_since_days: int = 0) -> str:
+        normalized_days = max(0, int(changed_since_days or 0))
+        return f"{str(user_key or '').strip()}:{str(action or '').strip().lower()}:days-{normalized_days}"
 
     def invalidate_candidate_paths_cache(self, user_key: str, action: Any) -> None:
-        state_key = self.candidate_paths_cache_key(user_key, action)
+        state_key_prefix = f"{str(user_key or '').strip()}:{str(action or '').strip().lower()}:"
         with self._candidate_paths_cache_lock:
-            self._candidate_paths_cache.pop(state_key, None)
+            for key in list(self._candidate_paths_cache.keys()):
+                if str(key).startswith(state_key_prefix):
+                    self._candidate_paths_cache.pop(key, None)
 
     def get_candidate_paths(
         self,
@@ -32,9 +37,11 @@ class FaceMatchWorkflowService:
         user_key: str,
         action: Any,
         shared_folder: str,
+        changed_since_days: int = 0,
         use_cache: bool = True,
     ) -> List[str]:
-        state_key = self.candidate_paths_cache_key(user_key, action)
+        normalized_days = max(0, int(changed_since_days or 0))
+        state_key = self.candidate_paths_cache_key(user_key, action, normalized_days)
         normalized_shared_folder = str(shared_folder or "").strip()
         if not normalized_shared_folder:
             return []
@@ -48,9 +55,25 @@ class FaceMatchWorkflowService:
                 ):
                     return list(cached.get("paths") or [])
         candidate_paths = self.backend.files.listImageFiles(normalized_shared_folder)
+        if normalized_days > 0:
+            cutoff_mtime_ns = int((datetime.now(timezone.utc).timestamp() - (normalized_days * 86400)) * 1_000_000_000)
+            lookup_cache = SidecarLookupCache()
+            changed_paths: List[str] = []
+            for image_path in candidate_paths:
+                normalized_path = str(image_path or "").strip()
+                if not normalized_path:
+                    continue
+                if self.backend._fileChangedSince(normalized_path, cutoff_mtime_ns):
+                    changed_paths.append(normalized_path)
+                    continue
+                sidecar_path = self.backend.files.findXmpForImage(normalized_path, lookup_cache=lookup_cache)
+                if sidecar_path and self.backend._fileChangedSince(sidecar_path, cutoff_mtime_ns):
+                    changed_paths.append(normalized_path)
+            candidate_paths = changed_paths
         with self._candidate_paths_cache_lock:
             self._candidate_paths_cache[state_key] = {
                 "shared_folder": normalized_shared_folder,
+                "changed_since_days": normalized_days,
                 "paths": list(candidate_paths),
             }
         return candidate_paths
@@ -857,8 +880,10 @@ class FaceMatchWorkflowService:
         resume_from_progress: bool = False,
         recognize_persons: bool = False,
         skip_unknown_persons: bool = False,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         backend = self.backend
+        normalized_changed_since_days = max(0, int(changed_since_days or 0))
         current = backend.getFaceMatchingProgress(user_key)
         if current.get("running"):
             backend._debugLog(
@@ -926,6 +951,7 @@ class FaceMatchWorkflowService:
             save_only = bool(resume_cursor.get("save_only", save_only))
             recognize_persons = bool(resume_cursor.get("recognize_persons", recognize_persons))
             skip_unknown_persons = bool(resume_cursor.get("skip_unknown_persons", skip_unknown_persons))
+            normalized_changed_since_days = max(0, int(resume_cursor.get("changed_since_days", normalized_changed_since_days) or 0))
             normalized_action = str(resume_cursor.get("action") or normalized_action).strip().lower() or normalized_action
         continue_existing_operation = bool(resume_cursor or combined_skip_face_ids or combined_skip_targets)
         resume_path_index = int(resume_cursor.get("path_index") or 0) if resume_cursor else 0
@@ -952,6 +978,7 @@ class FaceMatchWorkflowService:
             resume_path_index=resume_path_index,
             recognize_persons=bool(recognize_persons),
             skip_unknown_persons=bool(skip_unknown_persons),
+            changed_since_days=normalized_changed_since_days,
         )
 
         backend._setFaceMatchingProgressMessage(
@@ -995,6 +1022,7 @@ class FaceMatchWorkflowService:
                 faces_read=int(resume_cursor.get("faces_read") or 0) if resume_cursor else 0,
                 target_faces_read=int(resume_cursor.get("target_faces_read") or 0) if resume_cursor else 0,
                 metadata_faces_read=int(resume_cursor.get("metadata_faces_read") or 0) if resume_cursor else 0,
+                changed_since_days=normalized_changed_since_days,
             ),
         )
         worker = Thread(
@@ -1012,6 +1040,7 @@ class FaceMatchWorkflowService:
                 "save_only": save_only,
                 "recognize_persons": bool(recognize_persons),
                 "skip_unknown_persons": bool(skip_unknown_persons),
+                "changed_since_days": normalized_changed_since_days,
                 "resume_cursor": resume_cursor if resume_cursor else None,
             },
             daemon=True,
@@ -1035,10 +1064,12 @@ class FaceMatchWorkflowService:
         save_only: bool,
         recognize_persons: bool = False,
         skip_unknown_persons: bool = False,
+        changed_since_days: int = 0,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> None:
         backend = self.backend
         started = monotonic()
+        normalized_changed_since_days = max(0, int(changed_since_days or 0))
         backend._debugLog(
             "face_matching_worker_start",
             action=action,
@@ -1046,6 +1077,7 @@ class FaceMatchWorkflowService:
             save_only=save_only,
             recognize_persons=bool(recognize_persons),
             skip_unknown_persons=bool(skip_unknown_persons),
+            changed_since_days=normalized_changed_since_days,
             limit=limit,
             offset=offset,
             skip_face_ids_count=len(skip_face_ids or []),
@@ -1062,6 +1094,7 @@ class FaceMatchWorkflowService:
                     skip_targets=skip_targets,
                     auto=auto,
                     save_only=save_only,
+                    changed_since_days=normalized_changed_since_days,
                     resume_cursor=resume_cursor,
                 )
             elif action == "mark_missing_photos_faces":
@@ -1072,6 +1105,7 @@ class FaceMatchWorkflowService:
                     skip_targets=skip_targets,
                     auto=auto,
                     save_only=save_only,
+                    changed_since_days=normalized_changed_since_days,
                     resume_cursor=resume_cursor,
                 )
             elif action == "search_missing_faces_insightface":
@@ -1084,6 +1118,7 @@ class FaceMatchWorkflowService:
                     save_only=save_only,
                     recognize_persons=recognize_persons,
                     skip_unknown_persons=skip_unknown_persons,
+                    changed_since_days=normalized_changed_since_days,
                     resume_cursor=resume_cursor,
                 )
             else:
@@ -1096,6 +1131,7 @@ class FaceMatchWorkflowService:
                     skip_face_ids=skip_face_ids,
                     auto=auto,
                     save_only=save_only,
+                    changed_since_days=normalized_changed_since_days,
                     resume_cursor=resume_cursor,
                 )
             progress_updates: Dict[str, Any] = {

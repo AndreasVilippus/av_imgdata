@@ -140,6 +140,8 @@ class TestExternalWorkerProcessorService(unittest.TestCase):
         self.assertEqual(stored["result_apply_status"], "consumed")
         self.assertEqual(stored["result_consumer_version"], "1.0")
         self.assertTrue(stored["result_consumed_at"])
+        self.assertTrue(stored["raw_result_purged_at"])
+        self.assertNotIn("result", stored)
 
     def test_embed_result_keeps_embedding_vector(self):
         self.service.enqueue_face_embed(

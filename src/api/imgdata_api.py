@@ -513,6 +513,11 @@ def _is_browser_image_compatible_path(path: str) -> bool:
     return extension in {"jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif"}
 
 
+def _is_decoder_preview_preferred_path(path: str) -> bool:
+    extension = Path(path).suffix.lower().lstrip(".")
+    return extension in {"heic", "heif"}
+
+
 def _image_preview_unavailable_response() -> Response:
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">'
@@ -1007,6 +1012,10 @@ async def face_matching_action(request: Request):
     skip_face_ids = body.get("skip_face_ids") if isinstance(body.get("skip_face_ids"), list) else []
     skip_targets = body.get("skip_targets") if isinstance(body.get("skip_targets"), list) else []
     try:
+        changed_since_days = max(0, int(body.get("changed_since_days") or 0)) if str(action or "").strip().lower() in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"} else 0
+    except (TypeError, ValueError):
+        changed_since_days = 0
+    try:
         limit = int(limit)
     except Exception:
         limit = default_limit
@@ -1057,6 +1066,7 @@ async def face_matching_action(request: Request):
             offset=offset,
             skip_face_ids_count=len(normalized_skip_face_ids),
             skip_targets_count=len(normalized_skip_targets),
+            changed_since_days=changed_since_days,
             findings_action=str(body.get("findings_action") or body.get("source_action") or "").strip(),
         )
         if action in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"}:
@@ -1075,6 +1085,7 @@ async def face_matching_action(request: Request):
                     resume_from_progress=resume_from_progress,
                     recognize_persons=recognize_persons,
                     skip_unknown_persons=skip_unknown_persons,
+                    changed_since_days=changed_since_days,
                 )
             )
         else:
@@ -2516,9 +2527,16 @@ async def file_image(request: Request, path: str = ""):
         return {"success": False, "error": {"code": 404, "message": "file_not_found"}}
 
     browser_compatible = _is_browser_image_compatible_path(requested)
-    if not browser_compatible:
+    decoder_preview_preferred = _is_decoder_preview_preferred_path(requested)
+    if not browser_compatible and not decoder_preview_preferred:
         preview = IMGDATA.files.extractEmbeddedJpegPreview(requested)
         if preview:
+            backend_debug_log(
+                "file_image_served",
+                path=requested,
+                source="embedded_preview",
+                reason="decoder_not_preferred",
+            )
             return Response(
                 content=preview,
                 media_type="image/jpeg",
@@ -2529,6 +2547,11 @@ async def file_image(request: Request, path: str = ""):
     if decoder is not None and not browser_compatible:
         decoded = await _run_backend_call(lambda: decoder.decode_to_jpeg(requested))
         if getattr(decoded, "success", False) and getattr(decoded, "image_bytes", b""):
+            backend_debug_log(
+                "file_image_served",
+                path=requested,
+                source=str(getattr(decoded, "source", "") or "image_decoder"),
+            )
             return Response(
                 content=decoded.image_bytes,
                 media_type="image/jpeg",
@@ -2544,8 +2567,32 @@ async def file_image(request: Request, path: str = ""):
             )
 
     if not browser_compatible:
+        preview = IMGDATA.files.extractEmbeddedJpegPreview(requested)
+        if preview:
+            backend_debug_log(
+                "file_image_served",
+                path=requested,
+                source="embedded_preview",
+                reason="decoder_failed_or_unavailable",
+            )
+            return Response(
+                content=preview,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "private, max-age=3600"},
+            )
+        backend_debug_log(
+            "file_image_served",
+            path=requested,
+            source="placeholder",
+            reason="preview_unavailable",
+        )
         return _image_preview_unavailable_response()
 
+    backend_debug_log(
+        "file_image_served",
+        path=requested,
+        source="original",
+    )
     return FileResponse(requested)
 
 

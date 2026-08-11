@@ -28,6 +28,7 @@ class _ExternalWorkerFaceBase:
         local_detector_factory: Optional[Callable[[], Any]] = None,
         action: str = "standardize_face_frames",
         composition_factory: Callable[[], WorkerApiCompositionService] = WorkerApiCompositionService,
+        debug_logger: Optional[Callable[..., None]] = None,
     ):
         factory = local_processor_factory or local_detector_factory
         if not callable(factory):
@@ -36,6 +37,7 @@ class _ExternalWorkerFaceBase:
         self._local_processor_factory = factory
         self._composition_factory = composition_factory
         self.action = str(action or "face_processing")
+        self._debug_logger = debug_logger if callable(debug_logger) else None
         self._local_processor = None
 
     def prepare(self) -> None:
@@ -62,6 +64,15 @@ class _ExternalWorkerFaceBase:
 
     def _operation(self) -> str:
         return "face_match" if self.action == "search_missing_faces_insightface" else "cleanup"
+
+    def _debug_log(self, event: str, **fields: Any) -> None:
+        logger = self._debug_logger
+        if not callable(logger):
+            return
+        try:
+            logger(event, **fields)
+        except Exception:
+            pass
 
     def _filter_faces(self, faces: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         min_width = float(self.options.get("min_width_ratio", 0.0) or 0.0)
@@ -96,8 +107,9 @@ class ExternalWorkerFaceDetectorAdapter(_ExternalWorkerFaceBase):
         source = Path(image_path).expanduser().resolve()
         composition = self._build_composition()
         if not composition.enabled():
+            self._debug_log("external_worker_dispatch_local", capability="face_native_detect", action=self.action, reason="worker_api_disabled")
             return self._detect_local(source)
-        processor = composition.external_face_processor(nas_root=self._photos_root(source))
+        processor = composition.external_face_processor(nas_root=self._photos_root(source), debug_logger=self._debug_log)
         result = processor.execute_face_detect(
             image_path=source,
             local_execute=lambda: self._detect_local(source),
@@ -128,8 +140,9 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
         source = Path(image_path).expanduser().resolve()
         composition = self._build_composition()
         if not composition.enabled():
+            self._debug_log("external_worker_dispatch_local", capability="face_native_embed", action=self.action, reason="worker_api_disabled")
             return self._embed_local(source)
-        processor = composition.external_face_processor(nas_root=self._photos_root(source))
+        processor = composition.external_face_processor(nas_root=self._photos_root(source), debug_logger=self._debug_log)
         result = processor.execute_face_embed(
             image_path=source,
             local_execute=lambda: self._embed_local(source),
@@ -164,8 +177,9 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
     ) -> List[Dict[str, Any]]:
         composition = self._build_composition()
         if not composition.enabled():
+            self._debug_log("external_worker_dispatch_local", capability="face_native_rank_embeddings", action=self.action, reason="worker_api_disabled")
             return self._rank_local(target_embeddings, profile_embeddings)
-        processor = composition.external_face_processor(nas_root=Path("/"))
+        processor = composition.external_face_processor(nas_root=Path("/"), debug_logger=self._debug_log)
         dispatched = processor.execute_rank_embeddings(
             target_embeddings=target_embeddings,
             profile_embeddings=profile_embeddings,
@@ -183,8 +197,9 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
     def profile_math(self, embeddings: List[List[float]]) -> Dict[str, Any]:
         composition = self._build_composition()
         if not composition.enabled():
+            self._debug_log("external_worker_dispatch_local", capability="face_native_profile_math", action=self.action, reason="worker_api_disabled")
             return self._profile_math_local(embeddings)
-        processor = composition.external_face_processor(nas_root=Path("/"))
+        processor = composition.external_face_processor(nas_root=Path("/"), debug_logger=self._debug_log)
         dispatched = processor.execute_profile_math(
             embeddings=embeddings,
             local_execute=lambda: self._profile_math_local(embeddings),
@@ -242,10 +257,12 @@ def _install_face_frame_integration() -> None:
     original_prepared_detector = service_class._prepared_detector
 
     def _prepared_detector(self: FaceFrameStandardizationService, options: Dict[str, Any]) -> Any:
+        debug_logger = getattr(getattr(self, "backend", None), "_debugLog", None)
         return ExternalWorkerFaceDetectorAdapter(
             options=options,
             action=FaceFrameStandardizationService.ACTION,
             local_processor_factory=lambda: original_prepared_detector(self, options),
+            debug_logger=debug_logger if callable(debug_logger) else None,
         )
 
     service_class._prepared_detector = _prepared_detector
@@ -287,6 +304,7 @@ def _install_face_recognition_integration() -> None:
             options=options,
             action=action,
             local_processor_factory=lambda: original_prepared_embedder(self, options),
+            debug_logger=self._debug_log,
         )
 
     service_class._run = _run
@@ -313,6 +331,7 @@ def _install_face_match_insightface_integration() -> None:
                 options=_normalized_factory_options(factory_options),
                 action="search_missing_faces_insightface",
                 local_processor_factory=lambda: original_detector_factory(**factory_options),
+                debug_logger=self._debugLog,
             )
 
         def create_embedder(**factory_options: Any) -> ExternalWorkerFaceEmbedderAdapter:
@@ -320,6 +339,7 @@ def _install_face_match_insightface_integration() -> None:
                 options=_normalized_factory_options(factory_options),
                 action="search_missing_faces_insightface",
                 local_processor_factory=lambda: original_embedder_factory(**factory_options),
+                debug_logger=self._debugLog,
             )
 
         self._createFaceDetector = create_detector

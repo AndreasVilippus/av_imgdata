@@ -122,12 +122,20 @@ class WorkerApiService:
         supported_types = WorkerProtocol.supported_job_types(capabilities)
 
         def mutate(state):
+            worker = state["workers"].get(worker_id)
+            if isinstance(worker, dict):
+                now = self._now_iso()
+                worker["last_seen_at"] = now
+                worker["status"] = "ready"
+                if capabilities is not None or "capabilities" not in worker:
+                    worker["capabilities"] = WorkerProtocol.normalize_capabilities(capabilities)
+            else:
+                now = self._now_iso()
             queued = [job for job in state["jobs"].values() if job.get("status") == "queued"]
             queued.sort(key=lambda item: (int(item.get("priority", 100)), str(item.get("created_at", ""))))
             for job in queued:
                 if job.get("type") not in supported_types:
                     continue
-                now = self._now_iso()
                 job.update({
                     "status": "claimed",
                     "claimed_by": worker_id,
@@ -135,6 +143,8 @@ class WorkerApiService:
                     "updated_at": now,
                     "attempts": int(job.get("attempts", 0)) + 1,
                 })
+                if isinstance(worker, dict):
+                    worker["status"] = "processing"
                 return job
             return None
 
@@ -257,6 +267,10 @@ class WorkerApiService:
             if job.get("claimed_by") and job.get("claimed_by") != worker_id:
                 raise WorkerApiError("job_claimed_by_other_worker")
             now = self._now_iso()
+            worker = state["workers"].get(worker_id)
+            if isinstance(worker, dict):
+                worker["last_seen_at"] = now
+                worker["status"] = "ready"
             job.update({"status": status, payload_key: payload if isinstance(payload, dict) else {}, "finished_at": now, "updated_at": now})
             return job
 

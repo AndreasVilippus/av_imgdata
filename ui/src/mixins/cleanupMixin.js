@@ -76,8 +76,50 @@ export default {
 		},
 	},
 	computed: {
+			cleanupStatusPhase() {
+				const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+					? this.cleanupProgress
+					: {};
+				const status = progress.status && typeof progress.status === 'object'
+					? progress.status
+					: {};
+				return String(status.phase || progress.status_phase || progress.phase || progress.status || '').trim().toLowerCase();
+			},
+			cleanupHasTerminalProgress() {
+				const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+					? this.cleanupProgress
+					: {};
+				const phase = this.cleanupStatusPhase;
+				return !!(
+					Object.keys(progress).length
+					&& progress.running !== true
+					&& progress.active !== true
+					&& (
+						progress.finished === true
+						|| ['finished', 'stopped', 'failed', 'idle'].includes(phase)
+					)
+				);
+			},
+			cleanupActionActive() {
+				const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
+					? this.cleanupProgress
+					: {};
+				const phase = this.cleanupStatusPhase;
+				if (this.cleanupHasTerminalProgress) {
+					return false;
+				}
+				return !!(
+					this.cleanupLoading
+					|| progress.active === true
+					|| progress.running === true
+					|| (progress.stop_requested === true && (progress.active === true || progress.running === true || phase === 'stopping'))
+					|| phase === 'preparing'
+					|| phase === 'running'
+					|| phase === 'stopping'
+				);
+			},
 			cleanupPrimaryButtonLabel() {
-			if (this.cleanupLoading) {
+			if (this.cleanupActionActive) {
 				return this.$avt('cleanup:button_stop', 'Stop');
 			}
 			if (
@@ -499,7 +541,7 @@ export default {
 			},
 			startCleanupProgressPolling() {
 				this.startNamedPolling('cleanupProgressTimer', () => {
-					this.fetchCleanupProgress();
+					return this.fetchCleanupProgress();
 				}, 1000, { skipIfPending: true });
 			},
 			stopCleanupProgressPolling() {
@@ -516,7 +558,7 @@ export default {
 				this.cleanupLoading = false;
 			},
 			async handleCleanupAction() {
-				if (this.cleanupLoading) {
+				if (this.cleanupActionActive) {
 					await this.stopCleanupRun();
 					return;
 				}

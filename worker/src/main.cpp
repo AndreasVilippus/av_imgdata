@@ -2,6 +2,7 @@
 #include "av_imgdata/worker_runtime.h"
 
 #include <chrono>
+#include <cctype>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -53,6 +54,17 @@ struct ReadinessStatus {
     CommandResult face_version;
     CommandResult face_probe;
     CommandResult image_vips_probe;
+};
+
+struct NormalizedFaceInput {
+    bool attempted = false;
+    bool ok = false;
+    std::string image_path;
+    std::string input_path;
+    std::string output_path;
+    CommandResult result;
+    std::string error_code;
+    std::string error_message;
 };
 
 WorkerConfig parse_worker_config(const std::string& config_path, const std::string& config_json) {
@@ -145,27 +157,106 @@ std::string resolve_job_image_path(const std::string& job_json, const std::strin
     return runtime::join_path(job_dir, image_path);
 }
 
+std::string path_extension(std::string path) {
+    const std::size_t separator = path.find_last_of("/\\");
+    const std::size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos || (separator != std::string::npos && dot < separator)) return "";
+    std::string extension = path.substr(dot + 1);
+    for (char& item : extension) {
+        item = static_cast<char>(std::tolower(static_cast<unsigned char>(item)));
+    }
+    return extension;
+}
+
+bool should_normalize_face_input(const std::string& image_path) {
+    const std::string extension = path_extension(image_path);
+    return extension == "heic" || extension == "heif";
+}
+
+NormalizedFaceInput normalize_image_for_face_processor(
+    const WorkerConfig& config,
+    const std::string& image_path,
+    const std::string& job_dir,
+    const std::string& safe_job_name
+) {
+    NormalizedFaceInput normalized;
+    normalized.image_path = image_path;
+    if (!should_normalize_face_input(image_path)) return normalized;
+    if (!config.image_vips_enabled) return normalized;
+
+    normalized.attempted = true;
+    normalized.input_path = runtime::join_path(job_dir, safe_job_name + ".image-vips-input.json");
+    normalized.output_path = runtime::join_path(job_dir, safe_job_name + ".image-vips-result.json");
+
+    if (config.image_vips_path.empty() || !runtime::file_exists(config.image_vips_path)) {
+        normalized.error_code = "image_normalization_unavailable";
+        normalized.error_message = "image_vips is enabled but av-imgdata-image-processor is missing";
+        return normalized;
+    }
+
+    const std::string vips_payload =
+        "{\"image_path\":\"" + runtime::json_escape(image_path) + "\","
+        "\"operation\":\"auto-orient\","
+        "\"output_format\":\"jpeg\","
+        "\"options\":{\"quality\":95}}";
+    if (!runtime::write_file(normalized.input_path, vips_payload)) {
+        normalized.error_code = "image_normalization_input_write_failed";
+        normalized.error_message = normalized.input_path;
+        return normalized;
+    }
+
+    normalized.result = runtime::run_process_capture(
+        config.image_vips_path,
+        {"process", "--input", normalized.input_path, "--output", normalized.output_path, "--workdir", job_dir}
+    );
+    const std::string result_json = runtime::read_file(normalized.output_path);
+    const std::string output_path = runtime::extract_json_string(result_json, "output_path");
+    if (normalized.result.exit_code != 0 || output_path.empty() || !runtime::file_exists(output_path)) {
+        normalized.error_code = "image_normalization_failed";
+        normalized.error_message = normalized.result.output.empty() ? result_json : normalized.result.output;
+        if (normalized.error_message.empty()) {
+            normalized.error_message = "av-imgdata-image-processor did not produce a normalized image";
+        }
+        return normalized;
+    }
+
+    normalized.ok = true;
+    normalized.image_path = output_path;
+    return normalized;
+}
+
 std::string build_processor_payload(
     const std::string& job_json,
     const std::string& job_path,
     const WorkerConfig& config,
     const std::string& type,
-    const std::string& command
+    const std::string& command,
+    const std::string& normalized_image_path = ""
 ) {
     std::string job_id = runtime::extract_json_string(job_json, "job_id");
     if (job_id.empty()) job_id = "local";
     const std::string job_dir = runtime::dirname_of(job_path);
-    const std::string image_path = resolve_job_image_path(job_json, job_dir);
+    const std::string image_path = normalized_image_path.empty()
+        ? resolve_job_image_path(job_json, job_dir)
+        : normalized_image_path;
     const std::string min_confidence = runtime::extract_json_scalar(job_json, "min_confidence", "0.5");
     const std::string max_faces = runtime::extract_json_scalar(job_json, "max_faces", "0");
     const std::string det_size = runtime::extract_json_scalar(job_json, "det_size", "[640,640]");
     const std::string image_paths = runtime::extract_json_array(job_json, "image_paths");
+    const std::string target_embeddings = runtime::extract_json_array(job_json, "target_embeddings");
+    const std::string profile_embeddings = runtime::extract_json_array(job_json, "profile_embeddings");
+    const std::string embeddings = runtime::extract_json_array(job_json, "embeddings");
 
     std::ostringstream payload;
     payload << "{\"contract_version\":\"" << av_imgdata::worker::kProtocolVersion << "\",";
     payload << "\"job_id\":\"" << runtime::json_escape(job_id) << "\",";
     payload << "\"type\":\"" << runtime::json_escape(type) << "\",";
-    if (command == "detect_batch" || command == "embed_batch") {
+    if (command == "rank_embeddings") {
+        payload << "\"target_embeddings\":" << (target_embeddings.empty() ? "[]" : target_embeddings) << ',';
+        payload << "\"profile_embeddings\":" << (profile_embeddings.empty() ? "[]" : profile_embeddings) << ',';
+    } else if (command == "profile_math") {
+        payload << "\"embeddings\":" << (embeddings.empty() ? "[]" : embeddings) << ',';
+    } else if (command == "detect_batch" || command == "embed_batch") {
         payload << "\"image_paths\":" << (image_paths.empty() ? "[]" : image_paths) << ',';
     } else {
         payload << "\"image_path\":\"" << runtime::json_escape(image_path) << "\",";
@@ -347,6 +438,7 @@ int command_once(const std::vector<std::string>& args) {
     std::string processor_execution = "not_started";
     std::string error_code;
     std::string error_message;
+    NormalizedFaceInput normalized_input;
 
     if (processor_command.empty()) {
         processor_execution = "unsupported_job_type";
@@ -361,11 +453,26 @@ int command_once(const std::vector<std::string>& args) {
         error_code = "face_models_missing";
         error_message = missing_model_message(model_status);
     } else {
-        const std::string payload = build_processor_payload(job, job_path, config, type, processor_command);
+        const std::string job_image_path = resolve_job_image_path(job, job_dir);
+        if (processor_command == "detect" || processor_command == "embed") {
+            normalized_input = normalize_image_for_face_processor(config, job_image_path, job_dir, safe_job_name);
+        }
+        const std::string payload = build_processor_payload(
+            job,
+            job_path,
+            config,
+            type,
+            processor_command,
+            normalized_input.ok ? normalized_input.image_path : ""
+        );
         if (!runtime::write_file(processor_input, payload)) {
             processor_execution = "failed";
             error_code = "input_write_failed";
             error_message = processor_input;
+        } else if (normalized_input.attempted && !normalized_input.ok) {
+            processor_execution = "failed";
+            error_code = normalized_input.error_code.empty() ? "image_normalization_failed" : normalized_input.error_code;
+            error_message = normalized_input.error_message;
         } else {
             processor_result = runtime::run_process_capture(
                 config.face_path,
@@ -401,7 +508,13 @@ int command_once(const std::vector<std::string>& args) {
         << "\", \"exit_code\": " << processor_result.exit_code
         << ", \"output\": \"" << runtime::json_escape(processor_result.output) << "\"},\n"
         << "  \"artifacts\": {\"processor_input\": \"" << runtime::json_escape(processor_input)
-        << "\", \"processor_result\": \"" << runtime::json_escape(processor_output) << "\"}";
+        << "\", \"processor_result\": \"" << runtime::json_escape(processor_output) << "\"";
+    if (normalized_input.attempted) {
+        std::cout << ", \"image_normalization_input\": \"" << runtime::json_escape(normalized_input.input_path)
+                  << "\", \"image_normalization_result\": \"" << runtime::json_escape(normalized_input.output_path)
+                  << "\", \"normalized_image_path\": \"" << runtime::json_escape(normalized_input.image_path) << "\"";
+    }
+    std::cout << "}";
     if (!processor_output_json.empty() && processor_output_json.find('{') != std::string::npos) {
         std::cout << ",\n  \"processor_result\": " << processor_output_json;
     }

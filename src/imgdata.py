@@ -1909,14 +1909,31 @@ class ImgDataService:
         user_key: str,
         action: Any,
         shared_folder: str,
+        changed_since_days: int = 0,
         use_cache: bool = True,
     ) -> List[str]:
         return self.face_match_workflow.get_candidate_paths(
             user_key=user_key,
             action=action,
             shared_folder=shared_folder,
+            changed_since_days=changed_since_days,
             use_cache=use_cache,
         )
+
+    def _imageOrSidecarChangedSince(
+        self,
+        image_path: Any,
+        cutoff_mtime_ns: int,
+        *,
+        lookup_cache: Optional[SidecarLookupCache] = None,
+    ) -> bool:
+        normalized_path = str(image_path or "").strip()
+        if not normalized_path:
+            return False
+        if self._fileChangedSince(normalized_path, cutoff_mtime_ns):
+            return True
+        sidecar_path = self.files.findXmpForImage(normalized_path, lookup_cache=lookup_cache)
+        return bool(sidecar_path and self._fileChangedSince(sidecar_path, cutoff_mtime_ns))
 
     @staticmethod
     def _formatExceptionForProgress(exc: Exception) -> str:
@@ -1941,6 +1958,7 @@ class ImgDataService:
         faces_read: int = 0,
         target_faces_read: int = 0,
         metadata_faces_read: int = 0,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         return {
             "skip_face_ids": sorted({int(face_id) for face_id in skip_face_ids if isinstance(face_id, int)}),
@@ -1958,6 +1976,7 @@ class ImgDataService:
             "faces_read": max(0, int(faces_read)),
             "target_faces_read": max(0, int(target_faces_read)),
             "metadata_faces_read": max(0, int(metadata_faces_read)),
+            "changed_since_days": max(0, int(changed_since_days)),
         }
 
     def recordFaceMatchTransferProgress(
@@ -3079,6 +3098,7 @@ class ImgDataService:
         skip_targets: Optional[List[str]],
         auto: bool,
         save_only: bool,
+        changed_since_days: int = 0,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.face_match_workflow._run_face_matching(
@@ -3092,6 +3112,7 @@ class ImgDataService:
             skip_targets=skip_targets,
             auto=auto,
             save_only=save_only,
+            changed_since_days=changed_since_days,
             resume_cursor=resume_cursor,
         )
 
@@ -6279,6 +6300,7 @@ class ImgDataService:
         resume_from_progress: bool = False,
         recognize_persons: bool = False,
         skip_unknown_persons: bool = False,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         return self.face_match_workflow.start_discovery(
             user_key=user_key,
@@ -6294,6 +6316,7 @@ class ImgDataService:
             resume_from_progress=resume_from_progress,
             recognize_persons=recognize_persons,
             skip_unknown_persons=skip_unknown_persons,
+            changed_since_days=changed_since_days,
         )
 
     def searchPhotoFaceInFile(
@@ -6307,9 +6330,18 @@ class ImgDataService:
         skip_face_ids: Optional[List[int]] = None,
         auto: bool = False,
         save_only: bool = False,
+        changed_since_days: int = 0,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
+        normalized_changed_since_days = max(0, int(changed_since_days or 0))
+        if isinstance(resume_cursor, dict):
+            normalized_changed_since_days = max(0, int(resume_cursor.get("changed_since_days", normalized_changed_since_days) or 0))
+        changed_cutoff_mtime_ns = (
+            int((datetime.now(timezone.utc).timestamp() - (normalized_changed_since_days * 86400)) * 1_000_000_000)
+            if normalized_changed_since_days > 0 else 0
+        )
+        sidecar_lookup_cache = SidecarLookupCache()
         known_persons_cache: Optional[List[Dict[str, Any]]] = None
         saved_entries = self._resumeFaceMatchSavedEntries(
             action="search_photo_face_in_file",
@@ -6369,6 +6401,7 @@ class ImgDataService:
                 faces_read=faces_read,
                 target_faces_read=target_faces_read,
                 metadata_faces_read=metadata_faces_read,
+                changed_since_days=normalized_changed_since_days,
             ),
         )
         try:
@@ -6454,10 +6487,11 @@ class ImgDataService:
                         "findings_count": findings_count,
                         "resume_cursor": self._buildFaceMatchResumeCursor(
                             skip_face_ids=list(skip_face_ids_set),
-                            transferred_count=transferred_count,
-                            auto=auto,
-                            save_only=save_only,
-                        ),
+                                transferred_count=transferred_count,
+                                auto=auto,
+                                save_only=save_only,
+                                changed_since_days=normalized_changed_since_days,
+                            ),
                     }
                 person_id = person.get("id")
                 if person_id is None:
@@ -6477,10 +6511,11 @@ class ImgDataService:
                     current_person_id=person_id_int,
                     resume_cursor=self._buildFaceMatchResumeCursor(
                         skip_face_ids=list(skip_face_ids_set),
-                        transferred_count=transferred_count,
-                        auto=auto,
-                        save_only=save_only,
-                    ),
+                            transferred_count=transferred_count,
+                            auto=auto,
+                            save_only=save_only,
+                            changed_since_days=normalized_changed_since_days,
+                        ),
                 )
 
                 images = self.photos.listFotoTeamItems(
@@ -6525,10 +6560,11 @@ class ImgDataService:
                             "findings_count": findings_count,
                             "resume_cursor": self._buildFaceMatchResumeCursor(
                                 skip_face_ids=list(skip_face_ids_set),
-                                transferred_count=transferred_count,
-                                auto=auto,
-                                save_only=save_only,
-                            ),
+                                    transferred_count=transferred_count,
+                                    auto=auto,
+                                    save_only=save_only,
+                                    changed_since_days=normalized_changed_since_days,
+                                ),
                         }
                     image_id = image.get("id")
                     if image_id is None:
@@ -6537,6 +6573,34 @@ class ImgDataService:
                     try:
                         image_id_int = int(image_id)
                     except (TypeError, ValueError):
+                        continue
+
+                    folder_id = image.get("folder_id")
+                    filename = image.get("filename")
+                    try:
+                        folder_id_int = int(folder_id)
+                    except (TypeError, ValueError):
+                        continue
+                    if not isinstance(filename, str) or not filename:
+                        continue
+
+                    folder_payload = self.photos.getFotoTeamFolder(
+                        user_key=user_key,
+                        cookies=cookies,
+                        base_url=base_url,
+                        id_folder=folder_id_int,
+                    )
+                    folder_data = folder_payload.get("folder") if isinstance(folder_payload, dict) else None
+                    folder_name = folder_data.get("name") if isinstance(folder_data, dict) else None
+                    if not isinstance(folder_name, str) or not folder_name:
+                        continue
+
+                    image_path = self._buildPhotoImagePath(shared_folder, folder_name, filename)
+                    if changed_cutoff_mtime_ns and not self._imageOrSidecarChangedSince(
+                        image_path,
+                        changed_cutoff_mtime_ns,
+                        lookup_cache=sidecar_lookup_cache,
+                    ):
                         continue
 
                     images_read += 1
@@ -6548,10 +6612,11 @@ class ImgDataService:
                         current_image_id=image_id_int,
                         resume_cursor=self._buildFaceMatchResumeCursor(
                             skip_face_ids=list(skip_face_ids_set),
-                            transferred_count=transferred_count,
-                            auto=auto,
-                            save_only=save_only,
-                        ),
+                                transferred_count=transferred_count,
+                                auto=auto,
+                                save_only=save_only,
+                                changed_since_days=normalized_changed_since_days,
+                            ),
                     )
 
                     faces = self.photos.list_faceFotoTeamItems(
@@ -6595,10 +6660,11 @@ class ImgDataService:
                                 "findings_count": findings_count,
                                 "resume_cursor": self._buildFaceMatchResumeCursor(
                                     skip_face_ids=list(skip_face_ids_set),
-                                    transferred_count=transferred_count,
-                                    auto=auto,
-                                    save_only=save_only,
-                                ),
+                                        transferred_count=transferred_count,
+                                        auto=auto,
+                                        save_only=save_only,
+                                        changed_since_days=normalized_changed_since_days,
+                                    ),
                             }
                         faces_read += 1
                         self._setFaceMatchingProgressMessage(
@@ -6609,10 +6675,11 @@ class ImgDataService:
                             current_face_id=face.get("face_id"),
                             resume_cursor=self._buildFaceMatchResumeCursor(
                                 skip_face_ids=list(skip_face_ids_set),
-                                transferred_count=transferred_count,
-                                auto=auto,
-                                save_only=save_only,
-                            ),
+                                    transferred_count=transferred_count,
+                                    auto=auto,
+                                    save_only=save_only,
+                                    changed_since_days=normalized_changed_since_days,
+                                ),
                         )
                         face_person_id = face.get("person_id")
                         face_id = face.get("face_id")
@@ -6629,27 +6696,6 @@ class ImgDataService:
                             continue
                         skip_face_ids_set.add(face_id_int)
 
-                        folder_id = image.get("folder_id")
-                        filename = image.get("filename")
-                        try:
-                            folder_id_int = int(folder_id)
-                        except (TypeError, ValueError):
-                            continue
-                        if not isinstance(filename, str) or not filename:
-                            continue
-
-                        folder_payload = self.photos.getFotoTeamFolder(
-                            user_key=user_key,
-                            cookies=cookies,
-                            base_url=base_url,
-                            id_folder=folder_id_int,
-                        )
-                        folder_data = folder_payload.get("folder") if isinstance(folder_payload, dict) else None
-                        folder_name = folder_data.get("name") if isinstance(folder_data, dict) else None
-                        if not isinstance(folder_name, str) or not folder_name:
-                            continue
-
-                        image_path = self._buildPhotoImagePath(shared_folder, folder_name, filename)
                         metadata_payload = self._readImageMetadata(image_path)
                         metadata_faces = metadata_payload.faces
                         metadata_faces_read += len(metadata_faces)
@@ -6660,10 +6706,11 @@ class ImgDataService:
                             metadata_faces_read=metadata_faces_read,
                             resume_cursor=self._buildFaceMatchResumeCursor(
                                 skip_face_ids=list(skip_face_ids_set),
-                                transferred_count=transferred_count,
-                                auto=auto,
-                                save_only=save_only,
-                            ),
+                                    transferred_count=transferred_count,
+                                    auto=auto,
+                                    save_only=save_only,
+                                    changed_since_days=normalized_changed_since_days,
+                                ),
                         )
 
                         photo_face = PhotosFace(
@@ -6697,6 +6744,7 @@ class ImgDataService:
                                 transferred_count=transferred_count,
                                 auto=auto,
                                 save_only=save_only,
+                                changed_since_days=normalized_changed_since_days,
                             ),
                         )
                         if not matches:
@@ -6811,11 +6859,12 @@ class ImgDataService:
                             "auto": auto,
                             "resume_cursor": self._buildFaceMatchResumeCursor(
                                 skip_face_ids=list(skip_face_ids_set),
-                                transferred_count=transferred_count,
-                                auto=auto,
-                                save_only=save_only,
-                                findings_count=findings_count + 1,
-                            ),
+                                    transferred_count=transferred_count,
+                                    auto=auto,
+                                    save_only=save_only,
+                                    findings_count=findings_count + 1,
+                                    changed_since_days=normalized_changed_since_days,
+                                ),
                         }
                     if result_entry is None:
                         continue
@@ -6847,11 +6896,12 @@ class ImgDataService:
                             findings_count=findings_count,
                             resume_cursor=self._buildFaceMatchResumeCursor(
                                 skip_face_ids=list(skip_face_ids_set),
-                                transferred_count=transferred_count,
-                                auto=auto,
-                                save_only=save_only,
-                                findings_count=findings_count,
-                            ),
+                                    transferred_count=transferred_count,
+                                    auto=auto,
+                                    save_only=save_only,
+                                    findings_count=findings_count,
+                                    changed_since_days=normalized_changed_since_days,
+                                ),
                         )
                         continue
                     if self._isFaceMatchFindingSuppressed(result_entry):
@@ -6891,11 +6941,12 @@ class ImgDataService:
                 "findings_count": findings_count,
                 "resume_cursor": self._buildFaceMatchResumeCursor(
                     skip_face_ids=list(skip_face_ids_set),
-                    transferred_count=transferred_count,
-                    auto=auto,
-                    save_only=save_only,
-                    findings_count=findings_count,
-                ),
+                        transferred_count=transferred_count,
+                        auto=auto,
+                        save_only=save_only,
+                        findings_count=findings_count,
+                        changed_since_days=normalized_changed_since_days,
+                    ),
             }
         finally:
             self._setFaceMatchingProgressMessage(
@@ -6910,11 +6961,12 @@ class ImgDataService:
                 findings_count=findings_count,
                 resume_cursor=self._buildFaceMatchResumeCursor(
                     skip_face_ids=list(skip_face_ids_set),
-                    transferred_count=transferred_count,
-                    auto=auto,
-                    save_only=save_only,
-                    findings_count=findings_count,
-                ),
+                        transferred_count=transferred_count,
+                        auto=auto,
+                        save_only=save_only,
+                        findings_count=findings_count,
+                        changed_since_days=normalized_changed_since_days,
+                    ),
             )
 
     def searchFileFaceInSources(
@@ -6926,9 +6978,13 @@ class ImgDataService:
         skip_targets: Optional[List[str]] = None,
         auto: bool = False,
         save_only: bool = False,
+        changed_since_days: int = 0,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
+        normalized_changed_since_days = max(0, int(changed_since_days or 0))
+        if isinstance(resume_cursor, dict):
+            normalized_changed_since_days = max(0, int(resume_cursor.get("changed_since_days", normalized_changed_since_days) or 0))
         saved_entries = self._resumeFaceMatchSavedEntries(
             action="search_file_face_in_sources",
             save_only=save_only,
@@ -6986,6 +7042,7 @@ class ImgDataService:
                 save_only=save_only,
                 action="search_file_face_in_sources",
                 findings_count=findings_count,
+                changed_since_days=normalized_changed_since_days,
             ),
         )
 
@@ -7070,6 +7127,7 @@ class ImgDataService:
                                 auto=auto,
                                 save_only=save_only,
                                 action="search_file_face_in_sources",
+                                changed_since_days=normalized_changed_since_days,
                             ),
                         }
                     person_id = person.get("id")
@@ -7184,6 +7242,7 @@ class ImgDataService:
                     save_only=save_only,
                     action="search_file_face_in_sources",
                     findings_count=findings_count,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             )
             if reverse_candidates:
@@ -7193,8 +7252,30 @@ class ImgDataService:
                         continue
                     candidate_entries_by_path.setdefault(image_path, []).append(entry)
                 candidate_paths = list(candidate_entries_by_path.keys())
+                if normalized_changed_since_days > 0:
+                    cutoff_mtime_ns = int((datetime.now(timezone.utc).timestamp() - (normalized_changed_since_days * 86400)) * 1_000_000_000)
+                    lookup_cache = SidecarLookupCache()
+                    candidate_paths = [
+                        image_path for image_path in candidate_paths
+                        if self._imageOrSidecarChangedSince(
+                            image_path,
+                            cutoff_mtime_ns,
+                            lookup_cache=lookup_cache,
+                        )
+                    ]
+                    candidate_entries_by_path = {
+                        image_path: candidate_entries_by_path[image_path]
+                        for image_path in candidate_paths
+                        if image_path in candidate_entries_by_path
+                    }
             else:
-                candidate_paths = self.files.listImageFiles(shared_folder)
+                candidate_paths = self._getFaceMatchCandidatePaths(
+                    user_key=user_key,
+                    action="search_file_face_in_sources",
+                    shared_folder=shared_folder,
+                    changed_since_days=normalized_changed_since_days,
+                    use_cache=bool(resume_cursor),
+                )
             self._setFaceMatchingProgressMessage(
                 user_key,
                 "face_match:progress_files_listed",
@@ -7215,6 +7296,7 @@ class ImgDataService:
                     save_only=save_only,
                     action="search_file_face_in_sources",
                     findings_count=findings_count,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             )
             for image_path in candidate_paths:
@@ -7249,6 +7331,7 @@ class ImgDataService:
                             auto=auto,
                             save_only=save_only,
                             action="search_file_face_in_sources",
+                            changed_since_days=normalized_changed_since_days,
                         ),
                     }
 
@@ -7268,6 +7351,7 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         action="search_file_face_in_sources",
+                        changed_since_days=normalized_changed_since_days,
                     ),
                 )
 
@@ -7289,6 +7373,7 @@ class ImgDataService:
                         auto=auto,
                         save_only=save_only,
                         action="search_file_face_in_sources",
+                        changed_since_days=normalized_changed_since_days,
                     ),
                 )
                 candidate_entries = candidate_entries_by_path.get(image_path, [])
@@ -7365,6 +7450,7 @@ class ImgDataService:
                             save_only=save_only,
                             action="search_file_face_in_sources",
                             findings_count=findings_count + 1,
+                            changed_since_days=normalized_changed_since_days,
                         ),
                     })
 
@@ -7392,6 +7478,7 @@ class ImgDataService:
                                     save_only=save_only,
                                     action="search_file_face_in_sources",
                                     findings_count=findings_count,
+                                    changed_since_days=normalized_changed_since_days,
                                 ),
                             )
                             continue
@@ -7429,6 +7516,7 @@ class ImgDataService:
                                 save_only=save_only,
                                 action="search_file_face_in_sources",
                                 findings_count=findings_count,
+                                changed_since_days=normalized_changed_since_days,
                             ),
                         )
                         continue
@@ -7472,6 +7560,7 @@ class ImgDataService:
                     save_only=save_only,
                     action="search_file_face_in_sources",
                     findings_count=findings_count,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             }
         finally:
@@ -7495,6 +7584,7 @@ class ImgDataService:
                     save_only=save_only,
                     action="search_file_face_in_sources",
                     findings_count=findings_count,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             )
 
@@ -7507,9 +7597,13 @@ class ImgDataService:
         skip_targets: Optional[List[str]] = None,
         auto: bool = False,
         save_only: bool = False,
+        changed_since_days: int = 0,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
+        normalized_changed_since_days = max(0, int(changed_since_days or 0))
+        if isinstance(resume_cursor, dict):
+            normalized_changed_since_days = max(0, int(resume_cursor.get("changed_since_days", normalized_changed_since_days) or 0))
         saved_entries = self._resumeFaceMatchSavedEntries(
             action="mark_missing_photos_faces",
             save_only=save_only,
@@ -7566,6 +7660,7 @@ class ImgDataService:
                 action="mark_missing_photos_faces",
                 findings_count=findings_count,
                 path_index=path_index,
+                changed_since_days=normalized_changed_since_days,
             ),
         )
 
@@ -7614,9 +7709,16 @@ class ImgDataService:
                     action="mark_missing_photos_faces",
                     findings_count=findings_count,
                     path_index=path_index,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             )
-            candidate_paths = self.files.listImageFiles(shared_folder)
+            candidate_paths = self._getFaceMatchCandidatePaths(
+                user_key=user_key,
+                action="mark_missing_photos_faces",
+                shared_folder=shared_folder,
+                changed_since_days=normalized_changed_since_days,
+                use_cache=bool(resume_cursor),
+            )
             path_index = min(max(0, path_index), len(candidate_paths))
             self._setFaceMatchingProgressMessage(
                 user_key,
@@ -7639,6 +7741,7 @@ class ImgDataService:
                     action="mark_missing_photos_faces",
                     findings_count=findings_count,
                     path_index=path_index,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             )
             for image_path in candidate_paths[path_index:]:
@@ -7675,6 +7778,7 @@ class ImgDataService:
                             action="mark_missing_photos_faces",
                             findings_count=findings_count,
                             path_index=images_read,
+                            changed_since_days=normalized_changed_since_days,
                         ),
                     }
 
@@ -7696,6 +7800,7 @@ class ImgDataService:
                         action="mark_missing_photos_faces",
                         findings_count=findings_count,
                         path_index=images_read,
+                        changed_since_days=normalized_changed_since_days,
                     ),
                 )
 
@@ -7719,6 +7824,7 @@ class ImgDataService:
                         action="mark_missing_photos_faces",
                         findings_count=findings_count,
                         path_index=images_read,
+                        changed_since_days=normalized_changed_since_days,
                     ),
                 )
 
@@ -7835,6 +7941,7 @@ class ImgDataService:
                         action="mark_missing_photos_faces",
                         findings_count=findings_count + 1,
                         path_index=images_read,
+                        changed_since_days=normalized_changed_since_days,
                     ),
                 }
 
@@ -7867,6 +7974,7 @@ class ImgDataService:
                                 action="mark_missing_photos_faces",
                                 findings_count=findings_count,
                                 path_index=images_read,
+                                changed_since_days=normalized_changed_since_days,
                             ),
                         )
                         continue
@@ -7905,6 +8013,7 @@ class ImgDataService:
                             action="mark_missing_photos_faces",
                             findings_count=findings_count,
                             path_index=images_read,
+                            changed_since_days=normalized_changed_since_days,
                         ),
                     )
                     continue
@@ -7948,6 +8057,7 @@ class ImgDataService:
                     action="mark_missing_photos_faces",
                     findings_count=findings_count,
                     path_index=images_read,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             }
         finally:
@@ -7972,6 +8082,7 @@ class ImgDataService:
                     action="mark_missing_photos_faces",
                     findings_count=findings_count,
                     path_index=images_read,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             )
 
@@ -7986,10 +8097,14 @@ class ImgDataService:
         save_only: bool = False,
         recognize_persons: bool = False,
         skip_unknown_persons: bool = False,
+        changed_since_days: int = 0,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         last_keepalive_at = monotonic()
         action = "search_missing_faces_insightface"
+        normalized_changed_since_days = max(0, int(changed_since_days or 0))
+        if isinstance(resume_cursor, dict):
+            normalized_changed_since_days = max(0, int(resume_cursor.get("changed_since_days", normalized_changed_since_days) or 0))
         saved_entries = self._resumeFaceMatchSavedEntries(
             action=action,
             save_only=save_only,
@@ -8052,6 +8167,7 @@ class ImgDataService:
                 faces_read=faces_read,
                 target_faces_read=target_faces_read,
                 metadata_faces_read=metadata_faces_read,
+                changed_since_days=normalized_changed_since_days,
             ),
         )
 
@@ -8147,12 +8263,14 @@ class ImgDataService:
                     faces_read=faces_read,
                     target_faces_read=target_faces_read,
                     metadata_faces_read=metadata_faces_read,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             )
             candidate_paths = self._getFaceMatchCandidatePaths(
                 user_key=user_key,
                 action=action,
                 shared_folder=shared_folder,
+                changed_since_days=normalized_changed_since_days,
                 use_cache=bool(resume_cursor),
             )
             path_index = min(max(0, path_index), len(candidate_paths))
@@ -8220,6 +8338,7 @@ class ImgDataService:
                             recognize_persons=bool(recognize_persons),
                             skip_unknown_persons=bool(skip_unknown_persons),
                             findings_count=findings_count,
+                            changed_since_days=normalized_changed_since_days,
                         ),
                     }
 
@@ -8242,6 +8361,12 @@ class ImgDataService:
                         recognize_persons=bool(recognize_persons),
                         skip_unknown_persons=bool(skip_unknown_persons),
                         findings_count=findings_count,
+                        path_index=images_read,
+                        images_read=images_read,
+                        faces_read=faces_read,
+                        target_faces_read=target_faces_read,
+                        metadata_faces_read=metadata_faces_read,
+                        changed_since_days=normalized_changed_since_days,
                     ),
                 )
 
@@ -8250,6 +8375,43 @@ class ImgDataService:
                     if recognize_persons
                     else detector.detect(Path(image_path))
                 )
+                if self._shouldStopFaceMatching(user_key):
+                    final_message_key = "face_match:progress_stopped"
+                    if save_only:
+                        self._writeFaceMatchFindings(
+                            status="stopped",
+                            shared_folder=shared_folder,
+                            action=action,
+                            auto=auto,
+                            save_only=save_only,
+                            transferred_count=transferred_count,
+                            entries=saved_entries,
+                        )
+                    return {
+                        "searched": False,
+                        "stopped": True,
+                        "transferred_count": transferred_count,
+                        "auto": auto,
+                        "save_only": save_only,
+                        "findings_count": findings_count,
+                        "resume_cursor": self._buildFaceMatchResumeCursor(
+                            skip_face_ids=[],
+                            skip_targets=skip_target_tokens,
+                            transferred_count=transferred_count,
+                            auto=auto,
+                            save_only=save_only,
+                            action=action,
+                            recognize_persons=bool(recognize_persons),
+                            skip_unknown_persons=bool(skip_unknown_persons),
+                            findings_count=findings_count,
+                            path_index=images_read,
+                            images_read=images_read,
+                            faces_read=faces_read,
+                            target_faces_read=target_faces_read,
+                            metadata_faces_read=metadata_faces_read,
+                            changed_since_days=normalized_changed_since_days,
+                        ),
+                    }
                 detected_pairs = [
                     (face, detection) for detection in raw_detections
                     for face in [self._insightFaceDetectionToMetadataFace(detection)]
@@ -8275,6 +8437,12 @@ class ImgDataService:
                         recognize_persons=bool(recognize_persons),
                         skip_unknown_persons=bool(skip_unknown_persons),
                         findings_count=findings_count,
+                        path_index=images_read,
+                        images_read=images_read,
+                        faces_read=faces_read,
+                        target_faces_read=target_faces_read,
+                        metadata_faces_read=metadata_faces_read,
+                        changed_since_days=normalized_changed_since_days,
                     ),
                 )
                 if not detected_faces:
@@ -8379,6 +8547,7 @@ class ImgDataService:
                             faces_read=faces_read,
                             target_faces_read=target_faces_read,
                             metadata_faces_read=metadata_faces_read,
+                            changed_since_days=normalized_changed_since_days,
                         ),
                     )
                     continue
@@ -8433,6 +8602,7 @@ class ImgDataService:
                         faces_read=faces_read,
                         target_faces_read=target_faces_read,
                         metadata_faces_read=metadata_faces_read,
+                        changed_since_days=normalized_changed_since_days,
                     ),
                 }
 
@@ -8473,6 +8643,7 @@ class ImgDataService:
                                     faces_read=faces_read,
                                     target_faces_read=target_faces_read,
                                     metadata_faces_read=metadata_faces_read,
+                                    changed_since_days=normalized_changed_since_days,
                                 ),
                             )
                             continue
@@ -8516,6 +8687,7 @@ class ImgDataService:
                             faces_read=faces_read,
                             target_faces_read=target_faces_read,
                             metadata_faces_read=metadata_faces_read,
+                            changed_since_days=normalized_changed_since_days,
                         ),
                     )
                     continue
@@ -8564,6 +8736,12 @@ class ImgDataService:
                     recognize_persons=bool(recognize_persons),
                     skip_unknown_persons=bool(skip_unknown_persons),
                     findings_count=findings_count,
+                    path_index=images_read,
+                    images_read=images_read,
+                    faces_read=faces_read,
+                    target_faces_read=target_faces_read,
+                    metadata_faces_read=metadata_faces_read,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             }
         except FaceDetectorUnavailable as exc:
@@ -8610,6 +8788,12 @@ class ImgDataService:
                     recognize_persons=bool(recognize_persons),
                     skip_unknown_persons=bool(skip_unknown_persons),
                     findings_count=findings_count,
+                    path_index=images_read,
+                    images_read=images_read,
+                    faces_read=faces_read,
+                    target_faces_read=target_faces_read,
+                    metadata_faces_read=metadata_faces_read,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             )
 

@@ -102,3 +102,32 @@ def test_worker_status_remains_backend_owned_and_schema_versioned():
     assert '"schema_version": WorkerProtocol.SCHEMA_VERSION' in api
     assert '"component": "external_worker"' in api
     assert "def admin_status" in api
+
+
+def test_worker_api_loop_checks_result_reporting_response():
+    source = _read("worker/src/api_loop.cpp")
+
+    assert "std::string normalized_result_payload" in source
+    assert 'runtime::extract_json_object(worker_json, "processor_result")' in source
+    assert "curl -SsL -X POST" in source
+    assert "curl -fSsL -X POST" not in source
+    assert "runtime::extract_first_json_object" in source
+    assert "worker_result_json" in source
+    assert '"worker_result_invalid_json"' in source
+    assert 'response_ok(report, "completed")' in source
+    assert '"result_report_failed"' in source
+    assert '"worker result was rejected by DSM"' in source
+    assert 'response_ok(report, "failed")' in source
+    assert "append_report_fields" in source
+
+
+def test_worker_api_loop_executes_vector_jobs_without_shared_path():
+    api_loop = _read("worker/src/api_loop.cpp")
+    worker = _read("worker/src/main.cpp")
+
+    assert 'type == "face_native_rank_embeddings"' in api_loop
+    assert 'type == "face_native_profile_math"' in api_loop
+    assert "if (vector_job)" in api_loop
+    assert 'runtime::extract_json_array(job_json, "target_embeddings")' in worker
+    assert 'runtime::extract_json_array(job_json, "profile_embeddings")' in worker
+    assert 'runtime::extract_json_array(job_json, "embeddings")' in worker

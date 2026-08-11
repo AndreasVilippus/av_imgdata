@@ -335,13 +335,14 @@ class ImageDecodeService:
     @staticmethod
     def _decode_with_pillow_heif(image_path: Path, max_edge: int = 4096) -> ImageDecodeResult:
         try:
-            from PIL import Image
+            from PIL import Image, ImageOps
             from pillow_heif import register_heif_opener
         except ImportError as exc:
             return ImageDecodeResult(False, source="pillow-heif", error=f"decoder_not_installed:{exc}")
         try:
             register_heif_opener()
             with Image.open(image_path) as image:
+                image = ImageOps.exif_transpose(image)
                 if image.mode not in {"RGB", "L"}:
                     image = image.convert("RGB")
                 if max_edge > 0:

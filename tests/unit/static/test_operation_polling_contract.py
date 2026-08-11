@@ -92,6 +92,19 @@ def test_only_runtime_progress_polling_opts_into_overlap_skipping():
         assert marker in source
 
 
+def test_skip_pending_polling_callbacks_return_fetch_promises():
+    expected_callbacks = [
+        "this.startNamedPolling('cleanupProgressTimer', () => {\n\t\t\t\t\treturn this.fetchCleanupProgress();",
+        "this.startNamedPolling('checksProgressTimer', () => {\n\t\t\t\treturn this.fetchChecksProgress();",
+        "this.startNamedPolling('fileAnalysisProgressTimer', () => {\n\t\t\t\treturn this.fetchFileAnalysisProgress();",
+        "this.startNamedPolling('faceMatchProgressTimer', () => this.fetchFaceMatchingProgress(), 1000, { skipIfPending: true });",
+    ]
+    source = read_ui_sources()
+
+    for callback in expected_callbacks:
+        assert callback in source
+
+
 def test_stopping_polling_releases_in_flight_latches_for_next_user_action():
     source = read_ui_sources()
     polling = Path("ui/src/services/runtime-polling.js").read_text(encoding="utf-8")

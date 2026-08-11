@@ -40,8 +40,10 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     assert "faceMatchRecognizeMissingInsightFacePersons" in face_match_view
     assert "faceMatchSkipUnknownInsightFacePersons" in face_match_view
     assert "faceMatchAutoApplySafeInsightFacePersons" in face_match_view
+    assert "vm.faceMatchMissingFacesChangedSinceDays" in face_match_view
     assert "switch_auto_apply_safe_missing_faces" in face_match_view
     assert "skip_unknown_persons:" in face_match_mixin
+    assert "changed_since_days:" in face_match_mixin
     assert 'v-if="vm.faceMatchSupportsAutoAssignKnown"' in face_match_view
     assert "faceMatchSupportsAutoAssignKnown()" in face_match_mixin
     assert "this.faceMatchAutoApplySafeInsightFacePersons" in face_match_mixin
