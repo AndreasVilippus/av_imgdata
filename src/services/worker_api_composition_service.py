@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from services.config_service import ConfigService
-from services.external_worker_processor_service import ExternalWorkerProcessorService
+from services.external_worker_batch_processor_service import ExternalWorkerBatchProcessorService
 from services.native_face_processor_service import NativeFaceProcessorService
 from services.worker_api_service import WorkerApiService
 from services.worker_provisioning_service import WorkerProvisioningService
@@ -85,10 +85,10 @@ class WorkerApiCompositionService:
         wait_timeout_seconds: int = 300,
         poll_interval_seconds: float = 0.5,
         debug_logger: Optional[Callable[..., None]] = None,
-    ) -> ExternalWorkerProcessorService:
+    ) -> ExternalWorkerBatchProcessorService:
         """Build the shared face dispatch/result service from the composition root."""
 
-        return ExternalWorkerProcessorService(
+        return ExternalWorkerBatchProcessorService(
             self.worker_api,
             self.native_face_processor,
             nas_root=nas_root,
