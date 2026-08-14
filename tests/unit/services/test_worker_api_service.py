@@ -120,6 +120,15 @@ class TestWorkerApiService(unittest.TestCase):
         )
         self.assertEqual(claimed["status"], "empty")
 
+    def test_runtime_capability_is_not_enqueueable_as_processor_job(self):
+        with self.assertRaises(WorkerApiError) as ctx:
+            self.service.enqueue_job(
+                job_id="warm-1",
+                job_type="warm_processor_worker",
+                payload={},
+            )
+        self.assertEqual(ctx.exception.code, "job_type_unsupported")
+
     def test_invalid_token_is_rejected(self):
         with self.assertRaises(WorkerApiError) as ctx:
             self.service.heartbeat(token="not-the-issued-token", worker_id="worker-01")
