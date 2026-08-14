@@ -16,7 +16,6 @@ CAPABILITIES = (
     "face_native_embed_batch",
     "face_native_rank_embeddings",
     "face_native_profile_math",
-    "warm_processor_worker",
 )
 INPUT_MODES = (
     "shared_path",
