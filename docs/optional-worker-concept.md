@@ -93,7 +93,7 @@ must continue to use the shared dispatch service.
 
 ## Processor contracts
 
-The face processor contract currently contains:
+The active worker advertises and the DSM dispatches exactly these processor jobs:
 
 ```text
 face_native_detect
@@ -208,22 +208,22 @@ Current controlled-rollout assumptions remain conservative: a JSON Worker API st
 store and a small number of workers/jobs. Transactional storage such as SQLite should
 be evaluated before high-volume multi-worker orchestration.
 
-## `warm_processor_worker`
+## Planned persistent warm runtime
 
-`warm_processor_worker` is currently present in worker capability metadata, but it is
-not a face-native job contract.
+`warm_processor_worker` is not currently advertised by the active protocol and is not
+a processor job contract.
 
 The package-internal native processor service can keep the face processor's persistent
 `worker` subprocess alive. The current *external* API loop, however, invokes
 `av-imgdata-worker once` for each claimed job. It therefore does not yet provide true
 cross-job persistent model residency.
 
-Consequences:
+A correct implementation must change process ownership in the long-running external
+worker/API-loop and expose truthful warm/readiness diagnostics. Until then:
 
-- do not enqueue `warm_processor_worker` as a normal job;
-- do not interpret its presence as proof that external model state stays resident;
-- implement external warm-runtime support by changing process ownership in the
-  long-running worker/API-loop and exposing truthful readiness diagnostics.
+- no warm capability is advertised;
+- no warm job is accepted;
+- no cross-job model residency is promised.
 
 This runtime optimization is independent from the DSM central pipeline and should be
 implemented/validated separately.
@@ -287,7 +287,7 @@ embed batch               integrated and used by Recognition lookahead
 embedding ranking         integrated
 profile math              integrated
 byte preview input        intentionally local
-external persistent warm  separate runtime work; not falsely treated as a job
+external persistent warm  planned runtime work; not advertised as available
 Windows single path       validated
 Windows batch path        requires bundle/runtime validation
 Linux/Docker              requires platform validation
