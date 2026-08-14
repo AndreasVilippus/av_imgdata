@@ -36,7 +36,7 @@ batch job instead of a sequence of individual external embed jobs.
 
 ## Implemented worker processor contracts
 
-Production DSM dispatch/result handling exists for:
+Production DSM dispatch/result handling and active worker advertisement exist for:
 
 - `face_native_detect`
 - `face_native_embed`
@@ -50,17 +50,17 @@ loop validates every path and materializes every entry below the worker's config
 `path_base_dir` before invoking the processor. Absolute paths, traversal and mixed
 path-profile inputs are rejected.
 
-## `warm_processor_worker`
+## Planned external warm runtime
 
-`warm_processor_worker` is currently advertised as a worker/runtime capability, but it
-is not one of the face processor job contracts. The current external API loop launches
-`av-imgdata-worker once` per claimed job, so it does not yet keep the face processor's
-persistent `worker` process alive across claimed jobs.
+`warm_processor_worker` is not advertised by the active worker protocol and is not an
+enqueueable job type. The bundled face processor already has a persistent `worker`
+command, but the external API loop currently launches `av-imgdata-worker once` per
+claimed job and therefore cannot truthfully promise cross-job model residency.
 
-Do not enqueue `warm_processor_worker` as if it were a completed processor contract.
-A real warm-runtime implementation must own processor lifetime inside the long-running
-external worker/API-loop process and expose truthful readiness/diagnostics. This is a
-separate runtime optimization and must not be confused with the central DSM pipeline.
+A future warm-runtime implementation must change process ownership inside the
+long-running external worker/API-loop and expose truthful readiness/diagnostics. This
+is a separate runtime optimization and must not be confused with the central DSM
+pipeline.
 
 ## Intentionally local work
 
