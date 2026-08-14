@@ -5,7 +5,13 @@
 The DSM backend remains the source of truth for operation identity, status, findings,
 review and writes. External workers execute only processor-contract operations. The
 shared dispatch service applies `external_preferred`: local execution is allowed only
-before a job is enqueued; no duplicate local retry is started after enqueue.
+when no external worker is available before enqueue; no duplicate local retry is
+started after enqueue.
+
+Package and external worker are one versioned release unit. There is no compatibility
+fallback for older worker versions, incomplete capability sets or mixed package/worker
+releases. A fresh registered worker must match the package worker version and the full
+active capability contract. Contract mismatch is an explicit error.
 
 Batch execution is a processor optimization, not a pipeline. One existing workflow
 call may submit several image paths as one processor job, but the DSM workflow still
@@ -30,9 +36,9 @@ The recognition service actions keep their existing operation/action identities:
 - `recognition_analyze_unknown_faces`
 - `recognition_check_person_assignments`
 
-The existing recognition lookahead already calls `detect_and_embed_many()`. When a
-compatible worker advertises `face_native_embed_batch`, that call is now one external
-batch job instead of a sequence of individual external embed jobs.
+The existing recognition lookahead already calls `detect_and_embed_many()`. With the
+matching package worker release, that call maps to one external
+`face_native_embed_batch` job instead of a sequence of individual external embed jobs.
 
 ## Implemented worker processor contracts
 
@@ -49,6 +55,24 @@ For `shared_path` batch jobs, DSM stores relative `image_paths`. The Windows/Lin
 loop validates every path and materializes every entry below the worker's configured
 `path_base_dir` before invoking the processor. Absolute paths, traversal and mixed
 path-profile inputs are rejected.
+
+## Package-worker compatibility rule
+
+A fresh worker is usable only when all of the following match the package contract:
+
+- `worker_version`
+- complete active capability set
+- required input mode for image jobs
+- protocol-defined processor contracts
+
+A fresh worker that violates this unit contract raises
+`external_worker_contract_mismatch`. The DSM backend must not downgrade a batch call to
+single-image external jobs and must not silently treat an older external worker as a
+supported target.
+
+The normal local package processor remains available only when there is no usable
+external worker before enqueue or when the Worker API is disabled. That is execution
+target selection, not version compatibility.
 
 ## Planned external warm runtime
 
@@ -69,8 +93,8 @@ pipeline.
 - findings, review and mutation logic
 - image bytes extracted from embedded previews, because the current worker input
   contract is `shared_path`
-- target selection fallback when Worker API is disabled or no compatible worker is
-  ready
+- execution-target fallback when Worker API is disabled or no fresh external worker is
+  available
 
 ## Deferred pipeline scope
 
