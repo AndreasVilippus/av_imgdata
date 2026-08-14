@@ -228,10 +228,11 @@ For backward compatibility, a worker without a batch capability may still proces
 single-image jobs. The adapter falls back to individual external calls rather than
 inventing a second batch implementation.
 
-## `warm_processor_worker`
+## Planned external warm runtime
 
-The protocol currently contains `warm_processor_worker`, but this is not a face-native
-job schema and must not be treated as one.
+The active worker protocol advertises only processor operations that are currently
+executable end to end. `warm_processor_worker` has therefore been removed from active
+capability advertisement and remains a planned runtime feature, not a job type.
 
 The bundled native face processor supports a persistent `worker` command internally,
 but the current external API loop starts `av-imgdata-worker once` for each claimed job.
@@ -245,9 +246,9 @@ pipeline.
 
 Until that implementation exists:
 
-- do not enqueue `warm_processor_worker` jobs;
-- do not claim reduced model-load latency from this capability;
-- keep the capability status explicit in documentation and diagnostics.
+- no warm-runtime capability is advertised;
+- no `warm_processor_worker` job is accepted;
+- no reduced cross-job model-load latency is claimed.
 
 ## Byte inputs
 
