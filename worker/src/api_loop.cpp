@@ -131,12 +131,107 @@ std::string claim_body(const LoopConfig& config) {
         "\",\"capabilities\":" + av_imgdata::worker::capabilities_json() + "}";
 }
 
+bool parse_json_string_array(const std::string& array_json, std::vector<std::string>* values) {
+    values->clear();
+    const std::string text = runtime::trim(array_json);
+    if (text.size() < 2 || text.front() != '[' || text.back() != ']') return false;
+    std::size_t pos = 1;
+    while (pos + 1 < text.size()) {
+        while (pos < text.size() && (std::isspace(static_cast<unsigned char>(text[pos])) || text[pos] == ',')) ++pos;
+        if (pos >= text.size() - 1) break;
+        if (text[pos] != '"') return false;
+        ++pos;
+        std::string value;
+        bool escaping = false;
+        bool closed = false;
+        for (; pos < text.size(); ++pos) {
+            const char c = text[pos];
+            if (escaping) {
+                switch (c) {
+                    case 'n': value += '\n'; break;
+                    case 'r': value += '\r'; break;
+                    case 't': value += '\t'; break;
+                    case '\\': value += '\\'; break;
+                    case '"': value += '"'; break;
+                    default: value += c; break;
+                }
+                escaping = false;
+            } else if (c == '\\') {
+                escaping = true;
+            } else if (c == '"') {
+                ++pos;
+                closed = true;
+                break;
+            } else {
+                value += c;
+            }
+        }
+        if (!closed) return false;
+        values->push_back(value);
+    }
+    return true;
+}
+
+std::string json_string_array(const std::vector<std::string>& values) {
+    std::ostringstream out;
+    out << '[';
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) out << ',';
+        out << '"' << runtime::json_escape(values[i]) << '"';
+    }
+    out << ']';
+    return out.str();
+}
+
+bool replace_json_array(std::string* json, const std::string& key, const std::string& replacement) {
+    const std::string current = runtime::extract_json_array(*json, key);
+    if (current.empty()) return false;
+    const std::string needle = "\"" + key + "\"";
+    const std::size_t key_pos = json->find(needle);
+    if (key_pos == std::string::npos) return false;
+    const std::size_t array_pos = json->find(current, key_pos + needle.size());
+    if (array_pos == std::string::npos) return false;
+    json->replace(array_pos, current.size(), replacement);
+    return true;
+}
+
+bool materialize_batch_paths(std::string* payload, const LoopConfig& config, LocalJobResult* result) {
+    std::vector<std::string> relative_values;
+    if (!parse_json_string_array(runtime::extract_json_array(*payload, "image_paths"), &relative_values) || relative_values.empty()) {
+        result->code = "image_paths_invalid";
+        result->message = "shared_path batch requires a non-empty image_paths string array";
+        return false;
+    }
+    std::vector<std::string> resolved_values;
+    for (const auto& value : relative_values) {
+        std::string relative;
+        std::string error;
+        if (!runtime::safe_relative_path(value, &relative, &error)) {
+            result->code = error;
+            result->message = "invalid shared_path image_paths entry";
+            return false;
+        }
+        resolved_values.push_back(runtime::join_path(config.path_base_dir, relative));
+    }
+    if (!replace_json_array(payload, "image_paths", json_string_array(resolved_values))) {
+        result->code = "image_paths_missing";
+        result->message = "payload image_paths could not be replaced";
+        return false;
+    }
+    result->resolved_path = resolved_values.front();
+    if (resolved_values.size() > 1) {
+        result->resolved_path += " (+" + std::to_string(resolved_values.size() - 1) + ")";
+    }
+    return true;
+}
+
 LocalJobResult make_local_job(const std::string& claimed, const LoopConfig& config) {
     LocalJobResult result;
     std::string payload = runtime::extract_json_object(claimed, "payload");
     const std::string job_id = runtime::extract_json_string(claimed, "job_id");
     const std::string type = runtime::extract_json_string(claimed, "type");
     const bool vector_job = type == "face_native_rank_embeddings" || type == "face_native_profile_math";
+    const bool batch_job = type == "face_native_detect_batch" || type == "face_native_embed_batch";
     if (vector_job) {
         std::ostringstream job;
         job << "{\"job_id\":\"" << runtime::json_escape(job_id)
@@ -156,18 +251,22 @@ LocalJobResult make_local_job(const std::string& claimed, const LoopConfig& conf
         result.message = "worker supports input_mode=shared_path only";
         return result;
     }
-    std::string relative;
-    std::string error;
-    if (!runtime::safe_relative_path(runtime::extract_json_string(payload, "local_path"), &relative, &error)) {
-        result.code = error;
-        result.message = "invalid shared_path local_path";
-        return result;
-    }
-    result.resolved_path = runtime::join_path(config.path_base_dir, relative);
-    if (!runtime::replace_json_string(&payload, "local_path", result.resolved_path)) {
-        result.code = "local_path_missing";
-        result.message = "payload local_path could not be replaced";
-        return result;
+    if (batch_job) {
+        if (!materialize_batch_paths(&payload, config, &result)) return result;
+    } else {
+        std::string relative;
+        std::string error;
+        if (!runtime::safe_relative_path(runtime::extract_json_string(payload, "local_path"), &relative, &error)) {
+            result.code = error;
+            result.message = "invalid shared_path local_path";
+            return result;
+        }
+        result.resolved_path = runtime::join_path(config.path_base_dir, relative);
+        if (!runtime::replace_json_string(&payload, "local_path", result.resolved_path)) {
+            result.code = "local_path_missing";
+            result.message = "payload local_path could not be replaced";
+            return result;
+        }
     }
     std::ostringstream job;
     job << "{\"job_id\":\"" << runtime::json_escape(job_id)
@@ -243,7 +342,7 @@ int usage() {
         << "Usage:\n"
         << "  av-imgdata-worker-api-loop --config <worker-config.json> [--api-url <url>] [--worker-bin <path>] [--path-base-dir <path>] [--max-iterations <n>]\n\n"
         << "The API loop registers explicitly, then sends heartbeats and claims jobs.\n"
-        << "shared_path jobs require input_mode=shared_path and a relative local_path.\n";
+        << "shared_path jobs require relative local_path or image_paths values.\n";
     return 0;
 }
 
