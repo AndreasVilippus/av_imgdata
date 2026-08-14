@@ -3,7 +3,7 @@
   "$id": "https://av-imgdata.local/schemas/face-native-job-input.schema.json",
   "title": "AV ImgData native face processor job input",
   "type": "object",
-  "required": ["contract_version", "job_id", "type", "input", "options"],
+  "required": ["contract_version", "job_id", "type"],
   "additionalProperties": true,
   "properties": {
     "contract_version": { "const": "1.0" },
@@ -25,15 +25,17 @@
         "image_path": { "type": "string", "minLength": 1 },
         "image_paths": {
           "type": "array",
+          "minItems": 1,
           "items": { "type": "string", "minLength": 1 }
         },
         "source_id": { "type": "string" }
-      },
-      "anyOf": [
-        { "required": ["image_path"] },
-        { "required": ["image_paths"] },
-        {}
-      ]
+      }
+    },
+    "image_path": { "type": "string", "minLength": 1 },
+    "image_paths": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
     },
     "target_embeddings": {
       "type": "array",
@@ -64,5 +66,63 @@
         "normalize_coordinates": { "type": "boolean" }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": { "enum": ["face_native_detect", "face_native_embed"] }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["input", "options"],
+        "properties": {
+          "input": { "required": ["image_path"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "enum": ["face_native_detect_batch", "face_native_embed_batch"] }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["options"],
+        "anyOf": [
+          {
+            "required": ["input"],
+            "properties": {
+              "input": { "required": ["image_paths"] }
+            }
+          },
+          { "required": ["image_paths"] }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "const": "face_native_rank_embeddings" }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["target_embeddings", "profile_embeddings"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "const": "face_native_profile_math" }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["embeddings"]
+      }
+    }
+  ]
 }
