@@ -18,6 +18,7 @@ from services.worker_runtime_service import (
 
 class WorkerApiService:
     DEFAULT_CAPABILITIES = WorkerProtocol.CAPABILITIES
+    NON_JOB_CAPABILITIES = {"warm_processor_worker"}
 
     def __init__(
         self,
@@ -40,6 +41,10 @@ class WorkerApiService:
         self.state_path = self.store.state_path
         self.credentials = WorkerCredentialService(self.store)
         self._clock = clock
+
+    @classmethod
+    def _supported_job_types(cls, capabilities: Optional[List[str]]) -> set:
+        return WorkerProtocol.supported_job_types(capabilities) - cls.NON_JOB_CAPABILITIES
 
     def create_token(self, *, token_id: str = "worker-default") -> Dict[str, Any]:
         return self.credentials.issue_token(
@@ -93,7 +98,7 @@ class WorkerApiService:
     def enqueue_job(self, *, job_id: str, job_type: str, payload: Dict[str, Any], priority: int = 100) -> Dict[str, Any]:
         job_id = self.credentials.require_value(job_id, "job_id_required")
         job_type = self.credentials.require_value(job_type, "job_type_required")
-        if job_type not in WorkerProtocol.supported_job_types(WorkerProtocol.CAPABILITIES):
+        if job_type not in self._supported_job_types(list(WorkerProtocol.CAPABILITIES)):
             raise WorkerApiError("job_type_unsupported")
 
         def mutate(state):
@@ -119,7 +124,7 @@ class WorkerApiService:
     def claim_job(self, *, token: str, worker_id: str, capabilities: Optional[List[str]] = None) -> Dict[str, Any]:
         self.credentials.authenticate(token=token, worker_id=worker_id, scope=WorkerProtocol.TOKEN_SCOPE_WORKER_API)
         worker_id = self.credentials.require_value(worker_id, "worker_id_required")
-        supported_types = WorkerProtocol.supported_job_types(capabilities)
+        supported_types = self._supported_job_types(capabilities)
 
         def mutate(state):
             worker = state["workers"].get(worker_id)
