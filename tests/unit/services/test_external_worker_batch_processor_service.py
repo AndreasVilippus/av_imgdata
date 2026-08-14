@@ -3,8 +3,12 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from services.external_worker_batch_processor_service import ExternalWorkerBatchProcessorService
+from services.external_worker_processor_service import ExternalWorkerProcessorUnavailable
 from services.worker_api_service import WorkerApiService
+from services.worker_runtime_service import WorkerProtocol
 
 
 class NativeProcessorStub:
@@ -45,6 +49,38 @@ class TestExternalWorkerBatchProcessorService:
 
     def teardown_method(self):
         self.temp_dir.cleanup()
+
+    def _register_worker(self, *, version=None, capabilities=None):
+        token = self.api.create_token(token_id="worker-test")["token"]
+        return self.api.register_worker(
+            token=token,
+            worker_id="worker-01",
+            version=version or WorkerProtocol.WORKER_VERSION,
+            capabilities=list(capabilities if capabilities is not None else WorkerProtocol.CAPABILITIES),
+            metadata={"input_modes": ["shared_path"]},
+        )
+
+    def test_package_worker_contract_accepts_matching_release(self):
+        self._register_worker()
+
+        assert self.service.has_compatible_worker(self.service.FACE_EMBED_BATCH_CAPABILITY) is True
+        assert self.service.has_compatible_worker(self.service.FACE_EMBED_CAPABILITY) is True
+
+    def test_package_worker_contract_rejects_older_worker_version(self):
+        self._register_worker(version="0.9.0")
+
+        with pytest.raises(ExternalWorkerProcessorUnavailable, match="external_worker_contract_mismatch"):
+            self.service.has_compatible_worker(self.service.FACE_EMBED_BATCH_CAPABILITY)
+
+    def test_package_worker_contract_rejects_incomplete_capability_set(self):
+        capabilities = [
+            item for item in WorkerProtocol.CAPABILITIES
+            if item != self.service.FACE_EMBED_BATCH_CAPABILITY
+        ]
+        self._register_worker(capabilities=capabilities)
+
+        with pytest.raises(ExternalWorkerProcessorUnavailable, match="external_worker_contract_mismatch"):
+            self.service.has_compatible_worker(self.service.FACE_EMBED_BATCH_CAPABILITY)
 
     def test_enqueue_embed_batch_uses_relative_shared_paths(self):
         queued = self.service.enqueue_face_embed_batch(
