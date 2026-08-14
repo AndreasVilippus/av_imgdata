@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Local bridge between av-imgdata-worker and the DSM-side worker API store.
 
-This is an integration harness for Phase E before a DSM HTTP router exists. It
-uses tools/worker-api-store.py as the API backend and the compiled worker binary
-for actual job execution.
+This integration harness mirrors the production processor job contracts closely enough
+to exercise single-image, batch and vector jobs without the HTTP API loop.
 """
 
 import argparse
@@ -51,6 +50,12 @@ def normalize_local_image_path(value: Any) -> Any:
         if candidate.exists():
             return str(candidate)
     return str((PROJECT_DIR / value).resolve())
+
+
+def normalize_local_image_paths(values: Any) -> Any:
+    if not isinstance(values, list):
+        return values
+    return [normalize_local_image_path(value) for value in values]
 
 
 def extract_config(config_path: Path) -> Dict[str, Any]:
@@ -108,6 +113,8 @@ def build_job_file_payload(claimed_job: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in payload.items():
         if key in ("image_path", "local_path"):
             job_payload[key] = normalize_local_image_path(value)
+        elif key == "image_paths":
+            job_payload[key] = normalize_local_image_paths(value)
         elif key not in job_payload:
             job_payload[key] = value
     if "asset" not in job_payload and ("image_path" in job_payload or "local_path" in job_payload):
