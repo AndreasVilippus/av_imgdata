@@ -74,19 +74,29 @@ def test_face_native_job_input_schema_accepts_batch_and_vector_jobs():
     schema = _load_schema("face-native-job-input.schema.json")
     validator = jsonschema.Draft202012Validator(schema)
 
+    # Local NativeFaceProcessorService shape.
     validator.validate({
         "contract_version": "1.0",
-        "job_id": "batch-1",
+        "job_id": "batch-local",
         "type": "face_native_embed_batch",
         "input": {"image_paths": ["/tmp/a.jpg", "/tmp/b.jpg"]},
         "options": {"model_root": "/tmp/models", "model_name": "buffalo_l"},
     })
+
+    # External worker bridge shape after shared-path materialization.
+    validator.validate({
+        "contract_version": "1.0",
+        "job_id": "batch-worker",
+        "type": "face_native_embed_batch",
+        "image_paths": ["C:/photo/a.jpg", "C:/photo/b.jpg"],
+        "options": {"model_root": "C:/models", "model_name": "buffalo_l"},
+    })
+
+    # Vector processor jobs do not require an image input object.
     validator.validate({
         "contract_version": "1.0",
         "job_id": "rank-1",
         "type": "face_native_rank_embeddings",
-        "input": {},
-        "options": {},
         "target_embeddings": [[1.0, 0.0]],
         "profile_embeddings": [[1.0, 0.0], [0.0, 1.0]],
     })
@@ -94,8 +104,6 @@ def test_face_native_job_input_schema_accepts_batch_and_vector_jobs():
         "contract_version": "1.0",
         "job_id": "profile-1",
         "type": "face_native_profile_math",
-        "input": {},
-        "options": {},
         "embeddings": [[1.0, 0.0], [0.8, 0.2]],
     })
 
