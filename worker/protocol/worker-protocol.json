@@ -13,8 +13,7 @@
     "face_native_detect_batch",
     "face_native_embed_batch",
     "face_native_rank_embeddings",
-    "face_native_profile_math",
-    "warm_processor_worker"
+    "face_native_profile_math"
   ],
   "input_modes": [
     "shared_path"
