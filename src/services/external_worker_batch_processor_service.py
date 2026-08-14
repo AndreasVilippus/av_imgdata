@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Batch extension for the shared external worker processor service.
 
-Batch dispatch stays outside domain workflows.  It reuses the established target
-selection, queue, waiting, result-consumption and fallback rules from
+Batch dispatch stays outside domain workflows. It reuses the established target
+selection, queue, waiting and result-consumption rules from
 ``ExternalWorkerProcessorService`` while adding the two processor-contract batch
 operations.
+
+Package and external worker are one versioned release unit. A fresh worker with a
+version or capability set that differs from the package contract is incompatible;
+there is no downgrade to older worker behavior.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from services.external_worker_processor_service import (
     ExternalWorkerProcessorService,
     ExternalWorkerProcessorUnavailable,
 )
+from services.worker_runtime_service import WorkerProtocol, parse_time
 
 
 class ExternalWorkerBatchProcessorService(ExternalWorkerProcessorService):
@@ -24,6 +29,55 @@ class ExternalWorkerBatchProcessorService(ExternalWorkerProcessorService):
 
     FACE_DETECT_BATCH_CAPABILITY = "face_native_detect_batch"
     FACE_EMBED_BATCH_CAPABILITY = "face_native_embed_batch"
+
+    def has_compatible_worker(self, capability: str = ExternalWorkerProcessorService.FACE_DETECT_CAPABILITY) -> bool:
+        """Require the external worker to match the package release contract exactly.
+
+        No fresh worker means external execution is unavailable and callers using
+        ``external_preferred`` may use the local package processor. A fresh worker
+        with the wrong version or an incomplete/extra active capability set is a
+        deployment error and must not silently fall back to another processor shape.
+        """
+        expected_capability = str(capability or self.FACE_DETECT_CAPABILITY)
+        expected_capabilities = set(WorkerProtocol.CAPABILITIES)
+        state = self.store.read()
+        now = self._now()
+        fresh_workers: List[Dict[str, Any]] = []
+
+        for raw in state.get("workers", {}).values():
+            worker = raw if isinstance(raw, dict) else {}
+            last_seen = parse_time(worker.get("last_seen_at"))
+            if (now - last_seen).total_seconds() <= self.stale_after_seconds:
+                fresh_workers.append(worker)
+
+        if not fresh_workers:
+            return False
+
+        for worker in fresh_workers:
+            version = str(worker.get("version") or "").strip()
+            capabilities = {str(item) for item in worker.get("capabilities", []) if str(item)}
+            metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
+            input_modes = metadata.get("input_modes", []) if isinstance(metadata.get("input_modes"), list) else []
+            contract_matches = (
+                version == WorkerProtocol.WORKER_VERSION
+                and capabilities == expected_capabilities
+            )
+            if not contract_matches:
+                continue
+            if expected_capability not in capabilities:
+                continue
+            if expected_capability not in self.VECTOR_CAPABILITIES and "shared_path" not in input_modes:
+                continue
+            return True
+
+        self._debug_log(
+            "external_worker_contract_mismatch",
+            required_version=WorkerProtocol.WORKER_VERSION,
+            required_capabilities=sorted(expected_capabilities),
+            requested_capability=expected_capability,
+            fresh_workers=len(fresh_workers),
+        )
+        raise ExternalWorkerProcessorUnavailable("external_worker_contract_mismatch")
 
     def execute_face_detect_batch(
         self,
