@@ -79,6 +79,23 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - Native processor command output must keep a stable JSON contract with `contract_version`, `success`, operation identity, and structured errors.
 - Native status checks should be cached or warmed in the background when direct probing would block the UI.
 
+## External Worker Architecture
+
+- External workers execute processor contracts only; DSM keeps workflow, status, findings, review, persistence, Synology Photos access, and final writes.
+- Existing domain workflows must be wrapped at established detector/embedder or processor seams instead of copied into external-worker variants.
+- External face dispatch, fallback, queue creation, waiting and result consumption must go through the shared worker services under `src/services/`.
+- `external_preferred` may fall back locally only before an external job has been enqueued. A failed enqueued job must not trigger a silent duplicate local execution.
+- Processor job types and runtime capabilities are different concepts. A runtime capability such as `warm_processor_worker` must not become enqueueable unless it has an explicit processor/job contract.
+- `shared_path` transport uses relative portable paths only. DSM absolute paths and worker-local absolute paths must not be stored as portable queue input.
+- Batch `image_paths` must be validated entry by entry and resolved only after claim below the worker's configured path root.
+- A batch is one processor job containing multiple inputs. Batch support must not introduce pipeline state, out-of-order domain application or workflow-specific concurrency.
+- Multiple independent jobs in flight, queue prefill, ordered result application, cancellation and durable per-item state belong in one later central pipeline service.
+- External worker platform differences belong in worker path/runtime adapters and validation, not in DSM domain workflows.
+- Raw worker results must be normalized through the same processor normalization rules used by local execution before domain logic sees them.
+- Result consumption must be idempotent and should purge raw external result payloads after normalized state is stored successfully.
+- Byte-only inputs must stay local until a bounded explicit byte/staged-asset input contract exists; do not overload path fields.
+- The detailed current contract is documented in `docs/external-worker-pre-pipeline-concept.md` and `docs/external-worker-gui-coverage.md`.
+
 ## Long-Running Process Rules
 
 The long-running operation set is:
@@ -180,6 +197,7 @@ Details are defined in `docs/status-concept-integrated.md`.
 - UI reconnect, progress identity, and button-state changes require focused UI or integration tests where available.
 - Native build, packaging, licensing, and binary-contract changes require static package/build contract tests.
 - Native processor runtime behavior requires focused service tests before relying on SPK-level validation.
+- External worker changes require focused dispatch/result tests plus transport/build validation for each affected worker platform.
 
 ## Decision Checklist
 
@@ -196,3 +214,4 @@ Before implementing a change, verify:
 9. Does the change affect findings, runtime state, ignore lists, or config migration?
 10. Does the change add or alter an optional dependency, external tool, model, or license-sensitive asset?
 11. Does the change add or alter a native processor command, binary, packaged library, or runtime fallback path?
+12. Does an external-worker change preserve the processor/domain boundary and avoid introducing workflow-specific pipeline behavior?
