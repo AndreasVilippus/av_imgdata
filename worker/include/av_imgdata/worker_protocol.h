@@ -16,14 +16,13 @@ inline constexpr std::array<const char*, 2> kTokenScopes = {
     "worker_api",
     "models_read",
 };
-inline constexpr std::array<const char*, 7> kCapabilities = {
+inline constexpr std::array<const char*, 6> kCapabilities = {
     "face_native_detect",
     "face_native_embed",
     "face_native_detect_batch",
     "face_native_embed_batch",
     "face_native_rank_embeddings",
     "face_native_profile_math",
-    "warm_processor_worker",
 };
 inline constexpr std::array<const char*, 1> kInputModes = {
     "shared_path",
