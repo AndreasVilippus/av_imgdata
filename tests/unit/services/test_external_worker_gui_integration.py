@@ -58,6 +58,29 @@ def test_face_frame_detector_applies_size_filters_to_external_result():
     assert faces[0]["bbox"]["x2"] == 0.3
 
 
+def test_face_detector_many_uses_batch_contract_when_available():
+    processor = Mock()
+    processor.has_compatible_worker.return_value = True
+    processor.execute_face_detect_batch.return_value = {
+        "execution_target": "external_worker",
+        "job_id": "detect-batch-1",
+        "images": {
+            "/volume1/photo/album/a.jpg": [{"bbox": {"x1": 0.1, "y1": 0.1, "x2": 0.3, "y2": 0.3}}],
+            "/volume1/photo/album/b.jpg": [],
+        },
+    }
+    composition = Mock()
+    composition.enabled.return_value = True
+    composition.external_face_processor.return_value = processor
+    adapter = ExternalWorkerFaceDetectorAdapter(options={}, local_processor_factory=Mock(side_effect=AssertionError("local detector must not be built")), composition_factory=lambda: composition)
+
+    result = adapter.detect_many([Path("/volume1/photo/album/a.jpg"), Path("/volume1/photo/album/b.jpg")])
+
+    assert len(result["/volume1/photo/album/a.jpg"]) == 1
+    processor.has_compatible_worker.assert_called_once_with(processor.FACE_DETECT_BATCH_CAPABILITY)
+    processor.execute_face_detect_batch.assert_called_once()
+
+
 def test_recognition_embedder_uses_face_native_embed_and_keeps_embeddings():
     processor = Mock()
     processor.execute_face_embed.return_value = {"execution_target": "external_worker", "job_id": "embed-1", "faces": [{"bbox": {"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.4}, "score": 0.9, "embedding": [0.1, 0.2, 0.3]}]}
@@ -72,6 +95,30 @@ def test_recognition_embedder_uses_face_native_embed_and_keeps_embeddings():
     kwargs = processor.execute_face_embed.call_args.kwargs
     assert kwargs["action"] == "recognition_build_profiles"
     assert kwargs["policy"] == "external_preferred"
+
+
+def test_recognition_many_uses_face_native_embed_batch():
+    processor = Mock()
+    processor.has_compatible_worker.return_value = True
+    processor.execute_face_embed_batch.return_value = {
+        "execution_target": "external_worker",
+        "job_id": "embed-batch-1",
+        "images": {
+            "/volume1/photo/album/a.jpg": [{"bbox": {"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.4}, "embedding": [1.0, 0.0]}],
+            "/volume1/photo/album/b.jpg": [{"bbox": {"x1": 0.2, "y1": 0.2, "x2": 0.4, "y2": 0.4}, "embedding": [0.0, 1.0]}],
+        },
+    }
+    composition = Mock()
+    composition.enabled.return_value = True
+    composition.external_face_processor.return_value = processor
+    adapter = ExternalWorkerFaceEmbedderAdapter(options={}, action="recognition_build_profiles", local_processor_factory=Mock(side_effect=AssertionError("local embedder must not be built")), composition_factory=lambda: composition)
+
+    result = adapter.detect_and_embed_many([Path("/volume1/photo/album/a.jpg"), Path("/volume1/photo/album/b.jpg")])
+
+    assert result["/volume1/photo/album/a.jpg"][0]["embedding"] == [1.0, 0.0]
+    assert result["/volume1/photo/album/b.jpg"][0]["embedding"] == [0.0, 1.0]
+    processor.has_compatible_worker.assert_called_once_with(processor.FACE_EMBED_BATCH_CAPABILITY)
+    processor.execute_face_embed_batch.assert_called_once()
 
 
 def test_recognition_rank_and_profile_math_use_vector_worker_contracts():
