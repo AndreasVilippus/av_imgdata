@@ -99,9 +99,18 @@ class _ExternalWorkerFaceBase:
                 return parent
         raise ValueError("source_path_outside_photos_share")
 
+    def _batch_root(self, paths: List[Path]) -> Path:
+        if not paths:
+            raise ValueError("worker_batch_image_paths_required")
+        root = self._photos_root(paths[0])
+        for path in paths[1:]:
+            if self._photos_root(path) != root:
+                raise ValueError("worker_batch_mixed_path_profiles")
+        return root
+
 
 class ExternalWorkerFaceDetectorAdapter(_ExternalWorkerFaceBase):
-    """Expose the existing ``detect(Path)`` boundary with external dispatch."""
+    """Expose the existing face-detection boundary with external dispatch."""
 
     def detect(self, image_path: Path) -> List[Dict[str, Any]]:
         source = Path(image_path).expanduser().resolve()
@@ -128,9 +137,53 @@ class ExternalWorkerFaceDetectorAdapter(_ExternalWorkerFaceBase):
         faces = result.get("faces") if isinstance(result, dict) else []
         return self._filter_faces([dict(face) for face in faces if isinstance(face, dict)])
 
+    def detect_many(self, image_paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
+        paths = [Path(path).expanduser().resolve() for path in list(image_paths or [])]
+        if not paths:
+            return {}
+        if len(paths) == 1:
+            return {str(paths[0]): self.detect(paths[0])}
+        composition = self._build_composition()
+        if not composition.enabled():
+            return self._detect_many_local(paths)
+        processor = composition.external_face_processor(nas_root=self._batch_root(paths), debug_logger=self._debug_log)
+        if not processor.has_compatible_worker(processor.FACE_DETECT_BATCH_CAPABILITY):
+            return {str(path): self.detect(path) for path in paths}
+        dispatched = processor.execute_face_detect_batch(
+            image_paths=paths,
+            local_execute=lambda: self._detect_many_local(paths),
+            policy="external_preferred",
+            operation=self._operation(),
+            action=self.action,
+            mode="scan",
+            operation_id=f"{self.action}-detect-batch-{uuid.uuid4().hex}",
+            det_thresh=float(self.options.get("det_thresh", 0.5)),
+            max_num=int(self.options.get("max_num", 0)),
+            det_size=self.options.get("det_size") or [640, 640],
+        )
+        images = dispatched.get("images") if isinstance(dispatched, dict) else {}
+        return {
+            str(path): self._filter_faces([dict(face) for face in faces if isinstance(face, dict)])
+            for path, faces in images.items()
+            if isinstance(faces, list)
+        }
+
     def _detect_local(self, source: Path) -> List[Dict[str, Any]]:
         detections = self._local().detect(source)
         return [dict(item) for item in detections if isinstance(item, dict)]
+
+    def _detect_many_local(self, paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
+        processor = self._local()
+        detect_many = getattr(processor, "detect_many", None)
+        if callable(detect_many):
+            result = detect_many(paths)
+            if isinstance(result, dict):
+                return {
+                    str(path): [dict(face) for face in faces if isinstance(face, dict)]
+                    for path, faces in result.items()
+                    if isinstance(faces, list)
+                }
+        return {str(path): self._detect_local(path) for path in paths}
 
 
 class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
@@ -163,8 +216,38 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
         return [face for face in normalized if isinstance(face.get("embedding"), list)]
 
     def detect_and_embed_many(self, image_paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
-        """Keep the existing batch interface without introducing pipeline state."""
-        return {str(Path(path)): self.detect_and_embed(Path(path)) for path in list(image_paths or [])}
+        """Use the native batch contract without introducing pipeline state."""
+        paths = [Path(path).expanduser().resolve() for path in list(image_paths or [])]
+        if not paths:
+            return {}
+        if len(paths) == 1:
+            return {str(paths[0]): self.detect_and_embed(paths[0])}
+        composition = self._build_composition()
+        if not composition.enabled():
+            return self._embed_many_local(paths)
+        processor = composition.external_face_processor(nas_root=self._batch_root(paths), debug_logger=self._debug_log)
+        if not processor.has_compatible_worker(processor.FACE_EMBED_BATCH_CAPABILITY):
+            return {str(path): self.detect_and_embed(path) for path in paths}
+        dispatched = processor.execute_face_embed_batch(
+            image_paths=paths,
+            local_execute=lambda: self._embed_many_local(paths),
+            policy="external_preferred",
+            operation=self._operation(),
+            action=self.action,
+            mode="scan",
+            operation_id=f"{self.action}-embed-batch-{uuid.uuid4().hex}",
+            det_thresh=float(self.options.get("det_thresh", 0.5)),
+            max_num=int(self.options.get("max_num", 0)),
+            det_size=self.options.get("det_size") or [640, 640],
+        )
+        images = dispatched.get("images") if isinstance(dispatched, dict) else {}
+        normalized: Dict[str, List[Dict[str, Any]]] = {}
+        for path, faces in images.items():
+            if not isinstance(faces, list):
+                continue
+            filtered = self._filter_faces([dict(face) for face in faces if isinstance(face, dict)])
+            normalized[str(path)] = [face for face in filtered if isinstance(face.get("embedding"), list)]
+        return normalized
 
     def detect_and_embed_bytes(self, image_bytes: bytes) -> List[Dict[str, Any]]:
         """Byte previews are not shared-path assets and therefore remain local."""
@@ -215,6 +298,19 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
     def _embed_local(self, source: Path) -> List[Dict[str, Any]]:
         faces = self._local().detect_and_embed(source)
         return [dict(item) for item in faces if isinstance(item, dict)]
+
+    def _embed_many_local(self, paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
+        processor = self._local()
+        detect_many = getattr(processor, "detect_and_embed_many", None)
+        if callable(detect_many):
+            result = detect_many(paths)
+            if isinstance(result, dict):
+                return {
+                    str(path): [dict(face) for face in faces if isinstance(face, dict)]
+                    for path, faces in result.items()
+                    if isinstance(faces, list)
+                }
+        return {str(path): self._embed_local(path) for path in paths}
 
     def _rank_local(
         self,
