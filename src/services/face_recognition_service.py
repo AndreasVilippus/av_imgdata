@@ -62,6 +62,8 @@ class FaceRecognitionService:
             "min_height_ratio": max(0.0, float(source.get("min_height_ratio", 0.015))),
             "resume_existing": bool(source.get("resume_existing", False)),
             "max_profile_reference_faces_per_person": max(0, int(source.get("max_profile_reference_faces_per_person") or 50)),
+            "recognition_batch_size": max(1, min(64, int(source.get("recognition_batch_size") or 8))),
+            "external_worker_prefetch_batches": bool(source.get("external_worker_prefetch_batches", True)),
         }
 
     def start(self, *, user_key: str, cookies: Dict[str, str], base_url: str, action: str, options: Any) -> Dict[str, Any]:
@@ -144,6 +146,7 @@ class FaceRecognitionService:
             "exclude_outliers", "rebuild_all", "changed_since_days", "safe_score", "review_score",
             "min_margin", "outlier_similarity_threshold", "min_face_iou", "det_size", "det_thresh",
             "max_num", "min_width_ratio", "min_height_ratio", "resume_existing", "max_profile_reference_faces_per_person",
+            "recognition_batch_size", "external_worker_prefetch_batches",
         )
         return {key: options.get(key) for key in keys if key in options}
 
@@ -389,6 +392,117 @@ class FaceRecognitionService:
         reference_limit_reached = False
         progress_images_scanned_floor = 0
         progress_images_analyzed_floor = 0
+        batch_size = max(1, int(options.get("recognition_batch_size") or 8))
+        detect_many = getattr(embedder, "detect_and_embed_many", None)
+        batch_detection_enabled = callable(detect_many)
+        prefetch_enabled = (
+            batch_detection_enabled
+            and batch_size > 1
+            and bool(options.get("external_worker_prefetch_batches", True))
+            and bool(getattr(embedder, "supports_async_batch_prefetch", False))
+        )
+        cache_lock = RLock()
+        prefetch_state: Dict[str, Any] = {"thread": None, "items": [], "error": None}
+
+        def cached_embeddings(path: str) -> Optional[List[Dict[str, Any]]]:
+            with cache_lock:
+                value = self._image_embedding_cache.get(path)
+                return list(value) if isinstance(value, list) else None
+
+        def write_embeddings(path: str, embeddings: List[Dict[str, Any]]) -> None:
+            with cache_lock:
+                self._image_embedding_cache[path] = embeddings
+
+        def collect_batch_items(start_index: int, start_path: Optional[str] = None) -> List[Tuple[int, str]]:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=options["changed_since_days"]) if options["changed_since_days"] > 0 else None
+            batch_items: List[Tuple[int, str]] = []
+            for lookahead_index in range(start_index, min(len(items), start_index + batch_size)):
+                lookahead = items[lookahead_index]
+                try:
+                    int(lookahead.get("id"))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                lookahead_path = start_path if lookahead_index == start_index and start_path else self._item_path(
+                    user_key=user_key, cookies=cookies, base_url=base_url,
+                    shared_folder=shared_folder, item=lookahead, folder_cache=folder_cache,
+                )
+                if not lookahead_path or cached_embeddings(lookahead_path) is not None or not Path(lookahead_path).is_file():
+                    continue
+                if cutoff is not None and datetime.fromtimestamp(Path(lookahead_path).stat().st_mtime, timezone.utc) < cutoff:
+                    continue
+                batch_items.append((lookahead_index, lookahead_path))
+            return batch_items
+
+        def cache_batch_result(batch_items: List[Tuple[int, str]], result: Dict[str, List[Dict[str, Any]]], *, prefetch: bool) -> None:
+            batch_paths = [path for _batch_index, path in batch_items]
+            faces_count = 0
+            with cache_lock:
+                for batch_path in batch_paths:
+                    embeddings = result.get(batch_path, []) if isinstance(result, dict) else []
+                    if not isinstance(embeddings, list):
+                        embeddings = []
+                    self._image_embedding_cache[batch_path] = embeddings
+                    faces_count += len(embeddings)
+            self._debug_log(
+                "recognition_native_image_batch_cached",
+                action=action,
+                images_count=len(batch_paths),
+                faces_count=faces_count,
+                prefetch=prefetch,
+            )
+
+        def run_batch(batch_items: List[Tuple[int, str]], *, prefetch: bool) -> None:
+            if not batch_items or not callable(detect_many):
+                return
+            batch_paths = [path for _batch_index, path in batch_items]
+            result = detect_many([Path(path) for path in batch_paths])
+            cache_batch_result(batch_items, result if isinstance(result, dict) else {}, prefetch=prefetch)
+
+        def finish_prefetch_if_needed(path: Optional[str] = None) -> None:
+            thread = prefetch_state.get("thread")
+            if thread is None:
+                return
+            prefetch_items = prefetch_state.get("items") or []
+            if path and path not in {item_path for _index, item_path in prefetch_items}:
+                return
+            thread.join()
+            if prefetch_state.get("error"):
+                error = prefetch_state["error"]
+                self._debug_log(
+                    "recognition_native_image_batch_prefetch_failed",
+                    action=action,
+                    error=f"{type(error).__name__}: {error}",
+                    images_count=len(prefetch_items),
+                )
+            prefetch_state["thread"] = None
+            prefetch_state["items"] = []
+            prefetch_state["error"] = None
+
+        def start_prefetch(start_index: int) -> None:
+            if not prefetch_enabled or start_index >= len(items) or self._should_stop(user_key, action):
+                return
+            finish_prefetch_if_needed()
+            batch_items = collect_batch_items(start_index)
+            if len(batch_items) <= 1:
+                return
+
+            def target() -> None:
+                try:
+                    run_batch(batch_items, prefetch=True)
+                except Exception as exc:
+                    prefetch_state["error"] = exc
+
+            prefetch_state["items"] = batch_items
+            self._debug_log(
+                "recognition_native_image_batch_prefetch_started",
+                action=action,
+                images_count=len(batch_items),
+                start_index=start_index,
+            )
+            thread = Thread(target=target, daemon=True)
+            prefetch_state["thread"] = thread
+            thread.start()
+
         for item_index, item in enumerate(items):
             if reference_limit > 0 and len(references) >= reference_limit:
                 reference_limit_reached = True
@@ -487,39 +601,16 @@ class FaceRecognitionService:
                     references_count=len(references),
                     **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
                 )
-            if image_path not in self._image_embedding_cache:
+            finish_prefetch_if_needed(image_path)
+            if cached_embeddings(image_path) is None:
                 try:
-                    batch_items = [(item_index, image_path)]
-                    detect_many = getattr(embedder, "detect_and_embed_many", None)
-                    if callable(detect_many):
-                        cutoff = datetime.now(timezone.utc) - timedelta(days=options["changed_since_days"]) if options["changed_since_days"] > 0 else None
-                        for lookahead_offset, lookahead in enumerate(items[item_index + 1:item_index + 8], start=item_index + 1):
-                            try:
-                                lookahead_id = int(lookahead.get("id"))
-                            except (AttributeError, TypeError, ValueError):
-                                continue
-                            lookahead_path = self._item_path(
-                                user_key=user_key, cookies=cookies, base_url=base_url,
-                                shared_folder=shared_folder, item=lookahead, folder_cache=folder_cache,
-                            )
-                            if not lookahead_path or lookahead_path in self._image_embedding_cache or not Path(lookahead_path).is_file():
-                                continue
-                            if cutoff is not None and datetime.fromtimestamp(Path(lookahead_path).stat().st_mtime, timezone.utc) < cutoff:
-                                continue
-                            batch_items.append((lookahead_offset, lookahead_path))
+                    if batch_detection_enabled:
+                        batch_items = collect_batch_items(item_index, image_path)
                         batch_paths = [path for _batch_index, path in batch_items]
                         if len(batch_paths) > 1:
-                            batch_result = detect_many([Path(path) for path in batch_paths])
-                            for batch_path in batch_paths:
-                                self._image_embedding_cache[batch_path] = batch_result.get(batch_path, [])
+                            run_batch(batch_items, prefetch=False)
                             progress_images_scanned_floor = max(progress_images_scanned_floor, max(batch_index for batch_index, _path in batch_items) + 1)
                             progress_images_analyzed_floor = max(progress_images_analyzed_floor, images_analyzed + len(batch_paths) - 1)
-                            self._debug_log(
-                                "recognition_native_image_batch_cached",
-                                action=action,
-                                images_count=len(batch_paths),
-                                faces_count=sum(len(self._image_embedding_cache.get(path, [])) for path in batch_paths),
-                            )
                             if context:
                                 self._set_progress(
                                     user_key, str(context.get("action") or self.ACTION_BUILD), options,
@@ -535,24 +626,25 @@ class FaceRecognitionService:
                                     references_count=len(references),
                                     **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
                                 )
+                            start_prefetch(max(batch_index for batch_index, _path in batch_items) + 1)
                         else:
-                            self._image_embedding_cache[image_path] = embedder.detect_and_embed(Path(image_path))
+                            write_embeddings(image_path, embedder.detect_and_embed(Path(image_path)))
                     else:
-                        self._image_embedding_cache[image_path] = embedder.detect_and_embed(Path(image_path))
+                        write_embeddings(image_path, embedder.detect_and_embed(Path(image_path)))
                 except Exception as direct_error:
                     preview, preview_source = self._extract_reference_preview(image_path)
                     if preview:
                         try:
-                            self._image_embedding_cache[image_path] = embedder.detect_and_embed_bytes(preview)
+                            write_embeddings(image_path, embedder.detect_and_embed_bytes(preview))
                             self._debug_log(
                                 "recognition_image_preview_fallback",
                                 image_path=image_path,
                                 source=preview_source,
                                 direct_error=str(direct_error),
-                                detected_faces=len(self._image_embedding_cache[image_path]),
+                                detected_faces=len(cached_embeddings(image_path) or []),
                             )
                         except Exception as preview_error:
-                            self._image_embedding_cache[image_path] = []
+                            write_embeddings(image_path, [])
                             self._image_quality_issues.append({
                                 "image_path": image_path,
                                 "quality": "image_unreadable",
@@ -565,7 +657,7 @@ class FaceRecognitionService:
                                 preview_error=f"{type(preview_error).__name__}: {preview_error}",
                             )
                     else:
-                        self._image_embedding_cache[image_path] = []
+                        write_embeddings(image_path, [])
                         self._image_quality_issues.append({
                             "image_path": image_path,
                             "quality": "image_unreadable",
@@ -577,7 +669,7 @@ class FaceRecognitionService:
                             direct_error=f"{type(direct_error).__name__}: {direct_error}",
                             preview_error="embedded_jpeg_preview_missing",
                         )
-            image_embeddings = self._image_embedding_cache[image_path]
+            image_embeddings = cached_embeddings(image_path) or []
             image_faces = self.backend.photos.list_faceFotoTeamItems(user_key=user_key, cookies=cookies, base_url=base_url, id_item=item_id)
             if not isinstance(image_faces, list):
                 image_faces = list(image_faces)
@@ -642,6 +734,7 @@ class FaceRecognitionService:
                         references_count=len(references),
                         **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
                     )
+        finish_prefetch_if_needed()
         unreadable_images_after = len([entry for entry in self._image_quality_issues if entry.get("quality") == "image_unreadable"])
         missing_images_after = len([entry for entry in self._image_quality_issues if entry.get("quality") == "image_missing"])
         self._debug_log(

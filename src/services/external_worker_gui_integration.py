@@ -189,6 +189,8 @@ class ExternalWorkerFaceDetectorAdapter(_ExternalWorkerFaceBase):
 class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
     """Expose recognition processor operations through existing Worker contracts."""
 
+    supports_async_batch_prefetch = True
+
     def detect_and_embed(self, image_path: Path) -> List[Dict[str, Any]]:
         source = Path(image_path).expanduser().resolve()
         composition = self._build_composition()

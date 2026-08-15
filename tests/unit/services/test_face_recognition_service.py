@@ -1,4 +1,5 @@
 import os
+from threading import Event
 from types import SimpleNamespace
 
 import services.face_recognition_service as face_recognition_module
@@ -861,6 +862,83 @@ def test_person_reference_native_batch_advances_visible_image_progress(tmp_path)
     assert image_progress[-1]["images_scanned"] == 3
     assert image_progress[-1]["images_analyzed"] == 3
     assert image_progress[-1]["status"]["progress"]["current"] == 3
+
+
+def test_person_reference_external_worker_prefetches_next_batch_during_face_metadata_scan(tmp_path):
+    service, _findings = _service()
+    item_count = 8
+    paths = {}
+    for index in range(1, item_count + 1):
+        name = f"image-{index}.jpg"
+        path = tmp_path / name
+        path.write_bytes(b"jpeg")
+        paths[name] = str(path)
+
+    service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: None)
+    service.backend._debugLog = lambda *_args, **_kwargs: None
+    service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [
+        {"id": 100 + index, "folder_id": 20, "filename": f"image-{index}.jpg"}
+        for index in range(1, item_count + 1)
+    ]
+    second_batch_started = Event()
+    second_batch_release = Event()
+    face_scan_observed_prefetch = Event()
+    face_scan_calls = []
+
+    def list_faces(id_item, **_kwargs):
+        face_scan_calls.append(id_item)
+        if id_item == 101 and second_batch_started.wait(1.0):
+            face_scan_observed_prefetch.set()
+            second_batch_release.set()
+        return [{
+            "person_id": 1,
+            "face_id": id_item + 1000,
+            "bbox": {"top_left": {"x": 0.1, "y": 0.1}, "bottom_right": {"x": 0.2, "y": 0.2}},
+        }]
+
+    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=list_faces)
+    service._item_path = lambda item, **_kwargs: paths[item["filename"]]
+    detect_calls = []
+
+    class _ExternalLikeEmbedder:
+        supports_async_batch_prefetch = True
+
+        def detect_and_embed_many(self, image_paths):
+            names = [path.name for path in image_paths]
+            detect_calls.append(names)
+            if len(detect_calls) == 2:
+                second_batch_started.set()
+                assert second_batch_release.wait(2.0)
+            return {
+                str(path): [{"bbox": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "embedding": [1.0, 0.0]}]
+                for path in image_paths
+            }
+
+        def detect_and_embed(self, _path):
+            raise AssertionError("batch path expected")
+
+        def _iou(self, _left, _right):
+            return 1.0
+
+    references = service._person_references(
+        user_key="u", cookies={}, base_url="https://dsm", shared_folder=str(tmp_path),
+        person={"id": 1, "name": "Ada"}, embedder=_ExternalLikeEmbedder(),
+        options=service.normalize_options({"recognition_batch_size": 4}), folder_cache={},
+        progress_context={
+            "action": service.ACTION_ASSIGNMENT,
+            "phase": "reading_unknown_images",
+            "persons_scanned": 0,
+            "persons_total": 1,
+        },
+    )
+
+    assert face_scan_observed_prefetch.is_set()
+    assert detect_calls == [
+        ["image-1.jpg", "image-2.jpg", "image-3.jpg", "image-4.jpg"],
+        ["image-5.jpg", "image-6.jpg", "image-7.jpg", "image-8.jpg"],
+    ]
+    assert len(references) == item_count
+    assert face_scan_calls[0] == 101
 
 
 def test_person_reference_scan_separates_list_progress_from_changed_date_skip(tmp_path):
