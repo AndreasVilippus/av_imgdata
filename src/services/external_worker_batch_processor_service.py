@@ -155,6 +155,72 @@ class ExternalWorkerBatchProcessorService(ExternalWorkerProcessorService):
             **kwargs,
         )
 
+    def start_face_embed_batch(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._start_face_batch(
+            capability=self.FACE_EMBED_BATCH_CAPABILITY,
+            job_prefix="face-embed-batch",
+            **kwargs,
+        )
+
+    def start_face_detect_batch(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._start_face_batch(
+            capability=self.FACE_DETECT_BATCH_CAPABILITY,
+            job_prefix="face-detect-batch",
+            **kwargs,
+        )
+
+    def _start_face_batch(
+        self,
+        *,
+        capability: str,
+        job_prefix: str,
+        image_paths: List[Path],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        paths = [Path(path).expanduser().resolve() for path in list(image_paths or [])]
+        queued = self._enqueue_face_batch(
+            capability=capability,
+            job_prefix=job_prefix,
+            image_paths=paths,
+            **kwargs,
+        )
+        job = queued.get("job") if isinstance(queued.get("job"), dict) else {}
+        return {
+            "execution_target": "external_worker",
+            "job_id": str(job.get("job_id") or ""),
+            "capability": capability,
+            "image_paths": paths,
+        }
+
+    def finish_face_batch(self, handle: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+        job_id = str(handle.get("job_id") or "")
+        capability = str(handle.get("capability") or "")
+        image_paths = [Path(path) for path in list(handle.get("image_paths") or [])]
+        self._wait_for_completed_job(job_id)
+        return self.consume_face_batch_result(
+            job_id,
+            capability=capability,
+            image_paths=image_paths,
+        )
+
+    def completed_face_batch_jobs(
+        self,
+        *,
+        operation_id: str,
+        capability: str = FACE_EMBED_BATCH_CAPABILITY,
+        action: str = "",
+        limit: int = 0,
+    ) -> List[Dict[str, Any]]:
+        origin_filter: Dict[str, Any] = {"operation_id": operation_id}
+        if action:
+            origin_filter["action"] = action
+        return self.worker_api.list_jobs(
+            status=["completed"],
+            origin_filter=origin_filter,
+            job_type=capability,
+            limit=limit,
+        )
+
     def _execute_face_batch(
         self,
         *,

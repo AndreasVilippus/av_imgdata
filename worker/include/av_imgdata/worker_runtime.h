@@ -11,6 +11,10 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 #ifdef _WIN32
 #define AV_IMGDATA_POPEN _popen
 #define AV_IMGDATA_PCLOSE _pclose
@@ -131,6 +135,15 @@ inline bool write_file(const std::string& path, const std::string& text) {
     if (!output) return false;
     output << text;
     return static_cast<bool>(output);
+}
+
+inline bool restrict_file_to_owner(const std::string& path) {
+#ifdef _WIN32
+    (void)path;
+    return true;
+#else
+    return ::chmod(path.c_str(), S_IRUSR | S_IWUSR) == 0;
+#endif
 }
 
 inline std::string trim(std::string value) {

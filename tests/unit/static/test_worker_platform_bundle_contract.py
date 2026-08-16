@@ -174,6 +174,17 @@ def test_worker_bundle_builds_and_integrates_vips_image_processor_by_default_wit
     assert "av-imgdata-image-processor.exe" in windows_script
 
 
+def test_worker_readme_documents_dsm_reverse_proxy_publication_path():
+    readme = (PROJECT_ROOT / "worker" / "README.md").read_text(encoding="utf-8")
+
+    assert "http://127.0.0.1:9771/worker-api/status" in readme
+    assert "DSM reverse" in readme
+    assert "forwards a public" in readme
+    assert "http://<nas>:5000/worker-api" in readme
+    assert "https://<nas>:5001/worker-api" in readme
+    assert "It is not the normal DSM package publication path" in readme
+
+
 def test_worker_probe_reports_vips_without_requiring_it_for_readiness():
     source = (PROJECT_ROOT / "worker" / "src" / "main.cpp").read_text(encoding="utf-8")
 

@@ -5,7 +5,8 @@ param(
   [Parameter(Mandatory=$true)][string]$PathBaseDir,
   [string]$ModelPack = "buffalo_l",
   [string]$ConfigPath = "",
-  [switch]$ForceEnroll
+  [switch]$ForceEnroll,
+  [switch]$InsecureTls
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +27,11 @@ $TokenMetadataPath = Join-Path $BundleRoot "worker.token.json"
 $ModelRoot = Join-Path $BundleRoot ".models\face"
 $ConfigureExe = Join-Path $BundleRoot "bin\av-imgdata-worker-configure.exe"
 $ModelSyncExe = Join-Path $BundleRoot "bin\av-imgdata-worker-model-sync.exe"
+
+if ($InsecureTls) {
+  Write-Warning "TLS certificate verification is disabled for Worker API requests."
+  [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+}
 
 function Protect-WorkerTokenFile {
   param([Parameter(Mandatory=$true)][string]$Path)
@@ -132,12 +138,18 @@ if ($LASTEXITCODE -ne 0) {
   throw "Worker configuration failed with exit code $LASTEXITCODE"
 }
 
-& $ModelSyncExe `
-  --api-url $ApiUrl `
-  --token-file $TokenPath `
-  --worker-id $WorkerId `
-  --model-root $ModelRoot `
-  --model-pack $ModelPack
+$modelSyncArgs = @(
+  "--api-url", $ApiUrl,
+  "--token-file", $TokenPath,
+  "--worker-id", $WorkerId,
+  "--model-root", $ModelRoot,
+  "--model-pack", $ModelPack
+)
+if ($InsecureTls) {
+  $modelSyncArgs += @("--insecure-tls")
+}
+
+& $ModelSyncExe @modelSyncArgs
 if ($LASTEXITCODE -ne 0) {
   throw "Worker token and configuration were saved, but model synchronization failed with exit code $LASTEXITCODE. Rerun without EnrollmentCode to reuse the token, or use -ForceEnroll with a new code to replace it."
 }

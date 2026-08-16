@@ -148,6 +148,44 @@ class TestExternalWorkerBatchProcessorService:
         assert stored["result_apply_status"] == "consumed"
         assert "result" not in stored
 
+    def test_start_and_finish_embed_batch_separates_enqueue_from_wait(self):
+        handle = self.service.start_face_embed_batch(
+            image_paths=[self.image_a, self.image_b],
+            operation="cleanup",
+            action="recognition_build_profiles",
+            mode="scan",
+            operation_id="op-batch-async",
+            job_id="embed-batch-async",
+        )
+
+        state = self.api.store.read()
+        assert handle["job_id"] == "embed-batch-async"
+        assert state["jobs"]["embed-batch-async"]["status"] == "queued"
+
+        def complete(state):
+            job = state["jobs"]["embed-batch-async"]
+            job["status"] = "completed"
+            job["result"] = {
+                "processor_execution": "completed",
+                "processor_result": {
+                    "result": {
+                        "images": [
+                            {"faces": [{"embedding": [1.0, 0.0]}]},
+                            {"faces": [{"embedding": [0.0, 1.0]}]},
+                        ]
+                    }
+                },
+            }
+            return job
+
+        self.api.store.update(complete)
+        result = self.service.finish_face_batch(handle)
+        completed = self.service.completed_face_batch_jobs(operation_id="op-batch-async")
+
+        assert result[str(self.image_a)][0]["embedding"] == [1.0, 0.0]
+        assert result[str(self.image_b)][0]["embedding"] == [0.0, 1.0]
+        assert [job["job_id"] for job in completed] == ["embed-batch-async"]
+
     def test_batch_rejects_path_outside_profile(self):
         outside = self.package_var / "outside.jpg"
         outside.write_bytes(b"x")

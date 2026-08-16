@@ -145,6 +145,79 @@ class TestWorkerApiService(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["status"], "claimed")
 
+    def test_status_counts_batch_jobs_and_items_separately(self):
+        self.service.enqueue_job(
+            job_id="batch-1",
+            job_type="face_native_embed_batch",
+            payload={
+                "image_paths": ["a.jpg", "b.jpg", "c.jpg"],
+                "origin": {"operation_id": "op-1", "action": "recognition_build_profiles"},
+            },
+        )
+        self.service.enqueue_job(
+            job_id="single-1",
+            job_type="face_native_embed",
+            payload={"local_path": "d.jpg", "origin": {"operation_id": "op-1"}},
+        )
+
+        status = self.service.status()
+
+        self.assertEqual(status["jobs"]["by_status"]["queued"], 2)
+        self.assertEqual(status["items"]["by_status"]["queued"], 4)
+
+    def test_list_and_cancel_jobs_by_origin(self):
+        self.service.enqueue_job(
+            job_id="op-job-1",
+            job_type="face_native_embed_batch",
+            payload={"image_paths": ["a.jpg", "b.jpg"], "origin": {"operation_id": "op-1", "action": "scan"}},
+        )
+        self.service.enqueue_job(
+            job_id="other-job-1",
+            job_type="face_native_embed_batch",
+            payload={"image_paths": ["c.jpg"], "origin": {"operation_id": "op-2", "action": "scan"}},
+        )
+
+        listed = self.service.list_jobs(
+            status=["queued"],
+            origin_filter={"operation_id": "op-1"},
+        )
+        cancelled = self.service.cancel_jobs_by_origin(origin_filter={"operation_id": "op-1"})
+        state = self.service.store.read()
+
+        self.assertEqual([job["job_id"] for job in listed], ["op-job-1"])
+        self.assertEqual(cancelled["cancelled_jobs"], 1)
+        self.assertEqual(state["jobs"]["op-job-1"]["status"], "cancelled")
+        self.assertEqual(state["jobs"]["other-job-1"]["status"], "queued")
+
+    def test_cancelled_job_rejects_late_worker_result(self):
+        self.service.register_worker(
+            token=self.token,
+            worker_id="worker-01",
+            version="0.10.0",
+            capabilities=["face_native_embed"],
+        )
+        self.service.enqueue_job(
+            job_id="op-job-1",
+            job_type="face_native_embed",
+            payload={"origin": {"operation_id": "op-1"}},
+        )
+        self.service.claim_job(
+            token=self.token,
+            worker_id="worker-01",
+            capabilities=["face_native_embed"],
+        )
+        self.service.cancel_jobs_by_origin(origin_filter={"operation_id": "op-1"})
+
+        with self.assertRaises(WorkerApiError) as ctx:
+            self.service.record_result(
+                token=self.token,
+                worker_id="worker-01",
+                job_id="op-job-1",
+                result={"faces": []},
+            )
+
+        self.assertEqual(ctx.exception.code, "job_cancelled")
+
 
 if __name__ == "__main__":
     unittest.main()

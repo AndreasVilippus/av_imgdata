@@ -23,6 +23,7 @@ struct LoopConfig {
     std::string workspace_root;
     std::string path_base_dir;
     int poll_interval_seconds = 2;
+    bool insecure_tls = false;
 };
 
 struct LocalJobResult {
@@ -57,6 +58,7 @@ LoopConfig parse_config(const std::string& path, const std::string& json, const 
     }
     if (config.path_base_dir.empty()) config.path_base_dir = std::filesystem::current_path().string();
     config.path_base_dir = runtime::absolute_path(config.path_base_dir).string();
+    config.insecure_tls = runtime::has_arg(args, "--insecure-tls");
     config.poll_interval_seconds = runtime::parse_int(
         runtime::extract_json_scalar(json, av_imgdata::worker::config_key::kPollIntervalSeconds, "2"),
         2
@@ -89,12 +91,32 @@ LoopConfig parse_config(const std::string& path, const std::string& json, const 
     return config;
 }
 
+std::string curl_tls_args(const LoopConfig& config) {
+    return config.insecure_tls ? " -k" : "";
+}
+
 std::string api_post(const LoopConfig& config, const std::string& action, const std::string& token, const std::string& body) {
     const std::string body_path = runtime::join_path(config.workspace_root, ".api-" + action + "-request.json");
     runtime::write_file(body_path, body);
     const std::string command =
-        "curl -SsL -X POST -H " + runtime::shell_quote("Content-Type: application/json") +
+        "curl -SsL" + curl_tls_args(config) +
+        " -X POST -H " + runtime::shell_quote("Content-Type: application/json") +
         " -H " + runtime::shell_quote("Authorization: Bearer " + token) +
+        " -H " + runtime::shell_quote("X-Worker-Id: " + config.worker_id) +
+        " --data-binary @" + runtime::shell_quote(body_path) +
+        " " + runtime::shell_quote(config.api_url + "/" + action) + " 2>&1";
+    const CommandResult result = runtime::run_shell_capture(command);
+    return result.exit_code == 0
+        ? result.output
+        : "{\"status\":\"error\",\"code\":\"curl_failed\",\"message\":\"" + runtime::json_escape(result.output) + "\"}";
+}
+
+std::string api_post_unauthenticated(const LoopConfig& config, const std::string& action, const std::string& body) {
+    const std::string body_path = runtime::join_path(config.workspace_root, ".api-" + action + "-request.json");
+    runtime::write_file(body_path, body);
+    const std::string command =
+        "curl -SsL" + curl_tls_args(config) +
+        " -X POST -H " + runtime::shell_quote("Content-Type: application/json") +
         " -H " + runtime::shell_quote("X-Worker-Id: " + config.worker_id) +
         " --data-binary @" + runtime::shell_quote(body_path) +
         " " + runtime::shell_quote(config.api_url + "/" + action) + " 2>&1";
@@ -329,6 +351,41 @@ bool response_ok(const std::string& response, const std::string& expected_status
     return runtime::extract_json_string(response, "status") == expected_status;
 }
 
+std::string enrollment_code_from_prompt() {
+    std::cerr << "Worker token not found. Enter registration code: ";
+    std::string code;
+    std::getline(std::cin, code);
+    return runtime::trim(code);
+}
+
+std::string enrollment_body(const LoopConfig& config, const std::string& code) {
+    return "{\"enrollment_code\":\"" + runtime::json_escape(code) +
+        "\",\"worker_id\":\"" + runtime::json_escape(config.worker_id) + "\"}";
+}
+
+bool enroll_worker(const LoopConfig& config, const std::string& enrollment_code, std::string* token) {
+    const std::string response = api_post_unauthenticated(config, "enroll", enrollment_body(config, enrollment_code));
+    if (!response_ok(response, "enrolled")) {
+        std::cerr << "ERROR: worker enrollment failed: " << response << "\n";
+        return false;
+    }
+    const std::string enrolled_token = runtime::extract_json_string(response, "token");
+    if (enrolled_token.empty()) {
+        std::cerr << "ERROR: enrollment response did not contain a token\n";
+        return false;
+    }
+    if (!runtime::write_file(config.token_file, enrolled_token + "\n")) {
+        std::cerr << "ERROR: worker token could not be written: " << config.token_file << "\n";
+        return false;
+    }
+    if (!runtime::restrict_file_to_owner(config.token_file)) {
+        std::cerr << "ERROR: worker token permissions could not be restricted: " << config.token_file << "\n";
+        return false;
+    }
+    *token = enrolled_token;
+    return true;
+}
+
 void append_report_fields(std::ostream& out, const std::string& response, const std::string& prefix = "report_response") {
     out << ",\"" << prefix << "_status\":\"" << runtime::json_escape(runtime::extract_json_string(response, "status")) << "\""
         << ",\"" << prefix << "_code\":\"" << runtime::json_escape(runtime::extract_json_string(response, "code")) << "\""
@@ -340,8 +397,10 @@ int usage() {
     std::cout
         << "av-imgdata-worker-api-loop " << av_imgdata::worker::kWorkerVersion << "\n\n"
         << "Usage:\n"
-        << "  av-imgdata-worker-api-loop --config <worker-config.json> [--api-url <url>] [--worker-bin <path>] [--path-base-dir <path>] [--max-iterations <n>]\n\n"
+        << "  av-imgdata-worker-api-loop --config <worker-config.json> [--api-url <url>] [--worker-bin <path>] [--path-base-dir <path>] [--max-iterations <n>] [--enrollment-code <code>] [--insecure-tls]\n\n"
         << "The API loop registers explicitly, then sends heartbeats and claims jobs.\n"
+        << "If no worker token exists, it asks for an enrollment code and redeems it through /enroll.\n"
+        << "--insecure-tls disables HTTPS certificate verification and is intended for local test setups only.\n"
         << "shared_path jobs require relative local_path or image_paths values.\n";
     return 0;
 }
@@ -365,14 +424,22 @@ int main(int argc, char** argv) {
 
     const LoopConfig config = parse_config(config_path, runtime::read_file(config_path), args);
     const int max_iterations = runtime::parse_int(runtime::arg_value(args, "--max-iterations"), 0);
-    if (config.worker_id.empty() || config.api_url.empty() ||
-        !runtime::file_exists(config.token_file) || !runtime::file_exists(config.worker_bin)) {
+    if (config.worker_id.empty() || config.api_url.empty() || !runtime::file_exists(config.worker_bin)) {
         std::cerr << "ERROR: incomplete worker configuration\n";
         return 4;
     }
 
-    const std::string token = read_token(config.token_file);
     runtime::ensure_dir(runtime::join_path(config.workspace_root, "claimed-jobs"));
+    std::string token = runtime::file_exists(config.token_file) ? read_token(config.token_file) : "";
+    if (token.empty()) {
+        std::string enrollment_code = runtime::arg_value(args, "--enrollment-code");
+        if (enrollment_code.empty()) enrollment_code = enrollment_code_from_prompt();
+        if (enrollment_code.empty()) {
+            std::cerr << "ERROR: registration code is required when no worker token exists\n";
+            return 6;
+        }
+        if (!enroll_worker(config, enrollment_code, &token)) return 7;
+    }
 
     const std::string registration = api_post(config, "register", token, register_body(config));
     if (!response_ok(registration, "registered")) {
@@ -463,7 +530,9 @@ int main(int argc, char** argv) {
         }
         std::cout << "}" << std::endl;
         if (max_iterations > 0 && iteration >= max_iterations) break;
-        std::this_thread::sleep_for(std::chrono::seconds(config.poll_interval_seconds));
+        if (status != "claimed") {
+            std::this_thread::sleep_for(std::chrono::seconds(config.poll_interval_seconds));
+        }
     }
     return 0;
 }

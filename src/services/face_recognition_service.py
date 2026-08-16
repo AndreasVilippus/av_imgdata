@@ -156,6 +156,13 @@ class FaceRecognitionService:
         except Exception:
             return False
 
+    def _current_operation_id(self, user_key: str, action: str) -> str:
+        try:
+            progress = self.backend.getCleanupProgress(user_key, action)
+            return str(progress.get("operation_id") or "").strip() if isinstance(progress, dict) else ""
+        except Exception:
+            return ""
+
     def _prepared_embedder(self, options: Dict[str, Any]) -> Any:
         key = (
             self.backend._faceProcessorRuntimeKey() if hasattr(self.backend, "_faceProcessorRuntimeKey") else ("python",),
@@ -356,6 +363,32 @@ class FaceRecognitionService:
     def _person_references(self, *, user_key: str, cookies: Dict[str, str], base_url: str, shared_folder: str, person: Dict[str, Any], embedder: Any, options: Dict[str, Any], folder_cache: Dict[int, str], progress_context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         context = dict(progress_context) if isinstance(progress_context, dict) else {}
         action = str(context.get("action") or self.ACTION_BUILD)
+        operation_id = str(context.get("operation_id") or "").strip()
+        if not operation_id:
+            try:
+                current_progress = self.backend.getCleanupProgress(user_key, action)
+                operation_id = str(current_progress.get("operation_id") or "").strip() if isinstance(current_progress, dict) else ""
+            except Exception:
+                operation_id = ""
+        if operation_id and hasattr(embedder, "set_external_worker_operation_id"):
+            try:
+                embedder.set_external_worker_operation_id(operation_id)
+            except Exception:
+                pass
+
+        def cancel_external_worker_jobs(reason: str = "operation_cancelled") -> None:
+            if not operation_id or not hasattr(embedder, "cancel_external_worker_operation"):
+                return
+            try:
+                embedder.cancel_external_worker_operation(operation_id, reason=reason)
+            except Exception as exc:
+                self._debug_log(
+                    "recognition_external_worker_cancel_failed",
+                    action=action,
+                    operation_id=operation_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+
         try:
             person_id = int(person.get("id"))
         except (AttributeError, TypeError, ValueError):
@@ -394,7 +427,14 @@ class FaceRecognitionService:
         progress_images_analyzed_floor = 0
         batch_size = max(1, int(options.get("recognition_batch_size") or 8))
         detect_many = getattr(embedder, "detect_and_embed_many", None)
+        start_many = getattr(embedder, "start_detect_and_embed_many", None)
+        finish_many = getattr(embedder, "finish_detect_and_embed_many", None)
         batch_detection_enabled = callable(detect_many)
+        async_batch_queue_enabled = (
+            callable(start_many)
+            and callable(finish_many)
+            and bool(getattr(embedder, "supports_async_batch_queue", False))
+        )
         prefetch_enabled = (
             batch_detection_enabled
             and batch_size > 1
@@ -458,6 +498,30 @@ class FaceRecognitionService:
             result = detect_many([Path(path) for path in batch_paths])
             cache_batch_result(batch_items, result if isinstance(result, dict) else {}, prefetch=prefetch)
 
+        def start_batch_handle(batch_items: List[Tuple[int, str]]) -> Optional[Dict[str, Any]]:
+            if not async_batch_queue_enabled or not batch_items:
+                return None
+            batch_paths = [path for _batch_index, path in batch_items]
+            handle = start_many([Path(path) for path in batch_paths])
+            return dict(handle) if isinstance(handle, dict) and handle.get("job_id") else None
+
+        def finish_batch_handle(batch_items: List[Tuple[int, str]], handle: Dict[str, Any], *, prefetch: bool) -> None:
+            result = finish_many(handle)
+            cache_batch_result(batch_items, result if isinstance(result, dict) else {}, prefetch=prefetch)
+
+        def run_batch_pipeline(batch_items: List[Tuple[int, str]], *, next_start_index: int) -> None:
+            if not async_batch_queue_enabled:
+                run_batch(batch_items, prefetch=False)
+                start_prefetch(next_start_index)
+                return
+            handle = start_batch_handle(batch_items)
+            if handle is None:
+                run_batch(batch_items, prefetch=False)
+                start_prefetch(next_start_index)
+                return
+            start_prefetch(next_start_index)
+            finish_batch_handle(batch_items, handle, prefetch=False)
+
         def finish_prefetch_if_needed(path: Optional[str] = None) -> None:
             thread = prefetch_state.get("thread")
             if thread is None:
@@ -488,7 +552,11 @@ class FaceRecognitionService:
 
             def target() -> None:
                 try:
-                    run_batch(batch_items, prefetch=True)
+                    handle = start_batch_handle(batch_items)
+                    if handle is not None:
+                        finish_batch_handle(batch_items, handle, prefetch=True)
+                    else:
+                        run_batch(batch_items, prefetch=True)
                 except Exception as exc:
                     prefetch_state["error"] = exc
 
@@ -517,6 +585,7 @@ class FaceRecognitionService:
                 )
                 break
             if self._should_stop(user_key, action):
+                cancel_external_worker_jobs()
                 self._debug_log(
                     "recognition_person_reference_scan_stop_requested",
                     action=action,
@@ -608,7 +677,8 @@ class FaceRecognitionService:
                         batch_items = collect_batch_items(item_index, image_path)
                         batch_paths = [path for _batch_index, path in batch_items]
                         if len(batch_paths) > 1:
-                            run_batch(batch_items, prefetch=False)
+                            next_start_index = max(batch_index for batch_index, _path in batch_items) + 1
+                            run_batch_pipeline(batch_items, next_start_index=next_start_index)
                             progress_images_scanned_floor = max(progress_images_scanned_floor, max(batch_index for batch_index, _path in batch_items) + 1)
                             progress_images_analyzed_floor = max(progress_images_analyzed_floor, images_analyzed + len(batch_paths) - 1)
                             if context:
@@ -626,7 +696,6 @@ class FaceRecognitionService:
                                     references_count=len(references),
                                     **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
                                 )
-                            start_prefetch(max(batch_index for batch_index, _path in batch_items) + 1)
                         else:
                             write_embeddings(image_path, embedder.detect_and_embed(Path(image_path)))
                     else:
@@ -675,6 +744,7 @@ class FaceRecognitionService:
                 image_faces = list(image_faces)
             for face in image_faces:
                 if self._should_stop(user_key, action):
+                    cancel_external_worker_jobs()
                     self._debug_log(
                         "recognition_person_reference_face_loop_stop_requested",
                         action=action,
@@ -982,6 +1052,7 @@ class FaceRecognitionService:
                 person=person, embedder=embedder, options=reference_options, folder_cache=folder_cache,
                 progress_context={
                     "action": self.ACTION_BUILD,
+                    "operation_id": self._current_operation_id(user_key, self.ACTION_BUILD),
                     "phase": "reading_reference_images",
                     "message_key": "cleanup:recognition_reading_reference_images",
                     "message": "Reading recognition reference images.",
@@ -1206,6 +1277,7 @@ class FaceRecognitionService:
                 person=person, embedder=embedder, options=options, folder_cache=folder_cache,
                 progress_context={
                     "action": self.ACTION_SUGGEST,
+                    "operation_id": self._current_operation_id(user_key, self.ACTION_SUGGEST),
                     "phase": "reading_unknown_images",
                     "message_key": "cleanup:recognition_reading_unknown_images",
                     "message": "Reading unknown face images.",
@@ -1353,6 +1425,7 @@ class FaceRecognitionService:
                 person=person, embedder=embedder, options=options, folder_cache=folder_cache,
                 progress_context={
                     "action": self.ACTION_ASSIGNMENT,
+                    "operation_id": self._current_operation_id(user_key, self.ACTION_ASSIGNMENT),
                     "phase": "reading_assigned_images",
                     "message_key": "cleanup:recognition_reading_assigned_images",
                     "message": "Reading assigned Photos face images.",

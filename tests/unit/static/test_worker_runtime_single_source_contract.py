@@ -109,7 +109,7 @@ def test_worker_api_loop_checks_result_reporting_response():
 
     assert "std::string normalized_result_payload" in source
     assert 'runtime::extract_json_object(worker_json, "processor_result")' in source
-    assert "curl -SsL -X POST" in source
+    assert "curl -SsL\" + curl_tls_args(config)" in source
     assert "curl -fSsL -X POST" not in source
     assert "runtime::extract_first_json_object" in source
     assert "worker_result_json" in source
@@ -119,6 +119,38 @@ def test_worker_api_loop_checks_result_reporting_response():
     assert '"worker result was rejected by DSM"' in source
     assert 'response_ok(report, "failed")' in source
     assert "append_report_fields" in source
+
+
+def test_worker_api_loop_enrolls_when_token_is_missing():
+    source = _read("worker/src/api_loop.cpp")
+    runtime = _read("worker/include/av_imgdata/worker_runtime.h")
+    local_router = _read("tools/worker-api-http-router.py")
+
+    assert "std::string enrollment_code_from_prompt" in source
+    assert '"Worker token not found. Enter registration code: "' in source
+    assert "api_post_unauthenticated(config, \"enroll\"" in source
+    assert "runtime::write_file(config.token_file, enrolled_token + \"\\n\")" in source
+    assert "runtime::restrict_file_to_owner(config.token_file)" in source
+    assert "inline bool restrict_file_to_owner" in runtime
+    assert "S_IRUSR | S_IWUSR" in runtime
+    assert "runtime::file_exists(config.token_file) ? read_token(config.token_file) : \"\"" in source
+    assert "registration code is required when no worker token exists" in source
+    assert '"enroll"' in local_router
+    assert "composition.provisioning.redeem_enrollment" in local_router
+
+
+def test_worker_curl_transport_supports_explicit_insecure_tls_flag():
+    api_loop = _read("worker/src/api_loop.cpp")
+    model_sync = _read("worker/src/model_sync.cpp")
+
+    assert 'runtime::has_arg(args, "--insecure-tls")' in api_loop
+    assert "curl -SsL\" + curl_tls_args(config)" in api_loop
+    assert 'config.insecure_tls ? " -k" : ""' in api_loop
+    assert "--insecure-tls disables HTTPS certificate verification" in api_loop
+
+    assert 'runtime::has_arg(args, "--insecure-tls")' in model_sync
+    assert '(insecure_tls ? " -k" : "")' in model_sync
+    assert "curl_download(manifest_url, token, worker_id, manifest_temp, insecure_tls)" in model_sync
 
 
 def test_worker_api_loop_executes_vector_jobs_without_shared_path():

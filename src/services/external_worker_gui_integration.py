@@ -39,6 +39,7 @@ class _ExternalWorkerFaceBase:
         self.action = str(action or "face_processing")
         self._debug_logger = debug_logger if callable(debug_logger) else None
         self._local_processor = None
+        self.external_worker_operation_id = ""
 
     def prepare(self) -> None:
         """Preparation stays lazy so external-only runs do not load NAS models."""
@@ -64,6 +65,24 @@ class _ExternalWorkerFaceBase:
 
     def _operation(self) -> str:
         return "face_match" if self.action == "search_missing_faces_insightface" else "cleanup"
+
+    def set_external_worker_operation_id(self, operation_id: str) -> None:
+        self.external_worker_operation_id = str(operation_id or "").strip()
+
+    def _operation_id(self, suffix: str) -> str:
+        return self.external_worker_operation_id or f"{self.action}-{suffix}-{uuid.uuid4().hex}"
+
+    def cancel_external_worker_operation(self, operation_id: str, *, reason: str = "operation_cancelled") -> Dict[str, Any]:
+        operation_id = str(operation_id or "").strip()
+        if not operation_id:
+            return {"status": "skipped", "cancelled_jobs": 0}
+        composition = self._build_composition()
+        if not composition.enabled():
+            return {"status": "disabled", "cancelled_jobs": 0}
+        return composition.worker_api.cancel_jobs_by_origin(
+            origin_filter={"operation_id": operation_id, "action": self.action},
+            reason=reason,
+        )
 
     def _debug_log(self, event: str, **fields: Any) -> None:
         logger = self._debug_logger
@@ -126,7 +145,7 @@ class ExternalWorkerFaceDetectorAdapter(_ExternalWorkerFaceBase):
             operation=self._operation(),
             action=self.action,
             mode="scan",
-            operation_id=f"{self.action}-detect-{uuid.uuid4().hex}",
+            operation_id=self._operation_id("detect"),
             source_id=str(source),
             entity_type="image",
             entity_id=str(source),
@@ -156,7 +175,7 @@ class ExternalWorkerFaceDetectorAdapter(_ExternalWorkerFaceBase):
             operation=self._operation(),
             action=self.action,
             mode="scan",
-            operation_id=f"{self.action}-detect-batch-{uuid.uuid4().hex}",
+            operation_id=self._operation_id("detect-batch"),
             det_thresh=float(self.options.get("det_thresh", 0.5)),
             max_num=int(self.options.get("max_num", 0)),
             det_size=self.options.get("det_size") or [640, 640],
@@ -190,6 +209,7 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
     """Expose recognition processor operations through existing Worker contracts."""
 
     supports_async_batch_prefetch = True
+    supports_async_batch_queue = True
 
     def detect_and_embed(self, image_path: Path) -> List[Dict[str, Any]]:
         source = Path(image_path).expanduser().resolve()
@@ -205,7 +225,7 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
             operation=self._operation(),
             action=self.action,
             mode="scan",
-            operation_id=f"{self.action}-embed-{uuid.uuid4().hex}",
+            operation_id=self._operation_id("embed"),
             source_id=str(source),
             entity_type="image",
             entity_id=str(source),
@@ -237,12 +257,48 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
             operation=self._operation(),
             action=self.action,
             mode="scan",
-            operation_id=f"{self.action}-embed-batch-{uuid.uuid4().hex}",
+            operation_id=self._operation_id("embed-batch"),
             det_thresh=float(self.options.get("det_thresh", 0.5)),
             max_num=int(self.options.get("max_num", 0)),
             det_size=self.options.get("det_size") or [640, 640],
         )
         images = dispatched.get("images") if isinstance(dispatched, dict) else {}
+        normalized: Dict[str, List[Dict[str, Any]]] = {}
+        for path, faces in images.items():
+            if not isinstance(faces, list):
+                continue
+            filtered = self._filter_faces([dict(face) for face in faces if isinstance(face, dict)])
+            normalized[str(path)] = [face for face in filtered if isinstance(face.get("embedding"), list)]
+        return normalized
+
+    def start_detect_and_embed_many(self, image_paths: List[Path]) -> Optional[Dict[str, Any]]:
+        paths = [Path(path).expanduser().resolve() for path in list(image_paths or [])]
+        if len(paths) <= 1:
+            return None
+        composition = self._build_composition()
+        if not composition.enabled():
+            return None
+        processor = composition.external_face_processor(nas_root=self._batch_root(paths), debug_logger=self._debug_log)
+        if not processor.has_compatible_worker(processor.FACE_EMBED_BATCH_CAPABILITY):
+            return None
+        return processor.start_face_embed_batch(
+            image_paths=paths,
+            operation=self._operation(),
+            action=self.action,
+            mode="scan",
+            operation_id=self._operation_id("embed-batch"),
+            det_thresh=float(self.options.get("det_thresh", 0.5)),
+            max_num=int(self.options.get("max_num", 0)),
+            det_size=self.options.get("det_size") or [640, 640],
+        )
+
+    def finish_detect_and_embed_many(self, handle: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+        paths = [Path(path).expanduser().resolve() for path in list(handle.get("image_paths") or [])]
+        if not paths:
+            return {}
+        composition = self._build_composition()
+        processor = composition.external_face_processor(nas_root=self._batch_root(paths), debug_logger=self._debug_log)
+        images = processor.finish_face_batch(handle)
         normalized: Dict[str, List[Dict[str, Any]]] = {}
         for path, faces in images.items():
             if not isinstance(faces, list):
@@ -273,7 +329,7 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
             operation=self._operation(),
             action=self.action,
             mode="scan",
-            operation_id=f"{self.action}-rank-{uuid.uuid4().hex}",
+            operation_id=self._operation_id("rank"),
         )
         result = dispatched.get("result") if isinstance(dispatched, dict) else {}
         ranks = result.get("ranks") if isinstance(result, dict) and isinstance(result.get("ranks"), list) else []
@@ -292,7 +348,7 @@ class ExternalWorkerFaceEmbedderAdapter(_ExternalWorkerFaceBase):
             operation=self._operation(),
             action=self.action,
             mode="scan",
-            operation_id=f"{self.action}-profile-math-{uuid.uuid4().hex}",
+            operation_id=self._operation_id("profile-math"),
         )
         result = dispatched.get("result") if isinstance(dispatched, dict) else {}
         return dict(result) if isinstance(result, dict) else {}

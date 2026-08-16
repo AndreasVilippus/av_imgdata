@@ -181,7 +181,42 @@ libvips, set `AV_IMGDATA_REQUIRE_WORKER_VIPS=0` and
 
 ## Worker API HTTP router integration test
 
-The framework-free local router exposes the same endpoint adapter that DSM routing should call later:
+In a DSM package installation, the Worker API is served by the package backend:
+
+```text
+http://127.0.0.1:9771/worker-api/status
+```
+
+The backend binds to localhost. External workers therefore must use the DSM reverse
+proxy or another explicitly configured NAS-side proxy that forwards a public
+`/worker-api` URL to `http://127.0.0.1:9771/worker-api`. Do not point workers at
+DSM's generic `http://<nas>:5000/worker-api` or `https://<nas>:5001/worker-api`
+unless a reverse proxy rule for that exact path exists.
+
+Typical production worker configuration:
+
+```json
+{
+  "worker_api_base_url": "https://photos.example.net/worker-api"
+}
+```
+
+The configured host name must match the TLS certificate presented by the reverse
+proxy. For local lab setups only, the worker start scripts and C++ API loop support
+`--insecure-tls` / `-InsecureTls`.
+
+Worker bundles do not include ONNX face model files. DSM is the model and license
+authority: it serves the model manifest and files only after administrator
+acknowledgement. The platform start scripts run the initializer/model-sync step
+before starting the API loop. With an existing `worker.token`, this refreshes
+configuration and DSM-authorized model files on every start. Without a token,
+`Start-AVImgDataWorker.ps1` / `start-av-imgdata-worker.sh` asks for the
+registration code, enrolls, synchronizes models, and only then starts claiming
+jobs. A changed or revoked DSM-side model/license state therefore fails during
+sync instead of producing claimed jobs with missing local models.
+
+The framework-free local router exposes the same endpoint adapter for development
+and integration tests. It is not the normal DSM package publication path:
 
 ```text
 POST /worker-api/register
@@ -189,6 +224,7 @@ POST /worker-api/heartbeat
 POST /worker-api/claim
 POST /worker-api/result
 POST /worker-api/fail
+POST /worker-api/enroll
 GET  /worker-api/status
 ```
 

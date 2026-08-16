@@ -404,9 +404,10 @@ Expected runtime layout:
   .models/face/buffalo_l/det_10g.onnx
   .models/face/buffalo_l/w600k_r50.onnx
   .models/face/buffalo_l/manifest.json
-  .models/face/buffalo_l/LICENSE_ACK.json
 
-Use tools/sync-worker-face-models.py from the source tree, or let the DSM package provide/sync these files after administrator acknowledgement.
+Workers do not require a local LICENSE_ACK.json. The DSM package is the license authority and serves model files only after administrator acknowledgement.
+
+Use tools/sync-worker-face-models.py from the source tree, or let the worker start scripts sync these files from the DSM package before the API loop starts.
 MODEL_README
 }
 

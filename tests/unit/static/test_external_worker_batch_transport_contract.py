@@ -13,6 +13,13 @@ def test_external_worker_api_loop_materializes_batch_shared_paths():
     assert "shared_path batch requires a non-empty image_paths string array" in source
 
 
+def test_external_worker_api_loop_does_not_sleep_after_claimed_job():
+    source = Path("worker/src/api_loop.cpp").read_text(encoding="utf-8")
+
+    assert 'if (status != "claimed")' in source
+    assert "sleep_for(std::chrono::seconds(config.poll_interval_seconds))" in source
+
+
 def test_external_worker_batch_dispatch_is_separate_from_pipeline():
     service = Path("src/services/external_worker_batch_processor_service.py").read_text(encoding="utf-8")
     integration = Path("src/services/external_worker_gui_integration.py").read_text(encoding="utf-8")

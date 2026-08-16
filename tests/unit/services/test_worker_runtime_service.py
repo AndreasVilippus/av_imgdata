@@ -191,4 +191,5 @@ def test_runtime_status_uses_backend_status_contract(tmp_path: Path):
         "phase": "ready",
         "workers": 0,
         "jobs": {"total": 0, "by_status": {}},
+        "items": {"total": 0, "by_status": {}},
     }

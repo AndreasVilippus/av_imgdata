@@ -112,7 +112,7 @@ def worker_error_http_status(code: str) -> int:
         return 404
     if value in {"worker_api_disabled"}:
         return 404
-    if value in {"job_already_exists", "enrollment_code_used"}:
+    if value in {"job_already_exists", "enrollment_code_used", "job_cancelled"}:
         return 409
     if value in {"state_read_failed", "state_write_failed"}:
         return 503

@@ -200,18 +200,103 @@ class WorkerApiService:
             **result,
         }
 
+    @staticmethod
+    def _job_origin(job: Dict[str, Any]) -> Dict[str, Any]:
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        origin = payload.get("origin") if isinstance(payload.get("origin"), dict) else {}
+        return origin
+
+    @classmethod
+    def _job_matches_origin(cls, job: Dict[str, Any], origin_filter: Optional[Dict[str, Any]]) -> bool:
+        if not origin_filter:
+            return True
+        origin = cls._job_origin(job)
+        for key, expected in origin_filter.items():
+            if expected is None or str(expected) == "":
+                continue
+            if str(origin.get(key) or "") != str(expected):
+                return False
+        return True
+
+    @staticmethod
+    def _job_item_count(job: Dict[str, Any]) -> int:
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        image_paths = payload.get("image_paths")
+        if isinstance(image_paths, list):
+            return max(1, len(image_paths))
+        return 1
+
+    def list_jobs(
+        self,
+        *,
+        status: Optional[List[str]] = None,
+        origin_filter: Optional[Dict[str, Any]] = None,
+        job_type: str = "",
+        limit: int = 0,
+    ) -> List[Dict[str, Any]]:
+        wanted_status = {str(item) for item in status or [] if str(item)}
+        wanted_type = str(job_type or "")
+        state = self.store.read()
+        jobs: List[Dict[str, Any]] = []
+        for raw in state["jobs"].values():
+            job = raw if isinstance(raw, dict) else {}
+            if wanted_status and str(job.get("status") or "") not in wanted_status:
+                continue
+            if wanted_type and str(job.get("type") or "") != wanted_type:
+                continue
+            if not self._job_matches_origin(job, origin_filter):
+                continue
+            jobs.append(dict(job))
+        jobs.sort(key=lambda item: (str(item.get("updated_at") or ""), str(item.get("created_at") or ""), str(item.get("job_id") or "")))
+        if limit > 0:
+            return jobs[:int(limit)]
+        return jobs
+
+    def cancel_jobs_by_origin(
+        self,
+        *,
+        origin_filter: Dict[str, Any],
+        statuses: Optional[List[str]] = None,
+        reason: str = "operation_cancelled",
+    ) -> Dict[str, Any]:
+        wanted_status = {str(item) for item in (statuses or ["queued", "claimed"]) if str(item)}
+        now = self._now_iso()
+
+        def mutate(state):
+            cancelled = []
+            for job_id, raw in state["jobs"].items():
+                job = raw if isinstance(raw, dict) else {}
+                if str(job.get("status") or "") not in wanted_status:
+                    continue
+                if not self._job_matches_origin(job, origin_filter):
+                    continue
+                job.update({
+                    "status": "cancelled",
+                    "cancelled_at": now,
+                    "updated_at": now,
+                    "error": {"code": str(reason or "operation_cancelled"), "message": str(reason or "operation_cancelled")},
+                })
+                cancelled.append(str(job_id))
+            return cancelled
+
+        cancelled_ids = self.store.update(mutate)
+        return {"status": "cancelled", "cancelled_jobs": len(cancelled_ids), "job_ids": cancelled_ids}
+
     def status(self) -> Dict[str, Any]:
         state = self.store.read()
         by_status: Dict[str, int] = {}
+        items_by_status: Dict[str, int] = {}
         for job in state["jobs"].values():
             value = str(job.get("status") or "unknown")
             by_status[value] = by_status.get(value, 0) + 1
+            items_by_status[value] = items_by_status.get(value, 0) + self._job_item_count(job if isinstance(job, dict) else {})
         return {
             "schema_version": WorkerProtocol.SCHEMA_VERSION,
             "component": "external_worker",
             "phase": "ready",
             "workers": len(state["workers"]),
             "jobs": {"total": len(state["jobs"]), "by_status": by_status},
+            "items": {"total": sum(items_by_status.values()), "by_status": items_by_status},
         }
 
     def admin_status(self) -> Dict[str, Any]:
@@ -271,6 +356,8 @@ class WorkerApiService:
             job = state["jobs"][job_id]
             if job.get("claimed_by") and job.get("claimed_by") != worker_id:
                 raise WorkerApiError("job_claimed_by_other_worker")
+            if str(job.get("status") or "") == "cancelled":
+                raise WorkerApiError("job_cancelled")
             now = self._now_iso()
             worker = state["workers"].get(worker_id)
             if isinstance(worker, dict):

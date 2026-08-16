@@ -15,12 +15,13 @@ SRC_DIR = PROJECT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from services.worker_api_composition_service import WorkerApiCompositionService  # noqa: E402
+from services.worker_api_composition_service import WorkerApiCompositionService, worker_error_http_status  # noqa: E402
 from services.worker_api_endpoints import handle_worker_api_request  # noqa: E402
+from services.worker_runtime_service import WorkerApiError  # noqa: E402
 
 
 ROUTE_PREFIX = "/worker-api"
-VALID_POST_ACTIONS = {"register", "heartbeat", "claim", "result", "fail"}
+VALID_POST_ACTIONS = {"register", "heartbeat", "claim", "result", "fail", "enroll"}
 
 
 def parse_headers(handler: BaseHTTPRequestHandler) -> Dict[str, str]:
@@ -89,12 +90,24 @@ class WorkerApiHttpHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"status": "error", "code": str(exc)})
             return
         composition = self.server.composition  # type: ignore[attr-defined]
-        status, payload = handle_worker_api_request(
-            action,
-            headers=parse_headers(self),
-            body=body,
-            service=composition.worker_api,
-        )
+        if action == "enroll":
+            try:
+                payload = composition.provisioning.redeem_enrollment(
+                    enrollment_code=str(body.get("enrollment_code") or ""),
+                    worker_id=str(body.get("worker_id") or self.headers.get("X-Worker-Id") or "").strip(),
+                )
+                status = 200
+            except WorkerApiError as exc:
+                code = exc.code
+                status = worker_error_http_status(code)
+                payload = {"status": "error", "code": code, "message": str(exc)}
+        else:
+            status, payload = handle_worker_api_request(
+                action,
+                headers=parse_headers(self),
+                body=body,
+                service=composition.worker_api,
+            )
         self._send_json(status, payload)
 
     def log_message(self, fmt: str, *args: object) -> None:

@@ -119,10 +119,12 @@ bool curl_download(
     const std::string& url,
     const std::string& token,
     const std::string& worker_id,
-    const std::filesystem::path& output
+    const std::filesystem::path& output,
+    bool insecure_tls
 ) {
     const std::string command =
-        "curl -fSsL -H " + runtime::shell_quote("Authorization: Bearer " + token) +
+        std::string("curl -fSsL") + (insecure_tls ? " -k" : "") +
+        " -H " + runtime::shell_quote("Authorization: Bearer " + token) +
         " -H " + runtime::shell_quote("X-Worker-Id: " + worker_id) +
         " -o " + runtime::shell_quote(output.string()) +
         " " + runtime::shell_quote(url) + " 2>&1";
@@ -138,7 +140,7 @@ int usage() {
     std::cout
         << "av-imgdata-worker-model-sync " << av_imgdata::worker::kWorkerVersion << "\n\n"
         << "Usage:\n"
-        << "  av-imgdata-worker-model-sync --api-url <worker-api-url> --token-file <path> --worker-id <id> --model-root <path> [--model-pack buffalo_l]\n";
+        << "  av-imgdata-worker-model-sync --api-url <worker-api-url> --token-file <path> --worker-id <id> --model-root <path> [--model-pack buffalo_l] [--insecure-tls]\n";
     return 0;
 }
 
@@ -155,6 +157,7 @@ int main(int argc, char** argv) {
     const std::filesystem::path model_root(runtime::arg_value(args, "--model-root"));
     const std::string configured_pack = runtime::arg_value(args, "--model-pack");
     const std::string model_pack = configured_pack.empty() ? "buffalo_l" : configured_pack;
+    const bool insecure_tls = runtime::has_arg(args, "--insecure-tls");
     if (api_url.empty() || token_file.empty() || worker_id.empty() || model_root.empty()) {
         std::cerr << "ERROR: --api-url, --token-file, --worker-id and --model-root are required\n";
         return 2;
@@ -178,7 +181,7 @@ int main(int argc, char** argv) {
     std::error_code error;
     const std::filesystem::path manifest_temp = model_dir / "manifest.json.download";
     const std::string manifest_url = api_url + "/models/" + model_pack + "/manifest";
-    if (!curl_download(manifest_url, token, worker_id, manifest_temp)) return 6;
+    if (!curl_download(manifest_url, token, worker_id, manifest_temp, insecure_tls)) return 6;
     const std::string manifest = runtime::read_file(manifest_temp.string());
     const auto files = parse_manifest_files(manifest);
     if (files.empty()) {
@@ -201,7 +204,7 @@ int main(int argc, char** argv) {
         const std::filesystem::path temporary = model_dir / (file.name + ".download");
         std::filesystem::remove(temporary, error);
         const std::string file_url = api_url + "/models/" + model_pack + "/files/" + file.name;
-        if (!curl_download(file_url, token, worker_id, temporary)) return 9;
+        if (!curl_download(file_url, token, worker_id, temporary, insecure_tls)) return 9;
         const std::string actual = file_sha256(temporary);
         if (actual != file.sha256) {
             std::filesystem::remove(temporary, error);

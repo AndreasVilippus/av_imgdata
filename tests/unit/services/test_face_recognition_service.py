@@ -941,6 +941,116 @@ def test_person_reference_external_worker_prefetches_next_batch_during_face_meta
     assert face_scan_calls[0] == 101
 
 
+def test_person_reference_external_worker_queues_next_batch_before_current_finish(tmp_path):
+    service, _findings = _service()
+    item_count = 8
+    paths = {}
+    for index in range(1, item_count + 1):
+        name = f"image-{index}.jpg"
+        path = tmp_path / name
+        path.write_bytes(b"jpeg")
+        paths[name] = str(path)
+
+    service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: None)
+    service.backend._debugLog = lambda *_args, **_kwargs: None
+    service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [
+        {"id": 100 + index, "folder_id": 20, "filename": f"image-{index}.jpg"}
+        for index in range(1, item_count + 1)
+    ]
+    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda id_item, **_kwargs: [{
+        "person_id": 1,
+        "face_id": id_item + 1000,
+        "bbox": {"top_left": {"x": 0.1, "y": 0.1}, "bottom_right": {"x": 0.2, "y": 0.2}},
+    }])
+    service._item_path = lambda item, **_kwargs: paths[item["filename"]]
+    second_batch_started = Event()
+    events = []
+
+    class _QueuedExternalEmbedder:
+        supports_async_batch_prefetch = True
+        supports_async_batch_queue = True
+
+        def start_detect_and_embed_many(self, image_paths):
+            names = [path.name for path in image_paths]
+            events.append(("start", names))
+            if names[0] == "image-5.jpg":
+                second_batch_started.set()
+            return {"job_id": "job-" + names[0], "image_paths": list(image_paths)}
+
+        def finish_detect_and_embed_many(self, handle):
+            names = [path.name for path in handle["image_paths"]]
+            if names[0] == "image-1.jpg":
+                assert second_batch_started.wait(1.0)
+            events.append(("finish", names))
+            return {
+                str(path): [{"bbox": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "embedding": [1.0, 0.0]}]
+                for path in handle["image_paths"]
+            }
+
+        def detect_and_embed_many(self, _image_paths):
+            raise AssertionError("async queue path expected")
+
+        def detect_and_embed(self, _path):
+            raise AssertionError("batch path expected")
+
+        def _iou(self, _left, _right):
+            return 1.0
+
+    references = service._person_references(
+        user_key="u", cookies={}, base_url="https://dsm", shared_folder=str(tmp_path),
+        person={"id": 1, "name": "Ada"}, embedder=_QueuedExternalEmbedder(),
+        options=service.normalize_options({"recognition_batch_size": 4}), folder_cache={},
+        progress_context={
+            "action": service.ACTION_ASSIGNMENT,
+            "phase": "reading_unknown_images",
+            "persons_scanned": 0,
+            "persons_total": 1,
+        },
+    )
+
+    first_finish_index = events.index(("finish", ["image-1.jpg", "image-2.jpg", "image-3.jpg", "image-4.jpg"]))
+    second_start_index = events.index(("start", ["image-5.jpg", "image-6.jpg", "image-7.jpg", "image-8.jpg"]))
+    assert second_start_index < first_finish_index
+    assert len(references) == item_count
+
+
+def test_person_reference_stop_cancels_external_worker_operation(tmp_path):
+    service, _findings = _service()
+    image_path = tmp_path / "image-1.jpg"
+    image_path.write_bytes(b"jpeg")
+    service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: None)
+    service.backend._debugLog = lambda *_args, **_kwargs: None
+    service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [
+        {"id": 101, "folder_id": 20, "filename": "image-1.jpg"}
+    ]
+    service.backend._shouldStopCleanup = lambda _user_key, _action: True
+    service._item_path = lambda item, **_kwargs: str(image_path)
+    cancelled = []
+
+    class _CancellableEmbedder:
+        def set_external_worker_operation_id(self, operation_id):
+            self.operation_id = operation_id
+
+        def cancel_external_worker_operation(self, operation_id, *, reason="operation_cancelled"):
+            cancelled.append((operation_id, reason))
+
+    references = service._person_references(
+        user_key="u", cookies={}, base_url="https://dsm", shared_folder=str(tmp_path),
+        person={"id": 1, "name": "Ada"}, embedder=_CancellableEmbedder(),
+        options=service.normalize_options({"recognition_batch_size": 4}), folder_cache={},
+        progress_context={
+            "action": service.ACTION_ASSIGNMENT,
+            "operation_id": "cleanup-recognition-op-1",
+            "phase": "reading_unknown_images",
+            "persons_scanned": 0,
+            "persons_total": 1,
+        },
+    )
+
+    assert references == []
+    assert cancelled == [("cleanup-recognition-op-1", "operation_cancelled")]
+
+
 def test_person_reference_scan_separates_list_progress_from_changed_date_skip(tmp_path):
     service, _findings = _service()
     image_path = tmp_path / "old.jpg"

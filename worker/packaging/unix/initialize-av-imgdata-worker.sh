@@ -11,6 +11,7 @@ Usage:
     [--enrollment-code <code>] \
     [--model-pack buffalo_l] \
     [--config <path>] \
+    [--insecure-tls] \
     [--force-enroll]
 EOF
 }
@@ -22,6 +23,7 @@ PATH_BASE_DIR=""
 MODEL_PACK="buffalo_l"
 CONFIG_PATH=""
 FORCE_ENROLL=0
+INSECURE_TLS=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -31,6 +33,7 @@ while [ "$#" -gt 0 ]; do
     --path-base-dir) PATH_BASE_DIR=${2:-}; shift 2 ;;
     --model-pack) MODEL_PACK=${2:-}; shift 2 ;;
     --config) CONFIG_PATH=${2:-}; shift 2 ;;
+    --insecure-tls) INSECURE_TLS=1; shift ;;
     --force-enroll) FORCE_ENROLL=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -76,7 +79,9 @@ if [ -z "$TOKEN" ]; then
   fi
   command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required for enrollment" >&2; exit 5; }
   BODY=$(printf '{"enrollment_code":"%s","worker_id":"%s"}' "$ENROLLMENT_CODE" "$WORKER_ID")
-  RESPONSE=$(curl -fSsL -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$API_URL/enroll") || {
+  CURL_TLS_ARGS=""
+  [ "$INSECURE_TLS" -eq 0 ] || CURL_TLS_ARGS="-k"
+  RESPONSE=$(curl -fSsL $CURL_TLS_ARGS -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$API_URL/enroll") || {
     echo "ERROR: worker enrollment failed" >&2
     exit 6
   }
@@ -97,12 +102,16 @@ chmod 600 "$TOKEN_PATH" 2>/dev/null || true
   --path-base-dir "$PATH_BASE_DIR" \
   --model-pack "$MODEL_PACK"
 
-"$MODEL_SYNC_BIN" \
+set -- "$MODEL_SYNC_BIN" \
   --api-url "$API_URL" \
   --token-file "$TOKEN_PATH" \
   --worker-id "$WORKER_ID" \
   --model-root "$MODEL_ROOT" \
   --model-pack "$MODEL_PACK"
+if [ "$INSECURE_TLS" -ne 0 ]; then
+  set -- "$@" --insecure-tls
+fi
+"$@"
 
 echo "Worker enrolled, configured and model files synchronized."
 echo "Config: $CONFIG_PATH"

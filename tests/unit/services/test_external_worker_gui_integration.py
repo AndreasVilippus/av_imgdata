@@ -121,6 +121,51 @@ def test_recognition_many_uses_face_native_embed_batch():
     processor.execute_face_embed_batch.assert_called_once()
 
 
+def test_recognition_many_can_start_and_finish_external_batch_separately():
+    processor = Mock()
+    processor.has_compatible_worker.return_value = True
+    processor.start_face_embed_batch.return_value = {
+        "job_id": "embed-batch-1",
+        "capability": "face_native_embed_batch",
+        "image_paths": [Path("/volume1/photo/album/a.jpg"), Path("/volume1/photo/album/b.jpg")],
+    }
+    processor.finish_face_batch.return_value = {
+        "/volume1/photo/album/a.jpg": [{"bbox": {"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.4}, "embedding": [1.0, 0.0]}],
+        "/volume1/photo/album/b.jpg": [{"bbox": {"x1": 0.2, "y1": 0.2, "x2": 0.4, "y2": 0.4}, "embedding": [0.0, 1.0]}],
+    }
+    composition = Mock()
+    composition.enabled.return_value = True
+    composition.external_face_processor.return_value = processor
+    adapter = ExternalWorkerFaceEmbedderAdapter(options={}, action="recognition_build_profiles", local_processor_factory=Mock(side_effect=AssertionError("local embedder must not be built")), composition_factory=lambda: composition)
+    adapter.set_external_worker_operation_id("cleanup-recognition-op-1")
+
+    handle = adapter.start_detect_and_embed_many([Path("/volume1/photo/album/a.jpg"), Path("/volume1/photo/album/b.jpg")])
+    result = adapter.finish_detect_and_embed_many(handle)
+
+    assert handle["job_id"] == "embed-batch-1"
+    assert result["/volume1/photo/album/a.jpg"][0]["embedding"] == [1.0, 0.0]
+    kwargs = processor.start_face_embed_batch.call_args.kwargs
+    assert kwargs["operation_id"] == "cleanup-recognition-op-1"
+    processor.finish_face_batch.assert_called_once_with(handle)
+
+
+def test_recognition_adapter_cancels_jobs_for_current_operation():
+    worker_api = Mock()
+    worker_api.cancel_jobs_by_origin.return_value = {"status": "cancelled", "cancelled_jobs": 2}
+    composition = Mock()
+    composition.enabled.return_value = True
+    composition.worker_api = worker_api
+    adapter = ExternalWorkerFaceEmbedderAdapter(options={}, action="recognition_build_profiles", local_processor_factory=Mock(), composition_factory=lambda: composition)
+
+    result = adapter.cancel_external_worker_operation("cleanup-recognition-op-1", reason="stopped")
+
+    assert result["cancelled_jobs"] == 2
+    worker_api.cancel_jobs_by_origin.assert_called_once_with(
+        origin_filter={"operation_id": "cleanup-recognition-op-1", "action": "recognition_build_profiles"},
+        reason="stopped",
+    )
+
+
 def test_recognition_rank_and_profile_math_use_vector_worker_contracts():
     processor = Mock()
     processor.execute_rank_embeddings.return_value = {"result": {"ranks": [{"best_index": 0, "best_score": 0.9}]}}
