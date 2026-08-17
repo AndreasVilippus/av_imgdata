@@ -8,7 +8,7 @@ import pytest
 from services.external_worker_batch_processor_service import ExternalWorkerBatchProcessorService
 from services.external_worker_processor_service import ExternalWorkerProcessorUnavailable
 from services.worker_api_service import WorkerApiService
-from services.worker_runtime_service import WorkerProtocol
+from services.worker_runtime_service import WorkerApiError, WorkerProtocol
 
 
 class NativeProcessorStub:
@@ -135,21 +135,12 @@ class TestExternalWorkerBatchProcessorService:
             capability=self.service.FACE_EMBED_BATCH_CAPABILITY,
             image_paths=[self.image_a, self.image_b],
         )
-        second = self.service.consume_face_batch_result(
-            "embed-batch-2",
-            capability=self.service.FACE_EMBED_BATCH_CAPABILITY,
-            image_paths=[self.image_a, self.image_b],
-        )
 
-        assert first == second
         assert first[str(self.image_a)][0]["embedding"] == [1.0, 0.0]
         assert first[str(self.image_b)][0]["embedding"] == [0.0, 1.0]
-        stored = self.service.get_job("embed-batch-2")
-        assert stored["result_apply_status"] == "consumed"
-        assert "result" not in stored
-        assert "normalized_batch_images" not in stored
-        assert stored["normalized_batch_images_ref"]["storage"] == "worker-api-result-file"
-        assert (self.package_var / "worker-api-results" / stored["normalized_batch_images_ref"]["path"]).is_file()
+        with pytest.raises(WorkerApiError, match="job_not_found"):
+            self.service.get_job("embed-batch-2")
+        assert not (self.package_var / "worker-api-results").exists()
 
     def test_start_and_finish_embed_batch_separates_enqueue_from_wait(self):
         handle = self.service.start_face_embed_batch(
@@ -187,7 +178,7 @@ class TestExternalWorkerBatchProcessorService:
 
         assert result[str(self.image_a)][0]["embedding"] == [1.0, 0.0]
         assert result[str(self.image_b)][0]["embedding"] == [0.0, 1.0]
-        assert [job["job_id"] for job in completed] == ["embed-batch-async"]
+        assert completed == []
 
     def test_batch_rejects_path_outside_profile(self):
         outside = self.package_var / "outside.jpg"

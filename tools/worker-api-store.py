@@ -10,7 +10,6 @@ sys.path.insert(0, str(PROJECT_DIR / "src"))
 
 from services.config_service import ConfigService
 from services.worker_api_service import WorkerApiError, WorkerApiService
-from services.worker_runtime_service import WorkerRuntimePathService
 
 
 def default_package_var() -> Path:
@@ -36,20 +35,14 @@ def build_config_service(args):
     return ConfigService(str(Path(args.package_var) / "config.json"))
 
 
-def resolve_state_path(args, config_service=None):
-    paths = WorkerRuntimePathService(
-        package_var=Path(args.package_var),
-        config_service=config_service or build_config_service(args),
-    )
-    explicit = Path(args.state_path) if str(args.state_path or "").strip() else None
-    return paths.state_path(explicit)
+def resolve_database_path(args, config_service=None):
+    return (Path(args.package_var) / "imgdata.sqlite3").resolve()
 
 
 def build_service(args):
     config = build_config_service(args)
     return WorkerApiService(
         package_var=Path(args.package_var),
-        state_path=resolve_state_path(args, config),
         config_service=config,
     )
 
@@ -59,8 +52,6 @@ def configure_worker_api(args, *, enabled: bool):
     config = service.readMergedConfig()
     worker_api = config.setdefault("worker_api", {})
     worker_api["ENABLED"] = bool(enabled)
-    if enabled:
-        worker_api["STATE_PATH"] = str(args.config_state_path or "worker-api-state.json")
     if not service.writeConfig(config):
         return {
             "status": "error",
@@ -71,18 +62,16 @@ def configure_worker_api(args, *, enabled: bool):
         "status": "ok",
         "worker_api": service.readMergedConfig().get("worker_api", {}),
         "config_path": str(Path(args.package_var) / "config.json"),
-        "state_path": str(resolve_state_path(args, service)),
+        "database_path": str(resolve_database_path(args, service)),
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Manage AV ImgData DSM-side external worker API state")
     parser.add_argument("--package-var", default=str(default_package_var()), help="Package var/root directory")
-    parser.add_argument("--state-path", default="", help="Explicit state JSON path override")
     sub = parser.add_subparsers(dest="command", required=True)
 
     enable_api = sub.add_parser("enable-api", help="Enable /worker-api in package config")
-    enable_api.add_argument("--config-state-path", default="worker-api-state.json")
     sub.add_parser("disable-api")
     sub.add_parser("api-config")
 
@@ -138,7 +127,7 @@ def main() -> int:
             print_json({
                 "status": "ok",
                 "config_path": str(Path(args.package_var) / "config.json"),
-                "state_path": str(resolve_state_path(args, config)),
+                "database_path": str(resolve_database_path(args, config)),
                 "worker_api": config.readMergedConfig().get("worker_api", {}),
             })
         else:

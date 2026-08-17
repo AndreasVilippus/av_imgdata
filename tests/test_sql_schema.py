@@ -18,7 +18,7 @@ def test_schema_applies_idempotently(tmp_path):
     connection.executescript(schema)
     connection.executescript(schema)
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_schema_contains_only_active_runtime_tables(tmp_path):

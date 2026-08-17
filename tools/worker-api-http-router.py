@@ -8,7 +8,7 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_DIR / "src"
@@ -121,13 +121,11 @@ class WorkerApiHttpServer(ThreadingHTTPServer):
         self,
         server_address: Tuple[str, int],
         package_var: Path,
-        state_path: Optional[Path],
         quiet: bool,
     ):
         super().__init__(server_address, WorkerApiHttpHandler)
         self.composition = WorkerApiCompositionService(
             package_var=package_var,
-            state_path=state_path,
         )
         self.quiet = quiet
 
@@ -137,18 +135,16 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--package-var", default=str(PROJECT_DIR))
-    parser.add_argument("--state-path", default="")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
     package_var = Path(args.package_var).resolve()
-    state_path = Path(args.state_path) if args.state_path else None
-    server = WorkerApiHttpServer((args.host, args.port), package_var, state_path, args.quiet)
+    server = WorkerApiHttpServer((args.host, args.port), package_var, args.quiet)
     print(json.dumps({
         "status": "listening",
         "base_url": f"http://{args.host}:{args.port}{ROUTE_PREFIX}",
         "package_var": str(server.composition.package_var),
-        "state_path": str(server.composition.state_store.state_path),
+        "database_path": str(server.composition.state_store.database_path),
     }, ensure_ascii=False), flush=True)
     try:
         server.serve_forever()

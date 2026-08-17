@@ -6,12 +6,13 @@ import json
 import os
 import secrets
 import sys
-import tempfile
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
+
+from av_imgdata.db.connection import Database, DatabaseError
 
 from services.worker_protocol_generated import (
     CAPABILITIES,
@@ -77,7 +78,7 @@ class WorkerProtocol:
 
 
 class WorkerRuntimePathService:
-    """Resolve package and worker state paths using one documented priority."""
+    """Resolve the package-local SQLite runtime database path."""
 
     def __init__(self, *, package_var: Optional[Path] = None, config_service: Optional[Any] = None):
         self.package_var = Path(
@@ -85,43 +86,22 @@ class WorkerRuntimePathService:
         ).resolve()
         self.config_service = config_service
 
-    def state_path(self, explicit: Optional[Path] = None) -> Path:
-        if explicit is not None and str(explicit).strip():
-            return self._resolve(explicit)
-        configured = self._configured_state_path()
-        if configured:
-            return self._resolve(configured)
-        environment = os.getenv("AV_IMGDATA_WORKER_API_STATE_PATH", "").strip()
-        if environment:
-            return self._resolve(environment)
-        return (self.package_var / "worker-api-state.json").resolve()
-
-    def _configured_state_path(self) -> str:
-        if self.config_service is None:
-            return ""
-        try:
-            config = self.config_service.readMergedConfig()
-        except Exception:
-            return ""
-        worker_api = config.get("worker_api") if isinstance(config, dict) and isinstance(config.get("worker_api"), dict) else {}
-        return str(worker_api.get("STATE_PATH") or "").strip()
-
-    def _resolve(self, value: Any) -> Path:
-        path = Path(value)
-        return path.resolve() if path.is_absolute() else (self.package_var / path).resolve()
+    def database_path(self) -> Path:
+        return (self.package_var / "imgdata.sqlite3").resolve()
 
 
 class WorkerStateStore:
-    """Single authority for worker runtime JSON state, migration and permissions."""
+    """Single authority for worker runtime state and locking."""
 
     _locks_guard = threading.Lock()
     _locks: Dict[str, threading.RLock] = {}
 
-    def __init__(self, *, package_var: Optional[Path] = None, state_path: Optional[Path] = None, config_service: Optional[Any] = None):
+    def __init__(self, *, package_var: Optional[Path] = None, config_service: Optional[Any] = None):
         self.paths = WorkerRuntimePathService(package_var=package_var, config_service=config_service)
         self.package_var = self.paths.package_var
-        self.state_path = self.paths.state_path(state_path)
-        key = str(self.state_path)
+        self.database_path = self.paths.database_path()
+        self.database = Database(str(self.database_path))
+        key = str(self.database.path.resolve())
         with self._locks_guard:
             self._lock = self._locks.setdefault(key, threading.RLock())
 
@@ -137,7 +117,7 @@ class WorkerStateStore:
 
     def _state_file_size(self) -> int:
         try:
-            return int(self.state_path.stat().st_size)
+            return int(self.database_path.stat().st_size)
         except OSError:
             return 0
 
@@ -163,21 +143,20 @@ class WorkerStateStore:
     def read(self) -> Dict[str, Any]:
         started = time.monotonic()
         with self._lock:
-            if not self.state_path.is_file():
+            try:
+                state = self._read_sqlite_state()
+            except DatabaseError as exc:
+                raise WorkerApiError("state_read_failed", str(exc)) from exc
+            except json.JSONDecodeError as exc:
+                raise WorkerApiError("state_invalid", str(exc)) from exc
+            if not any(state.get(key) for key in ("tokens", "workers", "jobs", "enrollments")):
                 self._debug_log(
                     "worker_state_read",
                     duration_ms=round((time.monotonic() - started) * 1000, 2),
-                    bytes=0,
+                    bytes=self._state_file_size(),
                     missing=True,
                 )
                 return self.default_state()
-            try:
-                with self.state_path.open("r", encoding="utf-8") as handle:
-                    state = json.load(handle)
-            except json.JSONDecodeError as exc:
-                raise WorkerApiError("state_invalid", str(exc))
-            except OSError as exc:
-                raise WorkerApiError("state_read_failed", str(exc))
             if not isinstance(state, dict):
                 raise WorkerApiError("state_invalid")
             migrated = self.migrate(state)
@@ -206,30 +185,16 @@ class WorkerStateStore:
         started = time.monotonic()
         with self._lock:
             normalized = self.migrate(state)
-            tmp_name = ""
             try:
-                self.state_path.parent.mkdir(parents=True, exist_ok=True)
-                fd, tmp_name = tempfile.mkstemp(prefix=self.state_path.name + ".", suffix=".tmp", dir=str(self.state_path.parent))
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump(normalized, handle, ensure_ascii=False, indent=2, sort_keys=True)
-                    handle.write("\n")
-                self._apply_runtime_permissions(Path(tmp_name))
-                os.replace(tmp_name, str(self.state_path))
-                self._apply_runtime_permissions(self.state_path)
+                self._write_sqlite_state(normalized)
                 self._debug_log(
                     "worker_state_write",
                     duration_ms=round((time.monotonic() - started) * 1000, 2),
                     bytes=self._state_file_size(),
                     **self._state_counts(normalized),
                 )
-            except OSError as exc:
+            except DatabaseError as exc:
                 raise WorkerApiError("state_write_failed", str(exc))
-            finally:
-                if tmp_name:
-                    try:
-                        os.unlink(tmp_name)
-                    except FileNotFoundError:
-                        pass
 
     def update(self, mutator: Callable[[Dict[str, Any]], Any]) -> Any:
         started = time.monotonic()
@@ -245,6 +210,157 @@ class WorkerStateStore:
             )
             return result
 
+    @staticmethod
+    def _json_dumps(value: Any) -> str:
+        return json.dumps(value if value is not None else {}, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+    @staticmethod
+    def _json_loads(value: Any, default: Any) -> Any:
+        if value is None:
+            return default
+        return json.loads(str(value))
+
+    @staticmethod
+    def _job_origin_fields(job: Dict[str, Any]) -> Dict[str, str]:
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        origin = payload.get("origin") if isinstance(payload.get("origin"), dict) else {}
+        return {
+            "operation_id": str(origin.get("operation_id") or ""),
+            "action": str(origin.get("action") or ""),
+        }
+
+    def _read_sqlite_state(self) -> Dict[str, Any]:
+        with self.database.read() as connection:
+            extra_row = connection.execute(
+                "SELECT value FROM app_state WHERE key = ?",
+                ("worker_runtime:extra",),
+            ).fetchone()
+            extra = self._json_loads(extra_row["value"], {}) if extra_row else {}
+            tokens = {}
+            for row in connection.execute("SELECT * FROM worker_tokens"):
+                token = {
+                    "token_hash": row["token_hash"],
+                    "created_at": row["created_at"],
+                    "revoked": bool(row["revoked"]),
+                    "worker_id": row["worker_id"] or "",
+                    "scopes": self._json_loads(row["scopes_json"], []),
+                    "issued_via": row["issued_via"] or "admin",
+                    "enrollment_id": row["enrollment_id"] or "",
+                }
+                tokens[str(row["token_id"])] = token
+            workers = {
+                str(row["worker_id"]): self._json_loads(row["worker_json"], {})
+                for row in connection.execute("SELECT worker_id, worker_json FROM worker_workers")
+            }
+            jobs = {
+                str(row["job_id"]): self._json_loads(row["job_json"], {})
+                for row in connection.execute("SELECT job_id, job_json FROM worker_jobs")
+            }
+            enrollments = {
+                str(row["enrollment_id"]): self._json_loads(row["enrollment_json"], {})
+                for row in connection.execute("SELECT enrollment_id, enrollment_json FROM worker_enrollments")
+            }
+        state = extra if isinstance(extra, dict) else {}
+        state.update({
+            "schema_version": WorkerProtocol.SCHEMA_VERSION,
+            "tokens": tokens,
+            "workers": workers,
+            "jobs": jobs,
+            "enrollments": enrollments,
+        })
+        return state
+
+    def _write_sqlite_state(self, state: Dict[str, Any]) -> None:
+        extra = {
+            key: value
+            for key, value in state.items()
+            if key not in {"schema_version", "tokens", "workers", "jobs", "enrollments"}
+        }
+        with self.database.transaction() as connection:
+            connection.execute("DELETE FROM worker_tokens")
+            connection.execute("DELETE FROM worker_workers")
+            connection.execute("DELETE FROM worker_jobs")
+            connection.execute("DELETE FROM worker_enrollments")
+            connection.execute(
+                """
+                INSERT INTO app_state(key, value, value_type)
+                VALUES (?, ?, 'json')
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, value_type = excluded.value_type
+                """,
+                ("worker_runtime:extra", self._json_dumps(extra)),
+            )
+            for token_id, raw in state.get("tokens", {}).items():
+                entry = raw if isinstance(raw, dict) else {}
+                connection.execute(
+                    """
+                    INSERT INTO worker_tokens(token_id, token_hash, created_at, revoked, worker_id, scopes_json, issued_via, enrollment_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(token_id),
+                        str(entry.get("token_hash") or ""),
+                        str(entry.get("created_at") or ""),
+                        1 if entry.get("revoked") else 0,
+                        str(entry.get("worker_id") or ""),
+                        self._json_dumps(entry.get("scopes") if isinstance(entry.get("scopes"), list) else []),
+                        str(entry.get("issued_via") or "admin"),
+                        str(entry.get("enrollment_id") or ""),
+                    ),
+                )
+            for worker_id, raw in state.get("workers", {}).items():
+                worker = raw if isinstance(raw, dict) else {}
+                connection.execute(
+                    """
+                    INSERT INTO worker_workers(worker_id, worker_json, status, version, registered_at, last_seen_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(worker_id),
+                        self._json_dumps(worker),
+                        str(worker.get("status") or ""),
+                        str(worker.get("version") or ""),
+                        str(worker.get("registered_at") or ""),
+                        str(worker.get("last_seen_at") or ""),
+                    ),
+                )
+            for job_id, raw in state.get("jobs", {}).items():
+                job = raw if isinstance(raw, dict) else {}
+                origin = self._job_origin_fields(job)
+                connection.execute(
+                    """
+                    INSERT INTO worker_jobs(job_id, job_json, type, status, priority, created_at, updated_at, claimed_by, operation_id, action)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(job_id),
+                        self._json_dumps(job),
+                        str(job.get("type") or ""),
+                        str(job.get("status") or "unknown"),
+                        int(job.get("priority", 100) or 100),
+                        str(job.get("created_at") or ""),
+                        str(job.get("updated_at") or ""),
+                        str(job.get("claimed_by") or ""),
+                        origin["operation_id"],
+                        origin["action"],
+                    ),
+                )
+            for enrollment_id, raw in state.get("enrollments", {}).items():
+                enrollment = raw if isinstance(raw, dict) else {}
+                connection.execute(
+                    """
+                    INSERT INTO worker_enrollments(enrollment_id, enrollment_json, created_at, expires_at, used_at, worker_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(enrollment_id),
+                        self._json_dumps(enrollment),
+                        str(enrollment.get("created_at") or ""),
+                        str(enrollment.get("expires_at") or ""),
+                        str(enrollment.get("used_at") or ""),
+                        str(enrollment.get("worker_id") or ""),
+                    ),
+                )
+
     def update_if_changed(self, mutator: Callable[[Dict[str, Any]], Any]) -> Any:
         started = time.monotonic()
         with self._lock:
@@ -259,18 +375,6 @@ class WorkerStateStore:
                 **self._state_counts(state),
             )
             return result
-
-    def _apply_runtime_permissions(self, path: Path) -> None:
-        if os.name != "posix":
-            return
-        try:
-            owner = self.package_var.stat()
-            if hasattr(os, "geteuid") and os.geteuid() == 0:
-                os.chown(str(path), owner.st_uid, owner.st_gid)
-            os.chmod(str(path), 0o600)
-        except OSError:
-            return
-
 
 class WorkerCredentialService:
     """Issue and validate all worker tokens with one security contract."""

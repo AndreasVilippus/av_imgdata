@@ -374,29 +374,13 @@ class ExternalWorkerProcessorService:
         return processor_result
 
     def _store_consumed(self, job_id: str, result_key: str, value: Any) -> Any:
-        now = self._now_iso()
-        value_ref = self._write_consumed_result(job_id, result_key, value)
-
         def mutate(state: Dict[str, Any]):
             current = state.get("jobs", {}).get(job_id)
             if not isinstance(current, dict):
                 raise WorkerApiError("job_not_found")
-            if current.get("result_consumed_at"):
-                consumed = self._consumed_value(current, result_key)
-                if consumed is not None:
-                    return consumed
             if str(current.get("status") or "") != "completed":
                 raise WorkerApiError("job_not_completed")
-            current.update({
-                result_key + "_ref": value_ref,
-                "result_consumed_at": now,
-                "result_consumer_version": "1.0",
-                "result_apply_status": "consumed",
-                "raw_result_purged_at": now,
-                "updated_at": now,
-            })
-            current.pop(result_key, None)
-            current.pop("result", None)
+            state.get("jobs", {}).pop(job_id, None)
             return value
 
         return self.store.update(mutate)

@@ -64,7 +64,8 @@ def test_worker_http_error_mapping_is_defined_once():
 def test_worker_cli_uses_canonical_paths_and_store_permissions():
     cli = _read("tools/worker-api-store.py")
 
-    assert "WorkerRuntimePathService" in cli
+    assert "imgdata.sqlite3" in cli
+    assert "worker-api-state.json" not in cli
     assert "repair_runtime_file_permissions" not in cli
     assert "os.chown" not in cli
     assert "os.chmod" not in cli

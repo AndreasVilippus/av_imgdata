@@ -37,11 +37,10 @@ def handle_worker_api_request(
     headers: Optional[Dict[str, str]] = None,
     body: Optional[Dict[str, Any]] = None,
     package_var: Optional[Path] = None,
-    state_path: Optional[Path] = None,
     service: Optional[WorkerApiService] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     body = body if isinstance(body, dict) else {}
-    runtime = service or WorkerApiService(package_var=package_var, state_path=state_path)
+    runtime = service or WorkerApiService(package_var=package_var)
     token = _bearer_token(headers, body)
     worker_id = _worker_id(headers, body)
     try:

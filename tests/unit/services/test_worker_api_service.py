@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import sys
 import tempfile
@@ -245,6 +245,63 @@ class TestWorkerApiService(unittest.TestCase):
             )
 
         self.assertEqual(ctx.exception.code, "job_cancelled")
+
+    def test_enqueue_prunes_old_terminal_jobs_and_used_enrollments(self):
+        clock = MutableClock(datetime(2026, 8, 9, 18, 0, 0, tzinfo=timezone.utc))
+        service = WorkerApiService(package_var=self.package_var, clock=clock)
+        old = (clock.value - timedelta(days=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        service.store.write({
+            "schema_version": 2,
+            "tokens": {},
+            "workers": {},
+            "jobs": {
+                "old-failed": {"job_id": "old-failed", "type": "face_native_embed", "status": "failed", "updated_at": old},
+                "old-cancelled": {"job_id": "old-cancelled", "type": "face_native_embed", "status": "cancelled", "updated_at": old},
+                "active": {"job_id": "active", "type": "face_native_embed", "status": "queued", "updated_at": old},
+            },
+            "enrollments": {
+                "used": {"created_at": old, "expires_at": old, "used_at": old, "worker_id": "worker-01"},
+            },
+        })
+
+        service.enqueue_job(job_id="new", job_type="face_native_embed", payload={})
+        state = service.store.read()
+
+        self.assertNotIn("old-failed", state["jobs"])
+        self.assertNotIn("old-cancelled", state["jobs"])
+        self.assertIn("active", state["jobs"])
+        self.assertIn("new", state["jobs"])
+        self.assertEqual(state["enrollments"], {})
+
+    def test_record_failure_stores_compact_error(self):
+        self.service.register_worker(
+            token=self.token,
+            worker_id="worker-01",
+            version="0.10.0",
+            capabilities=["face_native_embed"],
+        )
+        self.service.enqueue_job(job_id="job-1", job_type="face_native_embed", payload={})
+        self.service.claim_job(token=self.token, worker_id="worker-01", capabilities=["face_native_embed"])
+
+        result = self.service.record_failure(
+            token=self.token,
+            worker_id="worker-01",
+            job_id="job-1",
+            error={
+                "code": "processor_failed",
+                "message": "x" * 2000,
+                "processor_result": {
+                    "timing_ms": {"total": 1.2, "batch_size": 8, "failed_images": 8},
+                    "result": {"images": [{"faces": []} for _ in range(100)]},
+                },
+            },
+        )
+
+        error = result["job"]["error"]
+        self.assertEqual(error["code"], "processor_failed")
+        self.assertEqual(len(error["message"]), 1000)
+        self.assertEqual(error["timing_ms"], {"total": 1.2, "batch_size": 8, "failed_images": 8})
+        self.assertNotIn("processor_result", error)
 
 
 if __name__ == "__main__":

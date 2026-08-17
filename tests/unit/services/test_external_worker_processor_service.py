@@ -13,6 +13,7 @@ from services.external_worker_processor_service import (
     ExternalWorkerProcessorUnavailable,
 )
 from services.worker_api_service import WorkerApiService
+from services.worker_runtime_service import WorkerApiError
 
 
 class NativeProcessorStub:
@@ -134,17 +135,12 @@ class TestExternalWorkerProcessorService(unittest.TestCase):
 
         self.api.store.update(complete)
         first = self.service.consume_face_detect_result("job-2")
-        second = self.service.consume_face_detect_result("job-2")
-        self.assertEqual(first, second)
-        stored = self.service.get_job("job-2")
-        self.assertEqual(stored["result_apply_status"], "consumed")
-        self.assertEqual(stored["result_consumer_version"], "1.0")
-        self.assertTrue(stored["result_consumed_at"])
-        self.assertTrue(stored["raw_result_purged_at"])
-        self.assertNotIn("result", stored)
-        self.assertNotIn("normalized_faces", stored)
-        self.assertEqual(stored["normalized_faces_ref"]["storage"], "worker-api-result-file")
-        self.assertTrue((self.package_var / "worker-api-results" / stored["normalized_faces_ref"]["path"]).is_file())
+
+        self.assertEqual(first, [{"bbox": {"x1": 1, "x2": 3, "y1": 2, "y2": 4}}])
+        with self.assertRaises(WorkerApiError) as ctx:
+            self.service.get_job("job-2")
+        self.assertEqual(ctx.exception.code, "job_not_found")
+        self.assertFalse((self.package_var / "worker-api-results").exists())
 
     def test_embed_result_keeps_embedding_vector(self):
         self.service.enqueue_face_embed(

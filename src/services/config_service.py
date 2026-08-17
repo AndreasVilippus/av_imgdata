@@ -140,7 +140,6 @@ class ConfigService:
             },
             "worker_api": {
                 "ENABLED": False,
-                "STATE_PATH": "",
             },
             "debug": {
                 "IO_METRICS_ENABLED": False,
@@ -348,7 +347,6 @@ class ConfigService:
 
         worker_api = config.get("worker_api", {}) if isinstance(config.get("worker_api"), dict) else {}
         worker_api["ENABLED"] = bool(worker_api.get("ENABLED", False))
-        worker_api["STATE_PATH"] = str(worker_api.get("STATE_PATH") or "").strip()
         config["worker_api"] = worker_api
 
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}

@@ -43,31 +43,28 @@ class WorkerApiConfigurationService:
             return False
         return bool(self.worker_api_config().get("ENABLED", False))
 
-    def state_path(self, explicit: Optional[Path] = None) -> Path:
-        return self.paths.state_path(explicit)
+    def database_path(self) -> Path:
+        return self.paths.database_path()
 
 
 class WorkerApiCompositionService:
     """Own shared Worker API services for one package runtime."""
 
-    def __init__(self, *, package_var: Optional[Path] = None, state_path: Optional[Path] = None):
+    def __init__(self, *, package_var: Optional[Path] = None):
         self.configuration = WorkerApiConfigurationService(package_var=package_var)
         self.package_var = self.configuration.package_var
         self.config_service = self.configuration.config_service
         self.state_store = WorkerStateStore(
             package_var=self.package_var,
-            state_path=self.configuration.state_path(state_path),
             config_service=self.config_service,
         )
         self.worker_api = WorkerApiService(
             package_var=self.package_var,
-            state_path=self.state_store.state_path,
             config_service=self.config_service,
             state_store=self.state_store,
         )
         self.provisioning = WorkerProvisioningService(
             package_var=self.package_var,
-            state_path=self.state_store.state_path,
             config_service=self.config_service,
             state_store=self.state_store,
         )

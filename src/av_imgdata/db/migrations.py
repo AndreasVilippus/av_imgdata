@@ -16,6 +16,7 @@ SQLITE_RUNTIME_MIGRATION = 4
 SQLITE_RUNTIME_MIGRATION_NAME = "sqlite_runtime_state_and_remove_sync_tables"
 LEGACY_FINDINGS_MIGRATION = 5
 LEGACY_FINDINGS_MIGRATION_NAME = "import_legacy_findings_json"
+CURRENT_SCHEMA_VERSION = 6
 
 
 def _read_legacy_mappings(path: Path) -> List[Dict[str, Any]]:
@@ -86,7 +87,7 @@ def migrate_legacy_findings(database: Database, package_var: Path) -> None:
             "INSERT OR IGNORE INTO schema_migrations(version, name, checksum) VALUES (?, ?, NULL)",
             (LEGACY_FINDINGS_MIGRATION, LEGACY_FINDINGS_MIGRATION_NAME),
         )
-        connection.execute(f"PRAGMA user_version = {LEGACY_FINDINGS_MIGRATION}")
+        connection.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
 
 
 def migrate_runtime_persistence(database: Database, package_var: Path) -> None:

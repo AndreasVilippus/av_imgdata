@@ -2,18 +2,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
-
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from api import worker_api
 from services.worker_api_service import WorkerApiService
 
 
 class _RequestStub:
-    def __init__(self, headers):
+    method = "POST"
+    url = SimpleNamespace(path="/worker-api/action")
+
+    def __init__(self, headers, body=None):
         self.headers = headers
+        self._body = body or {}
+
+    async def json(self):
+        return dict(self._body)
 
 
 class _InvalidJsonRequestStub:
@@ -31,86 +36,93 @@ class _InvalidJsonRequestStub:
         raise ValueError("invalid json")
 
 
-def _client(tmp_path, monkeypatch, *, enabled: bool) -> TestClient:
+def _configure(tmp_path, monkeypatch, *, enabled: bool) -> None:
     monkeypatch.setenv("SYNOPKG_PKGVAR", str(tmp_path))
     monkeypatch.setenv("AV_IMGDATA_WORKER_API_ENABLED", "1" if enabled else "0")
+    async def run_direct(func):
+        return func()
+    monkeypatch.setattr(worker_api, "_run_worker_api_call", run_direct)
     worker_api._composition_for.cache_clear()
-    app = FastAPI()
-    app.include_router(worker_api.router)
-    return TestClient(app)
+
+
+def _payload(response):
+    return json.loads(response.body.decode("utf-8"))
 
 
 def test_worker_api_router_disabled_returns_404(tmp_path, monkeypatch) -> None:
-    client = _client(tmp_path, monkeypatch, enabled=False)
+    _configure(tmp_path, monkeypatch, enabled=False)
 
-    response = client.get("/worker-api/status")
+    response = asyncio.run(worker_api.status())
 
     assert response.status_code == 404
-    assert response.json()["code"] == "worker_api_disabled"
+    assert _payload(response)["code"] == "worker_api_disabled"
 
 
 def test_worker_api_router_registers_heartbeats_and_reports_status(tmp_path, monkeypatch) -> None:
-    client = _client(tmp_path, monkeypatch, enabled=True)
+    _configure(tmp_path, monkeypatch, enabled=True)
     token = WorkerApiService(package_var=tmp_path).create_token()["token"]
 
-    registered = client.post(
-        "/worker-api/register",
-        headers={"Authorization": "Bearer " + token, "X-Worker-Id": "worker-01"},
-        json={"version": "test"},
+    registered = asyncio.run(
+        worker_api.worker_action(
+            "register",
+            _RequestStub({"authorization": "Bearer " + token, "x-worker-id": "worker-01"}, {"version": "test"}),
+        )
     )
     assert registered.status_code == 200
 
-    response = client.post(
-        "/worker-api/heartbeat",
-        headers={"Authorization": "Bearer " + token, "X-Worker-Id": "worker-01"},
-        json={"status": "ready"},
+    response = asyncio.run(
+        worker_api.worker_action(
+            "heartbeat",
+            _RequestStub({"authorization": "Bearer " + token, "x-worker-id": "worker-01"}, {"status": "ready"}),
+        )
     )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert _payload(response)["status"] == "ok"
 
-    status = client.get("/worker-api/status")
+    status = asyncio.run(worker_api.status())
     assert status.status_code == 200
-    assert status.json()["service"]["workers"] == 1
+    assert _payload(status)["service"]["workers"] == 1
 
 
-def test_worker_api_router_uses_state_path_env_override(tmp_path, monkeypatch) -> None:
-    custom_state = tmp_path / "runtime" / "worker-api-state.json"
-    monkeypatch.setenv("AV_IMGDATA_WORKER_API_STATE_PATH", str(custom_state))
-    client = _client(tmp_path, monkeypatch, enabled=True)
-    token = WorkerApiService(package_var=tmp_path, state_path=custom_state).create_token()["token"]
+def test_worker_api_router_uses_package_sqlite_state(tmp_path, monkeypatch) -> None:
+    _configure(tmp_path, monkeypatch, enabled=True)
+    token = WorkerApiService(package_var=tmp_path).create_token()["token"]
 
-    registered = client.post(
-        "/worker-api/register",
-        headers={"Authorization": "Bearer " + token, "X-Worker-Id": "worker-01"},
-        json={"version": "test"},
+    registered = asyncio.run(
+        worker_api.worker_action(
+            "register",
+            _RequestStub({"authorization": "Bearer " + token, "x-worker-id": "worker-01"}, {"version": "test"}),
+        )
     )
     assert registered.status_code == 200
 
-    response = client.post(
-        "/worker-api/heartbeat",
-        headers={"Authorization": "Bearer " + token, "X-Worker-Id": "worker-01"},
-        json={"status": "ready"},
+    response = asyncio.run(
+        worker_api.worker_action(
+            "heartbeat",
+            _RequestStub({"authorization": "Bearer " + token, "x-worker-id": "worker-01"}, {"status": "ready"}),
+        )
     )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
-    assert custom_state.exists()
+    assert _payload(response)["status"] == "ok"
+    assert (tmp_path / "imgdata.sqlite3").exists()
     assert not (tmp_path / "worker-api-state.json").exists()
 
 
 def test_worker_api_router_rejects_invalid_token_with_shared_mapping(tmp_path, monkeypatch) -> None:
-    client = _client(tmp_path, monkeypatch, enabled=True)
+    _configure(tmp_path, monkeypatch, enabled=True)
     WorkerApiService(package_var=tmp_path).create_token()
 
-    response = client.post(
-        "/worker-api/heartbeat",
-        headers={"Authorization": "Bearer invalid", "X-Worker-Id": "worker-01"},
-        json={"status": "ready"},
+    response = asyncio.run(
+        worker_api.worker_action(
+            "heartbeat",
+            _RequestStub({"authorization": "Bearer invalid", "x-worker-id": "worker-01"}, {"status": "ready"}),
+        )
     )
 
     assert response.status_code == 401
-    assert response.json()["code"] == "unauthorized"
+    assert _payload(response)["code"] == "unauthorized"
 
 
 def test_worker_api_error_response_is_logged_without_sensitive_payload(monkeypatch) -> None:
@@ -181,4 +193,3 @@ def test_worker_api_success_response_is_not_logged(monkeypatch) -> None:
     )
 
     assert events == []
-

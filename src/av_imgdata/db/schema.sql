@@ -1,5 +1,5 @@
 -- AV_ImgData SQLite schema
--- Schema version: 5
+-- Schema version: 6
 -- Target: SQLite, package-local database imgdata.sqlite3
 
 PRAGMA foreign_keys = ON;
@@ -124,6 +124,63 @@ CREATE TABLE IF NOT EXISTS face_match_finding_entries (
 CREATE INDEX IF NOT EXISTS idx_face_match_finding_entries_image_path
 ON face_match_finding_entries(image_path);
 
+CREATE TABLE IF NOT EXISTS worker_tokens (
+    token_id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL,
+    created_at TEXT,
+    revoked INTEGER NOT NULL DEFAULT 0 CHECK (revoked IN (0, 1)),
+    worker_id TEXT,
+    scopes_json TEXT NOT NULL DEFAULT '[]',
+    issued_via TEXT,
+    enrollment_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_tokens_worker_id
+ON worker_tokens(worker_id);
+
+CREATE TABLE IF NOT EXISTS worker_workers (
+    worker_id TEXT PRIMARY KEY,
+    worker_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT,
+    version TEXT,
+    registered_at TEXT,
+    last_seen_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_workers_last_seen
+ON worker_workers(last_seen_at);
+
+CREATE TABLE IF NOT EXISTS worker_jobs (
+    job_id TEXT PRIMARY KEY,
+    job_json TEXT NOT NULL DEFAULT '{}',
+    type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 100,
+    created_at TEXT,
+    updated_at TEXT,
+    claimed_by TEXT,
+    operation_id TEXT,
+    action TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_jobs_status_priority
+ON worker_jobs(status, priority, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_worker_jobs_origin
+ON worker_jobs(operation_id, action, status);
+
+CREATE TABLE IF NOT EXISTS worker_enrollments (
+    enrollment_id TEXT PRIMARY KEY,
+    enrollment_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT,
+    expires_at TEXT,
+    used_at TEXT,
+    worker_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_enrollments_lifecycle
+ON worker_enrollments(used_at, expires_at);
+
 CREATE VIEW IF NOT EXISTS active_name_mappings AS
 SELECT * FROM name_mappings WHERE enabled = 1;
 
@@ -157,6 +214,6 @@ END;
 INSERT OR IGNORE INTO schema_migrations(version, name, checksum)
 VALUES (1, 'initial_sqlite_schema', NULL);
 
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 
 COMMIT;

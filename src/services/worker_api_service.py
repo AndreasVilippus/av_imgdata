@@ -12,6 +12,7 @@ from services.worker_runtime_service import (
     WorkerProtocol,
     WorkerStateStore,
     iso_time,
+    parse_time,
     utc_now,
 )
 
@@ -19,12 +20,13 @@ from services.worker_runtime_service import (
 class WorkerApiService:
     DEFAULT_CAPABILITIES = WorkerProtocol.CAPABILITIES
     NON_JOB_CAPABILITIES = {"warm_processor_worker"}
+    TERMINAL_JOB_RETENTION_SECONDS = 900
+    ENROLLMENT_RETENTION_SECONDS = 86400
 
     def __init__(
         self,
         *,
         package_var: Optional[Path] = None,
-        state_path: Optional[Path] = None,
         clock: Optional[Callable[[], datetime]] = None,
         config_service: Optional[Any] = None,
         state_store: Optional[WorkerStateStore] = None,
@@ -34,11 +36,10 @@ class WorkerApiService:
         )
         self.store = state_store or WorkerStateStore(
             package_var=package_var,
-            state_path=state_path,
             config_service=self.config_service,
         )
         self.package_var = self.store.package_var
-        self.state_path = self.store.state_path
+        self.database_path = self.store.database_path
         self.credentials = WorkerCredentialService(self.store)
         self._clock = clock
 
@@ -102,6 +103,7 @@ class WorkerApiService:
             raise WorkerApiError("job_type_unsupported")
 
         def mutate(state):
+            self._prune_runtime_state(state, now=self._now_iso())
             jobs = state["jobs"]
             if job_id in jobs and jobs[job_id].get("status") not in ("failed", "completed"):
                 raise WorkerApiError("job_already_exists")
@@ -162,7 +164,7 @@ class WorkerApiService:
         return self._finish_job(token=token, worker_id=worker_id, job_id=job_id, status="completed", payload_key="result", payload=result)
 
     def record_failure(self, *, token: str, worker_id: str, job_id: str, error: Dict[str, Any]) -> Dict[str, Any]:
-        return self._finish_job(token=token, worker_id=worker_id, job_id=job_id, status="failed", payload_key="error", payload=error)
+        return self._finish_job(token=token, worker_id=worker_id, job_id=job_id, status="failed", payload_key="error", payload=self._compact_error(error))
 
     def delete_worker(self, *, worker_id: str) -> Dict[str, Any]:
         worker_id = self.credentials.require_value(worker_id, "worker_id_required")
@@ -370,6 +372,71 @@ class WorkerApiService:
 
         job = self.store.update(mutate)
         return {"status": status, "job": job}
+
+    def delete_job(self, *, job_id: str) -> bool:
+        job_id = self.credentials.require_value(job_id, "job_id_required")
+
+        def mutate(state):
+            return state.get("jobs", {}).pop(job_id, None) is not None
+
+        return bool(self.store.update(mutate))
+
+    def _prune_runtime_state(self, state: Dict[str, Any], *, now: str) -> Dict[str, int]:
+        now_dt = parse_time(now)
+        jobs = state.get("jobs") if isinstance(state.get("jobs"), dict) else {}
+        removed_jobs = 0
+        for job_id, raw in list(jobs.items()):
+            job = raw if isinstance(raw, dict) else {}
+            status = str(job.get("status") or "")
+            if status == "completed" and job.get("result_consumed_at"):
+                del jobs[job_id]
+                removed_jobs += 1
+                continue
+            if status not in {"failed", "cancelled", "expired"}:
+                continue
+            timestamp = job.get("updated_at") or job.get("finished_at") or job.get("cancelled_at") or job.get("created_at")
+            if (now_dt - parse_time(timestamp)).total_seconds() >= self.TERMINAL_JOB_RETENTION_SECONDS:
+                del jobs[job_id]
+                removed_jobs += 1
+        enrollments = state.get("enrollments") if isinstance(state.get("enrollments"), dict) else {}
+        removed_enrollments = 0
+        for enrollment_id, raw in list(enrollments.items()):
+            entry = raw if isinstance(raw, dict) else {}
+            used_at = str(entry.get("used_at") or "")
+            expires_at = str(entry.get("expires_at") or "")
+            reference = parse_time(used_at or expires_at)
+            if reference.timestamp() <= 0:
+                continue
+            if used_at or reference <= now_dt:
+                if (now_dt - reference).total_seconds() >= self.ENROLLMENT_RETENTION_SECONDS:
+                    del enrollments[enrollment_id]
+                    removed_enrollments += 1
+        return {"removed_jobs": removed_jobs, "removed_enrollments": removed_enrollments}
+
+    @staticmethod
+    def _compact_error(error: Dict[str, Any]) -> Dict[str, Any]:
+        source = error if isinstance(error, dict) else {}
+        compact: Dict[str, Any] = {
+            "code": str(source.get("code") or "worker_job_failed"),
+            "message": str(source.get("message") or source.get("code") or "worker_job_failed")[:1000],
+        }
+        processor = source.get("processor") if isinstance(source.get("processor"), dict) else {}
+        if processor:
+            compact["processor"] = {
+                "name": str(processor.get("name") or ""),
+                "version": str(processor.get("version") or ""),
+                "backend": str(processor.get("backend") or ""),
+                "exit_code": processor.get("exit_code"),
+            }
+        processor_result = source.get("processor_result") if isinstance(source.get("processor_result"), dict) else {}
+        timing = processor_result.get("timing_ms") if isinstance(processor_result.get("timing_ms"), dict) else source.get("timing_ms")
+        if isinstance(timing, dict):
+            compact["timing_ms"] = {
+                key: timing.get(key)
+                for key in ("total", "batch_size", "failed_images")
+                if timing.get(key) is not None
+            }
+        return compact
 
     def _now_iso(self) -> str:
         return iso_time(utc_now(self._clock))

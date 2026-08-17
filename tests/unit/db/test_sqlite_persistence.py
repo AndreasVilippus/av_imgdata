@@ -163,7 +163,7 @@ def test_legacy_name_mapping_migration_is_idempotent_and_preserves_source(tmp_pa
             "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
             (LEGACY_NAME_MAPPINGS_MIGRATION,),
         ).fetchone()[0] == 1
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
     assert legacy_path.exists()
 
 
@@ -300,7 +300,7 @@ def test_legacy_findings_migration_replaces_json_with_sqlite_once(tmp_path):
             "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
             (LEGACY_FINDINGS_MIGRATION,),
         ).fetchone()[0] == 1
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_legacy_findings_migration_does_not_replace_existing_sqlite_data(tmp_path):

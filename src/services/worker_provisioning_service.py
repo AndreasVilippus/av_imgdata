@@ -23,17 +23,16 @@ from services.worker_runtime_service import (
 class WorkerProvisioningService:
     DEFAULT_SCOPES = WorkerProtocol.DEFAULT_TOKEN_SCOPES
 
-    def __init__(self, *, package_var: Optional[Path] = None, state_path: Optional[Path] = None, clock: Optional[Callable[[], datetime]] = None, config_service: Optional[ConfigService] = None, state_store: Optional[WorkerStateStore] = None):
+    def __init__(self, *, package_var: Optional[Path] = None, clock: Optional[Callable[[], datetime]] = None, config_service: Optional[ConfigService] = None, state_store: Optional[WorkerStateStore] = None):
         self.config_service = config_service or ConfigService(
             str(Path(package_var) / "config.json") if package_var is not None else None
         )
         self.store = state_store or WorkerStateStore(
             package_var=package_var,
-            state_path=state_path,
             config_service=self.config_service,
         )
         self.package_var = self.store.package_var
-        self.state_path = self.store.state_path
+        self.database_path = self.store.database_path
         self.credentials = WorkerCredentialService(self.store)
         self._clock = clock
 

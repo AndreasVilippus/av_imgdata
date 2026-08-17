@@ -2684,6 +2684,14 @@ class ImgDataService:
         normalized_action = self._normalizeCleanupAction(action or current.get("action"))
         current["action"] = normalized_action
         current["targets"] = self._normalizeCleanupTargets(current.get("targets"))
+        if self._isStaleStoppingProgress(current):
+            current["running"] = False
+            current["finished"] = True
+            current["stale"] = True
+            current["stop_requested"] = True
+            current["phase"] = "stopped"
+            current["message_key"] = "cleanup:progress_stopped"
+            current["message"] = "Cleanup stopped."
         return self.runtime_state.normalize_progress(
             current,
             operation="cleanup",

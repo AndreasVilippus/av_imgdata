@@ -1,4 +1,5 @@
 from api.session_manager import SessionManager
+from datetime import datetime, timedelta, timezone
 from imgdata import ImgDataService
 from pathlib import Path
 
@@ -108,6 +109,36 @@ def test_cleanup_progress_reconnects_to_single_running_memory_state_for_new_user
     assert progress["action"] == "recognition_analyze_unknown_faces"
     assert progress["operation_id"] == "cleanup-recognition_analyze_unknown_faces-1"
     assert progress["images_scanned"] == 185
+
+
+def test_cleanup_progress_marks_stale_stopping_state_terminal_after_restart():
+    service = make_service()
+    state_key = service._cleanupStateKey("user", "recognition_analyze_unknown_faces")
+    service.file_analysis.writeRuntimeState(
+        "cleanup_progress",
+        state_key,
+        {
+            "action": "recognition_analyze_unknown_faces",
+            "operation": "cleanup",
+            "running": True,
+            "finished": False,
+            "stop_requested": True,
+            "message_key": "cleanup:progress_stopping",
+            "phase": "stopping",
+            "last_updated_at": (datetime.now(timezone.utc) - timedelta(seconds=300)).isoformat(),
+            "operation_id": "cleanup-recognition_analyze_unknown_faces-1",
+            "revision": 12,
+        },
+    )
+
+    progress = service.getCleanupProgress("user", "recognition_analyze_unknown_faces")
+
+    assert progress["running"] is False
+    assert progress["finished"] is True
+    assert progress["stale"] is True
+    assert progress["stop_requested"] is True
+    assert progress["phase"] == "stopped"
+    assert progress["message_key"] == "cleanup:progress_stopped"
 
 
 def test_file_analysis_progress_has_normalized_runtime_identity():

@@ -245,7 +245,7 @@ def test_external_worker_status_reports_bundle_without_download_archive(monkeypa
     monkeypatch.setattr(
         imgdata_api.IMGDATA,
         "getRuntimeConfig",
-        Mock(return_value={"worker_api": {"ENABLED": True, "STATE_PATH": "runtime/worker-api-state.json"}}),
+        Mock(return_value={"worker_api": {"ENABLED": True}}),
     )
 
     payload = _run(imgdata_api.external_worker_status(object()))
@@ -277,7 +277,7 @@ def test_external_worker_status_reports_ready_archive(monkeypatch, tmp_path):
     monkeypatch.setattr(
         imgdata_api.IMGDATA,
         "getRuntimeConfig",
-        Mock(return_value={"worker_api": {"ENABLED": False, "STATE_PATH": ""}}),
+        Mock(return_value={"worker_api": {"ENABLED": False}}),
     )
 
     payload = _run(imgdata_api.external_worker_status(object()))
@@ -307,7 +307,7 @@ def test_external_worker_status_reports_ready_zip_archive(monkeypatch, tmp_path)
     monkeypatch.setattr(
         imgdata_api.IMGDATA,
         "getRuntimeConfig",
-        Mock(return_value={"worker_api": {"ENABLED": False, "STATE_PATH": ""}}),
+        Mock(return_value={"worker_api": {"ENABLED": False}}),
     )
 
     payload = _run(imgdata_api.external_worker_status(object()))
@@ -348,7 +348,7 @@ def test_external_worker_status_rejects_archive_with_legacy_top_level_directory(
     monkeypatch.setattr(
         imgdata_api.IMGDATA,
         "getRuntimeConfig",
-        Mock(return_value={"worker_api": {"ENABLED": False, "STATE_PATH": ""}}),
+        Mock(return_value={"worker_api": {"ENABLED": False}}),
     )
 
     payload = _run(imgdata_api.external_worker_status(object()))

@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-import json
-
 from services.config_service import ConfigService
 from services.worker_api_composition_service import (
     WorkerApiCompositionService,
@@ -10,15 +8,14 @@ from services.worker_api_composition_service import (
 )
 
 
-def test_configuration_prefers_configured_state_path_over_environment(tmp_path, monkeypatch):
+def test_configuration_uses_package_sqlite_database_path(tmp_path):
     config = ConfigService(str(tmp_path / "config.json"))
-    config.writeConfig({"worker_api": {"ENABLED": True, "STATE_PATH": "configured/state.json"}})
-    monkeypatch.setenv("AV_IMGDATA_WORKER_API_STATE_PATH", str(tmp_path / "environment.json"))
+    config.writeConfig({"worker_api": {"ENABLED": True}})
 
     service = WorkerApiConfigurationService(package_var=tmp_path, config_service=config)
 
     assert service.enabled() is True
-    assert service.state_path() == (tmp_path / "configured" / "state.json").resolve()
+    assert service.database_path() == (tmp_path / "imgdata.sqlite3").resolve()
 
 
 def test_enabled_environment_override_is_explicit_and_dynamic(tmp_path, monkeypatch):
@@ -38,7 +35,7 @@ def test_composition_shares_one_store_between_api_and_provisioning(tmp_path):
 
     assert composition.worker_api.store is composition.state_store
     assert composition.provisioning.store is composition.state_store
-    assert composition.worker_api.state_path == composition.provisioning.state_path
+    assert composition.worker_api.database_path == composition.provisioning.database_path
 
 
 def test_composition_services_observe_the_same_state(tmp_path):
@@ -58,7 +55,7 @@ def test_composition_services_observe_the_same_state(tmp_path):
 
     assert status["workers"][0]["worker_id"] == "worker-01"
     assert status["enrollments"][0]["status"] == "enrolled"
-    persisted = json.loads(composition.state_store.state_path.read_text(encoding="utf-8"))
+    persisted = composition.state_store.read()
     assert set(persisted) >= {"tokens", "workers", "jobs", "enrollments"}
 
 

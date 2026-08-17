@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-import json
 from datetime import datetime, timedelta, timezone
 
 from api import worker_admin_api
+from services.worker_runtime_service import WorkerStateStore
 
 
 def _iso(value):
@@ -38,10 +38,8 @@ def test_admin_status_masks_secrets_and_reports_enrollment_state(tmp_path, monke
         },
         "tokens": {"token-id": {"token_hash": "must-not-leak"}},
     }
-    state_path = tmp_path / "worker-api-state.json"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
+    WorkerStateStore(package_var=tmp_path).write(state)
     monkeypatch.setenv("SYNOPKG_PKGVAR", str(tmp_path))
-    monkeypatch.delenv("AV_IMGDATA_WORKER_API_STATE_PATH", raising=False)
 
     result = worker_admin_api._admin_status()
 

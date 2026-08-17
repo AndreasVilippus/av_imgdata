@@ -2627,7 +2627,6 @@ async def external_worker_status(request: Request):
         "data": {
             "worker_api": {
                 "ENABLED": bool(worker_api.get("ENABLED", False)),
-                "STATE_PATH": str(worker_api.get("STATE_PATH") or ""),
             },
             "package": _external_worker_package_status(),
         },

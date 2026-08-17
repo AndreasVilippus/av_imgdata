@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from av_imgdata.db.connection import DatabaseError
 from services.config_service import ConfigService
 from services.worker_api_service import WorkerApiError, WorkerApiService
 from services.worker_provisioning_service import WorkerProvisioningService
@@ -20,28 +20,20 @@ from services.worker_runtime_service import (
 UTC = timezone.utc
 
 
-def _config(tmp_path: Path, state_path: str = "") -> ConfigService:
+def _config(tmp_path: Path) -> ConfigService:
     service = ConfigService(str(tmp_path / "config.json"))
-    service.writeConfig({"worker_api": {"ENABLED": True, "STATE_PATH": state_path}})
+    service.writeConfig({"worker_api": {"ENABLED": True}})
     return service
 
 
-def test_state_path_priority_explicit_config_environment_default(tmp_path: Path, monkeypatch):
-    config = _config(tmp_path, "configured/state.json")
+def test_database_path_is_package_sqlite_database_only(tmp_path: Path):
+    config = _config(tmp_path)
     paths = WorkerRuntimePathService(package_var=tmp_path, config_service=config)
-    monkeypatch.setenv("AV_IMGDATA_WORKER_API_STATE_PATH", "environment/state.json")
 
-    assert paths.state_path(Path("explicit/state.json")) == (tmp_path / "explicit/state.json").resolve()
-    assert paths.state_path() == (tmp_path / "configured/state.json").resolve()
-
-    config.writeConfig({"worker_api": {"ENABLED": True, "STATE_PATH": ""}})
-    assert paths.state_path() == (tmp_path / "environment/state.json").resolve()
-
-    monkeypatch.delenv("AV_IMGDATA_WORKER_API_STATE_PATH")
-    assert paths.state_path() == (tmp_path / "worker-api-state.json").resolve()
+    assert paths.database_path() == (tmp_path / "imgdata.sqlite3").resolve()
 
 
-def test_state_store_migrates_schema_one_without_losing_fields(tmp_path: Path):
+def test_state_store_ignores_legacy_json_state(tmp_path: Path):
     state_path = tmp_path / "worker-api-state.json"
     state_path.write_text(json.dumps({
         "schema_version": 1,
@@ -53,21 +45,26 @@ def test_state_store_migrates_schema_one_without_losing_fields(tmp_path: Path):
 
     state = WorkerStateStore(package_var=tmp_path).read()
 
-    assert state["schema_version"] == WorkerProtocol.SCHEMA_VERSION
-    assert state["enrollments"] == {}
-    assert state["tokens"]["legacy"]["scopes"] == list(WorkerProtocol.DEFAULT_TOKEN_SCOPES)
-    assert state["custom"] == {"keep": True}
+    assert state == WorkerStateStore.default_state()
+    assert (tmp_path / "imgdata.sqlite3").exists()
 
 
 def test_state_store_distinguishes_missing_invalid_and_read_failure(tmp_path: Path, monkeypatch):
     store = WorkerStateStore(package_var=tmp_path)
     assert store.read() == store.default_state()
 
-    store.state_path.write_text("{invalid", encoding="utf-8")
+    with store.database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO app_state(key, value, value_type) VALUES (?, ?, 'json')",
+            ("worker_runtime:extra", "{invalid"),
+        )
     with pytest.raises(WorkerApiError, match="state_invalid"):
         store.read()
 
-    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("denied")))
+    def fail_read():
+        raise DatabaseError("denied")
+
+    monkeypatch.setattr(store.database, "read", fail_read)
     with pytest.raises(WorkerApiError, match="state_read_failed"):
         store.read()
 

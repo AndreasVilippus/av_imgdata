@@ -10,10 +10,10 @@ The DSM backend remains authoritative. External workers execute compatible jobs 
 
 ```text
 WorkerRuntimePathService
-  owns package-var and worker state path resolution
+  owns package-var and SQLite runtime database path resolution
 
 WorkerStateStore
-  owns state schema, migration, atomic persistence, locking and file permissions
+  owns state schema, atomic persistence and locking
 
 WorkerCredentialService
   owns token issuance, hashing, scopes, revocation checks and worker binding
@@ -28,26 +28,23 @@ WorkerProvisioningService
   owns enrollment and model distribution, using the same state and credentials
 ```
 
-No API router, CLI helper, installation script, or feature service may independently parse or write `worker-api-state.json`, hash worker tokens, infer enrollment status, or define a second capability list.
+No API router, CLI helper, installation script, or feature service may independently parse or write worker runtime tables, hash worker tokens, infer enrollment status, or define a second capability list.
 
-## State path priority
+## Runtime persistence
 
-The state path is resolved once in this order:
+The package-local SQLite database is the authoritative worker runtime store:
 
 ```text
-1. explicit constructor or CLI override
-2. worker_api.STATE_PATH from ConfigService
-3. AV_IMGDATA_WORKER_API_STATE_PATH environment override
-4. <SYNOPKG_PKGVAR>/worker-api-state.json
+<SYNOPKG_PKGVAR>/imgdata.sqlite3
 ```
 
-Relative paths are resolved below `SYNOPKG_PKGVAR`.
+`worker-api-state.json` is not a runtime source. The backend does not import it, merge it, or use it as a fallback.
 
 ## State schema
 
 Current schema version: `2`.
 
-Required top-level maps:
+Required runtime domains:
 
 ```text
 tokens
@@ -56,9 +53,11 @@ jobs
 enrollments
 ```
 
-`WorkerStateStore` preserves unknown top-level fields during migration. A missing state file is a valid empty state. Invalid JSON, invalid structure, read failures, and write failures are distinct errors and must not be rendered as an empty installation.
+`WorkerStateStore` persists those domains in SQLite worker tables and preserves unknown top-level fields in app state when callers write them through the store. Missing worker tables are initialized as an empty state. Invalid stored JSON, invalid structure, read failures, and write failures are distinct errors and must not be rendered as an empty installation.
 
-All mutations use atomic replacement. Runtime permissions are applied by the store, not repaired by individual callers.
+All mutations go through the store. Runtime permissions and database initialization are owned by the database layer, not repaired by individual callers.
+
+Completed jobs are queue transport, not history. They are deleted after the backend consumes the result. Failed, cancelled, expired jobs and used or expired enrollments are pruned from runtime state after their short retention window.
 
 ## Credentials
 
@@ -74,7 +73,7 @@ issued_via
 enrollment_id
 ```
 
-A bound token cannot be used by another worker. Every protected operation requires an explicit scope. Legacy tokens are migrated to the current default scopes for compatibility.
+A bound token cannot be used by another worker. Every protected operation requires an explicit scope.
 
 Enrollment redemption writes the token and marks the enrollment used in one state transaction.
 

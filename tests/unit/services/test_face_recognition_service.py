@@ -407,7 +407,10 @@ def test_person_reference_scan_stops_when_cleanup_stop_requested(tmp_path):
     )
 
     assert references == []
-    assert any(event == "recognition_person_reference_face_loop_stop_requested" for event, _fields in logs)
+    assert any(
+        event in {"recognition_person_reference_scan_stop_requested", "recognition_person_reference_face_loop_stop_requested"}
+        for event, _fields in logs
+    )
 
 
 def test_assignment_scan_finishes_stopped_when_cleanup_stop_requested():
