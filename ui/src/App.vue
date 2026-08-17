@@ -19,6 +19,15 @@
 						<database-lists-view v-if="selectedOption === 'database_lists'" :vm="this" />
 					</main>
 				</div>
+				<div v-if="noticeDialog.visible" class="sm-modal-backdrop">
+					<div class="sm-modal sm-modal-centered" role="dialog" aria-modal="true" aria-labelledby="app-notice-dialog-title">
+						<div id="app-notice-dialog-title" class="sm-modal-title">{{ noticeDialog.title }}</div>
+						<div class="sm-modal-text">{{ noticeDialog.message }}</div>
+						<div class="sm-modal-actions">
+							<v-button @click="closeNoticeDialog" style="width: 150px;">{{ $avt('common:button_ok', 'OK') }}</v-button>
+						</div>
+					</div>
+				</div>
 			</div>
 		</v-app-window>
 	</v-app-instance>
@@ -64,6 +73,11 @@ export default {
 			backendErrorFormatter: null,
 			dsmApiClient: null,
 			runtimePolling: null,
+			noticeDialog: {
+				visible: false,
+				title: '',
+				message: '',
+			},
 		};
 	},
 	created() {
@@ -74,6 +88,57 @@ export default {
 	methods: {
 		close() {
 			this.$refs.appWindow.close();
+		},
+		showNoticeDialog(message, title = '') {
+			const normalizedMessage = String(message || '').trim();
+			if (!normalizedMessage) {
+				return;
+			}
+			this.noticeDialog = {
+				visible: true,
+				title: String(title || '').trim() || this.$avt('common:notice_title', 'Notice'),
+				message: normalizedMessage,
+			};
+		},
+		closeNoticeDialog() {
+			this.noticeDialog = {
+				visible: false,
+				title: '',
+				message: '',
+			};
+		},
+		showOptionalComponentUnavailableNotice(message = '') {
+			this.showNoticeDialog(
+				String(message || '').trim() || this.$avt(
+					'common:optional_component_unavailable',
+					'The selected function cannot be started because an optional component is not available.'
+				),
+				this.$avt('common:notice_title', 'Notice')
+			);
+		},
+		getOptionalComponentUnavailableMessage(payload) {
+			const source = payload && typeof payload === 'object' ? payload : {};
+			const error = String(source.error || '').trim();
+			const messageKey = String(source.message_key || '').trim();
+			const message = String(source.message || '').trim();
+			if (error === 'insightface_not_installed') {
+				return this.faceMatchInsightFaceUnavailableMessage || this.$avt(
+					'face_match:progress_insightface_missing',
+					'InsightFace is not available.'
+				);
+			}
+			if ([
+				'face_match:progress_insightface_missing',
+				'face_match:progress_insightface_unavailable',
+				'cleanup:recognition_failed',
+				'cleanup:face_frames_failed',
+			].includes(messageKey)) {
+				return message || this.$avt(messageKey, messageKey);
+			}
+			if (message && /native face processor|insightface|FaceDetectorUnavailable/i.test(message)) {
+				return message;
+			}
+			return '';
 		},
 		resolveLocalIconUrl(filename) {
 			return filename ? '/webman/3rdparty/AV_ImgData/images/' + filename : '';

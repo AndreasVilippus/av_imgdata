@@ -2730,10 +2730,34 @@ class ImgDataService:
     def getCleanupProgress(self, user_key: str, action: str = "normalize_names") -> Dict[str, Any]:
         normalized_action = self._normalizeCleanupAction(action)
         state_key = self._cleanupStateKey(user_key, normalized_action)
+        memory_progress: Dict[str, Any] = {}
         with self.runtime_state.lock("cleanup_progress"):
             current = self.runtime_state.memory("cleanup_progress").get(state_key, {})
+            if isinstance(current, dict) and current:
+                memory_progress = dict(current)
+            else:
+                running_states = [
+                    dict(progress)
+                    for progress in self.runtime_state.memory("cleanup_progress").values()
+                    if isinstance(progress, dict)
+                    and progress.get("running") is True
+                    and str(progress.get("operation") or "cleanup").strip().lower() == "cleanup"
+                ]
+                if len(running_states) == 1:
+                    memory_progress = running_states[0]
+                elif not running_states and len(self.runtime_state.memory("cleanup_progress")) == 1:
+                    only_progress = next(iter(self.runtime_state.memory("cleanup_progress").values()))
+                    if isinstance(only_progress, dict) and only_progress:
+                        memory_progress = dict(only_progress)
+        if memory_progress:
+            return self._normalizeCleanupProgress(
+                user_key,
+                str(memory_progress.get("action") or normalized_action),
+                memory_progress,
+            )
+        current = self.runtime_state.read_persisted("cleanup_progress", state_key)
         if not isinstance(current, dict) or not current:
-            current = self.runtime_state.read_persisted("cleanup_progress", state_key)
+            current = {}
         return self._normalizeCleanupProgress(user_key, normalized_action, dict(current) if isinstance(current, dict) else {})
 
     def requestStopCleanup(self, user_key: str, action: str = "normalize_names") -> Dict[str, Any]:

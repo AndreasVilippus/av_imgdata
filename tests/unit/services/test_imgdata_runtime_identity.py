@@ -88,6 +88,28 @@ def test_cleanup_progress_prefers_current_memory_state_over_stale_persistence():
     assert progress["revision"] == 3
 
 
+def test_cleanup_progress_reconnects_to_single_running_memory_state_for_new_user_key():
+    service = make_service()
+    old_state_key = service._cleanupStateKey("old-user", "recognition_analyze_unknown_faces")
+    service.runtime_state.memory("cleanup_progress")[old_state_key] = {
+        "action": "recognition_analyze_unknown_faces",
+        "operation": "cleanup",
+        "running": True,
+        "finished": False,
+        "images_scanned": 185,
+        "images_total": 985,
+        "operation_id": "cleanup-recognition_analyze_unknown_faces-1",
+        "revision": 995,
+    }
+
+    progress = service.getCleanupProgress("new-user", "recognition_check_person_assignments")
+
+    assert progress["running"] is True
+    assert progress["action"] == "recognition_analyze_unknown_faces"
+    assert progress["operation_id"] == "cleanup-recognition_analyze_unknown_faces-1"
+    assert progress["images_scanned"] == 185
+
+
 def test_file_analysis_progress_has_normalized_runtime_identity():
     service = make_service()
     service._setFileAnalysisProgress(

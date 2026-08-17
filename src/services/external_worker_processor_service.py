@@ -8,6 +8,10 @@ logic and only call processor-shaped adapters.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -72,6 +76,62 @@ class ExternalWorkerProcessorService:
             logger(event, **fields)
         except Exception:
             pass
+
+    def _consumed_results_dir(self) -> Path:
+        return (self.store.package_var / "worker-api-results").resolve()
+
+    def _consumed_result_ref(self, job_id: str, result_key: str) -> Dict[str, str]:
+        digest = hashlib.sha256(f"{job_id}:{result_key}".encode("utf-8")).hexdigest()[:24]
+        return {
+            "storage": "worker-api-result-file",
+            "path": f"{digest}.json",
+            "job_id": str(job_id),
+            "result_key": str(result_key),
+        }
+
+    def _write_consumed_result(self, job_id: str, result_key: str, value: Any) -> Dict[str, str]:
+        result_dir = self._consumed_results_dir()
+        result_dir.mkdir(parents=True, exist_ok=True)
+        ref = self._consumed_result_ref(job_id, result_key)
+        target = (result_dir / ref["path"]).resolve()
+        if result_dir not in target.parents:
+            raise WorkerApiError("result_path_invalid")
+        fd, tmp_name = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=str(result_dir))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, ensure_ascii=False, separators=(",", ":"))
+                handle.write("\n")
+            os.replace(tmp_name, str(target))
+        finally:
+            try:
+                os.unlink(tmp_name)
+            except FileNotFoundError:
+                pass
+        return ref
+
+    def _read_consumed_result(self, ref: Dict[str, Any]) -> Any:
+        if str(ref.get("storage") or "") != "worker-api-result-file":
+            raise WorkerApiError("result_ref_unsupported")
+        rel_path = Path(str(ref.get("path") or ""))
+        if rel_path.is_absolute() or not str(rel_path):
+            raise WorkerApiError("result_ref_invalid")
+        result_dir = self._consumed_results_dir()
+        target = (result_dir / rel_path).resolve()
+        if result_dir not in target.parents:
+            raise WorkerApiError("result_ref_invalid")
+        try:
+            with target.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except OSError as exc:
+            raise WorkerApiError("result_ref_read_failed", str(exc))
+
+    def _consumed_value(self, job: Dict[str, Any], result_key: str) -> Any:
+        if result_key in job:
+            return job.get(result_key)
+        ref = job.get(result_key + "_ref")
+        if isinstance(ref, dict):
+            return self._read_consumed_result(ref)
+        return None
 
     def execute_face_detect(self, *, image_path: Path, local_execute: Callable[[], List[Dict[str, Any]]], policy: str = "local_preferred", operation: str, action: str, mode: str, operation_id: str, source_id: str = "", entity_type: str = "image", entity_id: str = "", det_thresh: float = 0.5, max_num: int = 0, det_size: Any = (640, 640), priority: int = 100) -> Dict[str, Any]:
         return self._execute_image_faces(
@@ -279,7 +339,8 @@ class ExternalWorkerProcessorService:
 
     def consume_faces_result(self, job_id: str, *, capability: str) -> List[Dict[str, Any]]:
         job = self._completed_job(job_id, capability)
-        stored_faces = job.get("normalized_faces") if isinstance(job.get("normalized_faces"), list) else None
+        consumed_faces = self._consumed_value(job, "normalized_faces")
+        stored_faces = consumed_faces if isinstance(consumed_faces, list) else None
         if job.get("result_consumed_at") and stored_faces is not None:
             return [dict(face) for face in stored_faces if isinstance(face, dict)]
         processor_result = self._processor_result(job)
@@ -289,8 +350,9 @@ class ExternalWorkerProcessorService:
 
     def consume_result(self, job_id: str, *, capability: str) -> Any:
         job = self._completed_job(job_id, capability)
-        if job.get("result_consumed_at") and "normalized_result" in job:
-            return job.get("normalized_result")
+        consumed_result = self._consumed_value(job, "normalized_result")
+        if job.get("result_consumed_at") and consumed_result is not None:
+            return consumed_result
         processor_result = self._processor_result(job)
         result = processor_result.get("result") if isinstance(processor_result.get("result"), dict) else {}
         return self._store_consumed(job_id, "normalized_result", result)
@@ -313,23 +375,27 @@ class ExternalWorkerProcessorService:
 
     def _store_consumed(self, job_id: str, result_key: str, value: Any) -> Any:
         now = self._now_iso()
+        value_ref = self._write_consumed_result(job_id, result_key, value)
 
         def mutate(state: Dict[str, Any]):
             current = state.get("jobs", {}).get(job_id)
             if not isinstance(current, dict):
                 raise WorkerApiError("job_not_found")
-            if current.get("result_consumed_at") and result_key in current:
-                return current.get(result_key)
+            if current.get("result_consumed_at"):
+                consumed = self._consumed_value(current, result_key)
+                if consumed is not None:
+                    return consumed
             if str(current.get("status") or "") != "completed":
                 raise WorkerApiError("job_not_completed")
             current.update({
-                result_key: value,
+                result_key + "_ref": value_ref,
                 "result_consumed_at": now,
                 "result_consumer_version": "1.0",
                 "result_apply_status": "consumed",
                 "raw_result_purged_at": now,
                 "updated_at": now,
             })
+            current.pop(result_key, None)
             current.pop("result", None)
             return value
 

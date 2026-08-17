@@ -17,6 +17,7 @@ UI_ALLOWED_MISSING_THIS_METHODS = {
     "getBackendImagePreviewUrl",
     "getFaceMatchFormatLabel",
     "getFaceMatchSourceLabel",
+    "getOptionalComponentUnavailableMessage",
     "getPhotoThumbnailUrl",
     "getResponseData",
     "getResponseDataObject",
@@ -30,6 +31,7 @@ UI_ALLOWED_MISSING_THIS_METHODS = {
     "startNamedPolling",
     "stopCleanupRun",
     "stopNamedPolling",
+    "showOptionalComponentUnavailableNotice",
 }
 
 BACKEND_ALLOWED_MISSING_SELF_METHODS = {

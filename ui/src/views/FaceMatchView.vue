@@ -11,12 +11,9 @@
 							<option value="search_photo_face_in_file">{{ vm.$avt('face_match:action_search_photo_face_in_file', 'search unknown Photos face in file') }}</option>
 							<option value="search_file_face_in_sources">{{ vm.$avt('face_match:action_search_file_face_in_sources', 'search face from file') }}</option>
 							<option value="mark_missing_photos_faces">{{ vm.$avt('face_match:action_mark_missing_photos_faces', 'mark missing faces in Photos') }}</option>
-							<option value="search_missing_faces_insightface" :disabled="!vm.hasInsightFaceForFaceMatch">{{ vm.$avt('face_match:action_search_missing_faces_insightface', 'search missing faces with InsightFace') }}</option>
-							<option value="recognition_analyze_unknown_faces" :disabled="!vm.hasInsightFaceForFaceMatch">{{ vm.$avt('face_match:action_recognition_unknown_faces', 'recognize unknown faces with InsightFace') }}</option>
+							<option value="search_missing_faces_insightface">{{ vm.$avt('face_match:action_search_missing_faces_insightface', 'search missing faces with InsightFace') }}</option>
+							<option value="recognition_analyze_unknown_faces">{{ vm.$avt('face_match:action_recognition_unknown_faces', 'recognize unknown faces with InsightFace') }}</option>
 						</select>
-					<div v-if="!vm.hasInsightFaceForFaceMatch" class="config-card-desc">
-						{{ vm.faceMatchInsightFaceUnavailableMessage }}
-					</div>
 					<div class="face-match-action-buttons">
 						<v-button @click="vm.handlePrimaryFaceMatchButton" :disabled="vm.faceMatchActionLocked" style="width: 160px;">
 							{{ vm.faceMatchPrimaryButtonLabel }}
@@ -104,7 +101,7 @@
 								class="face-match-switch"
 								:title="vm.$avt('face_match:hint_recognize_missing_faces', 'Detected missing faces are compared with existing InsightFace person profiles and suggested for a Photos person when matched.')"
 							>
-							<input v-model="vm.faceMatchRecognizeMissingInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasInsightFaceForFaceMatch" />
+							<input v-model="vm.faceMatchRecognizeMissingInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading" />
 							<span class="face-match-switch-slider"></span>
 								<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_recognize_missing_faces', 'Person recognition with InsightFace') }}</span>
 							</label>
@@ -113,7 +110,7 @@
 								class="face-match-switch"
 								:title="vm.$avt('face_match:hint_auto_apply_safe_missing_faces', 'Safe InsightFace person matches are created and assigned in Photos directly; uncertain matches remain available for display or findings list.')"
 							>
-								<input :checked="vm.faceMatchAutoApplySafeInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasInsightFaceForFaceMatch" @change="vm.setFaceMatchAutoApplySafeInsightFacePersons($event.target.checked)" />
+								<input :checked="vm.faceMatchAutoApplySafeInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading" @change="vm.setFaceMatchAutoApplySafeInsightFacePersons($event.target.checked)" />
 								<span class="face-match-switch-slider"></span>
 								<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_auto_apply_safe_missing_faces', 'Apply safe suggestions directly') }}</span>
 							</label>
@@ -122,7 +119,7 @@
 								class="face-match-switch"
 								:title="vm.$avt('face_match:hint_skip_unknown_missing_faces', 'Detected missing faces without a matching InsightFace person profile are skipped automatically.')"
 							>
-								<input :checked="vm.faceMatchSkipUnknownInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading || !vm.hasInsightFaceForFaceMatch" @change="vm.setFaceMatchSkipUnknownInsightFacePersons($event.target.checked)" />
+								<input :checked="vm.faceMatchSkipUnknownInsightFacePersons" type="checkbox" :disabled="vm.faceMatchLoading" @change="vm.setFaceMatchSkipUnknownInsightFacePersons($event.target.checked)" />
 								<span class="face-match-switch-slider"></span>
 								<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_skip_unknown_missing_faces', 'Skip unknown persons') }}</span>
 							</label>

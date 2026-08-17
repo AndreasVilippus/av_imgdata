@@ -485,6 +485,12 @@ export default {
 				return false;
 			}
 			this.cleanupProgress = nextProgress;
+			const unavailableMessage = typeof this.getOptionalComponentUnavailableMessage === 'function'
+				? this.getOptionalComponentUnavailableMessage(nextProgress)
+				: '';
+			if (unavailableMessage && this.cleanupLoading) {
+				this.showOptionalComponentUnavailableNotice(unavailableMessage);
+			}
 			if (nextProgress.message_key || nextProgress.message) {
 				this.cleanupStatusMessage = this.$avt(
 					nextProgress.message_key || '',

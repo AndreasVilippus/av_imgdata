@@ -5,8 +5,10 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -123,6 +125,31 @@ class WorkerStateStore:
         with self._locks_guard:
             self._lock = self._locks.setdefault(key, threading.RLock())
 
+    def _debug_log(self, event: str, **fields: Any) -> None:
+        module = sys.modules.get("api.imgdata_api")
+        logger = getattr(module, "backend_debug_log", None) if module is not None else None
+        if not callable(logger):
+            return
+        try:
+            logger(event, **fields)
+        except Exception:
+            pass
+
+    def _state_file_size(self) -> int:
+        try:
+            return int(self.state_path.stat().st_size)
+        except OSError:
+            return 0
+
+    @staticmethod
+    def _state_counts(state: Dict[str, Any]) -> Dict[str, int]:
+        return {
+            "tokens_count": len(state.get("tokens", {})) if isinstance(state.get("tokens"), dict) else 0,
+            "workers_count": len(state.get("workers", {})) if isinstance(state.get("workers"), dict) else 0,
+            "jobs_count": len(state.get("jobs", {})) if isinstance(state.get("jobs"), dict) else 0,
+            "enrollments_count": len(state.get("enrollments", {})) if isinstance(state.get("enrollments"), dict) else 0,
+        }
+
     @staticmethod
     def default_state() -> Dict[str, Any]:
         return {
@@ -134,8 +161,15 @@ class WorkerStateStore:
         }
 
     def read(self) -> Dict[str, Any]:
+        started = time.monotonic()
         with self._lock:
             if not self.state_path.is_file():
+                self._debug_log(
+                    "worker_state_read",
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                    bytes=0,
+                    missing=True,
+                )
                 return self.default_state()
             try:
                 with self.state_path.open("r", encoding="utf-8") as handle:
@@ -146,7 +180,15 @@ class WorkerStateStore:
                 raise WorkerApiError("state_read_failed", str(exc))
             if not isinstance(state, dict):
                 raise WorkerApiError("state_invalid")
-            return self.migrate(state)
+            migrated = self.migrate(state)
+            self._debug_log(
+                "worker_state_read",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                bytes=self._state_file_size(),
+                missing=False,
+                **self._state_counts(migrated),
+            )
+            return migrated
 
     def migrate(self, state: Dict[str, Any]) -> Dict[str, Any]:
         result = dict(state)
@@ -161,6 +203,7 @@ class WorkerStateStore:
         return result
 
     def write(self, state: Dict[str, Any]) -> None:
+        started = time.monotonic()
         with self._lock:
             normalized = self.migrate(state)
             tmp_name = ""
@@ -173,6 +216,12 @@ class WorkerStateStore:
                 self._apply_runtime_permissions(Path(tmp_name))
                 os.replace(tmp_name, str(self.state_path))
                 self._apply_runtime_permissions(self.state_path)
+                self._debug_log(
+                    "worker_state_write",
+                    duration_ms=round((time.monotonic() - started) * 1000, 2),
+                    bytes=self._state_file_size(),
+                    **self._state_counts(normalized),
+                )
             except OSError as exc:
                 raise WorkerApiError("state_write_failed", str(exc))
             finally:
@@ -183,10 +232,32 @@ class WorkerStateStore:
                         pass
 
     def update(self, mutator: Callable[[Dict[str, Any]], Any]) -> Any:
+        started = time.monotonic()
         with self._lock:
             state = self.read()
             result = mutator(state)
             self.write(state)
+            self._debug_log(
+                "worker_state_update",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                changed=True,
+                **self._state_counts(state),
+            )
+            return result
+
+    def update_if_changed(self, mutator: Callable[[Dict[str, Any]], Any]) -> Any:
+        started = time.monotonic()
+        with self._lock:
+            state = self.read()
+            result, changed = mutator(state)
+            if changed:
+                self.write(state)
+            self._debug_log(
+                "worker_state_update",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                changed=bool(changed),
+                **self._state_counts(state),
+            )
             return result
 
     def _apply_runtime_permissions(self, path: Path) -> None:
@@ -226,10 +297,18 @@ class WorkerCredentialService:
         return {"token_id": token_id, "token": token, "created_at": created_at, "scopes": list(entry["scopes"])}
 
     def authenticate(self, *, token: str, worker_id: str = "", scope: str = WorkerProtocol.TOKEN_SCOPE_WORKER_API) -> Dict[str, Any]:
+        return self.authenticate_state(
+            self.store.read(),
+            token=token,
+            worker_id=worker_id,
+            scope=scope,
+        )
+
+    def authenticate_state(self, state: Dict[str, Any], *, token: str, worker_id: str = "", scope: str = WorkerProtocol.TOKEN_SCOPE_WORKER_API) -> Dict[str, Any]:
         token = self.require_value(token, "token_required")
         requested_worker = str(worker_id or "").strip()
         digest = self.hash_value(token)
-        for token_id, entry in self.store.read().get("tokens", {}).items():
+        for token_id, entry in state.get("tokens", {}).items():
             if not isinstance(entry, dict) or entry.get("token_hash") != digest or entry.get("revoked"):
                 continue
             bound_worker = str(entry.get("worker_id") or "").strip()

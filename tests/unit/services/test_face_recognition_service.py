@@ -864,6 +864,46 @@ def test_person_reference_native_batch_advances_visible_image_progress(tmp_path)
     assert image_progress[-1]["status"]["progress"]["current"] == 3
 
 
+def test_person_reference_logs_single_image_batch_fallback(tmp_path):
+    service, _findings = _service()
+    image_path = tmp_path / "image-1.jpg"
+    image_path.write_bytes(b"jpeg")
+    debug_events = []
+    service.backend.files = SimpleNamespace(extractEmbeddedJpegPreview=lambda _path: None)
+    service.backend._debugLog = lambda event, **fields: debug_events.append((event, fields))
+    service.backend._listAllPhotoItemsForPerson = lambda **_kwargs: [
+        {"id": 10, "folder_id": 20, "filename": "image-1.jpg"},
+    ]
+    service.backend.photos = SimpleNamespace(list_faceFotoTeamItems=lambda **_kwargs: [])
+    service._item_path = lambda item, **_kwargs: str(image_path)
+
+    calls = []
+    embedder = SimpleNamespace(
+        detect_and_embed_many=lambda _paths: (_ for _ in ()).throw(AssertionError("single image must not use batch")),
+        detect_and_embed=lambda path: calls.append(path) or [],
+        _iou=lambda _left, _right: 0.0,
+    )
+
+    references = service._person_references(
+        user_key="u", cookies={}, base_url="https://dsm", shared_folder=str(tmp_path),
+        person={"id": 1, "name": "Ada"}, embedder=embedder,
+        options=service.normalize_options({"recognition_batch_size": 8}), folder_cache={},
+        progress_context={
+            "action": service.ACTION_ASSIGNMENT,
+            "phase": "reading_unknown_images",
+            "persons_scanned": 0,
+            "persons_total": 1,
+        },
+    )
+
+    assert references == []
+    assert calls == [image_path]
+    fallback_events = [fields for event, fields in debug_events if event == "recognition_native_image_batch_not_started"]
+    assert fallback_events
+    assert fallback_events[-1]["reason"] == "single_image_fallback"
+    assert fallback_events[-1]["candidates_count"] == 1
+
+
 def test_person_reference_external_worker_prefetches_next_batch_during_face_metadata_scan(tmp_path):
     service, _findings = _service()
     item_count = 8

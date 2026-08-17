@@ -122,25 +122,27 @@ class WorkerApiService:
         return {"status": "queued", "job": job}
 
     def claim_job(self, *, token: str, worker_id: str, capabilities: Optional[List[str]] = None) -> Dict[str, Any]:
-        self.credentials.authenticate(token=token, worker_id=worker_id, scope=WorkerProtocol.TOKEN_SCOPE_WORKER_API)
         worker_id = self.credentials.require_value(worker_id, "worker_id_required")
         supported_types = self._supported_job_types(capabilities)
 
         def mutate(state):
-            worker = state["workers"].get(worker_id)
-            if isinstance(worker, dict):
-                now = self._now_iso()
-                worker["last_seen_at"] = now
-                worker["status"] = "ready"
-                if capabilities is not None or "capabilities" not in worker:
-                    worker["capabilities"] = WorkerProtocol.normalize_capabilities(capabilities)
-            else:
-                now = self._now_iso()
+            self.credentials.authenticate_state(
+                state,
+                token=token,
+                worker_id=worker_id,
+                scope=WorkerProtocol.TOKEN_SCOPE_WORKER_API,
+            )
+            now = self._now_iso()
             queued = [job for job in state["jobs"].values() if job.get("status") == "queued"]
             queued.sort(key=lambda item: (int(item.get("priority", 100)), str(item.get("created_at", ""))))
             for job in queued:
                 if job.get("type") not in supported_types:
                     continue
+                worker = state["workers"].get(worker_id)
+                if isinstance(worker, dict):
+                    worker["last_seen_at"] = now
+                    if capabilities is not None or "capabilities" not in worker:
+                        worker["capabilities"] = WorkerProtocol.normalize_capabilities(capabilities)
                 job.update({
                     "status": "claimed",
                     "claimed_by": worker_id,
@@ -150,10 +152,10 @@ class WorkerApiService:
                 })
                 if isinstance(worker, dict):
                     worker["status"] = "processing"
-                return job
-            return None
+                return job, True
+            return None, False
 
-        job = self.store.update(mutate)
+        job = self.store.update_if_changed(mutate)
         return {"status": "claimed", "job": job} if job is not None else {"status": "empty", "job": None}
 
     def record_result(self, *, token: str, worker_id: str, job_id: str, result: Dict[str, Any]) -> Dict[str, Any]:

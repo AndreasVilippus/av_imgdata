@@ -367,7 +367,7 @@ class ExternalWorkerBatchProcessorService(ExternalWorkerProcessorService):
         image_paths: List[Path],
     ) -> Dict[str, List[Dict[str, Any]]]:
         job = self._completed_job(job_id, capability)
-        stored = job.get("normalized_batch_images")
+        stored = self._consumed_value(job, "normalized_batch_images")
         if job.get("result_consumed_at") and isinstance(stored, dict):
             return self._copy_batch_result(stored)
 

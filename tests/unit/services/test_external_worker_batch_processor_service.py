@@ -147,6 +147,9 @@ class TestExternalWorkerBatchProcessorService:
         stored = self.service.get_job("embed-batch-2")
         assert stored["result_apply_status"] == "consumed"
         assert "result" not in stored
+        assert "normalized_batch_images" not in stored
+        assert stored["normalized_batch_images_ref"]["storage"] == "worker-api-result-file"
+        assert (self.package_var / "worker-api-results" / stored["normalized_batch_images_ref"]["path"]).is_file()
 
     def test_start_and_finish_embed_batch_separates_enqueue_from_wait(self):
         handle = self.service.start_face_embed_batch(

@@ -1,6 +1,11 @@
 [app]
 title="ImgData"
 
+[common]
+button_ok="OK"
+notice_title="Hinweis"
+optional_component_unavailable="Die gewählte Funktion kann nicht gestartet werden, weil eine optionale Komponente nicht verfügbar ist."
+
 [nav]
 group_photos="Photos"
 group_music="Musik"

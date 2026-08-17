@@ -453,22 +453,36 @@ class FaceRecognitionService:
             with cache_lock:
                 self._image_embedding_cache[path] = embeddings
 
-        def collect_batch_items(start_index: int, start_path: Optional[str] = None) -> List[Tuple[int, str]]:
+        def collect_batch_items(start_index: int, start_path: Optional[str] = None, stats: Optional[Dict[str, int]] = None) -> List[Tuple[int, str]]:
             cutoff = datetime.now(timezone.utc) - timedelta(days=options["changed_since_days"]) if options["changed_since_days"] > 0 else None
             batch_items: List[Tuple[int, str]] = []
+
+            def increment(reason: str) -> None:
+                if stats is not None:
+                    stats[reason] = int(stats.get(reason, 0)) + 1
+
             for lookahead_index in range(start_index, min(len(items), start_index + batch_size)):
                 lookahead = items[lookahead_index]
                 try:
                     int(lookahead.get("id"))
                 except (AttributeError, TypeError, ValueError):
+                    increment("invalid_item_id")
                     continue
                 lookahead_path = start_path if lookahead_index == start_index and start_path else self._item_path(
                     user_key=user_key, cookies=cookies, base_url=base_url,
                     shared_folder=shared_folder, item=lookahead, folder_cache=folder_cache,
                 )
-                if not lookahead_path or cached_embeddings(lookahead_path) is not None or not Path(lookahead_path).is_file():
+                if not lookahead_path:
+                    increment("path_missing")
+                    continue
+                if cached_embeddings(lookahead_path) is not None:
+                    increment("cache_hit")
+                    continue
+                if not Path(lookahead_path).is_file():
+                    increment("not_file")
                     continue
                 if cutoff is not None and datetime.fromtimestamp(Path(lookahead_path).stat().st_mtime, timezone.utc) < cutoff:
+                    increment("unchanged")
                     continue
                 batch_items.append((lookahead_index, lookahead_path))
             return batch_items
@@ -546,8 +560,18 @@ class FaceRecognitionService:
             if not prefetch_enabled or start_index >= len(items) or self._should_stop(user_key, action):
                 return
             finish_prefetch_if_needed()
-            batch_items = collect_batch_items(start_index)
+            stats: Dict[str, int] = {}
+            batch_items = collect_batch_items(start_index, stats=stats)
             if len(batch_items) <= 1:
+                self._debug_log(
+                    "recognition_native_image_batch_prefetch_not_started",
+                    action=action,
+                    reason="insufficient_candidates",
+                    candidates_count=len(batch_items),
+                    start_index=start_index,
+                    inspected_count=min(batch_size, max(0, len(items) - start_index)),
+                    skip_counts=dict(stats),
+                )
                 return
 
             def target() -> None:
@@ -674,7 +698,8 @@ class FaceRecognitionService:
             if cached_embeddings(image_path) is None:
                 try:
                     if batch_detection_enabled:
-                        batch_items = collect_batch_items(item_index, image_path)
+                        stats: Dict[str, int] = {}
+                        batch_items = collect_batch_items(item_index, image_path, stats=stats)
                         batch_paths = [path for _batch_index, path in batch_items]
                         if len(batch_paths) > 1:
                             next_start_index = max(batch_index for batch_index, _path in batch_items) + 1
@@ -697,6 +722,16 @@ class FaceRecognitionService:
                                     **({"current_name": str(context.get("current_name") or "")} if str(context.get("current_name") or "") else {}),
                                 )
                         else:
+                            self._debug_log(
+                                "recognition_native_image_batch_not_started",
+                                action=action,
+                                reason="single_image_fallback" if batch_paths else "no_candidates",
+                                image_path=image_path,
+                                candidates_count=len(batch_paths),
+                                item_index=item_index,
+                                inspected_count=min(batch_size, max(0, len(items) - item_index)),
+                                skip_counts=dict(stats),
+                            )
                             write_embeddings(image_path, embedder.detect_and_embed(Path(image_path)))
                     else:
                         write_embeddings(image_path, embedder.detect_and_embed(Path(image_path)))

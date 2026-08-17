@@ -2248,16 +2248,6 @@ export default {
 				}
 				return;
 			}
-			if (this.selectedFaceMatchingAction === 'search_missing_faces_insightface' && !this.hasInsightFaceForFaceMatch) {
-				this.faceMatchProgress = {
-					...(this.faceMatchProgress || {}),
-					message_key: 'face_match:progress_insightface_missing',
-					message: this.faceMatchInsightFaceUnavailableMessage,
-				};
-				this.faceMatchResult = null;
-				this.resetFaceMatchSelectionState();
-				return;
-			}
 			const resetSkippedFaceIds = options.resetSkippedFaceIds !== false;
 			const resumeFromProgress = options.resumeFromProgress === true;
 			if (resetSkippedFaceIds) {
@@ -2352,6 +2342,12 @@ export default {
 				const faceMatches = this.getResponseDataObject(data, 'face_matches');
 				if (!this.applyFaceMatchingProgress(faceMatches, { authoritative: true })) {
 					return;
+				}
+				const unavailableMessage = typeof this.getOptionalComponentUnavailableMessage === 'function'
+					? this.getOptionalComponentUnavailableMessage(faceMatches)
+					: '';
+				if (unavailableMessage) {
+					this.showOptionalComponentUnavailableNotice(unavailableMessage);
 				}
 				if (faceMatches && faceMatches.running) {
 					this.faceMatchLoading = true;

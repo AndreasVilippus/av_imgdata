@@ -11,7 +11,7 @@
 					<option value="duplicate_faces">{{ vm.$avt('checks:type_duplicate_faces', 'Duplicate face markings') }}</option>
 					<option value="position_deviations">{{ vm.$avt('checks:type_position_deviations', 'Deviating face positions') }}</option>
 					<option value="name_conflicts">{{ vm.$avt('checks:type_name_conflicts', 'Name conflicts') }}</option>
-					<option value="recognition_check_person_assignments" :disabled="!vm.hasInsightFaceForFaceMatch">{{ vm.$avt('checks:type_recognition_check_person_assignments', 'Person assignments with InsightFace') }}</option>
+					<option value="recognition_check_person_assignments">{{ vm.$avt('checks:type_recognition_check_person_assignments', 'Person assignments with InsightFace') }}</option>
 				</select>
 				<select v-model="vm.selectedChecksAction" class="face-match-select" :disabled="vm.checksLoading || (vm.isInsightFaceAssignmentCheck && vm.cleanupLoading)">
 					<option value="findings">{{ vm.$avt('checks:action_findings', 'Process saved findings list') }}</option>
@@ -54,14 +54,11 @@
 					<span class="face-match-switch-label">{{ vm.$avt('checks:label_changed_since_days', 'Changed in days') }}</span>
 					<input v-model.number="vm.checksChangedSinceDays" type="number" min="0" step="1" class="checks-number-input" :disabled="vm.checksLoading" />
 				</label>
-				<div v-if="vm.isInsightFaceAssignmentCheck && !vm.hasInsightFaceForFaceMatch" class="config-card-desc">
-					{{ vm.faceMatchInsightFaceUnavailableMessage }}
-				</div>
-				<InsightFaceAssignmentOptions v-if="vm.isInsightFaceAssignmentCheck && vm.hasInsightFaceForFaceMatch" :vm="vm" />
+				<InsightFaceAssignmentOptions v-if="vm.isInsightFaceAssignmentCheck" :vm="vm" />
 			</div>
 			<div class="checks-actions-row checks-actions-row-buttons">
 				<div class="face-match-action-buttons">
-					<v-button @click="vm.startChecksReview" :disabled="vm.isInsightFaceAssignmentCheck && !vm.hasInsightFaceForFaceMatch" style="width: 160px;">
+					<v-button @click="vm.startChecksReview" style="width: 160px;">
 						{{ vm.checksPrimaryButtonLabel }}
 					</v-button>
 					<v-button
@@ -186,7 +183,7 @@
 				</div>
 			</div>
 		</div>
-		<InsightFaceAssignmentReview v-if="vm.isInsightFaceAssignmentCheck && vm.hasInsightFaceForFaceMatch" :vm="vm" />
+		<InsightFaceAssignmentReview v-if="vm.isInsightFaceAssignmentCheck" :vm="vm" />
 	</section>
 </template>
 

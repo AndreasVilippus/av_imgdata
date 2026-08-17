@@ -36,7 +36,10 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     assert "nativeStatus.hot_path_available === true" in face_match_mixin
     assert "nativeStatus.available === true" in face_match_mixin
     assert "return !!(nativeStatus && nativeStatus.hot_path_available === true && nativeStatus.available === true);" in face_match_mixin
-    assert "faceMatchInsightFaceUnavailableMessage" in face_match_view
+    assert "faceMatchInsightFaceUnavailableMessage" in face_match_mixin
+    assert ':disabled="!vm.hasInsightFaceForFaceMatch"' not in face_match_view
+    assert ':disabled="!vm.hasInsightFaceForFaceMatch"' not in checks_view
+    assert 'v-if="vm.isInsightFaceAssignmentCheck && vm.hasInsightFaceForFaceMatch"' not in checks_view
     assert "faceMatchRecognizeMissingInsightFacePersons" in face_match_view
     assert "faceMatchSkipUnknownInsightFacePersons" in face_match_view
     assert "faceMatchAutoApplySafeInsightFacePersons" in face_match_view

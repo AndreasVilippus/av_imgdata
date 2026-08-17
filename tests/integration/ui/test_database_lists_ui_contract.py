@@ -9,6 +9,11 @@ def test_database_lists_ui_has_navigation_search_pagination_edit_and_delete():
 
     assert "selectedOption === 'database_lists'" in app
     assert "$emit('select', 'database_lists')" in sidebar
+    assert "import DatabaseListIcon from './icons/DatabaseListIcon.vue';" in sidebar
+    assert '<DatabaseListIcon class="sm-nav-icon" />' in sidebar
+    assert sidebar.rfind("$emit('select', 'database_lists')") > sidebar.rfind(
+        "$emit('select', 'external_libraries_libvips')"
+    )
     assert "databaseListSearch" in view
     assert "databaseListPageSize" in view
     assert "saveDatabaseNameMapping" in view

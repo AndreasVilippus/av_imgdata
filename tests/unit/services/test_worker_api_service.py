@@ -108,8 +108,18 @@ class TestWorkerApiService(unittest.TestCase):
         )
         state = service.store.read()
         self.assertEqual(empty["status"], "empty")
-        self.assertEqual(state["workers"]["worker-01"]["last_seen_at"], "2026-08-09T18:04:00Z")
+        self.assertEqual(state["workers"]["worker-01"]["last_seen_at"], "2026-08-09T18:03:00Z")
         self.assertEqual(state["workers"]["worker-01"]["status"], "ready")
+
+        heartbeat = service.heartbeat(
+            token=token,
+            worker_id="worker-01",
+            status="ready",
+            capabilities=["face_native_embed"],
+        )
+        state = service.store.read()
+        self.assertEqual(heartbeat["status"], "ok")
+        self.assertEqual(state["workers"]["worker-01"]["last_seen_at"], "2026-08-09T18:04:00Z")
 
     def test_claim_respects_capabilities(self):
         self.service.enqueue_job(job_id="job-1", job_type="face_native_detect", payload={})
@@ -119,6 +129,24 @@ class TestWorkerApiService(unittest.TestCase):
             capabilities=["face_native_embed"],
         )
         self.assertEqual(claimed["status"], "empty")
+
+    def test_empty_claim_does_not_write_worker_state(self):
+        calls = []
+        original_write = self.service.store.write
+
+        def write_spy(state):
+            calls.append(True)
+            return original_write(state)
+
+        self.service.store.write = write_spy
+        claimed = self.service.claim_job(
+            token=self.token,
+            worker_id="worker-01",
+            capabilities=["face_native_embed"],
+        )
+
+        self.assertEqual(claimed["status"], "empty")
+        self.assertEqual(calls, [])
 
     def test_runtime_capability_is_not_enqueueable_as_processor_job(self):
         with self.assertRaises(WorkerApiError) as ctx:

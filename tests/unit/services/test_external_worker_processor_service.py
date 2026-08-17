@@ -142,6 +142,9 @@ class TestExternalWorkerProcessorService(unittest.TestCase):
         self.assertTrue(stored["result_consumed_at"])
         self.assertTrue(stored["raw_result_purged_at"])
         self.assertNotIn("result", stored)
+        self.assertNotIn("normalized_faces", stored)
+        self.assertEqual(stored["normalized_faces_ref"]["storage"], "worker-api-result-file")
+        self.assertTrue((self.package_var / "worker-api-results" / stored["normalized_faces_ref"]["path"]).is_file())
 
     def test_embed_result_keeps_embedding_vector(self):
         self.service.enqueue_face_embed(

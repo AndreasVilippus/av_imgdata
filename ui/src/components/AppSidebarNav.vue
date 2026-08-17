@@ -59,13 +59,6 @@
 		</button>
 		<button
 			class="sm-nav-item sm-nav-sub-item"
-			:class="{ active: selectedOption === 'database_lists' }"
-			@click="$emit('select', 'database_lists')"
-		>
-			{{ $avt('nav:database_lists', 'Database lists') }}
-		</button>
-		<button
-			class="sm-nav-item sm-nav-sub-item"
 			:class="{ active: selectedOption === 'external_libraries_exiftool' }"
 			@click="$emit('select', 'external_libraries_exiftool')"
 		>
@@ -85,6 +78,15 @@
 		>
 			{{ $avt('nav:libvips', 'libvips') }}
 		</button>
+		<div class="sm-nav-separator"></div>
+		<button
+			class="sm-nav-item"
+			:class="{ active: selectedOption === 'database_lists' }"
+			@click="$emit('select', 'database_lists')"
+		>
+			<DatabaseListIcon class="sm-nav-icon" />
+			{{ $avt('nav:database_lists', 'Database lists') }}
+		</button>
 	</aside>
 </template>
 
@@ -92,8 +94,9 @@
 import ChecksIcon from './icons/ChecksIcon.vue';
 import CleanupIcon from './icons/CleanupIcon.vue';
 import ConfigIcon from './icons/ConfigIcon.vue';
+import DatabaseListIcon from './icons/DatabaseListIcon.vue';
 import ExternalLibrariesIcon from './icons/ExternalLibrariesIcon.vue';
-import ExternalWorkerIcon from './icons/PackageIcon.vue';
+import ExternalWorkerIcon from './icons/ExternalWorkerIcon.vue';
 import FaceMatchIcon from './icons/FaceMatchIcon.vue';
 import StatusIcon from './icons/StatusIcon.vue';
 
@@ -103,6 +106,7 @@ export default {
 		ChecksIcon,
 		CleanupIcon,
 		ConfigIcon,
+		DatabaseListIcon,
 		ExternalLibrariesIcon,
 		ExternalWorkerIcon,
 		FaceMatchIcon,
