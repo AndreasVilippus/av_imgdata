@@ -180,7 +180,7 @@ class ImageDecodeService:
             self._debug_log("image_decoder_vips_skipped", image_suffix=image_path.suffix.lower(), reason=reason)
             return ImageDecodeResult(False, source="libvips", error=reason)
         max_edge = self._max_edge(files_config)
-        options: Dict[str, Any] = {"quality": 95}
+        options: Dict[str, Any] = {"quality": 95, "colorspace": "srgb"}
         operation = "auto-orient"
         if max_edge > 0:
             operation = "resize"
@@ -282,7 +282,7 @@ class ImageDecodeService:
 
     def _vips_decode_operation(self, files_config: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         max_edge = self._max_edge(files_config)
-        options: Dict[str, Any] = {"quality": 95}
+        options: Dict[str, Any] = {"quality": 95, "colorspace": "srgb"}
         operation = "auto-orient"
         if max_edge > 0:
             operation = "resize"
@@ -343,8 +343,7 @@ class ImageDecodeService:
             register_heif_opener()
             with Image.open(image_path) as image:
                 image = ImageOps.exif_transpose(image)
-                if image.mode not in {"RGB", "L"}:
-                    image = image.convert("RGB")
+                image = ImageDecodeService._normalize_pillow_image_for_jpeg(image)
                 if max_edge > 0:
                     resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", 1)
                     image.thumbnail((max_edge, max_edge), resampling)
@@ -356,6 +355,28 @@ class ImageDecodeService:
         if not image_bytes.startswith(b"\xff\xd8"):
             return ImageDecodeResult(False, source="pillow-heif", error="decoder_output_not_jpeg")
         return ImageDecodeResult(True, image_bytes=image_bytes, source="pillow-heif")
+
+    @staticmethod
+    def _normalize_pillow_image_for_jpeg(image: Any) -> Any:
+        info = getattr(image, "info", {})
+        icc_profile = info.get("icc_profile") if isinstance(info, dict) else None
+        if icc_profile:
+            try:
+                from PIL import ImageCms
+
+                source_profile = ImageCms.ImageCmsProfile(BytesIO(icc_profile))
+                target_profile = ImageCms.createProfile("sRGB")
+                return ImageCms.profileToProfile(
+                    image,
+                    source_profile,
+                    target_profile,
+                    outputMode="RGB",
+                )
+            except Exception:
+                pass
+        if getattr(image, "mode", None) != "RGB":
+            return image.convert("RGB")
+        return image
 
     def _decode_with(self, decoder: str, image_path: Path, config: Dict[str, Any]) -> ImageDecodeResult:
         executable = self._decoder_executable(decoder, config)
@@ -397,7 +418,7 @@ class ImageDecodeService:
         if decoder == "heif-convert":
             return [executable, "-q", "95", source, target]
         if decoder in {"magick", "convert"}:
-            return [executable, source, "-auto-orient", "-quality", "95", target]
+            return [executable, source, "-auto-orient", "-colorspace", "sRGB", "-quality", "95", target]
         if decoder == "ffmpeg":
             return [executable, "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-frames:v", "1", target]
         return []

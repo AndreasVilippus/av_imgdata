@@ -1073,6 +1073,37 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(progress["findings_count"], 65)
         self.assertEqual(progress["transferred_count"], 61)
 
+    def test_recognition_cleanup_progress_drops_stale_review_count_without_findings(self):
+        self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+            "operation_id": "cleanup-recognition-existing",
+            "running": False,
+            "finished": True,
+            "action": "recognition_analyze_unknown_faces",
+            "phase": "review_required",
+            "message_key": "cleanup:recognition_review_required",
+            "message": "Manual review required for the next recognition finding.",
+            "options": {"operation_mode": "immediate"},
+            "findings_count": 1,
+            "status": {
+                "schema_version": 1,
+                "operation": "cleanup",
+                "action": "recognition_analyze_unknown_faces",
+                "mode": "scan",
+                "phase": "review_required",
+                "counters": [{"key": "findings", "value": 1}],
+            },
+        }
+        self.service.face_recognition.findings = Mock(return_value={"entries": []})
+
+        progress = self.service.getCleanupProgress("user", "recognition_analyze_unknown_faces")
+
+        self.assertFalse(progress.get("running"))
+        self.assertEqual(progress.get("phase"), "finished")
+        self.assertEqual(progress.get("message_key"), "cleanup:recognition_scan_finished")
+        self.assertEqual(progress.get("findings_count"), 0)
+        self.assertEqual(progress.get("status", {}).get("phase"), "finished")
+        self.assertEqual(progress.get("status", {}).get("counters")[0].get("value"), 0)
+
     def test_get_file_analysis_progress_preserves_persisted_running_state_without_local_worker(self):
         written = {}
         self.service.file_analysis.readRuntimeState = lambda state_type, state_key: {

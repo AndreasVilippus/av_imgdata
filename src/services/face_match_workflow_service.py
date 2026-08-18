@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from threading import Lock
 from threading import Thread
 from time import monotonic
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from api.session_manager import SessionBootstrapRequired, SessionManagerError
@@ -39,6 +39,8 @@ class FaceMatchWorkflowService:
         shared_folder: str,
         changed_since_days: int = 0,
         use_cache: bool = True,
+        should_stop: Optional[Callable[[], bool]] = None,
+        progress_callback: Optional[Callable[..., None]] = None,
     ) -> List[str]:
         normalized_days = max(0, int(changed_since_days or 0))
         state_key = self.candidate_paths_cache_key(user_key, action, normalized_days)
@@ -54,22 +56,53 @@ class FaceMatchWorkflowService:
                     and isinstance(cached.get("paths"), list)
                 ):
                     return list(cached.get("paths") or [])
-        candidate_paths = self.backend.files.listImageFiles(normalized_shared_folder)
-        if normalized_days > 0:
-            cutoff_mtime_ns = int((datetime.now(timezone.utc).timestamp() - (normalized_days * 86400)) * 1_000_000_000)
-            lookup_cache = SidecarLookupCache()
-            changed_paths: List[str] = []
-            for image_path in candidate_paths:
-                normalized_path = str(image_path or "").strip()
-                if not normalized_path:
-                    continue
+        iter_image_files = getattr(self.backend.files, "iterImageFiles", None)
+        list_image_files_overridden = "listImageFiles" in getattr(self.backend.files, "__dict__", {})
+        image_paths = (
+            iter_image_files(normalized_shared_folder, should_stop=should_stop)
+            if callable(iter_image_files) and not list_image_files_overridden
+            else self.backend.files.listImageFiles(normalized_shared_folder)
+        )
+        candidate_paths: List[str] = []
+        scanned_paths = 0
+        matched_paths = 0
+        stopped = False
+        last_progress_at = monotonic()
+        cutoff_mtime_ns = (
+            int((datetime.now(timezone.utc).timestamp() - (normalized_days * 86400)) * 1_000_000_000)
+            if normalized_days > 0
+            else 0
+        )
+        lookup_cache = SidecarLookupCache() if normalized_days > 0 else None
+        for image_path in image_paths:
+            if should_stop and should_stop():
+                stopped = True
+                break
+            scanned_paths += 1
+            normalized_path = str(image_path or "").strip()
+            if not normalized_path:
+                continue
+            include_path = True
+            if normalized_days > 0:
+                include_path = False
                 if self.backend._fileChangedSince(normalized_path, cutoff_mtime_ns):
-                    changed_paths.append(normalized_path)
-                    continue
-                sidecar_path = self.backend.files.findXmpForImage(normalized_path, lookup_cache=lookup_cache)
-                if sidecar_path and self.backend._fileChangedSince(sidecar_path, cutoff_mtime_ns):
-                    changed_paths.append(normalized_path)
-            candidate_paths = changed_paths
+                    include_path = True
+                else:
+                    sidecar_path = self.backend.files.findXmpForImage(normalized_path, lookup_cache=lookup_cache)
+                    include_path = bool(sidecar_path and self.backend._fileChangedSince(sidecar_path, cutoff_mtime_ns))
+            if include_path:
+                matched_paths += 1
+                candidate_paths.append(normalized_path)
+            now = monotonic()
+            if progress_callback and (scanned_paths == 1 or scanned_paths % 100 == 0 or now - last_progress_at >= 2.0):
+                progress_callback(scanned_paths=scanned_paths, matched_paths=matched_paths)
+                last_progress_at = now
+        if normalized_days > 0:
+            candidate_paths = list(candidate_paths)
+        if progress_callback:
+            progress_callback(scanned_paths=scanned_paths, matched_paths=matched_paths)
+        if stopped:
+            return candidate_paths
         with self._candidate_paths_cache_lock:
             self._candidate_paths_cache[state_key] = {
                 "shared_folder": normalized_shared_folder,

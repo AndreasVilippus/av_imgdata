@@ -5,7 +5,7 @@ import struct
 import mmap
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from services.config_service import ConfigService
 from services.exiftool_service import ExifToolService
 from models.metadata_payload import MetadataPayload
@@ -486,16 +486,29 @@ class FileHandler:
         return len(conflicts)
 
     def listImageFiles(self, base_path: str) -> List[str]:
+        return sorted(self.iterImageFiles(base_path))
+
+    def iterImageFiles(
+        self,
+        base_path: str,
+        *,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> Iterator[str]:
         root = Path(base_path).expanduser().resolve()
         if not root.exists() or not root.is_dir():
-            return []
+            return
 
         extensions = set(self.effectiveImageExtensions())
-        return sorted([
-            str(p) for p in root.rglob("*")
-            if p.is_file() and p.suffix.lower().lstrip(".") in extensions
-            and "@eaDir" not in p.parts
-        ])
+        for dirpath, dirnames, filenames in os.walk(root):
+            if should_stop and should_stop():
+                return
+            dirnames[:] = sorted(name for name in dirnames if name != "@eaDir")
+            for filename in sorted(filenames):
+                if should_stop and should_stop():
+                    return
+                path = Path(dirpath) / filename
+                if path.suffix.lower().lstrip(".") in extensions and path.is_file():
+                    yield str(path)
 
     @staticmethod
     def list_files(base_path: str, pattern: str = "*") -> List[str]:

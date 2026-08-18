@@ -951,6 +951,146 @@ class FaceRecognitionService:
         )
         return references
 
+    def _preload_person_reference_embeddings(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        shared_folder: str,
+        persons: List[Dict[str, Any]],
+        start_index: int,
+        embedder: Any,
+        options: Dict[str, Any],
+        folder_cache: Dict[int, str],
+        action: str,
+        operation_id: str,
+    ) -> int:
+        """Fill the shared image embedding cache across sparse person groups.
+
+        ``_person_references`` already owns reference matching and progress. This
+        helper only avoids one-image external worker jobs when several adjacent
+        Photos persons each contribute too few images for an in-person batch.
+        """
+        batch_size = max(1, int(options.get("recognition_batch_size") or 8))
+        detect_many = getattr(embedder, "detect_and_embed_many", None)
+        if batch_size <= 1 or not callable(detect_many) or start_index >= len(persons):
+            return max(start_index + 1, 0)
+        if operation_id and hasattr(embedder, "set_external_worker_operation_id"):
+            try:
+                embedder.set_external_worker_operation_id(operation_id)
+            except Exception:
+                pass
+        if self._should_stop(user_key, action):
+            return start_index
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=options["changed_since_days"]) if options["changed_since_days"] > 0 else None
+        batch_items: List[Tuple[int, int, str]] = []
+        skip_counts: Dict[str, int] = {}
+
+        def increment(reason: str) -> None:
+            skip_counts[reason] = int(skip_counts.get(reason, 0)) + 1
+
+        max_persons = max(batch_size, batch_size * 4)
+        next_index = start_index + 1
+        for person_index in range(start_index, min(len(persons), start_index + max_persons)):
+            person = persons[person_index] if isinstance(persons[person_index], dict) else {}
+            try:
+                person_id = int(person.get("id"))
+            except (AttributeError, TypeError, ValueError):
+                increment("invalid_person_id")
+                next_index = person_index + 1
+                continue
+            try:
+                items = self.backend._listAllPhotoItemsForPerson(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    person_id=person_id,
+                )
+            except Exception as exc:
+                self._debug_log(
+                    "recognition_reference_embedding_preload_failed",
+                    action=action,
+                    person_id=person_id,
+                    person_index=person_index,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                next_index = person_index + 1
+                continue
+            if not isinstance(items, list):
+                items = list(items)
+            for item in items:
+                if len(batch_items) >= batch_size:
+                    break
+                try:
+                    int(item.get("id"))
+                except (AttributeError, TypeError, ValueError):
+                    increment("invalid_item_id")
+                    continue
+                image_path = self._item_path(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                    item=item,
+                    folder_cache=folder_cache,
+                )
+                if not image_path:
+                    increment("path_missing")
+                    continue
+                if self._image_embedding_cache.get(image_path) is not None:
+                    increment("cache_hit")
+                    continue
+                path = Path(image_path)
+                if not path.is_file():
+                    increment("not_file")
+                    continue
+                if cutoff is not None and datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) < cutoff:
+                    increment("unchanged")
+                    continue
+                batch_items.append((person_index, person_id, image_path))
+            next_index = person_index + 1
+            if len(batch_items) >= batch_size:
+                break
+
+        if len(batch_items) <= 1:
+            self._debug_log(
+                "recognition_reference_embedding_preload_not_started",
+                action=action,
+                reason="insufficient_cross_person_candidates",
+                start_index=start_index,
+                next_index=next_index,
+                candidates_count=len(batch_items),
+                inspected_persons=max(0, next_index - start_index),
+                skip_counts=dict(skip_counts),
+            )
+            return next_index
+        if self._should_stop(user_key, action):
+            return start_index
+
+        paths = [Path(path) for _person_index, _person_id, path in batch_items]
+        result = detect_many(paths)
+        images = result if isinstance(result, dict) else {}
+        faces_count = 0
+        for _person_index, _person_id, image_path in batch_items:
+            normalized_path = str(Path(image_path).expanduser().resolve())
+            embeddings = images.get(image_path, images.get(normalized_path, [])) if isinstance(images, dict) else []
+            if not isinstance(embeddings, list):
+                embeddings = []
+            self._image_embedding_cache[image_path] = embeddings
+            faces_count += len(embeddings)
+        self._debug_log(
+            "recognition_reference_embedding_preload_batch",
+            action=action,
+            start_index=start_index,
+            next_index=next_index,
+            images_count=len(batch_items),
+            persons_count=len({person_id for _person_index, person_id, _path in batch_items}),
+            faces_count=faces_count,
+        )
+        return next_index
+
     @staticmethod
     def _normalize_vector(values: List[float]) -> List[float]:
         magnitude = math.sqrt(sum(float(value) * float(value) for value in values))
@@ -1395,16 +1535,35 @@ class FaceRecognitionService:
             images_scanned=0, images_total=0, images_analyzed=0, images_skipped_unchanged=0,
             faces_scanned=0, references_count=0, transferred_count=0, errors_count=0,
         )
+        operation_id = self._current_operation_id(user_key, self.ACTION_SUGGEST)
+        next_preload_index = 0
         for index, person in enumerate(unknown):
             if self._should_stop(user_key, self.ACTION_SUGGEST):
                 self._finish_stopped_scan(user_key, self.ACTION_SUGGEST, options, entries)
                 return
+            if index >= next_preload_index:
+                next_preload_index = self._preload_person_reference_embeddings(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                    persons=unknown,
+                    start_index=index,
+                    embedder=embedder,
+                    options=options,
+                    folder_cache=folder_cache,
+                    action=self.ACTION_SUGGEST,
+                    operation_id=operation_id,
+                )
+                if self._should_stop(user_key, self.ACTION_SUGGEST):
+                    self._finish_stopped_scan(user_key, self.ACTION_SUGGEST, options, entries)
+                    return
             references = self._person_references(
                 user_key=user_key, cookies=cookies, base_url=base_url, shared_folder=shared_folder,
                 person=person, embedder=embedder, options=options, folder_cache=folder_cache,
                 progress_context={
                     "action": self.ACTION_SUGGEST,
-                    "operation_id": self._current_operation_id(user_key, self.ACTION_SUGGEST),
+                    "operation_id": operation_id,
                     "phase": "reading_unknown_images",
                     "message_key": "cleanup:recognition_reading_unknown_images",
                     "message": "Reading unknown face images.",
@@ -1563,6 +1722,8 @@ class FaceRecognitionService:
             message_key="cleanup:recognition_persons_loaded", message="Photos persons loaded.",
             persons_scanned=0, persons_total=len(persons_to_scan), findings_count=len(entries),
         )
+        operation_id = self._current_operation_id(user_key, self.ACTION_ASSIGNMENT)
+        next_preload_index = 0
         for index, person in enumerate(persons_to_scan):
             if self._should_stop(user_key, self.ACTION_ASSIGNMENT):
                 self._finish_stopped_scan(user_key, self.ACTION_ASSIGNMENT, options, entries)
@@ -1572,12 +1733,29 @@ class FaceRecognitionService:
             except (AttributeError, TypeError, ValueError):
                 continue
             current_person_name = str(person.get("name") or "")
+            if index >= next_preload_index and not (resume_after_image_id and current_person_id == resume_person_id):
+                next_preload_index = self._preload_person_reference_embeddings(
+                    user_key=user_key,
+                    cookies=cookies,
+                    base_url=base_url,
+                    shared_folder=shared_folder,
+                    persons=persons_to_scan,
+                    start_index=index,
+                    embedder=embedder,
+                    options=options,
+                    folder_cache=folder_cache,
+                    action=self.ACTION_ASSIGNMENT,
+                    operation_id=operation_id,
+                )
+                if self._should_stop(user_key, self.ACTION_ASSIGNMENT):
+                    self._finish_stopped_scan(user_key, self.ACTION_ASSIGNMENT, options, entries)
+                    return
             references = self._person_references(
                 user_key=user_key, cookies=cookies, base_url=base_url, shared_folder=shared_folder,
                 person=person, embedder=embedder, options=options, folder_cache=folder_cache,
                 progress_context={
                     "action": self.ACTION_ASSIGNMENT,
-                    "operation_id": self._current_operation_id(user_key, self.ACTION_ASSIGNMENT),
+                    "operation_id": operation_id,
                     "phase": "reading_assigned_images",
                     "message_key": "cleanup:recognition_reading_assigned_images",
                     "message": "Reading assigned Photos face images.",

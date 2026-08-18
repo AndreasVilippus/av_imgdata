@@ -299,6 +299,122 @@ def test_assignment_suggestion_ranks_person_references_in_one_native_call():
     assert len(findings.values[service.FINDING_ASSIGNMENTS]["entries"]) == 2
 
 
+def test_unknown_face_suggestions_preload_sparse_persons_as_one_image_batch(tmp_path):
+    service, findings = _service()
+    options = service.normalize_options({"operation_mode": "save_only", "review_score": 0.1, "min_margin": 0.0, "recognition_batch_size": 3})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {"person_id": 1, "person_name": "One", "used_count": 3, "centroid_embedding": [1.0, 0.0], "medoid": {}},
+        ],
+    }
+    persons = [{"id": 100 + index, "name": f"Unknown {index}"} for index in range(3)]
+    for person in persons:
+        path = tmp_path / f"unknown-{person['id']}.jpg"
+        path.write_bytes(b"jpeg")
+
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: str(tmp_path))
+    service.backend.getCleanupProgress = lambda _user_key, _action: {"operation_id": "cleanup-recognition-suggest-1"}
+    service.backend._listAllPhotoItemsForPerson = lambda person_id, **_kwargs: [
+        {"id": int(person_id) * 10, "folder_id": 20, "filename": f"unknown-{person_id}.jpg"}
+    ]
+    service.backend.photos = SimpleNamespace(
+        listFotoTeamPersonUnknown=lambda **_kwargs: persons,
+        list_faceFotoTeamItems=lambda id_item, **_kwargs: [{
+            "person_id": int(id_item) // 10,
+            "face_id": int(id_item) + 1000,
+            "bbox": {"top_left": {"x": 0.1, "y": 0.1}, "bottom_right": {"x": 0.2, "y": 0.2}},
+        }],
+    )
+    service._item_path = lambda item, **_kwargs: str(tmp_path / item["filename"])
+    detect_calls = []
+
+    class _Embedder:
+        def set_external_worker_operation_id(self, operation_id):
+            self.operation_id = operation_id
+
+        def detect_and_embed_many(self, image_paths):
+            detect_calls.append([path.name for path in image_paths])
+            return {
+                str(path): [{"bbox": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "embedding": [1.0, 0.0]}]
+                for path in image_paths
+            }
+
+        def detect_and_embed(self, _path):
+            raise AssertionError("sparse persons should be preloaded as one batch")
+
+        def rank_embeddings(self, target_embeddings, profile_embeddings):
+            return [{"best_index": 0, "best_score": 0.9, "second_index": -1, "second_score": 0.0, "margin": 0.9} for _ in target_embeddings]
+
+        def _iou(self, _left, _right):
+            return 1.0
+
+    service._prepared_embedder = lambda _options: _Embedder()
+
+    service._build_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    assert detect_calls == [["unknown-100.jpg", "unknown-101.jpg", "unknown-102.jpg"]]
+    assert len(findings.values[service.FINDING_SUGGESTIONS]["entries"]) == 3
+
+
+def test_assignment_suggestions_preload_sparse_persons_as_one_image_batch(tmp_path):
+    service, findings = _service()
+    options = service.normalize_options({"operation_mode": "save_only", "review_score": 0.1, "min_margin": 0.0, "recognition_batch_size": 3})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {"person_id": 1, "person_name": "One", "used_count": 3, "centroid_embedding": [1.0, 0.0], "medoid": {}},
+            {"person_id": 2, "person_name": "Two", "used_count": 3, "centroid_embedding": [0.0, 1.0], "medoid": {}},
+        ],
+    }
+    persons = [{"id": 10 + index, "name": f"Known {index}"} for index in range(3)]
+    for person in persons:
+        (tmp_path / f"known-{person['id']}.jpg").write_bytes(b"jpeg")
+
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: str(tmp_path))
+    service.backend.getCleanupProgress = lambda _user_key, _action: {"operation_id": "cleanup-recognition-assignment-1"}
+    service.backend._listAllPhotoItemsForPerson = lambda person_id, **_kwargs: [
+        {"id": int(person_id) * 10, "folder_id": 20, "filename": f"known-{person_id}.jpg"}
+    ]
+    service.backend.photos = SimpleNamespace(
+        listFotoTeamPersonKnown=lambda **_kwargs: persons,
+        list_faceFotoTeamItems=lambda id_item, **_kwargs: [{
+            "person_id": int(id_item) // 10,
+            "face_id": int(id_item) + 1000,
+            "bbox": {"top_left": {"x": 0.1, "y": 0.1}, "bottom_right": {"x": 0.2, "y": 0.2}},
+        }],
+    )
+    service._item_path = lambda item, **_kwargs: str(tmp_path / item["filename"])
+    detect_calls = []
+
+    class _Embedder:
+        def set_external_worker_operation_id(self, operation_id):
+            self.operation_id = operation_id
+
+        def detect_and_embed_many(self, image_paths):
+            detect_calls.append([path.name for path in image_paths])
+            return {
+                str(path): [{"bbox": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "embedding": [0.0, 1.0]}]
+                for path in image_paths
+            }
+
+        def detect_and_embed(self, _path):
+            raise AssertionError("sparse persons should be preloaded as one batch")
+
+        def rank_embeddings(self, target_embeddings, profile_embeddings):
+            return [{"best_index": 1, "best_score": 0.9, "second_index": 0, "second_score": 0.1, "margin": 0.8} for _ in target_embeddings]
+
+        def _iou(self, _left, _right):
+            return 1.0
+
+    service._prepared_embedder = lambda _options: _Embedder()
+
+    service._build_assignment_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    assert detect_calls == [["known-10.jpg", "known-11.jpg", "known-12.jpg"]]
+    assert len(findings.values[service.FINDING_ASSIGNMENTS]["entries"]) == 3
+
+
 def test_assignment_resume_skips_persons_before_previous_review_finding():
     service, findings = _service()
     options = service.normalize_options({"operation_mode": "immediate", "resume_existing": True})

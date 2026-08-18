@@ -118,14 +118,14 @@ export default {
 		},
 		getOptionalComponentUnavailableMessage(payload) {
 			const source = payload && typeof payload === 'object' ? payload : {};
-			const error = String(source.error || '').trim();
-			const messageKey = String(source.message_key || '').trim();
-			const message = String(source.message || '').trim();
-			if (error === 'insightface_not_installed') {
-				return this.faceMatchInsightFaceUnavailableMessage || this.$avt(
-					'face_match:progress_insightface_missing',
-					'InsightFace is not available.'
-				);
+				const error = String(source.error || '').trim();
+				const messageKey = String(source.message_key || '').trim();
+				const message = String(source.message || '').trim();
+				if (error === 'insightface_not_installed') {
+					return message || this.$avt(
+						'face_match:progress_insightface_missing',
+						'InsightFace is not available.'
+					);
 			}
 			if ([
 				'face_match:progress_insightface_missing',

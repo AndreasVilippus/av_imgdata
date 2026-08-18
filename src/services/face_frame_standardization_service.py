@@ -546,6 +546,34 @@ class FaceFrameStandardizationService:
                 options=options,
             )
             detector = self._prepared_detector(options)
+            detection_cache: Dict[str, List[Dict[str, Any]]] = {}
+            detect_many = getattr(detector, "detect_many", None)
+            batch_size = 8
+
+            def load_detections(path_index: int, path: str) -> List[Dict[str, Any]]:
+                cached = detection_cache.get(path)
+                if cached is not None:
+                    return cached
+                batch_paths = [
+                    candidate
+                    for candidate in paths[path_index:min(total_files, path_index + batch_size)]
+                    if candidate not in detection_cache
+                ]
+                if callable(detect_many) and len(batch_paths) > 1:
+                    result = detect_many([Path(candidate) for candidate in batch_paths])
+                    images = result if isinstance(result, dict) else {}
+                    for candidate in batch_paths:
+                        normalized_candidate = str(Path(candidate).expanduser().resolve())
+                        detections = images.get(candidate, images.get(normalized_candidate, [])) if isinstance(images, dict) else []
+                        detection_cache[candidate] = [dict(item) for item in detections if isinstance(item, dict)] if isinstance(detections, list) else []
+                else:
+                    detection_cache[path] = [
+                        dict(item)
+                        for item in detector.detect(Path(path))
+                        if isinstance(item, dict)
+                    ]
+                return detection_cache.get(path, [])
+
             photos_cache = PhotosLookupCache()
             for index, path in enumerate(paths[start_index:], start=start_index):
                 if backend._shouldStopCleanup(user_key, self.ACTION):
@@ -568,7 +596,7 @@ class FaceFrameStandardizationService:
                             image_path=path,
                             photos_lookup_cache=photos_cache,
                         ))
-                    detections = detector.detect(Path(path))
+                    detections = load_detections(index, path)
                     if backend._shouldStopCleanup(user_key, self.ACTION):
                         break
                     detection_boxes = [self._detection_box(item) for item in detections]

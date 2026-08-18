@@ -76,10 +76,6 @@ export default {
 		faceMatchSupportsAutoAssignKnown() {
 			return !['search_missing_faces_insightface', 'recognition_analyze_unknown_faces'].includes(this.selectedFaceMatchingAction);
 		},
-		hasInsightFaceForFaceMatch() {
-			const nativeStatus = this.faceMatchInsightFaceNativeProcessorStatus;
-			return !!(nativeStatus && nativeStatus.hot_path_available === true && nativeStatus.available === true);
-		},
 		faceMatchInsightFaceNativeProcessorStatus() {
 			const insightFaceStatus = this.insightFaceStatus && typeof this.insightFaceStatus === 'object'
 				? this.insightFaceStatus
@@ -96,20 +92,6 @@ export default {
 			return runtimeStatus.native_processor_status && typeof runtimeStatus.native_processor_status === 'object'
 				? runtimeStatus.native_processor_status
 				: {};
-		},
-		faceMatchInsightFaceUnavailableMessage() {
-			const nativeStatus = this.faceMatchInsightFaceNativeProcessorStatus;
-			const reason = String(nativeStatus && nativeStatus.reason || '').trim();
-			if (reason === 'insightface_license_not_acknowledged') {
-				return this.$avt(
-					'face_match:hint_insightface_license_missing',
-					'InsightFace actions become available after the InsightFace model license terms have been acknowledged in the native processor configuration.'
-				);
-			}
-			return this.$avt(
-				'face_match:hint_insightface_unavailable',
-				'InsightFace actions become available when the native face processor is ready.'
-			);
 		},
 		faceMatchReviewingStoredFindings() {
 			return this.faceMatchUseStoredFindings || this.selectedFaceMatchingAction === 'load_photo_face_match_findings';

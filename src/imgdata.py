@@ -1911,6 +1911,8 @@ class ImgDataService:
         shared_folder: str,
         changed_since_days: int = 0,
         use_cache: bool = True,
+        should_stop: Optional[Any] = None,
+        progress_callback: Optional[Any] = None,
     ) -> List[str]:
         return self.face_match_workflow.get_candidate_paths(
             user_key=user_key,
@@ -1918,6 +1920,8 @@ class ImgDataService:
             shared_folder=shared_folder,
             changed_since_days=changed_since_days,
             use_cache=use_cache,
+            should_stop=should_stop,
+            progress_callback=progress_callback,
         )
 
     def _imageOrSidecarChangedSince(
@@ -2692,11 +2696,59 @@ class ImgDataService:
             current["phase"] = "stopped"
             current["message_key"] = "cleanup:progress_stopped"
             current["message"] = "Cleanup stopped."
-        return self.runtime_state.normalize_progress(
+        current = self.runtime_state.normalize_progress(
             current,
             operation="cleanup",
             action=normalized_action,
         )
+        if normalized_action in {
+            FaceRecognitionService.ACTION_OUTLIERS,
+            FaceRecognitionService.ACTION_SUGGEST,
+            FaceRecognitionService.ACTION_ASSIGNMENT,
+        }:
+            current = self._syncRecognitionProgressFindingsCount(user_key, normalized_action, current)
+        return current
+
+    def _syncRecognitionProgressFindingsCount(self, user_key: str, action: str, progress: Dict[str, Any]) -> Dict[str, Any]:
+        current = dict(progress) if isinstance(progress, dict) else {}
+        if current.get("running"):
+            return current
+        options = current.get("options") if isinstance(current.get("options"), dict) else {}
+        operation_mode = str(options.get("operation_mode") or current.get("operation_mode") or "").strip().lower()
+        findings = self.face_recognition.findings(
+            action,
+            user_key=user_key,
+            operation_mode=operation_mode,
+        )
+        entries = findings.get("entries") if isinstance(findings, dict) and isinstance(findings.get("entries"), list) else []
+        actual_count = len(entries)
+        current["findings_count"] = actual_count
+        result = current.get("result")
+        if isinstance(result, dict) and "findings_count" in result:
+            result = dict(result)
+            result["findings_count"] = actual_count
+            current["result"] = result
+        status = current.get("status")
+        if isinstance(status, dict):
+            status = dict(status)
+            counters = []
+            for counter in status.get("counters") if isinstance(status.get("counters"), list) else []:
+                if isinstance(counter, dict) and counter.get("key") == "findings":
+                    counter = dict(counter)
+                    counter["value"] = actual_count
+                counters.append(counter)
+            status["counters"] = counters
+            current["status"] = status
+        if actual_count == 0 and str(current.get("message_key") or "") == "cleanup:recognition_review_required":
+            current["phase"] = "finished"
+            current["message_key"] = "cleanup:recognition_scan_finished"
+            current["message"] = "Recognition scan finished."
+            status = current.get("status")
+            if isinstance(status, dict):
+                status = dict(status)
+                status["phase"] = "finished"
+                current["status"] = status
+        return current
 
     def _setCleanupProgress(self, user_key: str, **updates: Any) -> Dict[str, Any]:
         action = self._normalizeCleanupAction(updates.get("action"))
@@ -8298,13 +8350,87 @@ class ImgDataService:
                     changed_since_days=normalized_changed_since_days,
                 ),
             )
+            def report_candidate_scan_progress(*, scanned_paths: int, matched_paths: int) -> None:
+                self._setFaceMatchingProgressMessage(
+                    user_key,
+                    "face_match:progress_listing_files",
+                    message_params={
+                        "path": shared_folder,
+                        "scanned": scanned_paths,
+                        "matched": matched_paths,
+                    },
+                    total_images=matched_paths,
+                    images_read=images_read,
+                    faces_read=faces_read,
+                    target_faces_read=target_faces_read,
+                    metadata_faces_read=metadata_faces_read,
+                    transferred_count=transferred_count,
+                    findings_count=findings_count,
+                    resume_cursor=self._buildFaceMatchResumeCursor(
+                        skip_face_ids=[],
+                        skip_targets=skip_target_tokens,
+                        transferred_count=transferred_count,
+                        auto=auto,
+                        save_only=save_only,
+                        action=action,
+                        recognize_persons=bool(recognize_persons),
+                        skip_unknown_persons=bool(skip_unknown_persons),
+                        findings_count=findings_count,
+                        path_index=path_index,
+                        images_read=images_read,
+                        faces_read=faces_read,
+                        target_faces_read=target_faces_read,
+                        metadata_faces_read=metadata_faces_read,
+                        changed_since_days=normalized_changed_since_days,
+                    ),
+                )
+
             candidate_paths = self._getFaceMatchCandidatePaths(
                 user_key=user_key,
                 action=action,
                 shared_folder=shared_folder,
                 changed_since_days=normalized_changed_since_days,
                 use_cache=bool(resume_cursor),
+                should_stop=lambda: self._shouldStopFaceMatching(user_key),
+                progress_callback=report_candidate_scan_progress,
             )
+            if self._shouldStopFaceMatching(user_key):
+                final_message_key = "face_match:progress_stopped"
+                if save_only:
+                    self._writeFaceMatchFindings(
+                        status="stopped",
+                        shared_folder=shared_folder,
+                        action=action,
+                        auto=auto,
+                        save_only=save_only,
+                        transferred_count=transferred_count,
+                        entries=saved_entries,
+                    )
+                return {
+                    "searched": False,
+                    "stopped": True,
+                    "transferred_count": transferred_count,
+                    "auto": auto,
+                    "save_only": save_only,
+                    "findings_count": findings_count,
+                    "resume_cursor": self._buildFaceMatchResumeCursor(
+                        skip_face_ids=[],
+                        skip_targets=skip_target_tokens,
+                        transferred_count=transferred_count,
+                        auto=auto,
+                        save_only=save_only,
+                        action=action,
+                        recognize_persons=bool(recognize_persons),
+                        skip_unknown_persons=bool(skip_unknown_persons),
+                        findings_count=findings_count,
+                        path_index=path_index,
+                        images_read=images_read,
+                        faces_read=faces_read,
+                        target_faces_read=target_faces_read,
+                        metadata_faces_read=metadata_faces_read,
+                        changed_since_days=normalized_changed_since_days,
+                    ),
+                }
             path_index = min(max(0, path_index), len(candidate_paths))
             self._setFaceMatchingProgressMessage(
                 user_key,

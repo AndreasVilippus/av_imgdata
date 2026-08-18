@@ -148,6 +148,49 @@ class TestWorkerApiService(unittest.TestCase):
         self.assertEqual(claimed["status"], "empty")
         self.assertEqual(calls, [])
 
+    def test_repeated_unchanged_heartbeat_is_not_persisted_until_interval(self):
+        clock = MutableClock(datetime(2026, 8, 9, 18, 0, 0, tzinfo=timezone.utc))
+        service = WorkerApiService(package_var=self.package_var, clock=clock)
+        token = service.create_token(token_id="heartbeat-worker")["token"]
+        service.register_worker(
+            token=token,
+            worker_id="worker-01",
+            version="0.10.0",
+            capabilities=["face_native_embed"],
+        )
+        calls = []
+        original_write = service.store.write
+
+        def write_spy(state):
+            calls.append(True)
+            return original_write(state)
+
+        service.store.write = write_spy
+        clock.value = datetime(2026, 8, 9, 18, 0, 5, tzinfo=timezone.utc)
+        heartbeat = service.heartbeat(
+            token=token,
+            worker_id="worker-01",
+            status="registered",
+            capabilities=["face_native_embed"],
+        )
+        state = service.store.read()
+
+        self.assertEqual(heartbeat["worker"]["last_seen_at"], "2026-08-09T18:00:05Z")
+        self.assertEqual(state["workers"]["worker-01"]["last_seen_at"], "2026-08-09T18:00:00Z")
+        self.assertEqual(calls, [])
+
+        clock.value = datetime(2026, 8, 9, 18, 0, 11, tzinfo=timezone.utc)
+        service.heartbeat(
+            token=token,
+            worker_id="worker-01",
+            status="registered",
+            capabilities=["face_native_embed"],
+        )
+        state = service.store.read()
+
+        self.assertEqual(state["workers"]["worker-01"]["last_seen_at"], "2026-08-09T18:00:11Z")
+        self.assertEqual(calls, [True])
+
     def test_runtime_capability_is_not_enqueueable_as_processor_job(self):
         with self.assertRaises(WorkerApiError) as ctx:
             self.service.enqueue_job(

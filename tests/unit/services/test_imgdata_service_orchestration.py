@@ -603,6 +603,70 @@ def test_face_match_candidate_paths_changed_since_days_uses_image_and_sidecar_mt
     ) == ["/volume1/photo/b.jpg", "/volume1/photo/c.jpg"]
 
 
+def test_face_match_candidate_paths_reports_incremental_scan_progress():
+    service = make_service()
+    paths = [
+        "/volume1/photo/a.jpg",
+        "/volume1/photo/b.jpg",
+        "/volume1/photo/c.jpg",
+    ]
+    progress = []
+
+    def iter_image_files(shared_folder, should_stop=None):
+        assert shared_folder == "/volume1/photo"
+        for path in paths:
+            yield path
+
+    service.files.iterImageFiles = iter_image_files
+    service.files.findXmpForImage = lambda image_path, lookup_cache=None: None
+    service._fileChangedSince = lambda path, cutoff: path.endswith(("a.jpg", "c.jpg"))
+
+    result = service._getFaceMatchCandidatePaths(
+        user_key="user",
+        action="search_missing_faces_insightface",
+        shared_folder="/volume1/photo",
+        changed_since_days=30,
+        use_cache=False,
+        progress_callback=lambda **kwargs: progress.append(kwargs),
+    )
+
+    assert result == ["/volume1/photo/a.jpg", "/volume1/photo/c.jpg"]
+    assert progress[0] == {"scanned_paths": 1, "matched_paths": 1}
+    assert progress[-1] == {"scanned_paths": 3, "matched_paths": 2}
+
+
+def test_face_match_candidate_paths_can_stop_during_incremental_scan():
+    service = make_service()
+    stop_checks = 0
+
+    def should_stop():
+        nonlocal stop_checks
+        stop_checks += 1
+        return stop_checks >= 3
+
+    def iter_image_files(_shared_folder, should_stop=None):
+        for path in ["/volume1/photo/a.jpg", "/volume1/photo/b.jpg", "/volume1/photo/c.jpg"]:
+            yield path
+
+    service.files.iterImageFiles = iter_image_files
+
+    result = service._getFaceMatchCandidatePaths(
+        user_key="user",
+        action="search_missing_faces_insightface",
+        shared_folder="/volume1/photo",
+        use_cache=False,
+        should_stop=should_stop,
+    )
+
+    assert result == ["/volume1/photo/a.jpg", "/volume1/photo/b.jpg"]
+    service.files.iterImageFiles = lambda _shared_folder, should_stop=None: iter(())
+    assert service._getFaceMatchCandidatePaths(
+        user_key="user",
+        action="search_missing_faces_insightface",
+        shared_folder="/volume1/photo",
+    ) == []
+
+
 def test_face_match_stop_request_is_owned_by_workflow_service():
     service = make_service()
     service._setFaceMatchingProgress(

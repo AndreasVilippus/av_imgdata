@@ -103,7 +103,7 @@ def test_vips_preferred_decoder_runs_before_configured_fallback(tmp_path):
     assert result.success is True
     assert result.source == "libvips"
     assert result.image_bytes == b"\xff\xd8vips-jpeg"
-    assert calls == [(image_path, "resize", {"quality": 95, "width": 1024, "height": 1024, "maintain_aspect": True}, "jpeg")]
+    assert calls == [(image_path, "resize", {"quality": 95, "colorspace": "srgb", "width": 1024, "height": 1024, "maintain_aspect": True}, "jpeg")]
 
 
 def test_vips_preferred_decoder_batches_multiple_images(tmp_path):
@@ -152,7 +152,64 @@ def test_vips_preferred_decoder_batches_multiple_images(tmp_path):
     assert results[str(image_a)].source == "libvips"
     assert results[str(image_a)].image_bytes == b"\xff\xd8batch-a.jpg"
     assert results[str(image_b)].success is True
-    assert calls == [([image_a, image_b], "resize", {"quality": 95, "width": 1024, "height": 1024, "maintain_aspect": True}, "jpeg")]
+    assert calls == [([image_a, image_b], "resize", {"quality": 95, "colorspace": "srgb", "width": 1024, "height": 1024, "maintain_aspect": True}, "jpeg")]
+
+
+def test_pillow_heif_decoder_converts_embedded_profile_to_srgb(monkeypatch, tmp_path):
+    image_path = tmp_path / "image.heic"
+    image_path.write_bytes(b"heic")
+    conversions = []
+    saved = []
+
+    class _Image:
+        mode = "RGB"
+        info = {"icc_profile": b"profile-bytes"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def thumbnail(self, *_args, **_kwargs):
+            pass
+
+        def convert(self, *_args, **_kwargs):
+            raise AssertionError("embedded profiles must use ImageCms conversion")
+
+    class _ConvertedImage:
+        mode = "RGB"
+        info = {}
+
+        def thumbnail(self, *_args, **_kwargs):
+            pass
+
+        def save(self, output, **_kwargs):
+            saved.append(self)
+            output.write(b"\xff\xd8jpeg")
+
+    converted = _ConvertedImage()
+    fake_image_module = SimpleNamespace(open=lambda _path: _Image())
+    fake_image_ops = SimpleNamespace(exif_transpose=lambda value: value)
+    fake_image_cms = SimpleNamespace(
+        ImageCmsProfile=lambda source: ("profile", source),
+        createProfile=lambda name: ("target", name),
+        profileToProfile=lambda image, source, target, outputMode=None: conversions.append((image, source[0], target, outputMode)) or converted,
+    )
+    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=fake_image_module, ImageOps=fake_image_ops, ImageCms=fake_image_cms))
+    monkeypatch.setitem(sys.modules, "pillow_heif", SimpleNamespace(register_heif_opener=lambda: None))
+    service = ImageDecodeService(_Config({
+        "IMAGE_DECODER_ENABLED": True,
+        "IMAGE_DECODER_EXTENSIONS": ["heic"],
+        "IMAGE_DECODER_ORDER": ["pillow-heif"],
+    }))
+
+    result = service.decode_to_jpeg(str(image_path))
+
+    assert result.success is True
+    assert conversions and conversions[0][2] == ("target", "sRGB")
+    assert conversions[0][3] == "RGB"
+    assert saved == [converted]
 
 
 def test_vips_preferred_decoder_skips_heic_when_probe_reports_no_heif(monkeypatch, tmp_path):
@@ -315,3 +372,21 @@ def test_external_decoder_uses_configured_binary(monkeypatch, tmp_path):
     assert result.success is True
     assert result.source == "heif-convert"
     assert commands[0][:3] == [str(executable), "-q", "95"]
+
+
+def test_imagemagick_decoder_normalizes_to_srgb(tmp_path):
+    image_path = tmp_path / "image.heic"
+    output_path = tmp_path / "decoded.jpg"
+
+    command = ImageDecodeService._decoder_command("magick", "magick", image_path, output_path)
+
+    assert command == [
+        "magick",
+        str(image_path),
+        "-auto-orient",
+        "-colorspace",
+        "sRGB",
+        "-quality",
+        "95",
+        str(output_path),
+    ]

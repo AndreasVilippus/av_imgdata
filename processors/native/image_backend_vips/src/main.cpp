@@ -63,6 +63,13 @@ bool write_file(const std::string& path, const std::string& body) {
     return true;
 }
 
+std::string lower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
 std::string trim(const std::string& value) {
     const auto start = value.find_first_not_of(" \t\r\n");
     if (start == std::string::npos) {
@@ -286,11 +293,13 @@ Job parse_job(const std::string& path) {
         const int height = json_int_value(options, "height", 0);
         const int angle = json_int_value(options, "angle", 0);
         const int quality = json_int_value(options, "quality", 95);
+        const std::string colorspace = lower(json_string_value(options, "colorspace"));
         const bool maintain_aspect = json_bool_value(options, "maintain_aspect", true);
         job.options["width"] = std::to_string(width);
         job.options["height"] = std::to_string(height);
         job.options["angle"] = std::to_string(angle);
         job.options["quality"] = std::to_string(std::max(1, std::min(100, quality)));
+        job.options["colorspace"] = colorspace.empty() ? "srgb" : colorspace;
         job.options["maintain_aspect"] = maintain_aspect ? "true" : "false";
     }
     return job;
@@ -316,13 +325,6 @@ Args parse_args(int argc, char** argv) {
         }
     }
     return args;
-}
-
-std::string lower(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value;
 }
 
 std::string output_extension(const std::string& format) {
@@ -428,6 +430,22 @@ int write_image(VipsImage* image, const std::string& path, int quality) {
     return vips_image_write_to_file(image, path.c_str(), "Q", quality, nullptr);
 }
 
+bool wants_srgb_output(const Job& job, const std::string& format) {
+    if (format != "jpeg" && format != "jpg") {
+        return false;
+    }
+    const auto option = job.options.find("colorspace");
+    return option == job.options.end() || lower(option->second) == "srgb";
+}
+
+VipsImage* normalize_srgb_for_jpeg(VipsImage* image) {
+    VipsImage* normalized = nullptr;
+    if (vips_colourspace(image, &normalized, VIPS_INTERPRETATION_sRGB, nullptr)) {
+        return nullptr;
+    }
+    return normalized;
+}
+
 int process_job(const Args& args, const Job& job, const std::string& output_stem) {
     if (job.image_path.empty()) {
         return write_error(args.output, "process", "invalid_job", "image_path missing");
@@ -484,17 +502,36 @@ int process_job(const Args& args, const Job& job, const std::string& output_stem
         }
         return write_error(args.output, operation, "processing_failed", "processor did not produce an image");
     }
-    if (write_image(processed, out_path, quality)) {
+    VipsImage* output_image = processed;
+    if (wants_srgb_output(job, format)) {
+        VipsImage* srgb = normalize_srgb_for_jpeg(processed);
+        if (!srgb) {
+            if (image) {
+                g_object_unref(image);
+            }
+            g_object_unref(processed);
+            return write_error(args.output, operation, "colorspace_failed", vips_error_buffer());
+        }
+        output_image = srgb;
+    }
+    if (write_image(output_image, out_path, quality)) {
         if (image) {
             g_object_unref(image);
+        }
+        if (output_image != processed) {
+            g_object_unref(output_image);
         }
         g_object_unref(processed);
         return write_error(args.output, operation, "output_failed", vips_error_buffer());
     }
-    const std::string json = image_info_json(processed, operation).substr(0, image_info_json(processed, operation).size() - 1)
+    const std::string info_json = image_info_json(output_image, operation);
+    const std::string json = info_json.substr(0, info_json.size() - 1)
         + ",\"output_path\":\"" + escape_json(out_path) + "\",\"output_format\":\"" + escape_json(format) + "\"}";
     if (image) {
         g_object_unref(image);
+    }
+    if (output_image != processed) {
+        g_object_unref(output_image);
     }
     g_object_unref(processed);
     return write_file(args.output, json) ? 0 : 1;

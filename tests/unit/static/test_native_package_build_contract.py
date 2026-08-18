@@ -234,6 +234,8 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "libvips" in source
     assert "vips_ready" in source
     assert "vips_image_new_from_file" in source
+    assert 'job.options["colorspace"] = colorspace.empty() ? "srgb" : colorspace' in source
+    assert "vips_colourspace(image, &normalized, VIPS_INTERPRETATION_sRGB" in source
     assert "0.1.0-skeleton image-backend-vips" not in source
     assert "libvips_not_linked" not in source
 

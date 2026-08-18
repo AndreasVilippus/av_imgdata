@@ -243,6 +243,62 @@ def test_save_only_run_writes_persisted_findings_list():
     assert stored["face_frame_standardization"]["entries"][0]["write_state"] == "pending"
 
 
+def test_save_only_run_uses_detector_batch_when_available(tmp_path):
+    image_a = tmp_path / "a.jpg"
+    image_b = tmp_path / "b.jpg"
+    image_a.write_bytes(b"jpeg")
+    image_b.write_bytes(b"jpeg")
+    stored = {}
+    backend = SimpleNamespace(
+        core=SimpleNamespace(getSharedFolder=Mock(return_value=str(tmp_path))),
+        checks_workflow=SimpleNamespace(get_candidate_paths=Mock(return_value=[str(image_a), str(image_b)])),
+        file_analysis=SimpleNamespace(
+            writeCheckFindings=Mock(side_effect=lambda finding_type, payload: stored.__setitem__(finding_type, payload) or True),
+        ),
+        _configuredInsightFaceModelName=Mock(return_value="buffalo_l"),
+        _configuredInsightFaceModelRoot=Mock(return_value="/models"),
+        _readImageMetadata=Mock(return_value=SimpleNamespace(faces=[
+            MetadataFace.from_center_box(
+                name="Person",
+                x=0.5,
+                y=0.5,
+                w=0.2,
+                h=0.2,
+                source="metadata",
+                source_format="MWG_REGIONS",
+            ),
+        ])),
+        _loadPhotoFacesForImage=Mock(return_value=[]),
+        _shouldStopCleanup=Mock(return_value=False),
+        _setCleanupProgress=Mock(),
+        _buildStatusPayload=Mock(return_value={"schema_version": 1}),
+        _buildStatusProgress=Mock(return_value={}),
+        _buildStatusCounter=Mock(return_value={}),
+    )
+    detector = Mock()
+    detector.detect.side_effect = AssertionError("batch path expected")
+    detector.detect_many.return_value = {
+        str(image_a.resolve()): [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}],
+        str(image_b.resolve()): [{"bbox": {"x1": 0.4, "y1": 0.4, "x2": 0.6, "y2": 0.6}}],
+    }
+
+    backend._createFaceDetector = Mock(return_value=detector)
+    FaceFrameStandardizationService(backend)._run(
+        user_key="user",
+        cookies={},
+        base_url="http://example.test",
+        options=FaceFrameStandardizationService.normalize_options({
+            "operation_mode": "save_only",
+            "profile": "normal",
+            "include_photos": False,
+        }),
+    )
+
+    detector.detect_many.assert_called_once()
+    assert [path.name for path in detector.detect_many.call_args.args[0]] == ["a.jpg", "b.jpg"]
+    assert len(stored["face_frame_standardization"]["entries"]) == 2
+
+
 def test_save_only_run_stops_after_detector_before_creating_findings():
     stored = {}
     backend = SimpleNamespace(

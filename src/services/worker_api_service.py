@@ -22,6 +22,7 @@ class WorkerApiService:
     NON_JOB_CAPABILITIES = {"warm_processor_worker"}
     TERMINAL_JOB_RETENTION_SECONDS = 900
     ENROLLMENT_RETENTION_SECONDS = 86400
+    HEARTBEAT_PERSIST_INTERVAL_SECONDS = 10
 
     def __init__(
         self,
@@ -87,13 +88,38 @@ class WorkerApiService:
     ) -> Dict[str, Any]:
         self.credentials.authenticate(token=token, worker_id=worker_id, scope=WorkerProtocol.TOKEN_SCOPE_WORKER_API)
         worker_id = self.credentials.require_value(worker_id, "worker_id_required")
-        worker = self._upsert_worker(
-            worker_id=worker_id,
-            status=str(status or "ready"),
-            capabilities=capabilities,
-            metadata=metadata,
-            require_existing=True,
-        )
+        now = self._now_iso()
+        normalized_status = str(status or "ready")
+        normalized_capabilities = WorkerProtocol.normalize_capabilities(capabilities) if capabilities is not None else None
+
+        def mutate(state):
+            workers = state["workers"]
+            if worker_id not in workers:
+                raise WorkerApiError("worker_not_registered")
+            worker = workers[worker_id]
+            if not isinstance(worker, dict):
+                raise WorkerApiError("worker_not_registered")
+            response_worker = dict(worker)
+            response_worker["last_seen_at"] = now
+            response_worker["status"] = normalized_status
+            if normalized_capabilities is not None:
+                response_worker["capabilities"] = normalized_capabilities
+            if isinstance(metadata, dict):
+                response_worker["metadata"] = metadata
+
+            last_seen = parse_time(worker.get("last_seen_at"))
+            stale_seconds = (parse_time(now) - last_seen).total_seconds()
+            changed = (
+                str(worker.get("status") or "") != normalized_status
+                or (normalized_capabilities is not None and worker.get("capabilities") != normalized_capabilities)
+                or (isinstance(metadata, dict) and worker.get("metadata") != metadata)
+                or stale_seconds >= self.HEARTBEAT_PERSIST_INTERVAL_SECONDS
+            )
+            if changed:
+                worker.update(response_worker)
+            return response_worker, changed
+
+        worker = self.store.update_if_changed(mutate)
         return {"status": "ok", "worker": worker}
 
     def enqueue_job(self, *, job_id: str, job_type: str, payload: Dict[str, Any], priority: int = 100) -> Dict[str, Any]:

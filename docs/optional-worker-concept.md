@@ -204,9 +204,9 @@ A worker is usable when:
 - image jobs have a compatible input mode;
 - the Worker API is enabled.
 
-Current controlled-rollout assumptions remain conservative: a JSON Worker API state
-store and a small number of workers/jobs. Transactional storage such as SQLite should
-be evaluated before high-volume multi-worker orchestration.
+Current controlled-rollout assumptions remain conservative: the package-local SQLite
+worker runtime store and a small number of workers/jobs. High-volume multi-worker
+orchestration still requires the lease/recovery lifecycle work below.
 
 ## Planned persistent warm runtime
 
