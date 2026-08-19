@@ -89,14 +89,24 @@ ensure_native_face_processor() {
 
 ensure_vips_image_processor() {
 	local install_root
+	local fingerprint_file
+	local expected_fingerprint
+	local current_fingerprint
 	if [ "${AV_IMGDATA_WITH_VIPS:-1}" != "1" ]; then
 		return 0
 	fi
 	install_root="$(native_install_root vips-image-processor-install)"
+	fingerprint_file="$install_root/share/av-imgdata-image-processor.build-fingerprint"
 	if [ -x "$install_root/bin/av-imgdata-image-processor" ]; then
-		return 0
+		expected_fingerprint="$(./tools/build-native-image-processor-vips.sh --print-fingerprint 2>/dev/null || true)"
+		current_fingerprint="$(cat "$fingerprint_file" 2>/dev/null || true)"
+		if [ -n "$expected_fingerprint" ] && [ "$current_fingerprint" = "$expected_fingerprint" ]; then
+			return 0
+		fi
+		echo "Existing libvips image processor is stale or unversioned; rebuilding before package staging."
+	else
+		echo "Optional libvips image processor missing; building before package staging."
 	fi
-	echo "Optional libvips image processor missing; building before package staging."
 	if ! ./tools/build-native-image-processor-vips.sh; then
 		echo "ERROR: native libvips image processor build failed."
 		return 1

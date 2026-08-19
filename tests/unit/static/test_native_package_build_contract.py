@@ -125,6 +125,14 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert '"$native_root/vips-image-processor-install"' not in install_script
     assert '"$native_root/deps"' not in install_script
     assert "vips-image-processor-install" in build_vips
+    assert "BUILD_FINGERPRINT_FILE" in build_vips
+    assert "build_fingerprint()" in build_vips
+    assert "--print-fingerprint" in build_vips
+    assert "fingerprint_contract=av-imgdata-image-processor-vips-v1" in build_vips
+    assert "processors/native/image_backend_vips/src/main.cpp" in build_vips
+    assert "processors/native/image_backend_vips/CMakeLists.txt" in build_vips
+    assert "tools/build-native-image-processor-vips.sh" in build_vips
+    assert 'build_fingerprint > "${BUILD_FINGERPRINT_FILE}"' in build_vips
     assert "LIBDE265_VERSION" in build_vips
     assert "b92beb6b53c346db9a8fae968d686ab706240099cdd5aff87777362d668b0de7" in build_vips
     assert "LIBHEIF_VERSION" in build_vips
@@ -212,6 +220,8 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert '"libmount.so*"' in build_vips
     assert '"libblkid.so*"' in build_vips
     assert '"libuuid.so*"' in build_vips
+    assert 'multiarch_dir="/usr/lib/$(gcc -dumpmachine' in build_vips
+    assert "for dir in /usr/lib/*-linux-gnu /lib/*-linux-gnu" in build_vips
     assert "-DCMAKE_BUILD_TYPE=Release" in build_vips
     assert "AV_IMGDATA_NATIVE_STRIP:-1" in build_vips
     assert "libvips image processor is only the skeleton binary" in build_vips
@@ -235,9 +245,8 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "vips_ready" in source
     assert "vips_image_new_from_file" in source
     assert 'job.options["colorspace"] = colorspace.empty() ? "srgb" : colorspace' in source
-    assert "vips_image_get_typeof(image, VIPS_META_ICC_NAME)" in source
-    assert "return image;" in source
     assert "vips_colourspace(image, &normalized, VIPS_INTERPRETATION_sRGB" in source
+    assert "vips_image_remove(normalized, VIPS_META_ICC_NAME)" in source
     assert "0.1.0-skeleton image-backend-vips" not in source
     assert "libvips_not_linked" not in source
 
@@ -267,6 +276,11 @@ def test_synology_install_can_build_missing_vips_processor_before_staging():
 
     assert "ensure_vips_image_processor" in install_script
     assert "Optional libvips image processor missing; building before package staging." in install_script
+    assert "Existing libvips image processor is stale or unversioned; rebuilding before package staging." in install_script
+    assert "av-imgdata-image-processor.build-fingerprint" in install_script
+    assert "./tools/build-native-image-processor-vips.sh --print-fingerprint" in install_script
+    assert 'current_fingerprint="$(cat "$fingerprint_file" 2>/dev/null || true)"' in install_script
+    assert '[ "$current_fingerprint" = "$expected_fingerprint" ]' in install_script
     assert "./tools/build-native-image-processor-vips.sh" in install_script
     assert install_script.index("ensure_vips_image_processor") < install_script.index("VIPS_INSTALL=\"$(native_install_root vips-image-processor-install)\"")
 

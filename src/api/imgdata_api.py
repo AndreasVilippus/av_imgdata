@@ -1098,8 +1098,16 @@ async def face_matching_action(request: Request):
     offset = body.get("offset", 0)
     skip_face_ids = body.get("skip_face_ids") if isinstance(body.get("skip_face_ids"), list) else []
     skip_targets = body.get("skip_targets") if isinstance(body.get("skip_targets"), list) else []
+    normalized_action_for_days = str(action or "").strip().lower()
+    normalized_findings_action_for_days = str(body.get("findings_action") or body.get("source_action") or "").strip().lower()
     try:
-        changed_since_days = max(0, int(body.get("changed_since_days") or 0)) if str(action or "").strip().lower() in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"} else 0
+        changed_since_days = max(0, int(body.get("changed_since_days") or 0)) if (
+            normalized_action_for_days in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"}
+            or (
+                normalized_action_for_days == "load_photo_face_match_findings"
+                and normalized_findings_action_for_days in {"search_photo_face_in_file", "search_file_face_in_sources", "mark_missing_photos_faces", "search_missing_faces_insightface"}
+            )
+        ) else 0
     except (TypeError, ValueError):
         changed_since_days = 0
     try:
@@ -1184,6 +1192,7 @@ async def face_matching_action(request: Request):
                     action=str(body.get("findings_action") or body.get("source_action") or "").strip(),
                     auto=auto,
                     refresh=refresh,
+                    changed_since_days=changed_since_days,
                 ),
             )
     except (SessionBootstrapRequired, SessionManagerError) as exc:
@@ -1528,6 +1537,7 @@ async def face_skip_match(request: Request):
     face_id = body.get("face_id")
     image_path = str(body.get("image_path") or "").strip()
     metadata_face = body.get("metadata_face")
+    suppress = bool(body.get("suppress"))
 
     parsed_face_id = None
     if face_id not in (None, ""):
@@ -1552,6 +1562,15 @@ async def face_skip_match(request: Request):
         }
 
     try:
+        suppression_update = (
+            IMGDATA.suppressFaceMatchFinding(
+                face_id=parsed_face_id,
+                image_path=image_path,
+                metadata_face=metadata_face if isinstance(metadata_face, dict) else None,
+            )
+            if suppress
+            else None
+        )
         if parsed_face_id is not None:
             findings_update = IMGDATA.removeFaceMatchFindingEntry(
                 face_id=parsed_face_id,
@@ -1572,6 +1591,7 @@ async def face_skip_match(request: Request):
             "face_id": parsed_face_id,
             "image_path": image_path,
             "findings_update": findings_update,
+            "suppression_update": suppression_update,
         },
     }
 
@@ -1638,6 +1658,10 @@ async def face_assign_metadata_match(request: Request):
     save_mapping = bool(body.get("save_mapping"))
     update_metadata_name = bool(body.get("update_metadata_name"))
     source_name = body.get("source_name")
+    source_action = str(body.get("action") or body.get("source_action") or body.get("finding_action") or "").strip().lower()
+    if source_action == "search_missing_faces_insightface":
+        save_mapping = False
+        source_name = ""
     if not image_path or not isinstance(metadata_face, dict) or not person_name:
         return {
             "success": False,
@@ -1730,6 +1754,10 @@ async def face_create_metadata_match(request: Request):
     save_mapping = bool(body.get("save_mapping"))
     update_metadata_name = bool(body.get("update_metadata_name"))
     source_name = body.get("source_name")
+    source_action = str(body.get("action") or body.get("source_action") or body.get("finding_action") or "").strip().lower()
+    if source_action == "search_missing_faces_insightface":
+        save_mapping = False
+        source_name = ""
     if not image_path or not isinstance(metadata_face, dict) or not person_name:
         return {
             "success": False,

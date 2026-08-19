@@ -47,6 +47,7 @@ export default {
 				selection_mode: 'review_all',
 				include_hidden_persons: false,
 				min_faces_per_person: 3,
+				max_profile_reference_faces_per_person: 50,
 				exclude_outliers: true,
 				rebuild_all: false,
 				changed_since_days: 30,
@@ -55,6 +56,8 @@ export default {
 				min_width_ratio: 0.015,
 				min_height_ratio: 0.015,
 			},
+			recognitionOptionOverrides: {},
+			recognitionConfigDefaultsLoading: false,
 			recognitionFindings: [],
 			recognitionFindingsLoading: false,
 			recognitionCurrentIndex: 0,
@@ -64,6 +67,9 @@ export default {
 	created() {
 		this.loadStoredFaceFrameStartOptions();
 	},
+	mounted() {
+		this.refreshRecognitionConfigDefaults();
+	},
 	watch: {
 		selectedCleanupAction(value) {
 			this.refreshCleanupSessionState();
@@ -71,6 +77,7 @@ export default {
 				this.fetchFaceFrameFindings();
 			}
 			if (this.isRecognitionReviewAction) {
+				this.refreshRecognitionConfigDefaults();
 				this.fetchRecognitionFindings();
 			}
 		},
@@ -272,6 +279,57 @@ export default {
 				...this.recognitionOptions,
 				[key]: value,
 			};
+			if (['min_faces_per_person', 'max_profile_reference_faces_per_person'].includes(String(key || ''))) {
+				this.recognitionOptionOverrides = {
+					...this.recognitionOptionOverrides,
+					[key]: true,
+				};
+			}
+		},
+		getRecognitionStartOptions(options = {}) {
+			const startOptions = {
+				...this.recognitionOptions,
+				resume_existing: !!options.resumeExisting,
+			};
+			if (!this.recognitionOptionOverrides.min_faces_per_person) {
+				delete startOptions.min_faces_per_person;
+			}
+			if (!this.recognitionOptionOverrides.max_profile_reference_faces_per_person) {
+				delete startOptions.max_profile_reference_faces_per_person;
+			}
+			return startOptions;
+		},
+		async refreshRecognitionConfigDefaults() {
+			if (this.recognitionConfigDefaultsLoading || typeof this.callDsmApi !== 'function') {
+				return;
+			}
+			this.recognitionConfigDefaultsLoading = true;
+			try {
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/config_get', {});
+				const root = this.getResponseData(data);
+				const config = root && typeof root.config === 'object' ? root.config : {};
+				const analysis = config.analysis && typeof config.analysis === 'object' ? config.analysis : {};
+				const checks = analysis.CHECKS && typeof analysis.CHECKS === 'object' ? analysis.CHECKS : {};
+				const nextOptions = {};
+				const minFaces = Number(checks.RECOGNITION_MIN_FACES_PER_PERSON);
+				const maxReferences = Number(checks.RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON);
+				if (!this.recognitionOptionOverrides.min_faces_per_person && Number.isFinite(minFaces)) {
+					nextOptions.min_faces_per_person = Math.max(2, Math.round(minFaces));
+				}
+				if (!this.recognitionOptionOverrides.max_profile_reference_faces_per_person && Number.isFinite(maxReferences)) {
+					nextOptions.max_profile_reference_faces_per_person = Math.max(0, Math.round(maxReferences));
+				}
+				if (Object.keys(nextOptions).length) {
+					this.recognitionOptions = {
+						...this.recognitionOptions,
+						...nextOptions,
+					};
+				}
+			} catch (err) {
+				// Keep local fallbacks when the configuration endpoint is unavailable.
+			} finally {
+				this.recognitionConfigDefaultsLoading = false;
+			}
 		},
 		updateFaceFrameOption(key, value) {
 			this.faceFrameOptions = {
@@ -640,15 +698,15 @@ export default {
 				};
 				this.cleanupStatusMessage = this.$avt('cleanup:status_preparing', 'Cleanup starts. Preparing run...');
 				try {
+					if (isRecognitionAction) {
+						await this.refreshRecognitionConfigDefaults();
+					}
 					const cleanupOptions = cleanupAction === 'standardize_face_frames'
 						? {
 							...this.faceFrameOptions,
 							resume_existing: !!options.resumeExisting,
 						}
-						: (isRecognitionAction ? {
-							...this.recognitionOptions,
-							resume_existing: !!options.resumeExisting,
-						} : {});
+						: (isRecognitionAction ? this.getRecognitionStartOptions(options) : {});
 					if (cleanupAction === 'standardize_face_frames') {
 						this.persistFaceFrameStartOptions();
 						if (this.faceFrameOptions.operation_mode !== 'findings' && !cleanupOptions.resume_existing) {

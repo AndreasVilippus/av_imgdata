@@ -34,6 +34,31 @@ LIBVIPS_SHA256="${AV_IMGDATA_LIBVIPS_SHA256:-d114d7c132ec5b45f116d654e17bb4af845
 LIBVIPS_SOURCE_PARENT="${BUILD_ROOT}/libvips-source"
 LIBVIPS_SOURCE_DIR="${LIBVIPS_SOURCE_PARENT}/vips-${LIBVIPS_VERSION}"
 LIBVIPS_ORIGINAL_SOURCE_DIR="${LIBVIPS_SOURCE_PARENT}/vips-${LIBVIPS_VERSION}.orig"
+BUILD_FINGERPRINT_FILE="${VIPS_PREFIX}/share/av-imgdata-image-processor.build-fingerprint"
+
+build_fingerprint() {
+  {
+    printf 'fingerprint_contract=av-imgdata-image-processor-vips-v1\n'
+    printf 'platform=%s\n' "${PLATFORM}"
+    printf 'libde265_version=%s\n' "${LIBDE265_VERSION}"
+    printf 'libde265_sha256=%s\n' "${LIBDE265_SHA256}"
+    printf 'libheif_version=%s\n' "${LIBHEIF_VERSION}"
+    printf 'libheif_sha256=%s\n' "${LIBHEIF_SHA256}"
+    printf 'libvips_version=%s\n' "${LIBVIPS_VERSION}"
+    printf 'libvips_sha256=%s\n' "${LIBVIPS_SHA256}"
+    sha256sum \
+      "${PROJECT_DIR}/tools/build-native-image-processor-vips.sh" \
+      "${PROJECT_DIR}/processors/native/image_backend_vips/CMakeLists.txt" \
+      "${PROJECT_DIR}/processors/native/image_backend_vips/src/main.cpp"
+  } | sha256sum | awk '{print $1}'
+}
+
+case "${1:-}" in
+  --print-fingerprint)
+    build_fingerprint
+    exit 0
+    ;;
+esac
 
 prepare_build_dirs() {
   rm -rf \
@@ -693,7 +718,17 @@ copy_library_family() {
   local dir
   local source
   local target
+  local multiarch_dir
 
+  if command -v gcc >/dev/null 2>&1; then
+    multiarch_dir="/usr/lib/$(gcc -dumpmachine 2>/dev/null || true)"
+    if [ -n "${multiarch_dir}" ]; then
+      dirs+=("${multiarch_dir}")
+    fi
+  fi
+  for dir in /usr/lib/*-linux-gnu /lib/*-linux-gnu; do
+    dirs+=("${dir}")
+  done
   for dir in /usr/local/*/*/sys-root/usr/lib; do
     dirs+=("${dir}")
   done
@@ -814,3 +849,6 @@ if ! PROBE_OUTPUT="$("${NATIVE_BINARY}" probe 2>&1)"; then
     exit 1
   fi
 fi
+
+mkdir -p "$(dirname "${BUILD_FINGERPRINT_FILE}")"
+build_fingerprint > "${BUILD_FINGERPRINT_FILE}"

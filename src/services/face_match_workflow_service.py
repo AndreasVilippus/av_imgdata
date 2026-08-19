@@ -24,6 +24,34 @@ class FaceMatchWorkflowService:
         normalized_days = max(0, int(changed_since_days or 0))
         return f"{str(user_key or '').strip()}:{str(action or '').strip().lower()}:days-{normalized_days}"
 
+    @staticmethod
+    def normalize_changed_since_days(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def resolve_findings_changed_since_days(
+        self,
+        findings: Optional[Dict[str, Any]],
+        entries: Optional[List[Dict[str, Any]]] = None,
+        fallback: Any = 0,
+    ) -> int:
+        normalized = self.normalize_changed_since_days(fallback)
+        if isinstance(findings, dict):
+            normalized = self.normalize_changed_since_days(findings.get("changed_since_days", normalized))
+        if normalized > 0:
+            return normalized
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            resume_cursor = entry.get("resume_cursor")
+            if isinstance(resume_cursor, dict):
+                normalized = self.normalize_changed_since_days(resume_cursor.get("changed_since_days"))
+                if normalized > 0:
+                    return normalized
+        return normalized
+
     def invalidate_candidate_paths_cache(self, user_key: str, action: Any) -> None:
         state_key_prefix = f"{str(user_key or '').strip()}:{str(action or '').strip().lower()}:"
         with self._candidate_paths_cache_lock:
@@ -210,6 +238,7 @@ class FaceMatchWorkflowService:
                 action=action,
                 auto=auto,
                 save_only=True,
+                changed_since_days=self.resolve_findings_changed_since_days(findings, entries),
                 transferred_count=transferred_count,
                 entries=[entry for entry in entries if isinstance(entry, dict)],
                 job_id=str(findings.get("job_id") or ""),
@@ -229,10 +258,16 @@ class FaceMatchWorkflowService:
         job_id: Optional[str] = None,
         started_at: Optional[str] = None,
         finished: bool = True,
+        changed_since_days: Optional[int] = None,
     ) -> None:
         timestamp = self.backend._timestamp_now()
         effective_job_id = str(job_id or timestamp)
         effective_started_at = str(started_at or timestamp)
+        normalized_changed_since_days = self.resolve_findings_changed_since_days(
+            None,
+            entries,
+            changed_since_days,
+        )
         self._write_findings_payload(
             {
                 "job_id": effective_job_id,
@@ -244,6 +279,7 @@ class FaceMatchWorkflowService:
                 "action": action,
                 "auto": auto,
                 "save_only": save_only,
+                "changed_since_days": normalized_changed_since_days,
                 "transferred_count": transferred_count,
                 "count": len(entries),
                 "entries": [
@@ -286,6 +322,7 @@ class FaceMatchWorkflowService:
             return
 
         timestamp = backend._timestamp_now()
+        normalized_changed_since_days = self.resolve_findings_changed_since_days(findings, entries)
         self._write_findings_payload(
             {
                 "job_id": str(findings.get("job_id") or timestamp),
@@ -297,6 +334,7 @@ class FaceMatchWorkflowService:
                 "action": str(findings.get("action") or "search_photo_face_in_file"),
                 "auto": bool(findings.get("auto")),
                 "save_only": bool(findings.get("save_only")),
+                "changed_since_days": normalized_changed_since_days,
                 "transferred_count": int(transferred_count),
                 "count": len(entries),
                 "entries": [
@@ -316,18 +354,25 @@ class FaceMatchWorkflowService:
         action: str = "",
         auto: bool = False,
         refresh: bool = False,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         backend = self.backend
         findings = backend.getFaceMatchFindings()
         stream_compacted = bool(findings.pop("_stream_compacted", False))
         requested_action = str(action or "").strip().lower()
         findings_action = str(findings.get("action") or "").strip().lower()
+        normalized_changed_since_days = self.resolve_findings_changed_since_days(
+            findings,
+            findings.get("entries") if isinstance(findings.get("entries"), list) else [],
+            changed_since_days,
+        )
         if requested_action and findings_action and requested_action != findings_action:
             return {
                 "status": str(findings.get("status") or ""),
                 "shared_folder": str(findings.get("shared_folder") or ""),
                 "action": findings_action,
                 "requested_action": requested_action,
+                "changed_since_days": normalized_changed_since_days,
                 "count": 0,
                 "entries": [],
                 "transferred_count": 0,
@@ -373,6 +418,7 @@ class FaceMatchWorkflowService:
                     entries_current=0,
                     entries_total=entries_total,
                     transferred_count=transferred_count,
+                    changed_since_days=normalized_changed_since_days,
                 )
             known_persons_cache = backend.photos.sortPersonsForFaceMatch(
                 backend.photos.listFotoTeamPersonKnown(
@@ -402,6 +448,7 @@ class FaceMatchWorkflowService:
                     entries_current=entries_current,
                     entries_total=entries_total,
                     transferred_count=transferred_count,
+                    changed_since_days=normalized_changed_since_days,
                 )
 
             def persist_checkpoint(remaining_entries: List[Any]) -> None:
@@ -449,6 +496,7 @@ class FaceMatchWorkflowService:
                         entries_current=entries_current,
                         entries_total=entries_total,
                         transferred_count=transferred_count,
+                        changed_since_days=normalized_changed_since_days,
                     )
                 if not isinstance(entry, dict):
                     findings_changed = True
@@ -610,6 +658,7 @@ class FaceMatchWorkflowService:
             "shared_folder": str(findings.get("shared_folder") or ""),
             "action": findings_action,
             "requested_action": requested_action,
+            "changed_since_days": normalized_changed_since_days,
             "count": len(resolved_entries),
             "entries": response_entries,
             "transferred_count": transferred_count,
@@ -626,6 +675,7 @@ class FaceMatchWorkflowService:
         action: str = "",
         auto: bool = False,
         refresh: bool = False,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         backend = self.backend
         lock = (
@@ -645,6 +695,7 @@ class FaceMatchWorkflowService:
                     action=action,
                     auto=auto,
                     refresh=refresh,
+                    changed_since_days=changed_since_days,
                 )
 
 
@@ -734,6 +785,7 @@ class FaceMatchWorkflowService:
             }
 
         timestamp = backend._timestamp_now()
+        normalized_changed_since_days = self.resolve_findings_changed_since_days(findings, remaining_entries)
         updated_payload = {
             "job_id": str(findings.get("job_id") or timestamp),
             "started_at": str(findings.get("started_at") or timestamp),
@@ -744,6 +796,7 @@ class FaceMatchWorkflowService:
             "action": str(findings.get("action") or "search_photo_face_in_file"),
             "auto": bool(findings.get("auto")),
             "save_only": bool(findings.get("save_only")),
+            "changed_since_days": normalized_changed_since_days,
             "transferred_count": transferred_count,
             "count": len(remaining_entries),
             "entries": [
@@ -860,6 +913,7 @@ class FaceMatchWorkflowService:
             }
 
         timestamp = backend._timestamp_now()
+        normalized_changed_since_days = self.resolve_findings_changed_since_days(findings, remaining_entries)
         updated_payload = {
             "job_id": str(findings.get("job_id") or timestamp),
             "started_at": str(findings.get("started_at") or timestamp),
@@ -870,6 +924,7 @@ class FaceMatchWorkflowService:
             "action": str(findings.get("action") or "search_photo_face_in_file"),
             "auto": bool(findings.get("auto")),
             "save_only": bool(findings.get("save_only")),
+            "changed_since_days": normalized_changed_since_days,
             "transferred_count": transferred_count,
             "count": len(remaining_entries),
             "entries": [
@@ -984,7 +1039,10 @@ class FaceMatchWorkflowService:
             save_only = bool(resume_cursor.get("save_only", save_only))
             recognize_persons = bool(resume_cursor.get("recognize_persons", recognize_persons))
             skip_unknown_persons = bool(resume_cursor.get("skip_unknown_persons", skip_unknown_persons))
-            normalized_changed_since_days = max(0, int(resume_cursor.get("changed_since_days", normalized_changed_since_days) or 0))
+            cursor_changed_since_days = self.normalize_changed_since_days(
+                resume_cursor.get("changed_since_days", normalized_changed_since_days)
+            )
+            normalized_changed_since_days = normalized_changed_since_days if normalized_changed_since_days > 0 else cursor_changed_since_days
             normalized_action = str(resume_cursor.get("action") or normalized_action).strip().lower() or normalized_action
         continue_existing_operation = bool(resume_cursor or combined_skip_face_ids or combined_skip_targets)
         resume_path_index = int(resume_cursor.get("path_index") or 0) if resume_cursor else 0

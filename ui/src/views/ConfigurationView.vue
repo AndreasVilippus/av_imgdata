@@ -231,6 +231,16 @@
 						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_DET_THRESH" type="number" min="0" max="1" step="0.05" class="config-input" :disabled="saving" />
 					</label>
 
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('cleanup:recognition_min_faces', 'Minimum reference faces per person') }}</span>
+						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_MIN_FACES_PER_PERSON" type="number" min="2" step="1" class="config-input" :disabled="saving" />
+					</label>
+
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('cleanup:recognition_max_profile_references', 'Maximum reference faces per person') }}</span>
+						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON" type="number" min="0" step="1" class="config-input" :disabled="saving" />
+					</label>
+
 				</div>
 			</section>
 
@@ -455,6 +465,8 @@ export default {
 						RECOGNITION_MIN_MARGIN: 0.08,
 						RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD: 0.35,
 						RECOGNITION_DET_THRESH: 0.5,
+						RECOGNITION_MIN_FACES_PER_PERSON: 3,
+						RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON: 50,
 						SINGLE_SOURCE_OF_TRUTH: '',
 					},
 				},
@@ -662,6 +674,8 @@ export default {
 						RECOGNITION_MIN_MARGIN: this.clampNumber(checks.RECOGNITION_MIN_MARGIN, 0, 1, defaults.analysis.CHECKS.RECOGNITION_MIN_MARGIN),
 						RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD: this.clampNumber(checks.RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD, 0, 1, defaults.analysis.CHECKS.RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD),
 						RECOGNITION_DET_THRESH: this.clampNumber(checks.RECOGNITION_DET_THRESH, 0, 1, defaults.analysis.CHECKS.RECOGNITION_DET_THRESH),
+						RECOGNITION_MIN_FACES_PER_PERSON: Math.max(2, Math.round(this.clampNumber(checks.RECOGNITION_MIN_FACES_PER_PERSON, 2, 1000, defaults.analysis.CHECKS.RECOGNITION_MIN_FACES_PER_PERSON))),
+						RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON: Math.max(0, Math.round(this.clampNumber(checks.RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON, 0, 10000, defaults.analysis.CHECKS.RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON))),
 						SINGLE_SOURCE_OF_TRUTH: this.normalizeChecksSingleSourceOfTruth(
 							checks.SINGLE_SOURCE_OF_TRUTH,
 							defaults.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH

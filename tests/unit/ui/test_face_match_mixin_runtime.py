@@ -268,6 +268,7 @@ def test_load_stored_findings_sends_selected_source_action_runtime():
             let requestBody = null;
             const component = createComponent({
               selectedFaceMatchingAction: 'mark_missing_photos_faces',
+              faceMatchMissingFacesChangedSinceDays: 21,
               callFileAnalysisApi: async (_path, body) => {
                 requestBody = body;
                 return {
@@ -288,6 +289,7 @@ def test_load_stored_findings_sends_selected_source_action_runtime():
 
             assert.strictEqual(requestBody.action, 'load_photo_face_match_findings');
             assert.strictEqual(requestBody.findings_action, 'mark_missing_photos_faces');
+            assert.strictEqual(requestBody.changed_since_days, 21);
             assert.strictEqual(component.faceMatchUseStoredFindings, false);
             console.log(JSON.stringify({ requestBody, useStored: component.faceMatchUseStoredFindings }));
             """
@@ -295,6 +297,7 @@ def test_load_stored_findings_sends_selected_source_action_runtime():
     )
 
     assert result["requestBody"]["findings_action"] == "mark_missing_photos_faces"
+    assert result["requestBody"]["changed_since_days"] == 21
     assert result["useStored"] is False
 
 
@@ -374,6 +377,7 @@ def test_stored_findings_person_creation_advances_without_full_refresh_runtime()
             {
                 "type": "create",
                     "body": {
+                        "action": "search_photo_face_in_file",
                         "face_id": 149661,
                         "image_path": "/volume1/photo/sven.jpg",
                         "person_name": "Sven",
@@ -434,6 +438,7 @@ def test_stored_findings_person_creation_auto_assign_reloads_without_refresh_run
             {
                 "type": "create",
                     "body": {
+                        "action": "search_photo_face_in_file",
                         "face_id": 149661,
                         "image_path": "/volume1/photo/sven.jpg",
                         "person_name": "Sven",
@@ -542,6 +547,7 @@ def test_stored_findings_auto_apply_polls_progress_while_request_is_running_runt
                   findings_action: 'search_photo_face_in_file',
                   auto: true,
                   refresh: true,
+                  changed_since_days: 30,
                 },
               },
               'fetch-progress',
@@ -944,6 +950,7 @@ def test_missing_photos_face_ignore_uses_visible_left_face_without_metadata_face
                 add_new_faces_to_photos: true,
               },
               setFaceMatchMutationPending: () => {},
+              resolveMissingFaceIgnoreSuppressionPreference: async () => false,
               startFaceMatchingAction: async (args) => { startArgs = args; },
             });
 
@@ -993,6 +1000,7 @@ def test_insightface_missing_face_can_be_ignored_from_left_preview_runtime():
                 add_new_faces_to_photos: true,
               },
               setFaceMatchMutationPending: () => {},
+              resolveMissingFaceIgnoreSuppressionPreference: async () => false,
               startFaceMatchingAction: async (args) => { startArgs = args; },
             });
 
@@ -1026,6 +1034,61 @@ def test_insightface_missing_face_can_be_ignored_from_left_preview_runtime():
         "tooltip": "Ignore detected face",
         "skippedTargets": ["/volume1/photo/test.jpg|INSIGHTFACE|0.500000|0.500000|0.200000|0.200000"],
         "startArgs": {"resetSkippedFaceIds": False},
+    }
+
+
+def test_missing_face_ignore_can_save_suppression_and_remember_choice_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const metadataFace = { name: '', x: 0.5, y: 0.5, w: 0.2, h: 0.2, source_format: 'INSIGHTFACE' };
+            const requests = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_missing_faces_insightface',
+              faceMatchResult: {
+                action: 'search_missing_faces_insightface',
+                image_path: '/volume1/photo/test.jpg',
+                metadata_face: metadataFace,
+                source_face: metadataFace,
+                face: metadataFace,
+                add_new_faces_to_photos: true,
+              },
+              setFaceMatchMutationPending: () => {},
+              callDsmApi: async (path, body) => {
+                requests.push({ path, body });
+                return { success: true, data: { findings_update: { removed: false } } };
+              },
+              startFaceMatchingAction: async () => {},
+            });
+
+            const first = component.ignoreCurrentMissingFace();
+            assert.strictEqual(component.ignoreMissingFaceConfirm.visible, true);
+            component.ignoreMissingFaceConfirm.rememberChoice = true;
+            component.resolveMissingFaceIgnoreConfirm(true);
+            await first;
+
+            assert.strictEqual(component.faceMatchIgnoreSuppressionPreference, true);
+            assert.strictEqual(requests.length, 1);
+            assert.strictEqual(requests[0].body.suppress, true);
+
+            await component.ignoreCurrentMissingFace();
+            assert.strictEqual(component.ignoreMissingFaceConfirm.visible, false);
+            assert.strictEqual(requests.length, 2);
+            assert.strictEqual(requests[1].body.suppress, true);
+
+            console.log(JSON.stringify({
+              remembered: component.faceMatchIgnoreSuppressionPreference,
+              requestCount: requests.length,
+              suppressValues: requests.map((request) => request.body.suppress),
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "remembered": True,
+        "requestCount": 2,
+        "suppressValues": [True, True],
     }
 
 
@@ -1200,6 +1263,79 @@ def test_auto_assign_known_is_not_supported_for_insightface_actions_runtime():
         "autoAssign": False,
         "events": ["findings-status"],
     }
+
+
+def test_insightface_missing_faces_name_mapping_prompt_is_skipped_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let confirmCalled = false;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_missing_faces_insightface',
+              faceMatchInitialEditableName: 'Detected Maybe',
+              confirmFaceMatchNameMapping: async () => {
+                confirmCalled = true;
+                return { saveMapping: true };
+              },
+            });
+
+            const preference = await component.resolveFaceMatchNameMappingPreference('Correct Person');
+
+            assert.strictEqual(confirmCalled, false);
+            assert.strictEqual(preference.saveMapping, false);
+            assert.strictEqual(preference.sourceName, '');
+            console.log(JSON.stringify({ confirmCalled, preference }));
+            """
+        )
+    )
+
+    assert result == {
+        "confirmCalled": False,
+        "preference": {"saveMapping": False, "sourceName": ""},
+    }
+
+
+def test_insightface_missing_faces_person_creation_does_not_request_name_mapping_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let confirmCalled = false;
+            let requestBody = null;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_missing_faces_insightface',
+              faceMatchEditableName: 'Correct Person',
+              faceMatchInitialEditableName: 'Detected Maybe',
+              faceMatchResult: {
+                action: 'search_missing_faces_insightface',
+                add_new_faces_to_photos: true,
+                image_path: '/volume1/photo/missing.jpg',
+                metadata_face: { name: 'Detected Maybe', x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
+              },
+              confirmFaceMatchNameMapping: async () => {
+                confirmCalled = true;
+                return { saveMapping: true };
+              },
+              callDsmApi: async (_path, body) => {
+                requestBody = body;
+                return { success: true, data: { updated: true } };
+              },
+              setFaceMatchMutationPending: () => {},
+              startFaceMatchingAction: async () => {},
+            });
+
+            await component.createFaceMatchPerson();
+
+            assert.strictEqual(confirmCalled, false);
+            assert.strictEqual(requestBody.save_mapping, false);
+            assert.strictEqual(requestBody.source_name, '');
+            console.log(JSON.stringify({ confirmCalled, requestBody }));
+            """
+        )
+    )
+
+    assert result["confirmCalled"] is False
+    assert result["requestBody"]["save_mapping"] is False
+    assert result["requestBody"]["source_name"] == ""
 
 
 def test_insightface_missing_face_start_sends_auto_only_for_safe_apply_runtime():

@@ -135,6 +135,8 @@ class ConfigService:
                     "RECOGNITION_MIN_MARGIN": 0.08,
                     "RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD": 0.35,
                     "RECOGNITION_DET_THRESH": 0.5,
+                    "RECOGNITION_MIN_FACES_PER_PERSON": 3,
+                    "RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON": 50,
                     "SINGLE_SOURCE_OF_TRUTH": "",
                 },
             },
@@ -393,6 +395,18 @@ class ConfigService:
                     minimum=0.0,
                     maximum=1.0,
                 )
+            checks["RECOGNITION_MIN_FACES_PER_PERSON"] = cls._clamp_int(
+                checks.get("RECOGNITION_MIN_FACES_PER_PERSON"),
+                default=3,
+                minimum=2,
+                maximum=1000,
+            )
+            checks["RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"] = cls._clamp_int(
+                checks.get("RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"),
+                default=50,
+                minimum=0,
+                maximum=10000,
+            )
 
     @staticmethod
     def _clamp_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:

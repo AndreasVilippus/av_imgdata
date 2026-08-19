@@ -109,6 +109,37 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         self.assertEqual(image_processor["SUPPORTED_FORMATS"], ["jpg", "png"])
         self.assertFalse(image_processor["ALLOW_FALLBACK_TO_DEFAULT"])
 
+    def test_recognition_reference_limit_config_defaults_and_normalization(self):
+        service = ConfigService(str(self.config_file))
+
+        defaults = service.readMergedConfig()["analysis"]["CHECKS"]
+        self.assertEqual(defaults["RECOGNITION_MIN_FACES_PER_PERSON"], 3)
+        self.assertEqual(defaults["RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"], 50)
+
+        service.writeConfig({
+            "analysis": {
+                "CHECKS": {
+                    "RECOGNITION_MIN_FACES_PER_PERSON": 1,
+                    "RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON": -1,
+                },
+            },
+        })
+        checks = service.readMergedConfig()["analysis"]["CHECKS"]
+        self.assertEqual(checks["RECOGNITION_MIN_FACES_PER_PERSON"], 2)
+        self.assertEqual(checks["RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"], 0)
+
+        service.writeConfig({
+            "analysis": {
+                "CHECKS": {
+                    "RECOGNITION_MIN_FACES_PER_PERSON": 7,
+                    "RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON": 123,
+                },
+            },
+        })
+        checks = service.readMergedConfig()["analysis"]["CHECKS"]
+        self.assertEqual(checks["RECOGNITION_MIN_FACES_PER_PERSON"], 7)
+        self.assertEqual(checks["RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"], 123)
+
     def test_readMergedConfig_detects_file_change(self):
         """
         Test: Wenn config.json sich ändert,

@@ -331,6 +331,7 @@ def test_face_matching_action_passes_selected_findings_action_to_loader(monkeypa
         action="mark_missing_photos_faces",
         auto=True,
         refresh=True,
+        changed_since_days=0,
     )
 
 
@@ -462,6 +463,41 @@ def test_face_skip_match_removes_metadata_finding_without_transfer_count(monkeyp
     )
 
 
+def test_face_skip_match_can_suppress_metadata_finding(monkeypatch):
+    metadata_face = {
+        "source_format": "INSIGHTFACE",
+        "x": 0.4,
+        "y": 0.3,
+        "w": 0.2,
+        "h": 0.1,
+    }
+
+    async def request_body(_request):
+        return {
+            "image_path": "photo/test.jpg",
+            "metadata_face": metadata_face,
+            "suppress": True,
+        }
+
+    suppress = Mock(return_value={"suppressed": True, "suppression_key": "face-match:token"})
+    remove = Mock(return_value={"removed": False, "remaining_count": 2, "transferred_count": 5})
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "suppressFaceMatchFinding", suppress)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", remove)
+
+    payload = _run(imgdata_api.face_skip_match(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["suppression_update"] == {"suppressed": True, "suppression_key": "face-match:token"}
+    suppress.assert_called_once_with(
+        face_id=None,
+        image_path="photo/test.jpg",
+        metadata_face=metadata_face,
+    )
+
+
 def test_face_skip_match_requires_face_id_or_metadata_target(monkeypatch):
     async def request_body(_request):
         return {"image_path": "photo/test.jpg"}
@@ -540,6 +576,57 @@ def test_face_create_metadata_match_creates_metadata_face_person_and_cleans_find
     )
 
 
+def test_face_assign_metadata_match_ignores_name_mapping_for_insightface_missing_faces(monkeypatch):
+    metadata_face = {
+        "name": "Detected Maybe",
+        "source_format": "INSIGHTFACE",
+        "x": 0.4,
+        "y": 0.3,
+        "w": 0.2,
+        "h": 0.1,
+    }
+
+    async def request_body(_request):
+        return {
+            "action": "search_missing_faces_insightface",
+            "image_path": "photo/test.jpg",
+            "metadata_face": metadata_face,
+            "person_id": "42",
+            "person_name": "Correct Person",
+            "save_mapping": True,
+            "source_name": "Detected Maybe",
+        }
+
+    assign_metadata_person = Mock(return_value={
+        "face_id": 107256,
+        "add_result": {"face_id": 107256, "item_id": 35535},
+        "assign_result": {"person_id": 42},
+    })
+    save_mapping = Mock(return_value=True)
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "assignMetadataFaceToKnownPhotosPerson", assign_metadata_person)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", Mock(return_value={"removed": True}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "recordFaceMatchTransferProgress", Mock(return_value={}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "saveNameMapping", save_mapping)
+
+    payload = _run(imgdata_api.face_assign_metadata_match(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["mapping_saved"] is False
+    assign_metadata_person.assert_called_once_with(
+        user_key="user-1",
+        cookies={"_SSID": "sid-1"},
+        base_url="https://dsm.example.test",
+        image_path="photo/test.jpg",
+        metadata_face=metadata_face,
+        person_id=42,
+        person_name="Correct Person",
+    )
+    save_mapping.assert_not_called()
+
+
 def test_face_create_metadata_match_optionally_updates_name_in_file(monkeypatch):
     metadata_face = {"name": "Old Name", "source_format": "MWG_REGIONS"}
 
@@ -571,6 +658,44 @@ def test_face_create_metadata_match_optionally_updates_name_in_file(monkeypatch)
         face_data=metadata_face,
         new_name="New Name",
     )
+
+
+def test_face_create_metadata_match_ignores_name_mapping_for_insightface_missing_faces(monkeypatch):
+    metadata_face = {
+        "name": "Detected Maybe",
+        "source_format": "INSIGHTFACE",
+        "x": 0.4,
+        "y": 0.3,
+        "w": 0.2,
+        "h": 0.1,
+    }
+
+    async def request_body(_request):
+        return {
+            "action": "search_missing_faces_insightface",
+            "image_path": "photo/test.jpg",
+            "metadata_face": metadata_face,
+            "person_name": "Correct Person",
+            "save_mapping": True,
+            "source_name": "Detected Maybe",
+        }
+
+    save_mapping = Mock(return_value=True)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "resolveOrCreatePhotosPersonForMetadataFace", Mock(return_value={
+        "face_id": 7,
+        "target_person": {"id": 8, "name": "Correct Person"},
+    }))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "removeFaceMatchFindingMetadataEntry", Mock(return_value={"removed": True}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "recordFaceMatchTransferProgress", Mock(return_value={}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "saveNameMapping", save_mapping)
+
+    payload = _run(imgdata_api.face_create_metadata_match(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["mapping_saved"] is False
+    save_mapping.assert_not_called()
 
 
 def test_face_delete_metadata_match_deletes_file_face_and_cleans_finding(monkeypatch):

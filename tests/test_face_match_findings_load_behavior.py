@@ -181,6 +181,33 @@ def test_face_match_write_findings_compacts_storage_entries():
     assert entry["image_path"] == "/volume1/photo/a.jpg"
 
 
+def test_face_match_write_findings_keeps_changed_since_days_from_entry_resume_cursor():
+    service = make_service()
+    written = {}
+    service._timestamp_now = lambda: "2026-06-05T12:00:00+02:00"
+    service.face_match_findings.write.side_effect = lambda payload: written.update({
+        "payload": payload,
+    }) or True
+
+    service.face_match_workflow.write_findings(
+        status="running",
+        shared_folder="/volume1/photo",
+        action="search_missing_faces_insightface",
+        auto=False,
+        save_only=True,
+        transferred_count=0,
+        entries=[{
+            "action": "search_missing_faces_insightface",
+            "image_path": "/volume1/photo/a.jpg",
+            "metadata_face": {"source_format": "INSIGHTFACE"},
+            "resume_cursor": {"changed_since_days": 30},
+        }],
+        finished=False,
+    )
+
+    assert written["payload"]["changed_since_days"] == 30
+
+
 def test_get_face_match_finding_entries_refresh_true_revalidates_stored_entries():
     service = make_service()
 

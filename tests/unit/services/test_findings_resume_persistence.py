@@ -112,6 +112,7 @@ def test_face_match_failed_terminal_write_preserves_persisted_entries():
         action="search_photo_face_in_file",
         auto=False,
         save_only=True,
+        changed_since_days=0,
         transferred_count=3,
         entries=entries,
         job_id="job-a",

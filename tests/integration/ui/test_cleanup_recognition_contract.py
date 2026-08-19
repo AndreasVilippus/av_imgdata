@@ -28,6 +28,7 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     assert "updateChecksChangedSinceDays" in checks_options
     assert "min_faces_per_person" in checks_options
     assert "cleanup:recognition_min_faces" in checks_options
+    assert "max_profile_reference_faces_per_person" not in checks_options
     assert 'value="recognition_analyze_unknown_faces"' not in view
     assert 'value="search_missing_faces_insightface"' in face_match_view
     assert 'value="recognition_analyze_unknown_faces"' in face_match_view
@@ -59,6 +60,7 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     assert "vm.recognitionOptions.selection_mode === 'safe_only'" in face_match_view
     assert "vm.recognitionOptions.changed_since_days" in face_match_view
     assert "vm.recognitionOptions.min_faces_per_person" in face_match_view
+    assert "vm.recognitionOptions.max_profile_reference_faces_per_person" not in face_match_view
     assert "syncFaceMatchRecognitionOptions()" in face_match_mixin
     assert "operation_mode: operationMode" in face_match_mixin
     assert "getCleanupStatusProgress()" in face_match_view
@@ -80,8 +82,39 @@ def test_cleanup_exposes_recognition_actions_and_standard_options():
     assert "sm-form-input sm-form-number-input" in options
     assert "cleanup:recognition_advanced_title" not in options
     assert "recognitionOptions" in mixin
+    assert "max_profile_reference_faces_per_person: 50" in mixin
+    assert "recognitionOptionOverrides" in mixin
+    assert "getRecognitionStartOptions(options)" in mixin
+    assert "delete startOptions.min_faces_per_person" in mixin
+    assert "delete startOptions.max_profile_reference_faces_per_person" in mixin
+    assert "await this.refreshRecognitionConfigDefaults()" in mixin
     assert "...this.recognitionOptions" in mixin
     assert "resume_existing: !!options.resumeExisting" in mixin
+
+
+def test_recognition_reference_limits_are_configured_centrally():
+    config_view = Path("ui/src/views/ConfigurationView.vue").read_text(encoding="utf-8")
+    external_libraries = Path("ui/src/mixins/externalLibrariesMixin.js").read_text(encoding="utf-8")
+    options = Path("ui/src/components/cleanup/RecognitionOptions.vue").read_text(encoding="utf-8")
+    backend = Path("src/imgdata.py").read_text(encoding="utf-8")
+    config_service = Path("src/services/config_service.py").read_text(encoding="utf-8")
+    german = Path("ui/texts/ger/strings").read_text(encoding="utf-8")
+    english = Path("ui/texts/enu/strings").read_text(encoding="utf-8")
+
+    for source in (config_view, external_libraries, config_service):
+        assert "RECOGNITION_MIN_FACES_PER_PERSON" in source
+        assert "RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON" in source
+
+    assert "configModel.analysis.CHECKS.RECOGNITION_MIN_FACES_PER_PERSON" in config_view
+    assert "configModel.analysis.CHECKS.RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON" in config_view
+    assert "max_profile_reference_faces_per_person" in options
+    assert "cleanup:recognition_max_profile_references" in options
+    assert "cleanup:recognition_max_profile_references_hint" in options
+    assert '"min_faces_per_person": int(checks.get("RECOGNITION_MIN_FACES_PER_PERSON"' in backend
+    assert '"max_profile_reference_faces_per_person": int(checks.get(' in backend
+    assert '"RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"' in backend
+    assert 'recognition_max_profile_references="Maximale Referenzgesichter pro Person"' in german
+    assert 'recognition_max_profile_references="Maximum reference faces per person"' in english
 
 
 def test_recognition_actions_do_not_fall_back_to_name_cleanup():

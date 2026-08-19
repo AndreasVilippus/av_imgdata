@@ -42,6 +42,11 @@
 					<span class="sm-form-label">{{ vm.$avt('cleanup:recognition_min_faces', 'Minimum reference faces per person') }}</span>
 					<input :value="vm.recognitionOptions.min_faces_per_person" type="number" min="2" step="1" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateRecognitionOption('min_faces_per_person', Number($event.target.value))" />
 				</label>
+				<label v-if="isProfileBuild" class="sm-form-field">
+					<span class="sm-form-label">{{ vm.$avt('cleanup:recognition_max_profile_references', 'Maximum reference faces per person') }}</span>
+					<input :value="vm.recognitionOptions.max_profile_reference_faces_per_person" type="number" min="0" step="1" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateRecognitionOption('max_profile_reference_faces_per_person', Number($event.target.value))" />
+					<span class="sm-form-hint">{{ vm.$avt('cleanup:recognition_max_profile_references_hint', '0 uses all matching reference faces.') }}</span>
+				</label>
 				<label v-if="isSuggestionScan" class="sm-form-field">
 					<span class="sm-form-label">{{ vm.$avt('cleanup:recognition_changed_days', 'Changed within days') }}</span>
 					<input :value="vm.recognitionOptions.changed_since_days" type="number" min="0" step="1" class="sm-form-input sm-form-number-input" :disabled="vm.cleanupLoading" @input="vm.updateRecognitionOption('changed_since_days', Number($event.target.value))" />

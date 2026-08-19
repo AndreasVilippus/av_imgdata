@@ -163,6 +163,24 @@ def test_checks_findings_status_uses_lightweight_status_reader():
     service.file_analysis.readCheckFindings.assert_not_called()
 
 
+def test_configured_recognition_check_options_include_reference_limits(tmp_path):
+    service = make_service()
+    service.config._config_path = tmp_path / "config.json"
+    service.config.writeConfig({
+        "analysis": {
+            "CHECKS": {
+                "RECOGNITION_MIN_FACES_PER_PERSON": 6,
+                "RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON": 42,
+            },
+        },
+    })
+
+    options = service._configuredRecognitionCheckOptions()
+
+    assert options["min_faces_per_person"] == 6
+    assert options["max_profile_reference_faces_per_person"] == 42
+
+
 def test_file_analysis_progress_enrichment_uses_lightweight_findings_status_reader():
     service = make_service()
     service.runtime_state.get_value = Mock(return_value=None)
@@ -667,6 +685,29 @@ def test_face_match_candidate_paths_can_stop_during_incremental_scan():
     ) == []
 
 
+def test_suppress_face_match_finding_blocks_same_metadata_target():
+    service = make_service()
+    metadata_face = {
+        "source_format": "INSIGHTFACE",
+        "x": 0.4,
+        "y": 0.3,
+        "w": 0.2,
+        "h": 0.1,
+    }
+
+    result = service.suppressFaceMatchFinding(
+        image_path="/volume1/photo/test.jpg",
+        metadata_face=metadata_face,
+    )
+
+    assert result["suppressed"] is True
+    assert result["suppression_type"] == "metadata_face"
+    assert service._isFaceMatchFindingSuppressed({
+        "image_path": "/volume1/photo/test.jpg",
+        "metadata_face": metadata_face,
+    }) is True
+
+
 def test_face_match_stop_request_is_owned_by_workflow_service():
     service = make_service()
     service._setFaceMatchingProgress(
@@ -716,6 +757,7 @@ def test_checks_workflow_builds_scan_payload_and_advances_name_conflict_resume_s
         pending_entries=[{"image_path": "photo/test.jpg"}],
         current_path="photo/test.jpg",
         result={"entry": {"image_path": "photo/test.jpg"}},
+        changed_since_days=12,
     )
 
     resume_cursor = service.checks_workflow.trusted_resume_cursor(
@@ -731,6 +773,8 @@ def test_checks_workflow_builds_scan_payload_and_advances_name_conflict_resume_s
 
     assert payload["resume_cursor"]["path_index"] == 3
     assert payload["resume_cursor"]["pending_entries"] == [{"image_path": "photo/test.jpg"}]
+    assert payload["resume_cursor"]["changed_since_days"] == 12
+    assert resume_cursor["changed_since_days"] == 12
     assert resume_cursor["findings_count"] == 4
     assert resume_cursor["resolved_count"] == 2
     assert resume_cursor["ignored_count"] == 2
@@ -862,6 +906,77 @@ def test_start_face_matching_discovery_reuses_progress_cursor_when_skipping_targ
     assert progress["findings_count"] == 11
     assert progress["resume_cursor"]["path_index"] == 1444
     assert progress["resume_cursor"]["skip_targets"] == ["new-token", "old-token"]
+
+
+def test_start_face_matching_discovery_request_days_override_stale_resume_cursor_when_skipping_target():
+    service = make_service()
+    captured = {}
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return False
+
+    service._setFaceMatchingProgress(
+        "user",
+        action="search_missing_faces_insightface",
+        operation_id="face-match-existing",
+        running=False,
+        finished=True,
+        images_read=8,
+        transferred_count=1,
+        findings_count=2,
+        resume_cursor={
+            "action": "search_missing_faces_insightface",
+            "path_index": 8,
+            "skip_targets": ["old-token"],
+            "transferred_count": 1,
+            "findings_count": 2,
+            "auto": False,
+            "save_only": False,
+            "changed_since_days": 0,
+        },
+    )
+
+    with patch("services.face_match_workflow_service.Thread", FakeThread):
+        progress = service.startFaceMatchingDiscovery(
+            user_key="user",
+            cookies={},
+            base_url="https://example.test",
+            action="search_missing_faces_insightface",
+            skip_targets=["new-token"],
+            changed_since_days=30,
+        )
+
+    assert progress["resume_cursor"]["changed_since_days"] == 30
+    assert captured["kwargs"]["kwargs"]["changed_since_days"] == 30
+
+
+def test_record_face_match_transfer_progress_preserves_changed_since_days():
+    service = make_service()
+    service._setFaceMatchingProgress(
+        "user",
+        action="search_missing_faces_insightface",
+        transferred_count=1,
+        resume_cursor={
+            "action": "search_missing_faces_insightface",
+            "skip_targets": ["old-token"],
+            "transferred_count": 1,
+            "auto": False,
+            "save_only": False,
+            "changed_since_days": 30,
+        },
+    )
+
+    progress = service.recordFaceMatchTransferProgress("user", skip_targets=["new-token"])
+
+    assert progress["resume_cursor"]["changed_since_days"] == 30
+    assert progress["resume_cursor"]["skip_targets"] == ["old-token", "new-token"]
 
 
 def test_start_face_matching_discovery_preserves_search_photo_progress_when_skipping_face():

@@ -439,13 +439,11 @@ bool wants_srgb_output(const Job& job, const std::string& format) {
 }
 
 VipsImage* normalize_srgb_for_jpeg(VipsImage* image) {
-    if (vips_image_get_typeof(image, VIPS_META_ICC_NAME)) {
-        return image;
-    }
     VipsImage* normalized = nullptr;
     if (vips_colourspace(image, &normalized, VIPS_INTERPRETATION_sRGB, nullptr)) {
         return nullptr;
     }
+    vips_image_remove(normalized, VIPS_META_ICC_NAME);
     return normalized;
 }
 

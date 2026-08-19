@@ -2029,6 +2029,7 @@ class ImgDataService:
             faces_read=int(current_cursor.get("faces_read") or current.get("faces_read") or 0),
             target_faces_read=int(current_cursor.get("target_faces_read") or current.get("target_faces_read") or 0),
             metadata_faces_read=int(current_cursor.get("metadata_faces_read") or current.get("metadata_faces_read") or 0),
+            changed_since_days=int(current_cursor.get("changed_since_days") or current.get("changed_since_days") or 0),
         )
         self._setFaceMatchingProgress(
             user_key,
@@ -3391,6 +3392,53 @@ class ImgDataService:
             and repository.is_suppressed(f"metadata-name:{normalized_name}")
         )
 
+    def suppressFaceMatchFinding(
+        self,
+        *,
+        face_id: Optional[int] = None,
+        image_path: str = "",
+        metadata_face: Optional[Dict[str, Any]] = None,
+        reason: str = "ignored_missing_face",
+    ) -> Dict[str, Any]:
+        repository = getattr(self, "face_suppressions", None)
+        if repository is None:
+            return {"suppressed": False, "reason": "suppression_repository_unavailable"}
+
+        suppression_key = ""
+        suppression_type = "face_match"
+        normalized_face_id = None
+        if face_id not in (None, ""):
+            try:
+                normalized_face_id = int(face_id)
+            except (TypeError, ValueError):
+                normalized_face_id = None
+        if normalized_face_id is not None:
+            suppression_key = f"photos-face:{normalized_face_id}"
+            suppression_type = "photos_face"
+        elif image_path and isinstance(metadata_face, dict):
+            token = self._faceMatchFindingEntryToken({
+                "image_path": image_path,
+                "metadata_face": metadata_face,
+            })
+            if token:
+                suppression_key = f"face-match:{token}"
+                suppression_type = "metadata_face"
+
+        if not suppression_key:
+            return {"suppressed": False, "reason": "missing_suppression_key"}
+
+        saved = repository.suppress(
+            suppression_key,
+            suppression_type,
+            scope="face_match",
+            reason=reason,
+        )
+        return {
+            "suppressed": bool(saved),
+            "suppression_key": suppression_key,
+            "suppression_type": suppression_type,
+        }
+
     def _faceMatchSavedEntryFaceIds(self, entries: List[Dict[str, Any]]) -> List[int]:
         face_ids: List[int] = []
         seen = set()
@@ -3527,6 +3575,7 @@ class ImgDataService:
         job_id: Optional[str] = None,
         started_at: Optional[str] = None,
         finished: bool = True,
+        changed_since_days: Optional[int] = None,
     ) -> None:
         self.face_match_workflow.write_findings(
             status=status,
@@ -3539,6 +3588,7 @@ class ImgDataService:
             job_id=job_id,
             started_at=started_at,
             finished=finished,
+            changed_since_days=changed_since_days,
         )
 
     def _shouldFlushFaceMatchFindings(
@@ -5528,6 +5578,11 @@ class ImgDataService:
             "min_margin": float(checks.get("RECOGNITION_MIN_MARGIN", defaults["RECOGNITION_MIN_MARGIN"])),
             "outlier_similarity_threshold": float(checks.get("RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD", defaults["RECOGNITION_OUTLIER_SIMILARITY_THRESHOLD"])),
             "det_thresh": float(checks.get("RECOGNITION_DET_THRESH", defaults["RECOGNITION_DET_THRESH"])),
+            "min_faces_per_person": int(checks.get("RECOGNITION_MIN_FACES_PER_PERSON", defaults["RECOGNITION_MIN_FACES_PER_PERSON"])),
+            "max_profile_reference_faces_per_person": int(checks.get(
+                "RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON",
+                defaults["RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"],
+            )),
         }
 
     def _runFileAnalysis(
@@ -6977,6 +7032,7 @@ class ImgDataService:
                                             transferred_count=transferred_count,
                                             auto=auto,
                                             save_only=save_only,
+                                            changed_since_days=normalized_changed_since_days,
                                         ),
                                     )
                                     continue
@@ -8513,6 +8569,7 @@ class ImgDataService:
                     faces_read=faces_read,
                     target_faces_read=target_faces_read,
                     metadata_faces_read=metadata_faces_read,
+                    changed_since_days=normalized_changed_since_days,
                 ),
             )
 
@@ -9026,6 +9083,7 @@ class ImgDataService:
         action: str = "",
         auto: bool = False,
         refresh: bool = False,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         return self.face_match_workflow.get_finding_entries(
             user_key=user_key,
@@ -9034,6 +9092,7 @@ class ImgDataService:
             action=action,
             auto=auto,
             refresh=refresh,
+            changed_since_days=changed_since_days,
         )
 
     def getFaceMatchFindingEntriesLocked(
@@ -9045,6 +9104,7 @@ class ImgDataService:
         action: str = "",
         auto: bool = False,
         refresh: bool = False,
+        changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         return self.face_match_workflow.get_finding_entries_locked(
             user_key=user_key,
@@ -9053,6 +9113,7 @@ class ImgDataService:
             action=action,
             auto=auto,
             refresh=refresh,
+            changed_since_days=changed_since_days,
         )
 
     def removeFaceMatchFindingMetadataEntry(

@@ -194,6 +194,29 @@ def test_face_matching_action_passes_changed_since_days_for_file_face_searches(m
     assert start_discovery.call_args.kwargs["changed_since_days"] == 11
 
 
+def test_face_matching_action_passes_changed_since_days_for_loading_filtered_findings(monkeypatch):
+    async def request_body(_request):
+        return {
+            "action": "load_photo_face_match_findings",
+            "findings_action": "search_missing_faces_insightface",
+            "changed_since_days": "30",
+        }
+
+    load_entries = Mock(return_value={"entries": []})
+
+    _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getRuntimeConfig", Mock(return_value={"photos": {"MAX_PHOTOS_PERSONS": 50}}))
+    monkeypatch.setattr(imgdata_api.IMGDATA, "getFaceMatchFindingEntriesLocked", load_entries)
+
+    payload = _run(imgdata_api.face_matching_action(object()))
+
+    assert payload["success"] is True
+    assert load_entries.call_args.kwargs["action"] == "search_missing_faces_insightface"
+    assert load_entries.call_args.kwargs["changed_since_days"] == 30
+
+
 def test_face_matching_action_rejects_unsupported_action_before_service_call(monkeypatch):
     async def request_body(_request):
         return {"action": "unsupported"}

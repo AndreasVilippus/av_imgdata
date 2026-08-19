@@ -41,6 +41,7 @@ export default {
 			faceMatchFindingEntriesTotal: 0,
 			faceMatchFindingsStatus: {},
 			faceMatchSkippedFindingKeys: [],
+			faceMatchIgnoreSuppressionPreference: null,
 			selectedFaceMatchingAction: 'search_photo_face_in_file',
 			addIconUrl: '',
 			faceIconUrl: '',
@@ -62,6 +63,12 @@ export default {
 			metadataFaceDeleteConfirm: {
 				visible: false,
 				message: '',
+				resolver: null,
+			},
+			ignoreMissingFaceConfirm: {
+				visible: false,
+				message: '',
+				rememberChoice: false,
 				resolver: null,
 			},
 		};
@@ -1044,6 +1051,9 @@ export default {
 			const faceId = this.getCurrentFaceMatchFaceId();
 			const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
 			const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
+			const saveSuppression = this.faceMatchCanIgnoreMissingFace
+				? await this.resolveMissingFaceIgnoreSuppressionPreference()
+				: false;
 			if (!faceId && (!metadataFace || !imagePath)) {
 				this.output = this.$avt('face_match:error_missing_finding_to_skip', 'Error: Missing saved finding to skip.');
 				return;
@@ -1062,6 +1072,7 @@ export default {
 						face_id: faceId,
 						image_path: imagePath,
 						metadata_face: metadataFace,
+						suppress: saveSuppression,
 					}
 				);
 				this.output = JSON.stringify(data, null, 2);
@@ -1092,12 +1103,24 @@ export default {
 			this.faceMatchActionLocked = true;
 			try {
 				const imagePath = this.faceMatchResult && this.faceMatchResult.image_path;
+				const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
+				const saveSuppression = await this.resolveMissingFaceIgnoreSuppressionPreference();
 				this.setFaceMatchMutationPending(
 					'face_match:output_ignore_detection_starting',
 					'Ignoring detected face: {path}',
 					imagePath,
 					this.faceMatchEditableName
 				);
+				if (saveSuppression && imagePath && metadataFace && typeof metadataFace === 'object') {
+					await this.callDsmApi(
+						'/webman/3rdparty/AV_ImgData/index.cgi/api/face_skip_match',
+						{
+							image_path: imagePath,
+							metadata_face: metadataFace,
+							suppress: true,
+						}
+					);
+				}
 				this.faceMatchSkippedTargets = this.buildNextSkippedTargets();
 				await this.startFaceMatchingAction({ resetSkippedFaceIds: false });
 			} finally {
@@ -1113,6 +1136,7 @@ export default {
 		},
 		async loadStoredFaceMatchFindings({ refresh = false } = {}) {
 			const autoApplying = !!this.faceMatchAutoAssignKnown;
+			const findingsAction = this.getFaceMatchFindingsSourceAction();
 			if (autoApplying) {
 				this.faceMatchLoading = true;
 				this.faceMatchProgress = {
@@ -1130,9 +1154,12 @@ export default {
 			try {
 				data = await this.callFileAnalysisApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_action', {
 					action: 'load_photo_face_match_findings',
-					findings_action: this.getFaceMatchFindingsSourceAction(),
+					findings_action: findingsAction,
 					auto: autoApplying,
 					refresh: !!refresh,
+					changed_since_days: ['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(findingsAction)
+						? Math.max(0, Number(this.faceMatchMissingFacesChangedSinceDays) || 0)
+						: 0,
 				});
 				if (autoApplying) {
 					await this.fetchFaceMatchingProgress();
@@ -1596,6 +1623,9 @@ export default {
 		resolveFaceMatchNameMappingPreference(targetName) {
 			const sourceName = (this.faceMatchInitialEditableName || '').trim();
 			const nextName = String(targetName || '').trim();
+			if (this.faceMatchCurrentAction === 'search_missing_faces_insightface') {
+				return Promise.resolve({ saveMapping: false, sourceName: '' });
+			}
 			if (!sourceName || !nextName) {
 				return Promise.resolve({ saveMapping: false, sourceName: '' });
 			}
@@ -1658,6 +1688,46 @@ export default {
 			this.metadataFaceDeleteConfirm.resolver = null;
 			if (typeof resolver === 'function') {
 				resolver(!!value);
+			}
+		},
+		resolveMissingFaceIgnoreSuppressionPreference() {
+			if (!this.faceMatchCanIgnoreMissingFace) {
+				return Promise.resolve(false);
+			}
+			if (typeof this.faceMatchIgnoreSuppressionPreference === 'boolean') {
+				return Promise.resolve(this.faceMatchIgnoreSuppressionPreference);
+			}
+			return this.confirmMissingFaceIgnoreSuppression().then((result) => {
+				const saveSuppression = !!(result && result.saveSuppression);
+				if (result && result.rememberChoice) {
+					this.faceMatchIgnoreSuppressionPreference = saveSuppression;
+				}
+				return saveSuppression;
+			});
+		},
+		confirmMissingFaceIgnoreSuppression() {
+			return new Promise((resolve) => {
+				this.ignoreMissingFaceConfirm.visible = true;
+				this.ignoreMissingFaceConfirm.message = this.$avt(
+					'face_match:confirm_save_ignored_missing_face',
+					'Should this ignored detected face be saved so it is not suggested again?'
+				);
+				this.ignoreMissingFaceConfirm.rememberChoice = false;
+				this.ignoreMissingFaceConfirm.resolver = resolve;
+			});
+		},
+		resolveMissingFaceIgnoreConfirm(value) {
+			const resolver = this.ignoreMissingFaceConfirm.resolver;
+			const rememberChoice = !!this.ignoreMissingFaceConfirm.rememberChoice;
+			this.ignoreMissingFaceConfirm.visible = false;
+			this.ignoreMissingFaceConfirm.message = '';
+			this.ignoreMissingFaceConfirm.rememberChoice = false;
+			this.ignoreMissingFaceConfirm.resolver = null;
+			if (typeof resolver === 'function') {
+				resolver({
+					saveSuppression: !!value,
+					rememberChoice,
+				});
 			}
 		},
 		confirmFaceMatchNameMapping(sourceName, targetName, options = {}) {
@@ -2078,6 +2148,7 @@ export default {
 							? '/webman/3rdparty/AV_ImgData/index.cgi/api/face_create_metadata_match'
 							: '/webman/3rdparty/AV_ImgData/index.cgi/api/face_create_match',
 						{
+							action: this.faceMatchCurrentAction,
 							face_id: faceId,
 							image_path: imagePath,
 							metadata_face: metadataFace,
@@ -2140,6 +2211,7 @@ export default {
 							? '/webman/3rdparty/AV_ImgData/index.cgi/api/face_assign_metadata_match'
 							: '/webman/3rdparty/AV_ImgData/index.cgi/api/face_assign_match',
 						{
+							action: this.faceMatchCurrentAction,
 							face_id: faceId,
 							image_path: imagePath,
 							metadata_face: metadataFace,
@@ -2256,6 +2328,7 @@ export default {
 			if (resetSkippedFaceIds) {
 				this.faceMatchSkippedFaceIds = [];
 				this.faceMatchSkippedTargets = [];
+				this.faceMatchIgnoreSuppressionPreference = null;
 				this.faceMatchTransferredCount = 0;
 				this.faceMatchProgressBase = {
 					persons_read: 0,

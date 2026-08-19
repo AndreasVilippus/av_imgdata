@@ -348,6 +348,21 @@
 				</div>
 			</div>
 		</div>
+		<div v-if="vm.ignoreMissingFaceConfirm.visible" class="sm-modal-backdrop">
+			<div class="sm-modal sm-modal-centered" role="dialog" aria-modal="true" aria-labelledby="missing-face-ignore-confirm-title">
+				<div id="missing-face-ignore-confirm-title" class="sm-modal-title">{{ vm.$avt('face_match:modal_ignore_missing_face_title', 'Save ignored face') }}</div>
+				<div class="sm-modal-text">{{ vm.ignoreMissingFaceConfirm.message }}</div>
+				<label class="face-match-switch sm-modal-switch-option">
+					<input v-model="vm.ignoreMissingFaceConfirm.rememberChoice" type="checkbox" />
+					<span class="face-match-switch-slider"></span>
+					<span class="face-match-switch-label">{{ vm.$avt('face_match:switch_remember_ignore_missing_face_choice', 'Use this answer for further ignored faces in this run') }}</span>
+				</label>
+				<div class="sm-modal-actions">
+					<v-button @click="vm.resolveMissingFaceIgnoreConfirm(false)" style="width: 120px;">{{ vm.$avt('face_match:button_no', 'No') }}</v-button>
+					<v-button @click="vm.resolveMissingFaceIgnoreConfirm(true)" style="width: 120px;">{{ vm.$avt('face_match:button_yes', 'Yes') }}</v-button>
+				</div>
+			</div>
+		</div>
 	</div>
 </template>
 

@@ -216,6 +216,7 @@ class ChecksWorkflowService:
             resolved_count=resolved_count,
             ignored_count=ignored_count,
             metrics_trusted=True,
+            changed_since_days=max(0, int(resume_cursor.get("changed_since_days") or 0)),
         )
 
     def write_findings(
