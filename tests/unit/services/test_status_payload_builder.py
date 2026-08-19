@@ -92,3 +92,10 @@ def test_status_phase_derivation_keeps_blocked_and_stopped_distinct():
     assert builder.derive_phase(status="blocked", running=False) == "blocked"
     assert builder.derive_phase(stop_requested=True, running=True) == "stopping"
     assert builder.derive_phase(stop_requested=True, running=False) == "stopped"
+
+
+def test_status_phase_derivation_maps_paused_auth_required_state():
+    builder = StatusPayloadBuilder()
+
+    assert builder.derive_phase(paused=True, running=False, finished=False) == "paused"
+    assert builder.derive_phase(message_key="face_match:progress_auth_required") == "paused"

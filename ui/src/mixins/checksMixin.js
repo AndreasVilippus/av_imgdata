@@ -1021,6 +1021,7 @@ export default {
 				try {
 					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_progress', {
 						check_type: checkType,
+						source_mode: 'scan',
 					}, { resume: false, requireSynoToken: false });
 					const progress = this.getResponseData(data);
 					const isRunningScan = !!(
@@ -1174,6 +1175,7 @@ export default {
 			try {
 				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/checks_progress', {
 					check_type: this.selectedChecksType,
+					source_mode: this.selectedChecksAction === 'findings' ? 'findings' : 'scan',
 				}, { resume: false, requireSynoToken: false });
 				if (this.checksProgressRequestId !== requestId) {
 					return {};

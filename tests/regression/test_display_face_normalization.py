@@ -1130,7 +1130,9 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertTrue(progress.get("running"))
         self.assertFalse(progress.get("finished"))
         self.assertFalse(progress.get("stopped"))
-        self.assertEqual(progress.get("status"), "running")
+        self.assertEqual(progress.get("status_text"), "running")
+        self.assertEqual(progress.get("status", {}).get("schema_version"), 1)
+        self.assertEqual(progress.get("status", {}).get("operation"), "file_analysis")
         self.assertEqual(progress.get("files_analyzed"), 12)
         self.assertEqual(written, {})
 

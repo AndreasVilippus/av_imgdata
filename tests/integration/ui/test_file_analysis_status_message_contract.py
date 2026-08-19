@@ -12,3 +12,18 @@ def test_file_analysis_status_message_translates_backend_message_key():
     assert "current.message_key" in method
     assert "this.$avt(" in method
     assert "current.message_params" in method
+
+
+def test_file_analysis_status_message_uses_schema_safe_status_text():
+    mixin = Path("ui/src/mixins/statusMixin.js").read_text(encoding="utf-8")
+    assert "getFileAnalysisStatusText(progress)" in mixin
+
+    start = mixin.find("getFileAnalysisStatusMessage(progress)")
+    assert start >= 0
+    end = mixin.find("\n\t\t},", start)
+    assert end > start
+    method = mixin[start:end]
+
+    assert "const statusText = this.getFileAnalysisStatusText(current);" in method
+    assert "statusText === 'finished'" in method
+    assert "statusText === 'failed'" in method

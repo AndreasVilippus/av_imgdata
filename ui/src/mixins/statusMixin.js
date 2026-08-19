@@ -181,6 +181,13 @@ export default {
 			}
 			return {};
 		},
+		getFileAnalysisStatusText(progress) {
+			const current = progress && typeof progress === 'object' ? progress : {};
+			if (typeof current.status === 'string') {
+				return String(current.status || '').trim().toLowerCase();
+			}
+			return String(current.status_text || '').trim().toLowerCase();
+		},
 		getFileAnalysisStatusProgressTitle() {
 			const progress = this.getFileAnalysisStatusProgress();
 			return progress.title_key ? this.$avt(progress.title_key, progress.fallback_title || progress.kind) : (progress.fallback_title || progress.kind || '');
@@ -253,6 +260,7 @@ export default {
 		},
 		getFileAnalysisStatusMessage(progress) {
 			const current = progress && typeof progress === 'object' ? progress : {};
+			const statusText = this.getFileAnalysisStatusText(current);
 
 			if (current.message_key) {
 				return this.$avt(
@@ -272,19 +280,19 @@ export default {
 			if (current.running && current.phase === 'analysis') {
 				return this.$avt('status:progress_analysis_running', 'Analyzing face metadata...');
 			}
-			if (current.status === 'stopped' && current.phase === 'discovery') {
+			if (statusText === 'stopped' && current.phase === 'discovery') {
 				return this.$avt('status:progress_discovery_stopped', 'Discovery stopped.');
 			}
-			if (current.status === 'stopped' && current.phase === 'analysis') {
+			if (statusText === 'stopped' && current.phase === 'analysis') {
 				return this.$avt('status:progress_analysis_stopped', 'Analysis stopped.');
 			}
-			if (current.status === 'finished' && current.phase === 'analysis') {
+			if (statusText === 'finished' && current.phase === 'analysis') {
 				return this.$avt('status:progress_analysis_finished', 'Analysis finished.');
 			}
-			if (current.status === 'failed' && !current.shared_folder) {
+			if (statusText === 'failed' && !current.shared_folder) {
 				return this.$avt('status:progress_shared_folder_missing', 'Shared folder not found.');
 			}
-			if (current.status === 'failed') {
+			if (statusText === 'failed') {
 				return this.$avt('status:progress_analysis_failed', 'File analysis failed.');
 			}
 			return current.message || this.$avt('status:analyze_idle', 'No file analysis has been started yet.');

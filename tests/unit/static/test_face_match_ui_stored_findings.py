@@ -76,6 +76,19 @@ def test_face_match_image_preview_uses_backend_fallback_after_thumbnail_error():
     assert view.count('@error="vm.handleFaceMatchImagePreviewError"') == 4
 
 
+def test_face_match_ignores_stale_progress_from_other_action():
+    source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    method_start = source.index("applyFaceMatchingProgress(progress")
+    method_end = source.index("async fetchFaceMatchingProgress", method_start)
+    method_source = source[method_start:method_end]
+
+    assert "faceMatchProgressMatchesSelectedAction(progress)" in source
+    assert "!this.faceMatchReviewingStoredFindings" in method_source
+    assert "nextProgress.stale === true" in method_source
+    assert "!this.faceMatchProgressMatchesSelectedAction(nextProgress)" in method_source
+    assert method_source.index("!this.faceMatchProgressMatchesSelectedAction(nextProgress)") < method_source.index("this.syncFaceMatchTransferredCountFromProgress(nextProgress)")
+
+
 def test_file_image_preview_url_building_is_centralized():
     app = Path("ui/src/App.vue").read_text(encoding="utf-8")
     face_match = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")

@@ -53,6 +53,8 @@ InsightFace-driven processes, including face-frame standardization, follow the s
 
 ## Phases
 
+The phase field is a stable, lower_snake_case status token. Consumers must handle the core phases below and treat operation-specific detail phases as display/status details, not as a reason to reconstruct state from legacy fields.
+
 | Phase | Meaning |
 |---|---|
 | `preparing` | preparing candidates or runtime data |
@@ -64,6 +66,8 @@ InsightFace-driven processes, including face-frame standardization, follow the s
 | `failed` | failed |
 | `empty` | no result |
 | `blocked` | start blocked by another operation |
+
+Known operation-specific terminal/detail phases include `review_required`, `needs_profiles`, and running detail phases such as `listing_files`, `preparing_model`, `preparing_detector`, `reading_reference_images`, `reading_unknown_images`, `reading_assigned_images`, `persons_loaded`, `unknown_loaded`, `building_profiles`, `building_suggestions`, and `building_assignment_suggestions`. These phases must preserve the same `operation`/`action`/`mode` identity rules as the core phases.
 
 ## Unified Status Schema
 
@@ -236,6 +240,8 @@ Rules:
 - UI must read persisted progress on view open.
 - UI must not immediately apply scan progress over an active findings review.
 - Checks views must discover running check scans across check types and adopt only matching scan state.
+- If a progress endpoint is queried for a specific action/check type and mode, a historical non-running state from a different action/check type or mode must not be returned as the current state. The response should be neutral/idle for the requested identity while exposing the historical source identity only as diagnostic metadata such as `source_action`.
+- A running state from another action/check type or mode may still be returned when needed for reconnect or cross-operation blocking, but it must keep its own `operation`, `mode`, `action`, and `operation_id`.
 - `stop_requested` applies only to the operation, action/check type, and mode that produced it.
 - Stale runtime status without a live worker must not keep an active stopping message. If FaceMatch has `running: false`, `active: false`, and `stop_requested: false`, a historical `face_match:progress_stopping` message is normalized to `face_match:progress_stopped`.
 - A stored findings review remains visible until the backend replaces, resolves, skips, ignores, or clears the current item.

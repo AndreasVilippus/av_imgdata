@@ -150,8 +150,10 @@ class RuntimeStateService:
         payload = dict(current) if isinstance(current, dict) else {}
         normalized_operation = str(operation or "").strip().lower()
         normalized_action = str(action or payload.get("action") or "").strip().lower()
-        normalized_mode = str(mode or payload.get("mode") or payload.get("source_mode") or "scan").strip().lower() or "scan"
         existing_status = payload.get("status")
+        status_mode = existing_status.get("mode") if isinstance(existing_status, dict) else ""
+        status_phase = existing_status.get("phase") if isinstance(existing_status, dict) else ""
+        normalized_mode = str(mode or payload.get("mode") or payload.get("source_mode") or status_mode or "scan").strip().lower() or "scan"
         existing_status_text = existing_status if isinstance(existing_status, str) else ""
         payload["operation"] = normalized_operation
         payload["action"] = normalized_action
@@ -160,11 +162,14 @@ class RuntimeStateService:
             running=payload.get("running"),
             finished=payload.get("finished"),
             stop_requested=payload.get("stop_requested"),
+            paused=payload.get("paused"),
             message_key=str(payload.get("message_key") or payload.get("message") or ""),
             status=existing_status_text,
         )
-        previous_phase = str(payload.get("phase") or "").strip().lower()
-        payload["phase"] = previous_phase if derived_phase == "idle" and previous_phase else derived_phase
+        previous_phase = str(payload.get("phase") or status_phase or "").strip().lower()
+        generic_derived_phase = derived_phase in {"idle", "running", "finished"}
+        stale_terminal_phase = previous_phase in {"failed", "stopped", "finished", "empty", "blocked"}
+        payload["phase"] = previous_phase if generic_derived_phase and previous_phase and not (bool(payload.get("running")) and stale_terminal_phase) else derived_phase
         return payload
 
     def stamp_progress(

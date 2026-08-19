@@ -252,6 +252,21 @@ export default {
 			}
 			return String(this.selectedCleanupAction || 'normalize_names');
 		},
+		getCleanupProgressMode(action) {
+			const normalizedAction = String(action || this.getCleanupProgressAction() || '').trim();
+			let operationMode = '';
+			if (normalizedAction === 'standardize_face_frames') {
+				operationMode = String(this.faceFrameOptions && this.faceFrameOptions.operation_mode || '').trim().toLowerCase();
+			} else if ([
+				'recognition_build_profiles',
+				'recognition_check_reference_outliers',
+				'recognition_analyze_unknown_faces',
+				'recognition_check_person_assignments',
+			].includes(normalizedAction)) {
+				operationMode = String(this.recognitionOptions && this.recognitionOptions.operation_mode || '').trim().toLowerCase();
+			}
+			return operationMode === 'findings' ? 'findings' : 'scan';
+		},
 		updateRecognitionOption(key, value) {
 			this.recognitionOptions = {
 				...this.recognitionOptions,
@@ -509,6 +524,7 @@ export default {
 				try {
 					const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/cleanup_progress', {
 						action,
+						mode: this.getCleanupProgressMode(action),
 					}, { resume: false, requireSynoToken: false });
 					if (this.cleanupProgressRequestId !== requestId) {
 						return {};

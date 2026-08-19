@@ -22,6 +22,7 @@ class StatusPayloadBuilder:
         running: Any = False,
         finished: Any = False,
         stop_requested: Any = False,
+        paused: Any = False,
         message_key: str = "",
         status: str = "",
     ) -> str:
@@ -33,6 +34,8 @@ class StatusPayloadBuilder:
             return "blocked"
         if bool(stop_requested) or normalized_status in {"stopping"} or "stopping" in normalized_message:
             return "stopping" if bool(running) else "stopped"
+        if bool(paused) or normalized_status in {"paused"} or "auth_required" in normalized_message:
+            return "paused"
         if "empty" in normalized_message or normalized_status in {"empty"}:
             return "empty"
         if bool(finished) or normalized_status in {"finished", "done", "saved"}:

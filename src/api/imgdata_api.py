@@ -497,6 +497,93 @@ def _compact_file_analysis_progress(progress: Any) -> Any:
     }
 
 
+def _is_active_runtime_progress(progress: Any) -> bool:
+    if not isinstance(progress, dict):
+        return False
+    return bool(progress.get("running") or progress.get("active"))
+
+
+def _normalize_runtime_action(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == "load_photo_face_match_findings":
+        return "search_photo_face_in_file"
+    return normalized
+
+
+def _normalize_runtime_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"immediate", "save_only"}:
+        return "scan"
+    return normalized
+
+
+def _neutral_progress_for_requested_action(
+    *,
+    operation: str,
+    requested_action: str,
+    source_action: str,
+    mode: str = "scan",
+) -> Dict[str, Any]:
+    action = _normalize_runtime_action(requested_action)
+    source = _normalize_runtime_action(source_action)
+    normalized_operation = str(operation or "").strip().lower()
+    normalized_mode = str(mode or "scan").strip().lower() or "scan"
+    payload = {
+        "running": False,
+        "finished": False,
+        "active": False,
+        "stale": False,
+        "operation": normalized_operation,
+        "action": action,
+        "requested_action": action,
+        "source_action": source,
+        "mode": normalized_mode,
+        "phase": "idle",
+        "status": {
+            "schema_version": 1,
+            "operation": normalized_operation,
+            "action": action,
+            "mode": normalized_mode,
+            "phase": "idle",
+            "save_only": False,
+            "progress": {},
+            "counters": [],
+        },
+    }
+    if normalized_operation == "checks":
+        payload["check_type"] = action
+        payload["source_check_type"] = source
+    return payload
+
+
+def _filter_stale_progress_for_requested_action(
+    progress: Any,
+    *,
+    operation: str,
+    requested_action: Any,
+    requested_mode: Any = "",
+) -> Any:
+    if not isinstance(progress, dict):
+        return progress
+    requested = _normalize_runtime_action(requested_action)
+    requested_mode_normalized = _normalize_runtime_mode(requested_mode)
+    if not requested and not requested_mode_normalized:
+        return progress
+    status = progress.get("status") if isinstance(progress.get("status"), dict) else {}
+    source = _normalize_runtime_action(progress.get("action") or progress.get("check_type") or status.get("action"))
+    source_mode = _normalize_runtime_mode(progress.get("mode") or progress.get("source_mode") or status.get("mode"))
+    action_matches = not requested or not source or source == requested
+    mode_matches = not requested_mode_normalized or not source_mode or source_mode == requested_mode_normalized
+    if (action_matches and mode_matches) or _is_active_runtime_progress(progress):
+        return progress
+    return _neutral_progress_for_requested_action(
+        operation=operation,
+        requested_action=requested,
+        source_action=source,
+        mode=requested_mode_normalized or str(progress.get("mode") or progress.get("source_mode") or "scan"),
+    )
+
+
 def _save_name_mapping_if_requested(*, save_mapping: bool, source_name: Any, target_name: Any) -> bool:
     normalized_source = str(source_name or "").strip()
     normalized_target = str(target_name or "").strip()
@@ -1164,14 +1251,19 @@ async def face_matching_findings_status(request: Request):
     requested_action = str(body.get("action") or body.get("source_action") or "").strip().lower()
     findings = await _run_backend_call(lambda: IMGDATA.getFaceMatchFindingsStatus())
     findings_action = str(findings.get("action") or "").strip().lower()
-    if requested_action and findings_action and requested_action != findings_action:
+    action_mismatch = bool(requested_action and findings_action and requested_action != findings_action)
+    if action_mismatch:
         count = 0
+        transferred_count = 0
+        response_action = requested_action
     else:
         entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
         try:
             count = max(0, int(findings.get("count") if "count" in findings else len(entries)))
         except (TypeError, ValueError):
             count = len(entries)
+        transferred_count = int(findings.get("transferred_count") or 0)
+        response_action = findings_action
     backend_debug_log(
         "face_matching_findings_status",
         duration_ms=round((time.monotonic() - started) * 1000, 2),
@@ -1180,16 +1272,17 @@ async def face_matching_findings_status(request: Request):
         findings_action=findings_action,
         status=str(findings.get("status") or ""),
         count=count,
-        transferred_count=int(findings.get("transferred_count") or 0),
+        transferred_count=transferred_count,
     )
     return {
         "success": True,
         "data": {
-            "status": str(findings.get("status") or ""),
-            "action": findings_action,
+            "status": "" if action_mismatch else str(findings.get("status") or ""),
+            "action": response_action,
+            "source_action": findings_action,
             "requested_action": requested_action,
             "count": count,
-            "transferred_count": int(findings.get("transferred_count") or 0),
+            "transferred_count": transferred_count,
             "save_only": bool(findings.get("save_only")) if count else False,
             "auto": bool(findings.get("auto")) if count else False,
         },
@@ -1203,9 +1296,18 @@ async def face_matching_progress(request: Request):
     if error_response:
         return error_response
 
+    body = await _read_request_body(request)
+    requested_action = body.get("action") or body.get("source_action") or ""
+    requested_mode = body.get("mode") or body.get("source_mode") or body.get("operation_mode") or ""
     try:
         progress = await _run_backend_call(
             lambda: IMGDATA.getFaceMatchingProgress(session_ctx["user_key"], compact_for_response=True)
+        )
+        progress = _filter_stale_progress_for_requested_action(
+            progress,
+            operation="face_match",
+            requested_action=requested_action,
+            requested_mode=requested_mode,
         )
     except Exception as exc:
         backend_debug_log(
@@ -1221,6 +1323,8 @@ async def face_matching_progress(request: Request):
         "face_matching_progress",
         duration_ms=round((time.monotonic() - started) * 1000, 2),
         user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        requested_action=_normalize_runtime_action(requested_action),
+        requested_mode=_normalize_runtime_mode(requested_mode),
         progress=_progress_debug_summary(progress),
     )
     return {
@@ -2000,8 +2104,15 @@ async def checks_progress(request: Request):
         return error_response
     body = await _read_request_body(request)
     check_type = body.get("check_type", "dimension_issues")
+    requested_mode = body.get("mode") or body.get("source_mode") or body.get("operation_mode") or ""
     progress = await _run_backend_call(
         lambda: IMGDATA.getChecksProgress(session_ctx["user_key"], str(check_type or "dimension_issues"))
+    )
+    progress = _filter_stale_progress_for_requested_action(
+        progress,
+        operation="checks",
+        requested_action=check_type,
+        requested_mode=requested_mode,
     )
 
     return {
@@ -2224,11 +2335,20 @@ async def cleanup_progress(request: Request):
 
     body = await _read_request_body(request)
     action = body.get("action", "normalize_names")
+    requested_mode = body.get("mode") or body.get("source_mode") or body.get("operation_mode") or ""
     progress = IMGDATA.getCleanupProgress(session_ctx["user_key"], str(action or "normalize_names"))
+    progress = _filter_stale_progress_for_requested_action(
+        progress,
+        operation="cleanup",
+        requested_action=action,
+        requested_mode=requested_mode,
+    )
     backend_debug_log(
         "cleanup_progress_end",
         duration_ms=round((time.monotonic() - started) * 1000, 2),
         user_key_hash=_debug_user_key(session_ctx["user_key"]),
+        requested_action=_normalize_runtime_action(action),
+        requested_mode=_normalize_runtime_mode(requested_mode),
         progress=_progress_debug_summary(progress) if isinstance(progress, dict) else {},
         persons_scanned=int(progress.get("persons_scanned") or 0) if isinstance(progress, dict) else None,
         persons_total=int(progress.get("persons_total") or 0) if isinstance(progress, dict) else None,

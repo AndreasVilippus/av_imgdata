@@ -130,6 +130,42 @@ def test_stored_findings_availability_is_bound_to_selected_action_runtime():
     assert result == {"hasFindings": True}
 
 
+def test_face_match_progress_request_sends_selected_action_and_mode_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            let requestBody = null;
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              faceMatchUseStoredFindings: false,
+              callDsmApi: async (_url, body) => {
+                requestBody = body;
+                return { success: true, data: { running: false, finished: false } };
+              },
+              fetchFaceMatchFindingsStatus: async () => {},
+            });
+
+            await component.fetchFaceMatchingProgress();
+
+            assert.strictEqual(requestBody.action, 'search_photo_face_in_file');
+            assert.strictEqual(requestBody.mode, 'scan');
+
+            component.faceMatchUseStoredFindings = true;
+            await component.fetchFaceMatchingProgress({ allowConcurrent: true });
+
+            assert.strictEqual(requestBody.action, 'search_photo_face_in_file');
+            assert.strictEqual(requestBody.mode, 'findings');
+            console.log(JSON.stringify(requestBody));
+            """
+        )
+    )
+
+    assert result == {
+        "action": "search_photo_face_in_file",
+        "mode": "findings",
+    }
+
+
 def test_stored_findings_status_count_is_not_review_progress_runtime():
     result = run_node(
         face_match_runtime_script(

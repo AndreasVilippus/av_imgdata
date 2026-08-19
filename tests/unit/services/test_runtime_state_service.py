@@ -53,6 +53,49 @@ def test_normalize_progress_scopes_stopping_phase_without_incrementing_revision(
     assert progress["revision"] == 7
 
 
+def test_normalize_progress_uses_schema_status_mode_when_top_level_mode_is_missing():
+    progress = make_service().normalize_progress(
+        {
+            "running": False,
+            "finished": True,
+            "status": {
+                "schema_version": 1,
+                "operation": "cleanup",
+                "action": "recognition_analyze_unknown_faces",
+                "mode": "findings",
+                "phase": "review_required",
+            },
+        },
+        operation="cleanup",
+        action="recognition_analyze_unknown_faces",
+    )
+
+    assert progress["operation"] == "cleanup"
+    assert progress["action"] == "recognition_analyze_unknown_faces"
+    assert progress["mode"] == "findings"
+    assert progress["phase"] == "review_required"
+
+
+def test_normalize_progress_preserves_detailed_running_phase():
+    progress = make_service().normalize_progress(
+        {
+            "running": True,
+            "finished": False,
+            "status": {
+                "schema_version": 1,
+                "operation": "cleanup",
+                "action": "recognition_analyze_unknown_faces",
+                "mode": "scan",
+                "phase": "reading_unknown_images",
+            },
+        },
+        operation="cleanup",
+        action="recognition_analyze_unknown_faces",
+    )
+
+    assert progress["phase"] == "reading_unknown_images"
+
+
 def test_stamp_progress_does_not_keep_failed_phase_when_new_run_is_active():
     progress = make_service().stamp_progress(
         {

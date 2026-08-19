@@ -862,6 +862,15 @@ export default {
 			}
 			return '';
 		},
+		faceMatchProgressMatchesSelectedAction(progress) {
+			const source = progress && typeof progress === 'object' ? progress : {};
+			const progressAction = this.normalizeFaceMatchAction(source.action || source.selected_action);
+			const selectedAction = this.normalizeFaceMatchAction(this.selectedFaceMatchingAction);
+			if (!progressAction || !selectedAction) {
+				return true;
+			}
+			return progressAction === selectedAction;
+		},
 		resetFaceMatchSelectionState() {
 			this.faceMatchEditableName = '';
 			this.faceMatchInitialEditableName = '';
@@ -1842,6 +1851,15 @@ export default {
 			if (!authoritative && this.isFaceMatchProgressUpdateStale(this.faceMatchProgress, nextProgress)) {
 				return false;
 			}
+			if (
+				!authoritative
+				&& !this.faceMatchReviewingStoredFindings
+				&& nextProgress.stale === true
+				&& !nextProgress.running
+				&& !this.faceMatchProgressMatchesSelectedAction(nextProgress)
+			) {
+				return false;
+			}
 			this.syncFaceMatchTransferredCountFromProgress(nextProgress);
 			if (this.isFaceMatchFindingsReviewActive() && this.getFaceMatchProgressMode(nextProgress) === 'scan') {
 				return true;
@@ -1865,7 +1883,10 @@ export default {
 			this.faceMatchProgressRequestId = requestId;
 			this.faceMatchProgressRequestPending = true;
 			try {
-				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_progress', {}, { resume: false, requireSynoToken: false });
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_matching_progress', {
+					action: this.selectedFaceMatchingAction,
+					mode: this.faceMatchReviewingStoredFindings ? 'findings' : 'scan',
+				}, { resume: false, requireSynoToken: false });
 				if (this.faceMatchProgressRequestId !== requestId) {
 					return {};
 				}

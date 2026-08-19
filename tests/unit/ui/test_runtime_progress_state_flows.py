@@ -239,6 +239,38 @@ def test_checks_final_backend_progress_releases_loading_runtime():
     assert result["events"] == ["apply-progress", "load-item", "stop"]
 
 
+def test_checks_progress_request_sends_selected_source_mode_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/checksMixin.js",
+            """
+            let requestBody = null;
+            const component = createComponent({
+              selectedChecksType: 'duplicate_faces',
+              selectedChecksAction: 'findings',
+              callDsmApi: async (_url, body) => {
+                requestBody = body;
+                return { success: true, data: { running: false, finished: false } };
+              },
+              applyChecksProgress: () => {},
+              ensureChecksResultItemLoaded: async () => {},
+              stopChecksProgressPolling: () => {},
+            });
+
+            await component.fetchChecksProgress();
+
+            assert.strictEqual(JSON.stringify(requestBody), JSON.stringify({
+              check_type: 'duplicate_faces',
+              source_mode: 'findings',
+            }));
+            console.log(JSON.stringify(requestBody));
+            """
+        )
+    )
+
+    assert result == {"check_type": "duplicate_faces", "source_mode": "findings"}
+
+
 def test_checks_save_only_scan_without_stored_findings_uses_start_label_runtime():
     result = run_node(
         mixin_runtime_script(
@@ -424,6 +456,43 @@ def test_cleanup_running_action_rejects_foreign_idle_progress_runtime():
     )
 
     assert result == {"applied": False, "action": "recognition_check_person_assignments"}
+
+
+def test_cleanup_progress_request_sends_selected_mode_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            let requestBody = null;
+            const requests = [];
+            const component = createComponent({
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupRuntimeAction: '',
+              recognitionOptions: {
+                operation_mode: 'findings',
+              },
+              callDsmApi: async (_url, body) => {
+                requestBody = body;
+                requests.push(body);
+                return { success: true, data: { running: false, finished: false } };
+              },
+              stopCleanupProgressPolling: () => {},
+              fetchRecognitionFindings: async () => {},
+            });
+
+            await component.fetchCleanupProgress();
+
+            assert.strictEqual(requestBody.action, 'recognition_analyze_unknown_faces');
+            assert.strictEqual(requestBody.mode, 'findings');
+            console.log(JSON.stringify(requests[0]));
+            """
+        )
+    )
+
+    assert result == {
+        "action": "recognition_analyze_unknown_faces",
+        "mode": "findings",
+    }
 
 
 def test_cleanup_progress_action_prefers_runtime_action_runtime():

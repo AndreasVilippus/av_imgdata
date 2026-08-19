@@ -62,8 +62,11 @@ def test_face_matching_findings_status_filters_by_requested_action(monkeypatch):
 
     assert payload["success"] is True
     assert payload["data"]["count"] == 0
-    assert payload["data"]["action"] == "mark_missing_photos_faces"
+    assert payload["data"]["action"] == "search_photo_face_in_file"
+    assert payload["data"]["source_action"] == "mark_missing_photos_faces"
     assert payload["data"]["requested_action"] == "search_photo_face_in_file"
+    assert payload["data"]["status"] == ""
+    assert payload["data"]["transferred_count"] == 0
     assert payload["data"]["save_only"] is False
     assert payload["data"]["auto"] is False
     assert len(calls) == 1
@@ -94,9 +97,207 @@ def test_face_matching_findings_status_uses_count_without_entries(monkeypatch):
     assert payload["success"] is True
     assert payload["data"]["count"] == 1909
     assert payload["data"]["action"] == "mark_missing_photos_faces"
+    assert payload["data"]["source_action"] == "mark_missing_photos_faces"
     assert payload["data"]["save_only"] is True
     assert payload["data"]["auto"] is True
     assert payload["data"]["transferred_count"] == 3
+    assert len(calls) == 1
+
+
+def test_face_matching_progress_neutralizes_finished_foreign_requested_action(monkeypatch):
+    async def request_body(_request):
+        return {"action": "search_photo_face_in_file"}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFaceMatchingProgress",
+        Mock(return_value={
+            "operation": "face_match",
+            "action": "search_missing_faces_insightface",
+            "mode": "scan",
+            "running": False,
+            "finished": True,
+            "stale": True,
+            "result": {"image_path": "/volume1/photo/old.jpg"},
+            "transferred_count": 9,
+        }),
+    )
+
+    payload = _run(imgdata_api.face_matching_progress(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["running"] is False
+    assert payload["data"]["action"] == "search_photo_face_in_file"
+    assert payload["data"]["requested_action"] == "search_photo_face_in_file"
+    assert payload["data"]["source_action"] == "search_missing_faces_insightface"
+    assert payload["data"]["status"]["phase"] == "idle"
+    assert "result" not in payload["data"]
+    assert "transferred_count" not in payload["data"]
+    imgdata_api.IMGDATA.getFaceMatchingProgress.assert_called_once_with("user-1", compact_for_response=True)
+    assert len(calls) == 1
+
+
+def test_face_matching_progress_keeps_running_foreign_action_for_reconnect(monkeypatch):
+    async def request_body(_request):
+        return {"action": "search_photo_face_in_file"}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFaceMatchingProgress",
+        Mock(return_value={
+            "operation": "face_match",
+            "action": "search_missing_faces_insightface",
+            "mode": "scan",
+            "running": True,
+            "finished": False,
+            "images_read": 4,
+        }),
+    )
+
+    payload = _run(imgdata_api.face_matching_progress(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["running"] is True
+    assert payload["data"]["action"] == "search_missing_faces_insightface"
+    assert payload["data"]["images_read"] == 4
+    assert len(calls) == 1
+
+
+def test_face_matching_progress_neutralizes_finished_foreign_mode_for_same_action(monkeypatch):
+    async def request_body(_request):
+        return {"action": "search_photo_face_in_file", "mode": "scan"}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFaceMatchingProgress",
+        Mock(return_value={
+            "operation": "face_match",
+            "action": "load_photo_face_match_findings",
+            "mode": "findings",
+            "running": False,
+            "finished": True,
+            "stale": True,
+            "result": {"image_path": "/volume1/photo/old.jpg"},
+            "transferred_count": 9,
+        }),
+    )
+
+    payload = _run(imgdata_api.face_matching_progress(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["running"] is False
+    assert payload["data"]["action"] == "search_photo_face_in_file"
+    assert payload["data"]["source_action"] == "search_photo_face_in_file"
+    assert payload["data"]["mode"] == "scan"
+    assert payload["data"]["status"]["mode"] == "scan"
+    assert payload["data"]["status"]["phase"] == "idle"
+    assert "result" not in payload["data"]
+    assert "transferred_count" not in payload["data"]
+    assert len(calls) == 1
+
+
+def test_cleanup_progress_neutralizes_finished_foreign_requested_action(monkeypatch):
+    async def request_body(_request):
+        return {"action": "normalize_names"}
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getCleanupProgress",
+        Mock(return_value={
+            "operation": "cleanup",
+            "action": "recognition_analyze_unknown_faces",
+            "mode": "scan",
+            "running": False,
+            "finished": True,
+            "result": {"findings_count": 12},
+        }),
+    )
+
+    payload = _json_response_payload(_run(imgdata_api.cleanup_progress(object())))
+
+    assert payload["success"] is True
+    assert payload["data"]["running"] is False
+    assert payload["data"]["action"] == "normalize_names"
+    assert payload["data"]["requested_action"] == "normalize_names"
+    assert payload["data"]["source_action"] == "recognition_analyze_unknown_faces"
+    assert payload["data"]["status"]["phase"] == "idle"
+    assert "result" not in payload["data"]
+
+
+def test_cleanup_progress_neutralizes_finished_foreign_mode_for_same_action(monkeypatch):
+    async def request_body(_request):
+        return {"action": "recognition_analyze_unknown_faces", "mode": "findings"}
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getCleanupProgress",
+        Mock(return_value={
+            "operation": "cleanup",
+            "action": "recognition_analyze_unknown_faces",
+            "mode": "scan",
+            "running": False,
+            "finished": True,
+            "result": {"findings_count": 12},
+        }),
+    )
+
+    payload = _json_response_payload(_run(imgdata_api.cleanup_progress(object())))
+
+    assert payload["success"] is True
+    assert payload["data"]["running"] is False
+    assert payload["data"]["action"] == "recognition_analyze_unknown_faces"
+    assert payload["data"]["source_action"] == "recognition_analyze_unknown_faces"
+    assert payload["data"]["mode"] == "findings"
+    assert payload["data"]["status"]["mode"] == "findings"
+    assert payload["data"]["status"]["phase"] == "idle"
+    assert "result" not in payload["data"]
+
+
+def test_checks_progress_neutralizes_finished_foreign_mode_for_same_check_type(monkeypatch):
+    async def request_body(_request):
+        return {"check_type": "duplicate_faces", "source_mode": "scan"}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getChecksProgress",
+        Mock(return_value={
+            "operation": "checks",
+            "check_type": "duplicate_faces",
+            "source_mode": "findings",
+            "running": False,
+            "finished": True,
+            "result": {"item": {"path": "/volume1/photo/old.jpg"}},
+            "findings_count": 4,
+        }),
+    )
+
+    payload = _run(imgdata_api.checks_progress(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["running"] is False
+    assert payload["data"]["check_type"] == "duplicate_faces"
+    assert payload["data"]["source_check_type"] == "duplicate_faces"
+    assert payload["data"]["mode"] == "scan"
+    assert payload["data"]["status"]["mode"] == "scan"
+    assert payload["data"]["status"]["phase"] == "idle"
+    assert "result" not in payload["data"]
+    assert "findings_count" not in payload["data"]
     assert len(calls) == 1
 
 
