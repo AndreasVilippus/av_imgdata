@@ -118,14 +118,14 @@ export default {
 		},
 		getOptionalComponentUnavailableMessage(payload) {
 			const source = payload && typeof payload === 'object' ? payload : {};
-				const error = String(source.error || '').trim();
-				const messageKey = String(source.message_key || '').trim();
-				const message = String(source.message || '').trim();
-				if (error === 'insightface_not_installed') {
-					return message || this.$avt(
-						'face_match:progress_insightface_missing',
-						'InsightFace is not available.'
-					);
+			const error = String(source.error || '').trim();
+			const messageKey = String(source.message_key || '').trim();
+			const message = String(source.message || '').trim();
+			if (error === 'insightface_not_installed') {
+				return message || this.$avt(
+					'face_match:progress_insightface_missing',
+					'InsightFace is not available.'
+				);
 			}
 			if ([
 				'face_match:progress_insightface_missing',
@@ -135,7 +135,9 @@ export default {
 			].includes(messageKey)) {
 				return message || this.$avt(messageKey, messageKey);
 			}
-			if (message && /native face processor|insightface|FaceDetectorUnavailable/i.test(message)) {
+			const mentionsOptionalFaceComponent = /native face processor|insightface|FaceDetectorUnavailable/i.test(message);
+			const describesUnavailableComponent = /unavailable|not available|not installed|missing|required|failed|error/i.test(message);
+			if (message && mentionsOptionalFaceComponent && describesUnavailableComponent) {
 				return message;
 			}
 			return '';
