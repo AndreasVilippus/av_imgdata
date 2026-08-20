@@ -344,7 +344,7 @@ bool operation_available(const char* operation) {
 
 std::string format_json() {
     std::ostringstream out;
-    out << "\"formats\":{"
+    out << "\"formats\":{" 
         << "\"jpeg\":" << (operation_available("jpegload") && operation_available("jpegsave") ? "true" : "false") << ","
         << "\"jpg\":" << (operation_available("jpegload") && operation_available("jpegsave") ? "true" : "false") << ","
         << "\"png\":" << (operation_available("pngload") && operation_available("pngsave") ? "true" : "false") << ","
@@ -370,10 +370,25 @@ int write_error(const std::string& output, const std::string& operation, const s
     return 1;
 }
 
+std::string interpretation_name(VipsImage* image) {
+    const char* interpretation = vips_enum_nick(VIPS_TYPE_INTERPRETATION, vips_image_get_interpretation(image));
+    return interpretation ? interpretation : "";
+}
+
+size_t icc_profile_size(VipsImage* image) {
+    if (vips_image_get_typeof(image, VIPS_META_ICC_NAME) == 0) {
+        return 0;
+    }
+    size_t length = 0;
+    vips_image_get_blob(image, VIPS_META_ICC_NAME, &length);
+    return length;
+}
+
 std::string image_info_json(VipsImage* image, const std::string& operation) {
     int orientation = 1;
     vips_image_get_int(image, "orientation", &orientation);
-    const char* interpretation = vips_enum_nick(VIPS_TYPE_INTERPRETATION, vips_image_get_interpretation(image));
+    const std::string interpretation = interpretation_name(image);
+    const size_t icc_bytes = icc_profile_size(image);
     std::ostringstream json;
     json << "{"
          << "\"success\":true,"
@@ -384,7 +399,9 @@ std::string image_info_json(VipsImage* image, const std::string& operation) {
          << "\"bands\":" << vips_image_get_bands(image) << ","
          << "\"has_alpha\":" << (vips_image_hasalpha(image) ? "true" : "false") << ","
          << "\"orientation\":" << orientation << ","
-         << "\"color_space\":\"" << escape_json(interpretation ? interpretation : "") << "\""
+         << "\"color_space\":\"" << escape_json(interpretation) << "\","
+         << "\"has_icc_profile\":" << (icc_bytes > 0 ? "true" : "false") << ","
+         << "\"icc_profile_bytes\":" << icc_bytes
          << "}";
     return json.str();
 }
@@ -393,7 +410,7 @@ int command_probe(const std::string& output) {
     std::ostringstream json;
     json << "{"
          << "\"contract_version\":\"1.0\","
-         << "\"processor\":{\"name\":\"av-imgdata-image-processor\",\"backend\":\"libvips\",\"version\":\"0.2.1\"},"
+         << "\"processor\":{\"name\":\"av-imgdata-image-processor\",\"backend\":\"libvips\",\"version\":\"0.2.2\"},"
          << "\"backend\":\"libvips\","
          << "\"available\":true,"
          << "\"reason\":\"vips_ready\","
@@ -440,18 +457,12 @@ bool wants_srgb_output(const Job& job, const std::string& format) {
 
 VipsImage* normalize_srgb_for_jpeg(VipsImage* image) {
     VipsImage* normalized = nullptr;
-
-    // Keep an embedded ICC profile with its pixel data. Stripping the profile
-    // after a simple interpretation conversion can make HEIC/HEIF previews
-    // render with visibly incorrect colours in colour-managed browsers.
     if (vips_image_get_typeof(image, VIPS_META_ICC_NAME) != 0) {
         if (vips_copy(image, &normalized, nullptr)) {
             return nullptr;
         }
         return normalized;
     }
-
-    // Images without an embedded profile retain the existing sRGB fallback.
     if (vips_colourspace(image, &normalized, VIPS_INTERPRETATION_sRGB, nullptr)) {
         return nullptr;
     }
@@ -514,6 +525,10 @@ int process_job(const Args& args, const Job& job, const std::string& output_stem
         }
         return write_error(args.output, operation, "processing_failed", "processor did not produce an image");
     }
+
+    const std::string input_color_space = interpretation_name(processed);
+    const size_t input_icc_bytes = icc_profile_size(processed);
+
     VipsImage* output_image = processed;
     if (wants_srgb_output(job, format)) {
         VipsImage* srgb = normalize_srgb_for_jpeg(processed);
@@ -526,6 +541,10 @@ int process_job(const Args& args, const Job& job, const std::string& output_stem
         }
         output_image = srgb;
     }
+
+    const std::string output_color_space = interpretation_name(output_image);
+    const size_t output_icc_bytes = icc_profile_size(output_image);
+
     if (write_image(output_image, out_path, quality)) {
         if (image) {
             g_object_unref(image);
@@ -538,6 +557,12 @@ int process_job(const Args& args, const Job& job, const std::string& output_stem
     }
     const std::string info_json = image_info_json(output_image, operation);
     const std::string json = info_json.substr(0, info_json.size() - 1)
+        + ",\"input_color_space\":\"" + escape_json(input_color_space)
+        + "\",\"input_has_icc_profile\":" + (input_icc_bytes > 0 ? "true" : "false")
+        + ",\"input_icc_profile_bytes\":" + std::to_string(input_icc_bytes)
+        + ",\"output_color_space\":\"" + escape_json(output_color_space)
+        + "\",\"output_has_icc_profile\":" + (output_icc_bytes > 0 ? "true" : "false")
+        + ",\"output_icc_profile_bytes\":" + std::to_string(output_icc_bytes)
         + ",\"output_path\":\"" + escape_json(out_path) + "\",\"output_format\":\"" + escape_json(format) + "\"}";
     if (image) {
         g_object_unref(image);
@@ -616,7 +641,7 @@ int main(int argc, char** argv) {
     const Args args = parse_args(argc, argv);
     int rc = 0;
     if (args.command == "version") {
-        std::cout << "av-imgdata-image-processor 0.2.1 libvips "
+        std::cout << "av-imgdata-image-processor 0.2.2 libvips "
                   << vips_version(0) << "." << vips_version(1) << "." << vips_version(2) << "\n";
     } else if (args.command == "probe") {
         rc = command_probe(args.output);
