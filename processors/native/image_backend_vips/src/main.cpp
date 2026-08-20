@@ -393,7 +393,7 @@ int command_probe(const std::string& output) {
     std::ostringstream json;
     json << "{"
          << "\"contract_version\":\"1.0\","
-         << "\"processor\":{\"name\":\"av-imgdata-image-processor\",\"backend\":\"libvips\",\"version\":\"0.2.0\"},"
+         << "\"processor\":{\"name\":\"av-imgdata-image-processor\",\"backend\":\"libvips\",\"version\":\"0.2.1\"},"
          << "\"backend\":\"libvips\","
          << "\"available\":true,"
          << "\"reason\":\"vips_ready\","
@@ -440,10 +440,21 @@ bool wants_srgb_output(const Job& job, const std::string& format) {
 
 VipsImage* normalize_srgb_for_jpeg(VipsImage* image) {
     VipsImage* normalized = nullptr;
+
+    // Keep an embedded ICC profile with its pixel data. Stripping the profile
+    // after a simple interpretation conversion can make HEIC/HEIF previews
+    // render with visibly incorrect colours in colour-managed browsers.
+    if (vips_image_get_typeof(image, VIPS_META_ICC_NAME) != 0) {
+        if (vips_copy(image, &normalized, nullptr)) {
+            return nullptr;
+        }
+        return normalized;
+    }
+
+    // Images without an embedded profile retain the existing sRGB fallback.
     if (vips_colourspace(image, &normalized, VIPS_INTERPRETATION_sRGB, nullptr)) {
         return nullptr;
     }
-    vips_image_remove(normalized, VIPS_META_ICC_NAME);
     return normalized;
 }
 
@@ -605,7 +616,7 @@ int main(int argc, char** argv) {
     const Args args = parse_args(argc, argv);
     int rc = 0;
     if (args.command == "version") {
-        std::cout << "av-imgdata-image-processor 0.2.0 libvips "
+        std::cout << "av-imgdata-image-processor 0.2.1 libvips "
                   << vips_version(0) << "." << vips_version(1) << "." << vips_version(2) << "\n";
     } else if (args.command == "probe") {
         rc = command_probe(args.output);
