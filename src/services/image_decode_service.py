@@ -212,6 +212,14 @@ class ImageDecodeService:
             image_suffix=image_path.suffix.lower(),
             operation=operation,
             output_bytes=len(image_bytes),
+            width=result.get("width"),
+            height=result.get("height"),
+            input_color_space=result.get("input_color_space"),
+            input_has_icc_profile=result.get("input_has_icc_profile"),
+            input_icc_profile_bytes=result.get("input_icc_profile_bytes"),
+            output_color_space=result.get("output_color_space"),
+            output_has_icc_profile=result.get("output_has_icc_profile"),
+            output_icc_profile_bytes=result.get("output_icc_profile_bytes"),
         )
         return ImageDecodeResult(True, image_bytes=image_bytes, source="libvips")
 
@@ -271,6 +279,20 @@ class ImageDecodeService:
                 self._debug_log("image_decoder_vips_failed", image_suffix=image_path.suffix.lower(), operation=operation, error="decoder_output_not_jpeg")
                 results[str(image_path)] = ImageDecodeResult(False, source="libvips", error="decoder_output_not_jpeg")
                 continue
+            self._debug_log(
+                "image_decoder_vips_item_used",
+                image_suffix=image_path.suffix.lower(),
+                operation=operation,
+                output_bytes=len(image_bytes),
+                width=item.get("width"),
+                height=item.get("height"),
+                input_color_space=item.get("input_color_space"),
+                input_has_icc_profile=item.get("input_has_icc_profile"),
+                input_icc_profile_bytes=item.get("input_icc_profile_bytes"),
+                output_color_space=item.get("output_color_space"),
+                output_has_icc_profile=item.get("output_has_icc_profile"),
+                output_icc_profile_bytes=item.get("output_icc_profile_bytes"),
+            )
             results[str(image_path)] = ImageDecodeResult(True, image_bytes=image_bytes, source="libvips")
         self._debug_log(
             "image_decoder_vips_batch_used",
