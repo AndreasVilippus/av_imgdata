@@ -239,15 +239,15 @@ install_native_face_processor_license_files() {
 AV_ImgData ships av-imgdata-face-processor and its native runtime libraries.
 
 Bundled runtime libraries:
-- ONNXRuntime C API from ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT}
-- libjpeg-compatible runtime from JPEG_ROOT=${JPEG_ROOT}
+- ONNXRuntime C API, see copied ONNXRuntime license files when present
+- libjpeg-compatible runtime, see copied JPEG/libjpeg license files when present
 
 ONNXRuntime is distributed under the MIT license. The copied license files from
-ONNXRUNTIME_ROOT are included in this directory when present.
+the selected ONNXRuntime distribution are included in this directory when present.
 
 libjpeg/libjpeg-turbo compatible libraries use permissive IJG/BSD/zlib-style
 terms depending on the target sysroot provider. AV_ImgData copies the shared
-runtime from the selected Synology Toolkit/sysroot JPEG_ROOT and links it
+runtime from the selected Synology Toolkit/sysroot JPEG provider and links it
 dynamically.
 EOF
 

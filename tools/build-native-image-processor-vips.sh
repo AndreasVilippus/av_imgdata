@@ -8,6 +8,7 @@ BUILD_DIR="${BUILD_ROOT}/vips-image-processor-build"
 LIBVIPS_BUILD_DIR="${BUILD_ROOT}/libvips-build"
 INSTALL_DIR="${BUILD_ROOT}/vips-image-processor-install"
 VIPS_PREFIX="${INSTALL_DIR}/usr/local/AV_ImgData"
+VIPS_RUNTIME_PREFIX="${AV_IMGDATA_VIPS_RUNTIME_PREFIX:-/usr/local/AV_ImgData}"
 DEPS_ROOT="${BUILD_ROOT}/deps"
 SOURCE_CACHE="${DEPS_ROOT}/source-cache"
 
@@ -216,7 +217,10 @@ install_libvips_license_files() {
   fi
 
   if [ -d "${LIBVIPS_ORIGINAL_SOURCE_DIR}" ] && command -v diff >/dev/null 2>&1; then
-    diff -ruN "${LIBVIPS_ORIGINAL_SOURCE_DIR}" "${LIBVIPS_SOURCE_DIR}" > "${patch_file}" || true
+    (
+      cd "${LIBVIPS_SOURCE_PARENT}"
+      diff -ruN "vips-${LIBVIPS_VERSION}.orig" "vips-${LIBVIPS_VERSION}" > "${patch_file}" || true
+    )
   else
     cat > "${patch_file}" <<EOF
 AV_ImgData could not generate an automatic libvips patch diff in this build environment.
@@ -625,7 +629,7 @@ build_libvips() {
   local synology_sysroot
   local meson_args=(
     setup "${LIBVIPS_BUILD_DIR}" "${LIBVIPS_SOURCE_DIR}"
-    "--prefix=${VIPS_PREFIX}"
+    "--prefix=${VIPS_RUNTIME_PREFIX}"
     "--libdir=lib"
     "--buildtype=release"
     "--default-library=shared"
@@ -694,7 +698,7 @@ build_libvips() {
     patch_libvips_ninja_link_args "${synology_sysroot}"
   fi
   meson compile -C "${LIBVIPS_BUILD_DIR}"
-  meson install -C "${LIBVIPS_BUILD_DIR}"
+  DESTDIR="${INSTALL_DIR}" meson install -C "${LIBVIPS_BUILD_DIR}"
 
   if [ ! -f "${VIPS_PREFIX}/lib/pkgconfig/vips.pc" ]; then
     echo "ERROR: libvips build did not install vips.pc." >&2
@@ -799,20 +803,81 @@ strip_native_binary() {
   "${strip_tool}" --strip-unneeded "${binary}" || "${strip_tool}" "${binary}" || true
 }
 
+replace_binary_string_with_padding() {
+  local file="$1"
+  local old="$2"
+  local new="$3"
+
+  [ -f "${file}" ] || return
+  if [ "${#new}" -gt "${#old}" ]; then
+    echo "ERROR: replacement string is longer than embedded build path in ${file}" >&2
+    exit 1
+  fi
+  if ! grep -aFq -- "${old}" "${file}"; then
+    return
+  fi
+  if ! command -v perl >/dev/null 2>&1; then
+    echo "ERROR: perl is required to sanitize embedded native build paths." >&2
+    exit 1
+  fi
+
+  OLD_BINARY_STRING="${old}" NEW_BINARY_STRING="${new}" perl -0pi -e '
+    my $old = $ENV{OLD_BINARY_STRING};
+    my $new = $ENV{NEW_BINARY_STRING};
+    my $replacement = $new . ("\0" x (length($old) - length($new)));
+    s/\Q$old\E/$replacement/g;
+  ' "${file}"
+}
+
+sanitize_native_build_paths() {
+  local file
+  local file_list
+  local staged_prefixes=(
+    "${VIPS_PREFIX}"
+    "${VIPS_PREFIX}/lib"
+  )
+  local runtime_prefixes=(
+    "${VIPS_RUNTIME_PREFIX}"
+    "${VIPS_RUNTIME_PREFIX}/lib"
+  )
+  local index
+
+  file_list="$(mktemp "${BUILD_ROOT}/native-paths.XXXXXX")"
+  find "${VIPS_PREFIX}/bin" "${VIPS_PREFIX}/lib" -maxdepth 1 -type f \( -perm -111 -o -name '*.so*' \) -print0 > "${file_list}" 2>/dev/null || true
+  while IFS= read -r -d '' file; do
+    for index in "${!staged_prefixes[@]}"; do
+      replace_binary_string_with_padding "${file}" "${staged_prefixes[${index}]}" "${runtime_prefixes[${index}]}"
+    done
+    if strings "${file}" | grep -Eq '(/home/andreas|//source/av_imgdata|/source/av_imgdata)'; then
+      echo "ERROR: native build path remains embedded in ${file}" >&2
+      strings "${file}" | grep -E '(/home/andreas|//source/av_imgdata|/source/av_imgdata)' >&2 || true
+      exit 1
+    fi
+  done < "${file_list}"
+  rm -f "${file_list}"
+}
+
 require_libvips_host_dependencies
 prepare_build_dirs
 build_heif_stack
 build_libvips
 copy_libvips_runtime_dependencies
+sanitize_native_build_paths
 
 export PKG_CONFIG_PATH="${VIPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 export LD_LIBRARY_PATH="${VIPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export PKG_CONFIG_SYSROOT_DIR="${INSTALL_DIR}"
+HOST_GLIB_CFLAGS="$(
+  PKG_CONFIG_SYSROOT_DIR= pkg-config --cflags glib-2.0 gio-2.0 gobject-2.0
+)"
+BACKEND_CXX_FLAGS="${CXXFLAGS:-} ${HOST_GLIB_CFLAGS}"
 
 cd "${BUILD_DIR}"
 CMAKE_ARGS=(
   "${PROJECT_DIR}/processors/native/image_backend_vips"
   "-DCMAKE_BUILD_TYPE=Release"
   "-DCMAKE_INSTALL_PREFIX=/usr/local/AV_ImgData"
+  "-DCMAKE_CXX_FLAGS=${BACKEND_CXX_FLAGS}"
 )
 if [ -n "${CC:-}" ]; then
   CMAKE_ARGS+=("-DCMAKE_C_COMPILER=${CC}")
@@ -823,6 +888,7 @@ fi
 cmake "${CMAKE_ARGS[@]}"
 make -j"$(nproc 2>/dev/null || echo 2)"
 make install DESTDIR="${INSTALL_DIR}"
+sanitize_native_build_paths
 
 NATIVE_BINARY="${VIPS_PREFIX}/bin/av-imgdata-image-processor"
 if [ "${AV_IMGDATA_NATIVE_STRIP:-1}" != "0" ] && [ -x "${NATIVE_BINARY}" ]; then

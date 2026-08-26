@@ -335,9 +335,9 @@ cat > "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/README.txt" <
 AV_ImgData Windows native face processor bundle.
 
 Bundled runtime libraries may include:
-- ONNXRuntime from ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT}
-- JPEG/libjpeg runtime from JPEG_ROOT=${JPEG_ROOT}
-- HEIF/libheif runtime from HEIF_ROOT=${HEIF_ROOT:-not configured}
+- ONNXRuntime, see copied ONNXRuntime license files when present
+- JPEG/libjpeg runtime, see copied JPEG/libjpeg license files when present
+- HEIF/libheif runtime, see copied HEIF/libheif license files when present
 EOF
 copy_optional_license_file "${ONNXRUNTIME_ROOT}/LICENSE" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/onnxruntime.LICENSE"
 copy_optional_license_file "${ONNXRUNTIME_ROOT}/ThirdPartyNotices.txt" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/onnxruntime.ThirdPartyNotices.txt"

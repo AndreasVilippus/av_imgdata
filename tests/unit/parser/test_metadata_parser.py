@@ -117,7 +117,7 @@ XMP_MWG_CONTEXT = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
 
 def parse_metadata(xmp_content, **kwargs):
     return MetadataParser().parse(
-        image_path="dev/test.jpg",
+        image_path="fixtures/test.jpg",
         xmp_content=xmp_content,
         image_dimensions={"width": 4000, "height": 3000, "unit": "pixel"},
         **kwargs,

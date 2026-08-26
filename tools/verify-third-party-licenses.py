@@ -278,7 +278,7 @@ def build_notice(root):
 
     notice = {
         "schema": "av-imgdata-third-party-notices-v1",
-        "root": str(root),
+        "root": ".",
         "components": sorted(components.values(), key=lambda item: str(item["id"])),
     }
     return notice, unknown

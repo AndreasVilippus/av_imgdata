@@ -26,8 +26,8 @@ resolve_model_root() {
   for candidate in \
     "${HOME:-}/.insightface" \
     "${HOME:-}/.insightface/models" \
+    "${PROJECT_DIR}/.models/face" \
     "${PROJECT_DIR}/models" \
-    "${PROJECT_DIR}/dev/models" \
     "${PROJECT_DIR}/build/native/${PLATFORM}/models"; do
     if [ -f "${candidate}/buffalo_l/det_10g.onnx" ] && [ -f "${candidate}/buffalo_l/w600k_r50.onnx" ]; then
       printf '%s\n' "${candidate}"
@@ -52,8 +52,6 @@ fi
 
 if [ -n "${AV_IMGDATA_NATIVE_TEST_IMAGE:-}" ]; then
   TEST_IMAGE="${AV_IMGDATA_NATIVE_TEST_IMAGE}"
-elif [ -f "${PROJECT_DIR}/dev/20160620_081556.jpg" ]; then
-  TEST_IMAGE="${PROJECT_DIR}/dev/20160620_081556.jpg"
 else
   TEST_IMAGE="${PROJECT_DIR}/tests/images/test_pic.jpg"
 fi

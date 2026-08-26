@@ -2674,10 +2674,10 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             source="metadata",
             source_format="ACD",
         )
-        payload = MetadataPayload(image_path="dev/test.jpg", faces=[safe_face, risky_face])
+        payload = MetadataPayload(image_path="fixtures/test.jpg", faces=[safe_face, risky_face])
         entry = self.service._buildCheckEntry(
             review_type="position_deviations",
-            image_path="dev/test.jpg",
+            image_path="fixtures/test.jpg",
             face_name="Person Alpha",
             left_face=safe_face,
             right_face=risky_face,
@@ -2685,7 +2685,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         with patch.object(self.service, "_readImageMetadata", return_value=payload):
             item = self.service._buildPositionDeviationReviewItem(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 entry=entry,
             )
 
@@ -2711,10 +2711,10 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             source="xmp_file",
             source_format="MWG_REGIONS",
         )
-        payload = MetadataPayload(image_path="dev/test.jpg", faces=[embedded_face, sidecar_face])
+        payload = MetadataPayload(image_path="fixtures/test.jpg", faces=[embedded_face, sidecar_face])
         entry = self.service._buildCheckEntry(
             review_type="position_deviations",
-            image_path="dev/test.jpg",
+            image_path="fixtures/test.jpg",
             face_name="Person Alpha",
             left_face=embedded_face,
             right_face=sidecar_face,
@@ -2729,7 +2729,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
 
         with patch.object(self.service, "_readImageMetadata", return_value=payload):
             item = self.service._buildPositionDeviationReviewItem(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 entry=entry,
             )
 
@@ -2737,7 +2737,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(item["right_state"], "suggested")
 
     def test_normalize_metadata_face_names_from_mappings_updates_selected_formats(self):
-        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        payload = MetadataPayload(image_path="fixtures/test.jpg", has_xmp=True)
         written = {}
 
         def capture_write(_target_path, xmp_content):
@@ -2749,7 +2749,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
              patch.object(self.service.exiftool_handler, "loadEmbeddedXmp", return_value=XMP_MICROSOFT_RENAME), \
              patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
             result = self.service.normalizeMetadataFaceNamesFromMappings(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 target_formats=["MICROSOFT"],
                 mapping_lookup={"person legacy": "Person Target"},
             )
@@ -2763,7 +2763,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
     def test_normalize_metadata_face_names_from_mappings_requires_exiftool(self):
         with patch.object(self.service.exiftool_handler, "isAvailable", return_value=False):
             result = self.service.normalizeMetadataFaceNamesFromMappings(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 target_formats=["MICROSOFT"],
                 mapping_lookup={"person legacy": "Person Target"},
             )
@@ -2772,14 +2772,14 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(result["warning"], "checks:warning_exiftool_required")
 
     def test_normalize_metadata_face_names_from_mappings_stops_before_write(self):
-        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        payload = MetadataPayload(image_path="fixtures/test.jpg", has_xmp=True)
 
         with patch.object(self.service, "_readImageMetadata", return_value=payload), \
              patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
              patch.object(self.service.exiftool_handler, "loadEmbeddedXmp", return_value=XMP_MICROSOFT_RENAME), \
              patch.object(self.service.exiftool_handler, "writeXmpDetailed") as write_mock:
             result = self.service.normalizeMetadataFaceNamesFromMappings(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 target_formats=["MICROSOFT"],
                 mapping_lookup={"person legacy": "Person Target"},
                 should_stop=lambda: True,
@@ -2790,7 +2790,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         write_mock.assert_not_called()
 
     def test_replace_metadata_face_name_uses_native_embedded_xmp_for_edit_preparation(self):
-        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        payload = MetadataPayload(image_path="fixtures/test.jpg", has_xmp=True)
         written = {}
 
         def capture_write(_target_path, xmp_content):
@@ -2803,7 +2803,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
              patch.object(self.service.exiftool_handler, "loadEmbeddedXmp", side_effect=AssertionError("native embedded XMP should be used for edit preparation")), \
              patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
             result = self.service.replaceMetadataFaceName(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 face_data={
                     "name": "Person Legacy",
                     "x": 0.25,
@@ -2821,7 +2821,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertNotIn("Person Legacy", written["xmp"])
 
     def test_replace_metadata_face_name_treats_already_renamed_face_as_success(self):
-        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        payload = MetadataPayload(image_path="fixtures/test.jpg", has_xmp=True)
         xmp_content = XMP_MWG_AND_MICROSOFT.replace("Person Alpha", "Jelizaveta Vilippus geb. Kromskaja")
 
         with patch.object(self.service, "_readImageMetadata", return_value=payload), \
@@ -2829,7 +2829,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
              patch.object(self.service.files, "loadXmpFromImageParsed", return_value=xmp_content), \
              patch.object(self.service.exiftool_handler, "writeXmpDetailed") as write_mock:
             result = self.service.replaceMetadataFaceName(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 face_data={
                     "name": "Jelizaveta Vilippus geb.  Kromskaja",
                     "x": 0.154412,
@@ -2847,7 +2847,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         write_mock.assert_not_called()
 
     def test_replace_metadata_face_name_denormalizes_oriented_display_face_for_match(self):
-        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        payload = MetadataPayload(image_path="fixtures/test.jpg", has_xmp=True)
         xmp_content = XMP_MWG_AND_MICROSOFT.replace(
             '<rdf:Description rdf:about=""',
             '<rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/"',
@@ -2866,7 +2866,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
              patch.object(self.service.files, "loadXmpFromImageParsed", return_value=xmp_content), \
              patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
             result = self.service.replaceMetadataFaceName(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 face_data={
                     "name": "Person Alpha",
                     "x": 0.462214,
@@ -2886,7 +2886,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertNotRegex(written["xmp"], r"\bmwg-rs:Name=\"Person Alpha\"|\bns\d+:Name=\"Person Alpha\"")
 
     def test_delete_metadata_face_denormalizes_oriented_display_face_for_match(self):
-        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        payload = MetadataPayload(image_path="fixtures/test.jpg", has_xmp=True)
         xmp_content = XMP_MWG_AND_MICROSOFT.replace(
             '<rdf:Description rdf:about=""',
             '<rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/"',
@@ -2905,7 +2905,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
              patch.object(self.service.files, "loadXmpFromImageParsed", return_value=xmp_content), \
              patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
             result = self.service.deleteMetadataFace(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 face_data={
                     "name": "Person Alpha",
                     "x": 0.462214,
@@ -2924,7 +2924,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertNotRegex(written["xmp"], r"\bmwg-rs:Area\b|\bns\d+:Area\b")
 
     def test_replace_metadata_face_position_denormalizes_oriented_display_target_for_match(self):
-        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        payload = MetadataPayload(image_path="fixtures/test.jpg", has_xmp=True)
         xmp_content = XMP_MWG_AND_MICROSOFT.replace(
             '<rdf:Description rdf:about=""',
             '<rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/"',
@@ -2943,7 +2943,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
              patch.object(self.service.files, "loadXmpFromImageParsed", return_value=xmp_content), \
              patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
             result = self.service.replaceMetadataFacePosition(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 face_data={
                     "name": "Person Alpha",
                     "x": 0.462214,
@@ -2973,14 +2973,14 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertRegex(written["xmp"], r"\bh=\"0\.1\"|\bns\d+:h=\"0\.1\"")
 
     def test_replace_metadata_face_position_rejects_same_source_format(self):
-        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        payload = MetadataPayload(image_path="fixtures/test.jpg", has_xmp=True)
 
         with patch.object(self.service, "_readImageMetadata", return_value=payload), \
              patch.object(self.service.exiftool_handler, "isAvailable", return_value=True), \
              patch.object(self.service.exiftool_handler, "loadEmbeddedXmp", return_value=XMP_MWG_AND_MICROSOFT), \
              patch.object(self.service.exiftool_handler, "writeXmpDetailed") as write_mock:
             result = self.service.replaceMetadataFacePosition(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 face_data={
                     "name": "Person Alpha",
                     "x": 0.462214,
@@ -3107,10 +3107,10 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             source="xmp_file",
             source_format="MICROSOFT",
         )
-        payload = MetadataPayload(image_path="dev/test.jpg", faces=[embedded_face, sidecar_face])
+        payload = MetadataPayload(image_path="fixtures/test.jpg", faces=[embedded_face, sidecar_face])
         entry = self.service._buildCheckEntry(
             review_type="duplicate_faces",
-            image_path="dev/test.jpg",
+            image_path="fixtures/test.jpg",
             face_name="Person Target",
             left_face=embedded_face,
             right_face=sidecar_face,
@@ -3226,7 +3226,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
         self.assertEqual((left_state, right_state), ("suggested", "alert"))
 
     def test_replace_metadata_face_position_denormalizes_for_oriented_microsoft_target(self):
-        payload = MetadataPayload(image_path="dev/test.jpg", has_xmp=True)
+        payload = MetadataPayload(image_path="fixtures/test.jpg", has_xmp=True)
         written = {}
 
         def capture_write(_target_path, xmp_content):
@@ -3238,7 +3238,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
              patch.object(self.service.exiftool_handler, "loadEmbeddedXmp", return_value=XMP_POSITION_REPLACE_ORIENTED), \
              patch.object(self.service.exiftool_handler, "writeXmpDetailed", side_effect=capture_write):
             result = self.service.replaceMetadataFacePosition(
-                image_path="dev/test.jpg",
+                image_path="fixtures/test.jpg",
                 face_data={
                     "name": "Person Alpha",
                     "x": 0.6309165,
@@ -3274,7 +3274,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
             source_format="ACD",
         )
         payload = MetadataPayload(
-            image_path="dev/test.jpg",
+            image_path="fixtures/test.jpg",
             has_xmp=True,
             faces=[unnamed_face],
         )
@@ -3291,7 +3291,7 @@ class DisplayFaceNormalizationTests(unittest.TestCase):
                 base_url="http://example.test",
                 entry={
                     "action": "search_file_face_in_sources",
-                    "image_path": "dev/test.jpg",
+                    "image_path": "fixtures/test.jpg",
                     "metadata_face": unnamed_face.to_dict(),
                 },
                 image_faces_cache={},

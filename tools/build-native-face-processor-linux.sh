@@ -231,10 +231,10 @@ cat > "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/README.txt" <
 AV_ImgData Linux native face processor bundle.
 
 Bundled runtime libraries may include:
-- ONNXRuntime from ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT}
-- libjpeg/libjpeg-turbo runtime from JPEG_ROOT=${JPEG_ROOT}
+- ONNXRuntime, see copied ONNXRuntime license files when present
+- libjpeg/libjpeg-turbo runtime, see copied JPEG/libjpeg license files when present
 
-The processor is built and packaged with matching libjpeg headers and runtime from JPEG_ROOT.
+The processor is built and packaged with matching libjpeg headers and runtime.
 EOF
 copy_optional_license_file "${ONNXRUNTIME_ROOT}/LICENSE" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/onnxruntime.LICENSE"
 copy_optional_license_file "${ONNXRUNTIME_ROOT}/ThirdPartyNotices.txt" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/onnxruntime.ThirdPartyNotices.txt"
