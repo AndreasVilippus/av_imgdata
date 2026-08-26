@@ -158,7 +158,7 @@ download_libvips() {
   mkdir -p "${LIBVIPS_SOURCE_PARENT}"
   tar -xf "${tarball_path}" -C "${LIBVIPS_SOURCE_PARENT}"
   rm -rf "${LIBVIPS_ORIGINAL_SOURCE_DIR}"
-  cp -a "${LIBVIPS_SOURCE_DIR}" "${LIBVIPS_ORIGINAL_SOURCE_DIR}"
+  cp -a --no-preserve=ownership "${LIBVIPS_SOURCE_DIR}" "${LIBVIPS_ORIGINAL_SOURCE_DIR}"
 }
 
 download_heif_stack() {
@@ -173,10 +173,10 @@ download_heif_stack() {
 install_heif_stack_license_files() {
   local license_dir="${VIPS_PREFIX}/share/licenses/AV_ImgData/heif-stack"
   mkdir -p "${license_dir}/sources"
-  cp -a "${LIBDE265_SOURCE_DIR}/COPYING" "${license_dir}/libde265.COPYING"
-  cp -a "${LIBHEIF_SOURCE_DIR}/COPYING" "${license_dir}/libheif.COPYING"
-  cp -a "${SOURCE_CACHE}/${LIBDE265_TARBALL}" "${license_dir}/sources/${LIBDE265_TARBALL}"
-  cp -a "${SOURCE_CACHE}/${LIBHEIF_TARBALL}" "${license_dir}/sources/${LIBHEIF_TARBALL}"
+  cp -a --no-preserve=ownership "${LIBDE265_SOURCE_DIR}/COPYING" "${license_dir}/libde265.COPYING"
+  cp -a --no-preserve=ownership "${LIBHEIF_SOURCE_DIR}/COPYING" "${license_dir}/libheif.COPYING"
+  cp -a --no-preserve=ownership "${SOURCE_CACHE}/${LIBDE265_TARBALL}" "${license_dir}/sources/${LIBDE265_TARBALL}"
+  cp -a --no-preserve=ownership "${SOURCE_CACHE}/${LIBHEIF_TARBALL}" "${license_dir}/sources/${LIBHEIF_TARBALL}"
   cat > "${license_dir}/README.txt" <<EOF
 AV_ImgData ships libheif and libde265 as dynamically linked shared libraries for HEIC decoding.
 
@@ -199,7 +199,7 @@ copy_optional_license_file() {
   local target="$2"
   if [ -f "${source}" ]; then
     mkdir -p "$(dirname "${target}")"
-    cp -a "${source}" "${target}"
+    cp -a --no-preserve=ownership "${source}" "${target}"
   fi
 }
 
@@ -212,7 +212,7 @@ install_libvips_license_files() {
   copy_optional_license_file "${LIBVIPS_SOURCE_DIR}/COPYING" "${license_dir}/libvips.COPYING"
   copy_optional_license_file "${LIBVIPS_SOURCE_DIR}/LICENSE" "${license_dir}/libvips.LICENSE"
   if [ -f "${tarball_path}" ]; then
-    cp -a "${tarball_path}" "${license_dir}/sources/${LIBVIPS_TARBALL}"
+    cp -a --no-preserve=ownership "${tarball_path}" "${license_dir}/sources/${LIBVIPS_TARBALL}"
   fi
 
   if [ -d "${LIBVIPS_ORIGINAL_SOURCE_DIR}" ] && command -v diff >/dev/null 2>&1; then
@@ -257,7 +257,7 @@ copy_runtime_dependency_license_files() {
         glib2 glib libffi pcre expat zlib libpng libtiff libwebp lcms2 xz util-linux libuuid e2fsprogs libjpeg libjpeg-turbo; do
         if [ -d "${license_root}/${package}" ]; then
           mkdir -p "${license_dir}/copied/${package}"
-          find "${license_root}/${package}" -maxdepth 2 -type f \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'license.txt' \) -exec cp -a {} "${license_dir}/copied/${package}/" \;
+          find "${license_root}/${package}" -maxdepth 2 -type f \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'license.txt' \) -exec cp -a --no-preserve=ownership {} "${license_dir}/copied/${package}/" \;
         fi
       done
     done
@@ -745,7 +745,7 @@ copy_library_family() {
       if [ -e "${target}" ]; then
         continue
       fi
-      cp -aL "${source}" "${target}"
+      cp -aL --no-preserve=ownership "${source}" "${target}"
     done
   done
 }

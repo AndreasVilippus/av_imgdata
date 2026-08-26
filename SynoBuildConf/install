@@ -131,6 +131,9 @@ package_external_worker_archives() {
 	for target in $required_targets; do
 		bundle_name="av-imgdata-worker-${target}"
 		source_dir="dist/${bundle_name}"
+		if [ "$target" = "windows-x86_64" ] && [ -d "${source_dir}.package" ]; then
+			source_dir="${source_dir}.package"
+		fi
 		archive_type="tar.gz"
 		archive_path="$package_tgz_dir/workers/${bundle_name}.tar.gz"
 		if [ ! -d "$source_dir" ]; then
@@ -172,11 +175,11 @@ create_install() {
 	make clean_python_artifacts
 
 	# install needed file into PKG_DIR on NAS
-	cp -av src $package_tgz_dir
-	cp -av app $package_tgz_dir
-	cp -av conf $package_tgz_dir
+	cp -av --no-preserve=ownership src $package_tgz_dir
+	cp -av --no-preserve=ownership app $package_tgz_dir
+	cp -av --no-preserve=ownership conf $package_tgz_dir
 	mkdir -p "$package_tgz_dir/tools"
-	cp -av tools/worker-api-store.py "$package_tgz_dir/tools/"
+	cp -av --no-preserve=ownership tools/worker-api-store.py "$package_tgz_dir/tools/"
 	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type d -name '__pycache__' -prune -exec rm -rf {} +
 	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 	make install DESTDIR="$package_tgz_dir" INSTALLDIR="$package_tgz_dir" || return 1
@@ -196,14 +199,14 @@ create_install() {
 		return 1
 	fi
 	mkdir -p "$package_tgz_dir/bin"
-	cp -av "$NATIVE_INSTALL/bin/av-imgdata-face-processor" "$package_tgz_dir/bin/"
+	cp -av --no-preserve=ownership "$NATIVE_INSTALL/bin/av-imgdata-face-processor" "$package_tgz_dir/bin/"
 	if [ -d "$NATIVE_INSTALL/lib" ]; then
 		mkdir -p "$package_tgz_dir/lib"
-		find "$NATIVE_INSTALL/lib" -maxdepth 1 \( -name 'libonnxruntime.so*' -o -name 'libjpeg.so*' \) -exec cp -av {} "$package_tgz_dir/lib/" \;
+		find "$NATIVE_INSTALL/lib" -maxdepth 1 \( -name 'libonnxruntime.so*' -o -name 'libjpeg.so*' \) -exec cp -av --no-preserve=ownership {} "$package_tgz_dir/lib/" \;
 	fi
 	if [ -d "$NATIVE_INSTALL/share/licenses" ]; then
 		mkdir -p "$package_tgz_dir/share"
-		cp -av "$NATIVE_INSTALL/share/licenses" "$package_tgz_dir/share/"
+		cp -av --no-preserve=ownership "$NATIVE_INSTALL/share/licenses" "$package_tgz_dir/share/"
 	fi
 	ensure_vips_image_processor || return 1
 	VIPS_INSTALL="$(native_install_root vips-image-processor-install)"
@@ -213,18 +216,18 @@ create_install() {
 			return 1
 		fi
 		mkdir -p "$package_tgz_dir/bin"
-		cp -av "$VIPS_INSTALL/bin/av-imgdata-image-processor" "$package_tgz_dir/bin/"
+		cp -av --no-preserve=ownership "$VIPS_INSTALL/bin/av-imgdata-image-processor" "$package_tgz_dir/bin/"
 		if [ ! -e "$VIPS_INSTALL/lib/libvips.so" ] && [ -z "$(find "$VIPS_INSTALL/lib" -maxdepth 1 -name 'libvips.so*' -print -quit 2>/dev/null)" ]; then
 			echo "ERROR: optional libvips image processor libraries missing: libvips.so*"
 			return 1
 		fi
 		if [ -d "$VIPS_INSTALL/lib" ]; then
 			mkdir -p "$package_tgz_dir/lib"
-			find "$VIPS_INSTALL/lib" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -exec cp -av {} "$package_tgz_dir/lib/" \;
+			find "$VIPS_INSTALL/lib" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -exec cp -av --no-preserve=ownership {} "$package_tgz_dir/lib/" \;
 		fi
 		if [ -d "$VIPS_INSTALL/share/licenses" ]; then
 			mkdir -p "$package_tgz_dir/share"
-			cp -av "$VIPS_INSTALL/share/licenses" "$package_tgz_dir/share/"
+			cp -av --no-preserve=ownership "$VIPS_INSTALL/share/licenses" "$package_tgz_dir/share/"
 		fi
 	fi
 	package_external_worker_archives "$package_tgz_dir"
@@ -242,11 +245,11 @@ create_install() {
 
 create_spk() {
 	# copy scripts, conf and optional files
-	cp -av scripts $PKG_DIR/scripts
-	cp -av conf $PKG_DIR
-	cp -av LICENSE $PKG_DIR/LICENSE
-	cp -av ui/PACKAGE_ICON.png  $PKG_DIR/PACKAGE_ICON.PNG
-	cp -av ui/PACKAGE_ICON_256.png $PKG_DIR/PACKAGE_ICON_256.PNG
+	cp -av --no-preserve=ownership scripts $PKG_DIR/scripts
+	cp -av --no-preserve=ownership conf $PKG_DIR
+	cp -av --no-preserve=ownership LICENSE $PKG_DIR/LICENSE
+	cp -av --no-preserve=ownership ui/PACKAGE_ICON.png  $PKG_DIR/PACKAGE_ICON.PNG
+	cp -av --no-preserve=ownership ui/PACKAGE_ICON_256.png $PKG_DIR/PACKAGE_ICON_256.PNG
 
 	./INFO.sh > INFO
 	cp INFO $PKG_DIR/INFO
@@ -264,3 +267,4 @@ main() {
 }
 
 main "$@"
+exit $?

@@ -136,7 +136,6 @@ $(PKG)_DESCR    := AV_ImgData reduced libvips build for worker image decoding.
 $(PKG)_IGNORE   :=
 $(PKG)_VERSION  := 8.16.1
 $(PKG)_CHECKSUM := d114d7c132ec5b45f116d654e17bb4af84561e3041183cd4bfd79abfb85cf724
-$(PKG)_PATCHES  := $(realpath $(sort $(wildcard $(dir $(lastword $(MAKEFILE_LIST)))/patches/vips-[0-9]*.patch)))
 $(PKG)_GH_CONF  := libvips/libvips/releases,v,,,,.tar.xz
 $(PKG)_SUBDIR   := vips-$($(PKG)_VERSION)
 $(PKG)_FILE     := vips-$($(PKG)_VERSION).tar.xz

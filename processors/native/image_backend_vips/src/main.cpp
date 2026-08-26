@@ -89,13 +89,13 @@ std::string json_string_value(const std::string& body, const std::string& key) {
     if (colon == std::string::npos) {
         return "";
     }
-    const auto quote = body.find('"', colon + 1);
-    if (quote == std::string::npos) {
+    const auto value_start = body.find_first_not_of(" \t\r\n", colon + 1);
+    if (value_start == std::string::npos || body[value_start] != '"') {
         return "";
     }
     std::ostringstream value;
     bool escaped = false;
-    for (auto i = quote + 1; i < body.size(); ++i) {
+    for (auto i = value_start + 1; i < body.size(); ++i) {
         const char ch = body[i];
         if (escaped) {
             switch (ch) {
@@ -238,10 +238,6 @@ std::vector<std::string> json_string_array_value(const std::string& body, const 
 }
 
 int json_int_value(const std::string& body, const std::string& key, int fallback) {
-    const std::string text = trim(json_string_value(body, key));
-    if (!text.empty()) {
-        return std::atoi(text.c_str());
-    }
     const std::string needle = "\"" + key + "\"";
     const auto key_pos = body.find(needle);
     if (key_pos == std::string::npos) {
@@ -251,11 +247,18 @@ int json_int_value(const std::string& body, const std::string& key, int fallback
     if (colon == std::string::npos) {
         return fallback;
     }
-    const auto start = body.find_first_of("-0123456789", colon + 1);
-    if (start == std::string::npos) {
+    const auto value_start = body.find_first_not_of(" \t\r\n", colon + 1);
+    if (value_start == std::string::npos) {
         return fallback;
     }
-    return std::atoi(body.c_str() + start);
+    if (body[value_start] == '"') {
+        const std::string text = trim(json_string_value(body, key));
+        return text.empty() ? fallback : std::atoi(text.c_str());
+    }
+    if (body[value_start] == '-' || std::isdigit(static_cast<unsigned char>(body[value_start]))) {
+        return std::atoi(body.c_str() + value_start);
+    }
+    return fallback;
 }
 
 bool json_bool_value(const std::string& body, const std::string& key, bool fallback) {
@@ -380,7 +383,8 @@ size_t icc_profile_size(VipsImage* image) {
         return 0;
     }
     size_t length = 0;
-    vips_image_get_blob(image, VIPS_META_ICC_NAME, &length);
+    const void* data = nullptr;
+    vips_image_get_blob(image, VIPS_META_ICC_NAME, &data, &length);
     return length;
 }
 
@@ -388,6 +392,7 @@ std::string image_info_json(VipsImage* image, const std::string& operation) {
     int orientation = 1;
     vips_image_get_int(image, "orientation", &orientation);
     const std::string interpretation = interpretation_name(image);
+    const char* band_format = vips_enum_nick(VIPS_TYPE_BAND_FORMAT, image->BandFmt);
     const size_t icc_bytes = icc_profile_size(image);
     std::ostringstream json;
     json << "{"
@@ -400,6 +405,7 @@ std::string image_info_json(VipsImage* image, const std::string& operation) {
          << "\"has_alpha\":" << (vips_image_hasalpha(image) ? "true" : "false") << ","
          << "\"orientation\":" << orientation << ","
          << "\"color_space\":\"" << escape_json(interpretation) << "\","
+         << "\"band_format\":\"" << escape_json(band_format ? band_format : "") << "\","
          << "\"has_icc_profile\":" << (icc_bytes > 0 ? "true" : "false") << ","
          << "\"icc_profile_bytes\":" << icc_bytes
          << "}";
@@ -457,12 +463,17 @@ bool wants_srgb_output(const Job& job, const std::string& format) {
 
 VipsImage* normalize_srgb_for_jpeg(VipsImage* image) {
     VipsImage* normalized = nullptr;
+
     if (vips_image_get_typeof(image, VIPS_META_ICC_NAME) != 0) {
-        if (vips_copy(image, &normalized, nullptr)) {
+        if (vips_icc_transform(image, &normalized, "srgb",
+                "embedded", TRUE,
+                "depth", 8,
+                nullptr)) {
             return nullptr;
         }
         return normalized;
     }
+
     if (vips_colourspace(image, &normalized, VIPS_INTERPRETATION_sRGB, nullptr)) {
         return nullptr;
     }

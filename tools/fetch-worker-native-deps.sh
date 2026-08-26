@@ -79,6 +79,27 @@ require_command curl
 require_command tar
 require_command dpkg-deb
 
+curl_with_ca() {
+  local ca_cert=""
+  local ca_candidate
+  for ca_candidate in \
+    "${CURL_CA_BUNDLE:-}" \
+    "${SSL_CERT_FILE:-}" \
+    /etc/ssl/certs/ca-certificates.crt \
+    /etc/ssl/cert.pem \
+    /etc/pki/tls/certs/ca-bundle.crt; do
+    [ -n "${ca_candidate}" ] || continue
+    [ -f "${ca_candidate}" ] || continue
+    ca_cert="${ca_candidate}"
+    break
+  done
+  if [ -n "${ca_cert}" ]; then
+    curl --cacert "${ca_cert}" "$@"
+  else
+    curl "$@"
+  fi
+}
+
 fetch_url() {
   local url="$1"
   local output="$2"
@@ -88,12 +109,12 @@ fetch_url() {
   fi
   mkdir -p "$(dirname "${output}")"
   echo "Downloading: ${url}"
-  curl -L -f --retry 3 --retry-delay 2 -o "${output}" "${url}"
+  curl_with_ca -L -f --retry 3 --retry-delay 2 -o "${output}" "${url}"
 }
 
 latest_github_tag() {
   local repo="$1"
-  curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" \
+  curl_with_ca -fsSL "https://api.github.com/repos/${repo}/releases/latest" \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n 1
 }

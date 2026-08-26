@@ -41,6 +41,7 @@ SANITIZE_NATIVE_BUILD_PATTERNS=(
   "build/native/*/vips-image-processor-build"
 )
 SANITIZE_BACKUP_ROOT=""
+STALE_GENERATED_BACKUP_ROOT=""
 SANITIZED_DIRS=()
 TEST_PKGVAR=""
 
@@ -70,6 +71,51 @@ restore_local_build_artifacts() {
   if [[ -n "${TEST_PKGVAR}" ]]; then
     rm -rf "${TEST_PKGVAR}"
   fi
+}
+
+move_stale_generated_path_out_of_way() {
+  local rel="$1"
+  local source="${PACKAGE_ROOT}/${rel}"
+  local target
+
+  [[ -e "${source}" ]] || return 0
+  [[ -w "${source}" ]] && return 0
+
+  if [[ -z "${STALE_GENERATED_BACKUP_ROOT}" ]]; then
+    STALE_GENERATED_BACKUP_ROOT="$(mktemp -d "${PACKAGE_ROOT}/.av_imgdata-stale-generated.XXXXXX")"
+  fi
+
+  target="${STALE_GENERATED_BACKUP_ROOT}/${rel}"
+  mkdir -p "$(dirname "${target}")"
+  log "Moving non-writable generated path out of the build tree: ${rel}"
+  mv "${source}" "${target}" || fail "Cannot move non-writable generated path out of the build tree: ${rel}"
+}
+
+prepare_generated_worker_paths() {
+  local target
+
+  for target in ${EXTERNAL_WORKER_TARGETS}; do
+    [[ "${target}" == "windows-x86_64" ]] && continue
+    move_stale_generated_path_out_of_way "build/worker/${target}"
+    move_stale_generated_path_out_of_way "dist/av-imgdata-worker-${target}"
+  done
+}
+
+assert_no_nobody_generated_paths() {
+  local roots=()
+  local rel
+  local matches
+
+  for rel in build dist worker/native_deps; do
+    [[ -e "${PACKAGE_ROOT}/${rel}" ]] && roots+=("${PACKAGE_ROOT}/${rel}")
+  done
+
+  [[ ${#roots[@]} -gt 0 ]] || return 0
+
+  matches="$(find "${roots[@]}" -xdev \( -user nobody -o -group nogroup \) -print 2>/dev/null | sed -n '1,40p')"
+  [[ -z "${matches}" ]] || fail "Generated paths owned by nobody/nogroup detected.
+Remove or chown these generated paths before continuing:
+${matches}"
 }
 
 sanitize_project_for_toolkit_link() {
@@ -155,6 +201,57 @@ worker_clean_args() {
   fi
 }
 
+windows_native_deps_ready() {
+  local deps_root="${PACKAGE_ROOT}/worker/native_deps/windows-x86_64"
+
+  [[ -f "${deps_root}/onnxruntime/include/onnxruntime_c_api.h" ]] || return 1
+  [[ -f "${deps_root}/jpeg/include/jpeglib.h" ]] || return 1
+}
+
+linux_native_deps_ready() {
+  local deps_root="${PACKAGE_ROOT}/worker/native_deps/linux-x86_64"
+
+  [[ -f "${deps_root}/onnxruntime/include/onnxruntime_c_api.h" ]] || return 1
+  [[ -f "${deps_root}/jpeg/include/jpeglib.h" ]] || return 1
+  compgen -G "${deps_root}/onnxruntime/lib/libonnxruntime.so*" >/dev/null || return 1
+  compgen -G "${deps_root}/jpeg/lib/libjpeg.so*" >/dev/null || return 1
+}
+
+ensure_linux_native_deps() {
+  linux_native_deps_ready && return 0
+
+  log "Preparing Linux native worker dependencies"
+  bash tools/fetch-worker-native-deps.sh --target linux-x86_64 --no-update-check
+}
+
+ensure_windows_native_deps() {
+  windows_native_deps_ready && return 0
+
+  log "Preparing Windows native worker dependencies"
+  bash tools/fetch-worker-windows-deps.sh
+}
+
+assert_pkgcreate_log_has_no_critical_errors() {
+  local pkgcreate_log="$1"
+  local critical_errors
+
+  critical_errors="$(grep -E '(^|[[:space:]])ERROR: (native|optional|external worker|Windows external worker|ui/index.cgi|libjpeg|ONNXRuntime)' "${pkgcreate_log}" || true)"
+  [[ -z "${critical_errors}" ]] || fail "Synology package build output contained critical errors although PkgCreate.py returned success:
+${critical_errors}"
+}
+
+run_pkgcreate() {
+  local pkgcreate_log
+
+  pkgcreate_log="$(mktemp)"
+  if ! AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 "${PKGCREATE}" "$@" "${PACKAGE_NAME}" 2>&1 | tee "${pkgcreate_log}"; then
+    rm -f "${pkgcreate_log}"
+    fail "PkgCreate.py failed"
+  fi
+  assert_pkgcreate_log_has_no_critical_errors "${pkgcreate_log}"
+  rm -f "${pkgcreate_log}"
+}
+
 build_external_worker_bundles() {
   local target
   local clean_args=()
@@ -165,15 +262,27 @@ build_external_worker_bundles() {
   }
 
   mapfile -t clean_args < <(worker_clean_args)
+  prepare_generated_worker_paths
 
   if target_list_contains windows-x86_64 && [[ "${BUILD_WINDOWS_FACE_PROCESSOR}" != "0" ]]; then
+    ensure_windows_native_deps
     log "Building Windows native face processor for external worker bundle"
-    bash tools/build-native-face-processor-windows.sh "${clean_args[@]}"
+    AV_IMGDATA_FACE_PROCESSOR_WINDOWS_BUILD_ROOT="${PACKAGE_ROOT}/build/native/windows-x86_64-package-face" \
+    AV_IMGDATA_FACE_PROCESSOR_WINDOWS_DIST_DIR="${PACKAGE_ROOT}/dist/av-imgdata-face-processor-windows-x86_64.package" \
+      bash tools/build-native-face-processor-windows.sh "${clean_args[@]}"
   fi
 
   for target in ${EXTERNAL_WORKER_TARGETS}; do
     log "Building external worker bundle: ${target}"
-    bash tools/build-worker.sh --target "${target}" "${clean_args[@]}"
+    if [[ "${target}" == "windows-x86_64" && "${BUILD_WINDOWS_FACE_PROCESSOR}" != "0" ]]; then
+      AV_IMGDATA_FACE_PROCESSOR_ROOT="${PACKAGE_ROOT}/dist/av-imgdata-face-processor-windows-x86_64.package" \
+      AV_IMGDATA_FACE_PROCESSOR_BIN="${PACKAGE_ROOT}/dist/av-imgdata-face-processor-windows-x86_64.package/bin/av-imgdata-face-processor.exe" \
+      AV_IMGDATA_WORKER_BUILD_DIR="${PACKAGE_ROOT}/build/worker/windows-x86_64.package" \
+      AV_IMGDATA_WORKER_DIST_DIR="${PACKAGE_ROOT}/dist/av-imgdata-worker-windows-x86_64.package" \
+        bash tools/build-worker.sh --target "${target}" "${clean_args[@]}"
+    else
+      bash tools/build-worker.sh --target "${target}" "${clean_args[@]}"
+    fi
   done
 
   log "External worker bundles built: ${EXTERNAL_WORKER_TARGETS}"
@@ -228,10 +337,14 @@ python3 tools/check_syntax_and_structure.py
 log "Running Python tests"
 TEST_PKGVAR="$(mktemp -d)"
 export SYNOPKG_PKGVAR="${TEST_PKGVAR}"
+export PYTHONDONTWRITEBYTECODE=1
 
 PYTHONPATH=src python3 -m pytest tests
 
+assert_no_nobody_generated_paths
+ensure_linux_native_deps
 build_external_worker_bundles
+assert_no_nobody_generated_paths
 
 log "Temporarily moving local build artifacts out of the Toolkit link tree"
 sanitize_project_for_toolkit_link
@@ -245,9 +358,9 @@ log "Building Synology package"
 cd "${TOOLKIT_ROOT}"
 
 if [[ "$#" -gt 0 ]]; then
-  python3 "${PKGCREATE}" "$@" "${PACKAGE_NAME}"
+  run_pkgcreate "$@"
 else
-  python3 "${PKGCREATE}" "${DEFAULT_ARGS[@]}" "${PACKAGE_NAME}"
+  run_pkgcreate "${DEFAULT_ARGS[@]}"
 fi
 
 log "Package build completed"

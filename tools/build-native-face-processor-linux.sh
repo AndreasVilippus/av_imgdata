@@ -103,7 +103,7 @@ copy_optional_license_file() {
   local target="$2"
   if [ -f "${source}" ]; then
     mkdir -p "$(dirname "${target}")"
-    cp -a "${source}" "${target}"
+    cp -a --no-preserve=ownership "${source}" "${target}"
   fi
 }
 
@@ -224,8 +224,8 @@ if [ ! -f "${NATIVE_BINARY}" ]; then
 fi
 
 mkdir -p "${DIST_DIR}/bin" "${DIST_DIR}/lib" "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor"
-cp -a "${INSTALL_DIR}/usr/local/AV_ImgData/bin/av-imgdata-face-processor" "${DIST_DIR}/bin/"
-cp -a "${INSTALL_DIR}/usr/local/AV_ImgData/lib/." "${DIST_DIR}/lib/"
+cp -a --no-preserve=ownership "${INSTALL_DIR}/usr/local/AV_ImgData/bin/av-imgdata-face-processor" "${DIST_DIR}/bin/"
+cp -a --no-preserve=ownership "${INSTALL_DIR}/usr/local/AV_ImgData/lib/." "${DIST_DIR}/lib/"
 
 cat > "${DIST_DIR}/share/licenses/AV_ImgData/native-face-processor/README.txt" <<EOF
 AV_ImgData Linux native face processor bundle.

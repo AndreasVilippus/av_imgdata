@@ -218,6 +218,7 @@ class ImageDecodeService:
             input_has_icc_profile=result.get("input_has_icc_profile"),
             input_icc_profile_bytes=result.get("input_icc_profile_bytes"),
             output_color_space=result.get("output_color_space"),
+            output_band_format=result.get("band_format"),
             output_has_icc_profile=result.get("output_has_icc_profile"),
             output_icc_profile_bytes=result.get("output_icc_profile_bytes"),
         )

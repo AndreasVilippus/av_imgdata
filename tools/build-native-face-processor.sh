@@ -22,6 +22,37 @@ has_heif_root() {
   [ -f "$1/include/libheif/heif.h" ]
 }
 
+auto_fetch_native_deps() {
+  [ "${AV_IMGDATA_NATIVE_FETCH_DEPS:-1}" = "1" ] || return 0
+  [ -z "${ONNXRUNTIME_ROOT:-}" ] || return 0
+
+  local deps_target="${AV_IMGDATA_NATIVE_DEPS_TARGET:-linux-x86_64}"
+  case "${deps_target}" in
+    linux-x86_64) ;;
+    *) return 0 ;;
+  esac
+
+  local candidate
+  local candidates=(
+    "${BUILD_ROOT}/deps/onnxruntime"
+    "${PROJECT_DIR}/build/native/deps/onnxruntime"
+    "${PROJECT_DIR}/worker/native_deps/${deps_target}/onnxruntime"
+    "${PROJECT_DIR}/worker/native_deps/${deps_target}"/onnxruntime-linux-x64-*
+    "${PROJECT_DIR}/worker/native_deps/${deps_target}"/onnxruntime*
+    "${PROJECT_DIR}/native_deps/onnxruntime"
+    "${PROJECT_DIR}/third_party/onnxruntime"
+    "/tmp/onnxruntime-capi"
+  )
+  for candidate in "${candidates[@]}"; do
+    if has_onnxruntime_root "${candidate}"; then
+      return 0
+    fi
+  done
+
+  echo "Preparing Linux native dependencies for ${deps_target}..."
+  bash "${PROJECT_DIR}/tools/fetch-worker-native-deps.sh" --target "${deps_target}" --no-update-check
+}
+
 resolve_onnxruntime_root() {
   if [ -n "${ONNXRUNTIME_ROOT:-}" ]; then
     has_onnxruntime_root "${ONNXRUNTIME_ROOT}" || {
@@ -156,6 +187,7 @@ resolve_synology_toolchain_compilers() {
   done
 }
 
+auto_fetch_native_deps
 resolve_onnxruntime_root
 resolve_jpeg_root
 resolve_heif_root
@@ -197,7 +229,7 @@ copy_optional_license_file() {
   local target="$2"
   if [ -f "${source}" ]; then
     mkdir -p "$(dirname "${target}")"
-    cp -a "${source}" "${target}"
+    cp -a --no-preserve=ownership "${source}" "${target}"
   fi
 }
 
@@ -244,7 +276,7 @@ copy_library_family() {
           continue
         fi
         rm -f "${target}"
-        cp -aL "${source}" "${target}"
+        cp -aL --no-preserve=ownership "${source}" "${target}"
       done
     fi
   done
@@ -258,7 +290,7 @@ if [ -L "${LIB_DIR}/libjpeg.so" ]; then
   if [ "${JPEG_LINK_TARGET#/}" != "${JPEG_LINK_TARGET}" ] && [ -e "${JPEG_LINK_TARGET}" ]; then
     JPEG_BASENAME="$(basename "${JPEG_LINK_TARGET}")"
     rm -f "${LIB_DIR}/libjpeg.so"
-    cp -aL "${JPEG_LINK_TARGET}" "${LIB_DIR}/${JPEG_BASENAME}"
+    cp -aL --no-preserve=ownership "${JPEG_LINK_TARGET}" "${LIB_DIR}/${JPEG_BASENAME}"
     ln -s "${JPEG_BASENAME}" "${LIB_DIR}/libjpeg.so"
   fi
 fi

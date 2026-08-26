@@ -153,6 +153,11 @@ def test_worker_bundle_builds_and_integrates_vips_image_processor_by_default_wit
     assert "patch_build_win64_mxe_runner" in windows_script
     assert 'AV_IMGDATA_WINDOWS_VIPS_CONTAINER_USER_ARGS' in windows_script
     assert "vips-avimgdata" in windows_script
+    assert "vips-8-cicp-heifload.patch" not in windows_script
+    assert "vips_foreign_load_heif_get_cicp" not in windows_script
+    assert "heifload: setting CICP from nclx" not in windows_script
+    assert "CICP image, skipping colourspace conversion" not in windows_script
+    assert "CICP image, skipping colour management" not in windows_script
     assert "glib expat libjpeg-turbo" in windows_script
     assert '"expat": "$(expat_VERSION)"' in windows_script
     assert "libheif libde265" in windows_script

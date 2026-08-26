@@ -413,8 +413,8 @@ MODEL_README
 
 apply_target_defaults
 
-BUILD_DIR="${PROJECT_DIR}/build/worker/${TARGET}"
-DIST_DIR="${PROJECT_DIR}/dist/av-imgdata-worker-${TARGET}"
+BUILD_DIR="${AV_IMGDATA_WORKER_BUILD_DIR:-${PROJECT_DIR}/build/worker/${TARGET}}"
+DIST_DIR="${AV_IMGDATA_WORKER_DIST_DIR:-${PROJECT_DIR}/dist/av-imgdata-worker-${TARGET}}"
 
 if [ "${CLEAN}" = "1" ]; then
   cleanup_generated_path "${BUILD_DIR}"
@@ -468,7 +468,7 @@ bundle_vips_processor
 
 case "${TARGET}" in
   windows-x86_64)
-    cp -a "${PROJECT_DIR}/worker/packaging/windows/README.md" "${DIST_DIR}/" 2>/dev/null || true
+    cp -a --no-preserve=ownership "${PROJECT_DIR}/worker/packaging/windows/README.md" "${DIST_DIR}/" 2>/dev/null || true
     if [ -f "${DIST_DIR}/config/worker-config.example.json" ]; then
       sed -i \
         -e 's#\.\./bin/av-imgdata-face-processor"#../bin/av-imgdata-face-processor.exe"#g' \
@@ -477,8 +477,8 @@ case "${TARGET}" in
     fi
     ;;
   docker-linux-x86_64)
-    cp -a "${PROJECT_DIR}/worker/packaging/docker/Dockerfile" "${DIST_DIR}/Dockerfile"
-    cp -a "${PROJECT_DIR}/worker/packaging/docker/entrypoint.sh" "${DIST_DIR}/entrypoint.sh"
+    cp -a --no-preserve=ownership "${PROJECT_DIR}/worker/packaging/docker/Dockerfile" "${DIST_DIR}/Dockerfile"
+    cp -a --no-preserve=ownership "${PROJECT_DIR}/worker/packaging/docker/entrypoint.sh" "${DIST_DIR}/entrypoint.sh"
     chmod +x "${DIST_DIR}/entrypoint.sh"
     if [ "${BUILD_DOCKER_IMAGE}" = "1" ]; then
       require_command docker
@@ -486,7 +486,7 @@ case "${TARGET}" in
     fi
     ;;
   linux-x86_64)
-    cp -a "${PROJECT_DIR}/worker/packaging/systemd/av-imgdata-worker.service.example" "${DIST_DIR}/" 2>/dev/null || true
+    cp -a --no-preserve=ownership "${PROJECT_DIR}/worker/packaging/systemd/av-imgdata-worker.service.example" "${DIST_DIR}/" 2>/dev/null || true
     ;;
 esac
 

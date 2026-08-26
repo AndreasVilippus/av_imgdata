@@ -65,6 +65,27 @@ require_command "${CXX:-x86_64-w64-mingw32-g++}"
 
 mkdir -p "${CACHE_DIR}" "${BUILD_DIR}" "${DEPS_ROOT}"
 
+curl_with_ca() {
+  local ca_cert=""
+  local ca_candidate
+  for ca_candidate in \
+    "${CURL_CA_BUNDLE:-}" \
+    "${SSL_CERT_FILE:-}" \
+    /etc/ssl/certs/ca-certificates.crt \
+    /etc/ssl/cert.pem \
+    /etc/pki/tls/certs/ca-bundle.crt; do
+    [ -n "${ca_candidate}" ] || continue
+    [ -f "${ca_candidate}" ] || continue
+    ca_cert="${ca_candidate}"
+    break
+  done
+  if [ -n "${ca_cert}" ]; then
+    curl --cacert "${ca_cert}" "$@"
+  else
+    curl "$@"
+  fi
+}
+
 if [ "${CLEAN}" = "1" ]; then
   rm -rf \
     "${DEPS_ROOT}/onnxruntime" \
@@ -78,7 +99,7 @@ download_if_missing() {
   local target="$2"
   if [ ! -f "${target}" ]; then
     echo "Downloading ${url}"
-    curl -L --fail --retry 3 --output "${target}" "${url}"
+    curl_with_ca -L --fail --retry 3 --output "${target}" "${url}"
   else
     echo "Using cached download: ${target}"
   fi
@@ -95,7 +116,7 @@ if [ ! -d "${ONNXRUNTIME_EXTRACTED}" ]; then
   echo "ERROR: expected extracted ONNXRuntime directory not found: ${ONNXRUNTIME_EXTRACTED}" >&2
   exit 1
 fi
-cp -a "${ONNXRUNTIME_EXTRACTED}/." "${DEPS_ROOT}/onnxruntime/"
+cp -a --no-preserve=ownership "${ONNXRUNTIME_EXTRACTED}/." "${DEPS_ROOT}/onnxruntime/"
 
 LIBJPEG_TURBO_TARBALL="${CACHE_DIR}/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}.tar.gz"
 LIBJPEG_TURBO_URL="https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/${LIBJPEG_TURBO_VERSION}/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}.tar.gz"

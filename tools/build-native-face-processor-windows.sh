@@ -145,7 +145,7 @@ prepare_windows_source_tree() {
   require_command python3
   rm -rf "${PATCHED_SOURCE_DIR}"
   mkdir -p "$(dirname "${PATCHED_SOURCE_DIR}")"
-  cp -a "${PROJECT_DIR}/processors/native/face_processor" "${PATCHED_SOURCE_DIR}"
+  cp -a --no-preserve=ownership "${PROJECT_DIR}/processors/native/face_processor" "${PATCHED_SOURCE_DIR}"
 
   python3 - "${PATCHED_SOURCE_DIR}" <<'PY'
 import pathlib

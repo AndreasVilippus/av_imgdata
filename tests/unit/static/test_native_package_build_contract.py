@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 def test_synology_build_uses_onnxruntime_native_face_processor():
@@ -13,6 +14,42 @@ def test_synology_build_uses_onnxruntime_native_face_processor():
     assert build_script.index("./tools/build-native-face-processor.sh") < build_script.index("./tools/smoke-native-face-processor.sh")
     assert build_script.index("./tools/smoke-native-face-processor.sh") < build_script.index("./tools/functional-native-face-processor.sh")
     assert build_script.index("./tools/functional-native-face-processor.sh") < build_script.index("make clean_python_artifacts")
+
+
+def test_synology_install_propagates_native_build_failures_to_script_exit():
+    install_script = Path("SynoBuildConf/install").read_text(encoding="utf-8")
+
+    assert "create_install || return 1" in install_script
+    assert "main \"$@\"\nexit $?" in install_script
+
+
+def test_synology_native_face_processor_build_auto_fetches_linux_deps():
+    build_script = Path("tools/build-native-face-processor.sh").read_text(encoding="utf-8")
+
+    assert "auto_fetch_native_deps" in build_script
+    assert "AV_IMGDATA_NATIVE_FETCH_DEPS:-1" in build_script
+    assert "AV_IMGDATA_NATIVE_DEPS_TARGET:-linux-x86_64" in build_script
+    assert "tools/fetch-worker-native-deps.sh" in build_script
+    assert "--target \"${deps_target}\" --no-update-check" in build_script
+    resolve_block = "auto_fetch_native_deps\nresolve_onnxruntime_root\nresolve_jpeg_root"
+    assert resolve_block in build_script
+
+
+def test_native_dependency_fetches_use_available_ca_bundle_for_curl():
+    native_fetch = Path("tools/fetch-worker-native-deps.sh").read_text(encoding="utf-8")
+    windows_fetch = Path("tools/fetch-worker-windows-deps.sh").read_text(encoding="utf-8")
+
+    for script in (native_fetch, windows_fetch):
+        assert "curl_with_ca" in script
+        assert "/etc/ssl/cert.pem" in script
+        assert "/etc/ssl/certs/ca-certificates.crt" in script
+        assert 'curl --cacert "${ca_cert}" "$@"' in script
+        assert 'curl "$@"' in script
+        assert '"${ca_args[@]}"' not in script
+
+    assert "curl_with_ca -L -f --retry 3 --retry-delay 2" in native_fetch
+    assert "curl_with_ca -fsSL" in native_fetch
+    assert "curl_with_ca -L --fail --retry 3" in windows_fetch
 
 
 def test_native_face_processor_build_uses_runtime_heif_loader():
@@ -72,6 +109,9 @@ def test_native_face_processor_smoke_script_checks_real_binary_vector_commands()
     smoke_script = Path("tools/smoke-native-face-processor.sh").read_text(encoding="utf-8")
 
     assert "NATIVE_BINARY" in smoke_script
+    assert "is_glibc_runtime_mismatch" in smoke_script
+    assert "GLIBC_[0-9.]+" in smoke_script
+    assert "smoke checks skipped: Toolkit build runtime is older than packaged Synology sysroot libraries" in smoke_script
     assert "onnxruntime-native" in smoke_script
     assert "rank_embeddings" in smoke_script
     assert "face_native_rank_embeddings" in smoke_script
@@ -171,6 +211,10 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "packaged-libraries.txt" in build_vips
     assert "$VIPS_INSTALL/share/licenses" in install_script
     assert "patch_libvips_source" in build_vips
+    assert "vips_foreign_load_heif_get_cicp" not in build_vips
+    assert "heifload: setting CICP from nclx" not in build_vips
+    assert "CICP image, skipping colourspace conversion" not in build_vips
+    assert "CICP image, skipping colour management" not in build_vips
     assert "has_header_symbol('tiff.h', 'COMPRESSION_WEBP'" in build_vips
     assert "AV_ImgData package build skips upstream libvips tools" in build_vips
     assert "AV_ImgData package build skips upstream libvips tests" in build_vips
@@ -179,6 +223,7 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "vipsmarshal_h = custom_target" in build_vips
     assert "glib-genmarshal --prefix=vips --header" in build_vips
     assert "glib-genmarshal --prefix=vips --body" in build_vips
+
     assert "The Synology Toolkit GLib is older than libvips 8.16.1 expects" in build_vips
     assert "g_utf8_make_valid" in build_vips
     assert "g_strdup(vips_value_get_save_string" in build_vips
@@ -247,10 +292,30 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert 'job.options["colorspace"] = colorspace.empty() ? "srgb" : colorspace' in source
     assert "vips_colourspace(image, &normalized, VIPS_INTERPRETATION_sRGB" in source
     assert "vips_image_get_typeof(image, VIPS_META_ICC_NAME)" in source
-    assert "vips_copy(image, &normalized" in source
+    normalizer = source.split("VipsImage* normalize_srgb_for_jpeg", 1)[1].split("\n}\n\nint process_job", 1)[0]
+    assert 'vips_image_get_typeof(image, "cicp-transfer-characteristics")' not in normalizer
+    assert "CICP image, skipping colourspace conversion" not in source
+    assert "CICP image, skipping colour management" not in source
+    assert "vips_copy(image, &normalized" not in normalizer
+    assert 'vips_icc_transform(image, &normalized, "srgb"' in source
+    assert '"embedded", TRUE' in source
+    assert '"depth", 8' in source
     assert "vips_image_remove(normalized, VIPS_META_ICC_NAME)" not in source
     assert "0.1.0-skeleton image-backend-vips" not in source
     assert "libvips_not_linked" not in source
+
+
+def test_native_vips_job_json_parser_does_not_read_later_fields_as_current_value():
+    source = Path("processors/native/image_backend_vips/src/main.cpp").read_text(encoding="utf-8")
+
+    string_parser = source.split("std::string json_string_value", 1)[1].split("\n}\n\nstd::string json_object_body", 1)[0]
+    int_parser = source.split("int json_int_value", 1)[1].split("\n}\n\nbool json_bool_value", 1)[0]
+
+    assert "body[value_start] != '\"'" in string_parser
+    assert 'body.find(\'"\', colon + 1)' not in string_parser
+    assert "body[value_start] == '\"'" in int_parser
+    assert "std::isdigit(static_cast<unsigned char>(body[value_start]))" in int_parser
+    assert 'body.find_first_of("-0123456789", colon + 1)' not in int_parser
 
 
 def test_synology_install_requires_native_face_processor_libraries():
@@ -285,6 +350,14 @@ def test_synology_install_can_build_missing_vips_processor_before_staging():
     assert '[ "$current_fingerprint" = "$expected_fingerprint" ]' in install_script
     assert "./tools/build-native-image-processor-vips.sh" in install_script
     assert install_script.index("ensure_vips_image_processor") < install_script.index("VIPS_INSTALL=\"$(native_install_root vips-image-processor-install)\"")
+
+
+def test_synology_install_accepts_packaged_windows_worker_bundle_path():
+    install_script = Path("SynoBuildConf/install").read_text(encoding="utf-8")
+
+    assert '[ "$target" = "windows-x86_64" ] && [ -d "${source_dir}.package" ]' in install_script
+    assert 'source_dir="${source_dir}.package"' in install_script
+    assert "archive_path=\"$package_tgz_dir/workers/${bundle_name}.zip\"" in install_script
 
 
 def test_ui_makefile_uses_unquoted_dist_targets_and_utf8_snpm():
@@ -330,11 +403,43 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
 
     assert "sanitize_project_for_toolkit_link" in build_package
     assert "restore_local_build_artifacts" in build_package
+    assert "move_stale_generated_path_out_of_way" in build_package
+    assert "prepare_generated_worker_paths" in build_package
+    assert "assert_no_nobody_generated_paths" in build_package
+    assert "-user nobody -o -group nogroup" in build_package
+    assert '"${PACKAGE_ROOT}/.av_imgdata-stale-generated.XXXXXX"' in build_package
+    assert '"build/worker/${target}"' in build_package
+    assert '"dist/av-imgdata-worker-${target}"' in build_package
+    assert '[[ "${target}" == "windows-x86_64" ]] && continue' in build_package
+    assert '"build/native/windows-x86_64/face_processor-build"' not in build_package
+    assert "prepare_generated_worker_paths" in build_package.split('log "Building Windows native face processor for external worker bundle"', 1)[0]
+    assert "windows_native_deps_ready" in build_package
+    assert "ensure_windows_native_deps" in build_package
+    assert "linux_native_deps_ready" in build_package
+    assert "ensure_linux_native_deps" in build_package
+    assert "tools/fetch-worker-native-deps.sh --target linux-x86_64 --no-update-check" in build_package
+    assert "ensure_linux_native_deps" in build_package.split("build_external_worker_bundles", 1)[0]
+    assert "run_pkgcreate" in build_package
+    assert "assert_pkgcreate_log_has_no_critical_errors" in build_package
+    assert "PkgCreate.py returned success" in build_package
+    assert "AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 \"${PKGCREATE}\"" in build_package
+    assert "tee \"${pkgcreate_log}\"" in build_package
+    assert "ERROR: (native|optional|external worker|Windows external worker|ui/index.cgi|libjpeg|ONNXRuntime)" in build_package
+    assert "tools/fetch-worker-windows-deps.sh" in build_package
+    assert 'onnxruntime/include/onnxruntime_c_api.h' in build_package
+    assert 'jpeg/include/jpeglib.h' in build_package
+    assert "AV_IMGDATA_FACE_PROCESSOR_WINDOWS_BUILD_ROOT" in build_package
+    assert "av-imgdata-face-processor-windows-x86_64.package" in build_package
+    assert "AV_IMGDATA_WORKER_BUILD_DIR" in build_package
+    assert "AV_IMGDATA_WORKER_DIST_DIR" in build_package
+    assert "av-imgdata-worker-windows-x86_64.package" in build_package
+    assert "ensure_windows_native_deps" in build_package.split('log "Building Windows native face processor for external worker bundle"', 1)[0]
     assert '".test-venv"' in build_package
     assert '"build"' not in build_package
     assert '"build/chroot/*"' in build_package
     assert "SANITIZE_NATIVE_BUILD_PATTERNS" in build_package
     assert "cleanup_existing_toolkit_link_target" in build_package
+    assert "PYTHONDONTWRITEBYTECODE=1" in build_package
     assert 'target="${WORKSPACE_ROOT}/build_env/ds.${platform}-${version}/source/${PACKAGE_NAME}"' in build_package
     assert '[[ -e "${target}" ]] || return 0' in build_package
     assert "Existing Toolkit link target cannot be removed" in build_package
@@ -352,6 +457,8 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert '"ui/node_modules"' in build_package
     assert 'mktemp -d "${PACKAGE_ROOT}/../.av_imgdata-link-sanitize.XXXXXX"' in build_package
     assert "sanitize_project_for_toolkit_link" in build_package.split('log "Building Synology package"', 1)[0]
+    assert "assert_no_nobody_generated_paths" in build_package.split("build_external_worker_bundles", 1)[0]
+    assert "assert_no_nobody_generated_paths" in build_package.split('log "Temporarily moving local build artifacts out of the Toolkit link tree"', 1)[0]
 
 
 def test_package_info_is_platform_specific_for_native_binary():
@@ -359,3 +466,26 @@ def test_package_info_is_platform_specific_for_native_binary():
 
     assert 'arch="$(pkg_get_platform)"' in info_script
     assert 'arch="noarch"' not in info_script
+
+
+def test_build_packaging_copies_do_not_preserve_source_ownership():
+    checked_files = [
+        Path("SynoBuildConf/install"),
+        Path("tools/build-native-face-processor-linux.sh"),
+        Path("tools/build-native-face-processor-windows.sh"),
+        Path("tools/build-native-face-processor.sh"),
+        Path("tools/build-native-image-processor-vips.sh"),
+        Path("tools/build-native-image-processor-vips-windows.sh"),
+        Path("tools/build-worker.sh"),
+        Path("tools/fetch-worker-windows-deps.sh"),
+        Path("tools/fetch-worker-native-deps.sh"),
+    ]
+
+    offenders = []
+    archive_copy = re.compile(r"\bcp\s+-a\S*")
+    for path in checked_files:
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if archive_copy.search(line) and "--no-preserve=ownership" not in line:
+                offenders.append(f"{path}:{lineno}: {line.strip()}")
+
+    assert offenders == []

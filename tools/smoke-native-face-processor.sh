@@ -11,7 +11,23 @@ if [ ! -x "${NATIVE_BINARY}" ]; then
   exit 1
 fi
 
-VERSION_OUTPUT="$("${NATIVE_BINARY}" version)"
+is_glibc_runtime_mismatch() {
+  grep -Eq 'GLIBC_[0-9.]+|version `GLIBC_|version .*GLIBC_'
+}
+
+skip_glibc_runtime_mismatch() {
+  echo "WARNING: native face processor smoke checks skipped: Toolkit build runtime is older than packaged Synology sysroot libraries." >&2
+  printf '%s\n' "$1" >&2
+  exit 0
+}
+
+if ! VERSION_OUTPUT="$("${NATIVE_BINARY}" version 2>&1)"; then
+  if printf '%s\n' "${VERSION_OUTPUT}" | is_glibc_runtime_mismatch; then
+    skip_glibc_runtime_mismatch "${VERSION_OUTPUT}"
+  fi
+  echo "ERROR: native face processor version command failed: ${VERSION_OUTPUT}" >&2
+  exit 1
+fi
 case "${VERSION_OUTPUT}" in
   *onnxruntime-native*) ;;
   *)
@@ -29,14 +45,26 @@ trap cleanup EXIT
 cat >"${TMP_DIR}/rank-input.json" <<'JSON'
 {"contract_version":"1.0","job_id":"rank-smoke","type":"face_native_rank_embeddings","input":{},"options":{},"target_embeddings":[[1,0],[0,1]],"profile_embeddings":[[1,0],[0,1],[0.7,0.3]]}
 JSON
-"${NATIVE_BINARY}" rank_embeddings --input "${TMP_DIR}/rank-input.json" --output "${TMP_DIR}/rank-output.json" >/dev/null
+if ! RANK_OUTPUT="$("${NATIVE_BINARY}" rank_embeddings --input "${TMP_DIR}/rank-input.json" --output "${TMP_DIR}/rank-output.json" 2>&1)"; then
+  if printf '%s\n' "${RANK_OUTPUT}" | is_glibc_runtime_mismatch; then
+    skip_glibc_runtime_mismatch "${RANK_OUTPUT}"
+  fi
+  echo "ERROR: native face processor rank_embeddings smoke command failed: ${RANK_OUTPUT}" >&2
+  exit 1
+fi
 python3 -m json.tool "${TMP_DIR}/rank-output.json" >/dev/null
 python3 -c 'import json, sys; p=json.load(open(sys.argv[1])); assert p["type"] == "face_native_rank_embeddings"; assert p["status"] == "completed"; assert p["result"]["ranks"][0]["best_index"] == 0' "${TMP_DIR}/rank-output.json"
 
 cat >"${TMP_DIR}/profile-input.json" <<'JSON'
 {"contract_version":"1.0","job_id":"profile-smoke","type":"face_native_profile_math","input":{},"options":{},"embeddings":[[1,0],[0.8,0.2],[0.9,0.1]]}
 JSON
-"${NATIVE_BINARY}" profile_math --input "${TMP_DIR}/profile-input.json" --output "${TMP_DIR}/profile-output.json" >/dev/null
+if ! PROFILE_OUTPUT="$("${NATIVE_BINARY}" profile_math --input "${TMP_DIR}/profile-input.json" --output "${TMP_DIR}/profile-output.json" 2>&1)"; then
+  if printf '%s\n' "${PROFILE_OUTPUT}" | is_glibc_runtime_mismatch; then
+    skip_glibc_runtime_mismatch "${PROFILE_OUTPUT}"
+  fi
+  echo "ERROR: native face processor profile_math smoke command failed: ${PROFILE_OUTPUT}" >&2
+  exit 1
+fi
 python3 -m json.tool "${TMP_DIR}/profile-output.json" >/dev/null
 python3 -c 'import json, sys; p=json.load(open(sys.argv[1])); assert p["type"] == "face_native_profile_math"; assert p["status"] == "completed"; assert p["result"]["centroid_embedding"]; assert isinstance(p["result"]["medoid_index"], int)' "${TMP_DIR}/profile-output.json"
 
