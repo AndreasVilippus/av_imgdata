@@ -313,7 +313,10 @@ class ConfigService:
         if graph_opt_level not in {"disable", "basic", "extended", "all"}:
             graph_opt_level = "all"
         face_processor["ORT_GRAPH_OPT_LEVEL"] = graph_opt_level
-        face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"] = bool(face_processor.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED", False))
+        face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"] = cls._normalize_bool(
+            face_processor.get("INSIGHTFACE_LICENSE_ACKNOWLEDGED"),
+            default=False,
+        )
         native_processors["FACE_PROCESSOR"] = face_processor
         image_processor_vips = native_processors.get("IMAGE_PROCESSOR_VIPS", {}) if isinstance(native_processors.get("IMAGE_PROCESSOR_VIPS"), dict) else {}
         image_processor_vips["ENABLED"] = bool(image_processor_vips.get("ENABLED", False))
@@ -415,6 +418,20 @@ class ConfigService:
         except (TypeError, ValueError):
             number = default
         return max(minimum, min(maximum, number))
+
+    @staticmethod
+    def _normalize_bool(value: Any, *, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off", ""}:
+                return False
+        return bool(default)
 
     @staticmethod
     def _normalizeStringList(

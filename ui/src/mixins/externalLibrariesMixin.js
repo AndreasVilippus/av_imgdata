@@ -211,6 +211,24 @@ export default {
 				.filter((entry, index, arr) => entry && allowed.includes(entry) && arr.indexOf(entry) === index);
 			return normalized.length ? normalized : [...fallback];
 		},
+		normalizeExternalLibrariesBoolean(value, fallback = false) {
+			if (typeof value === 'boolean') {
+				return value;
+			}
+			if (typeof value === 'number') {
+				return value !== 0;
+			}
+			if (typeof value === 'string') {
+				const normalized = value.trim().toLowerCase();
+				if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+					return true;
+				}
+				if (['0', 'false', 'no', 'off', ''].includes(normalized)) {
+					return false;
+				}
+			}
+			return Boolean(fallback);
+		},
 		normalizeExternalLibrariesSidecarReadMode(value, files = {}) {
 			const normalized = String(value || '').trim().toLowerCase();
 			if (['direct_only', 'direct_first', 'exiftool_first', 'exiftool_only'].includes(normalized)) {
@@ -490,7 +508,10 @@ export default {
 						MODEL_NAME: String(faceProcessor.MODEL_NAME || defaults.native_processors.FACE_PROCESSOR.MODEL_NAME),
 						TIMEOUT_SECONDS: Math.max(1, Math.min(3600, Number(faceProcessor.TIMEOUT_SECONDS) || defaults.native_processors.FACE_PROCESSOR.TIMEOUT_SECONDS)),
 						MAX_IMAGE_BYTES: Math.max(1048576, Math.min(1073741824, Number(faceProcessor.MAX_IMAGE_BYTES) || defaults.native_processors.FACE_PROCESSOR.MAX_IMAGE_BYTES)),
-						INSIGHTFACE_LICENSE_ACKNOWLEDGED: Boolean(faceProcessor.INSIGHTFACE_LICENSE_ACKNOWLEDGED ?? defaults.native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED),
+						INSIGHTFACE_LICENSE_ACKNOWLEDGED: this.normalizeExternalLibrariesBoolean(
+							faceProcessor.INSIGHTFACE_LICENSE_ACKNOWLEDGED,
+							defaults.native_processors.FACE_PROCESSOR.INSIGHTFACE_LICENSE_ACKNOWLEDGED
+						),
 					},
 					IMAGE_PROCESSOR_VIPS: {
 						...imageProcessorVips,

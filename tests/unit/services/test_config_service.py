@@ -75,6 +75,20 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         self.assertNotIn("PATH", face_processor)
         self.assertNotIn("FALLBACK_TO_PYTHON", face_processor)
 
+    def test_insightface_license_acknowledgement_rejects_false_string(self):
+        service = ConfigService(str(self.config_file))
+        service.writeConfig({
+            "native_processors": {
+                "FACE_PROCESSOR": {
+                    "INSIGHTFACE_LICENSE_ACKNOWLEDGED": "false",
+                },
+            },
+        })
+
+        face_processor = service.readMergedConfig()["native_processors"]["FACE_PROCESSOR"]
+
+        self.assertFalse(face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"])
+
     def test_optional_vips_image_processor_config_defaults_and_normalization(self):
         service = ConfigService(str(self.config_file))
         default_config = service.readMergedConfig()

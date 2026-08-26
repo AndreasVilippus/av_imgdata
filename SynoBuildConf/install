@@ -230,6 +230,7 @@ create_install() {
 			cp -av --no-preserve=ownership "$VIPS_INSTALL/share/licenses" "$package_tgz_dir/share/"
 		fi
 	fi
+	python3 tools/verify-third-party-licenses.py --root "$package_tgz_dir" --write || return 1
 	package_external_worker_archives "$package_tgz_dir"
 	# Fail fast if UI entrypoint didn't get packaged
 	if [ ! -f "$package_tgz_dir/ui/index.cgi" ]; then

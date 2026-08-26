@@ -345,6 +345,9 @@ class ExifToolService:
         target_lib = self._packageTargetLibPath()
         if target_lib.exists():
             shutil.rmtree(target_lib)
+        target_license = self._packageTargetLicensePath()
+        if target_license.exists():
+            shutil.rmtree(target_license)
 
         config = self._config.readMergedConfig()
         files_config = config.get("files") if isinstance(config.get("files"), dict) else {}
@@ -361,6 +364,7 @@ class ExifToolService:
             "removed_root": str(install_root),
             "removed_target_path": str(target_executable),
             "removed_target_lib_path": str(target_lib),
+            "removed_target_license_path": str(target_license),
         }
 
     @classmethod
@@ -378,18 +382,60 @@ class ExifToolService:
         package_dest = Path(os.getenv("SYNOPKG_PKGDEST", "/var/packages/AV_ImgData/target"))
         return package_dest / "usr/bin/lib"
 
+    @classmethod
+    def _packageTargetLicensePath(cls) -> Path:
+        package_dest = Path(os.getenv("SYNOPKG_PKGDEST", "/var/packages/AV_ImgData/target"))
+        return package_dest / "share/licenses/AV_ImgData/exiftool"
+
     @staticmethod
     def _installPackageTargetExecutable(executable_path: Path, lib_path: Optional[Path] = None) -> None:
         target_path = ExifToolService._packageTargetExecutablePath()
         target_lib_path = ExifToolService._packageTargetLibPath()
+        target_license_path = ExifToolService._packageTargetLicensePath()
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.unlink(missing_ok=True)
         if target_lib_path.exists():
             shutil.rmtree(target_lib_path)
+        if target_license_path.exists():
+            shutil.rmtree(target_license_path)
         shutil.copy2(executable_path, target_path)
         target_path.chmod(0o755)
         if lib_path and lib_path.exists():
             shutil.copytree(lib_path, target_lib_path)
+        ExifToolService._copyPackageTargetLicenseFiles(executable_path.parent, target_license_path)
+
+    @staticmethod
+    def _copyPackageTargetLicenseFiles(source_root: Path, target_license_path: Path) -> None:
+        source_root = Path(source_root)
+        license_names = {
+            "acknowledgements",
+            "artistic",
+            "copying",
+            "license",
+            "licence",
+            "notice",
+            "readme",
+        }
+        copied = []
+        if source_root.is_dir():
+            for source in sorted(source_root.iterdir(), key=lambda item: item.name.lower()):
+                if not source.is_file():
+                    continue
+                name = source.name.lower()
+                stem = source.stem.lower()
+                if stem in license_names or name in license_names or "license" in name or "licence" in name:
+                    target_license_path.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target_license_path / source.name)
+                    copied.append(source.name)
+        target_license_path.mkdir(parents=True, exist_ok=True)
+        (target_license_path / "AV_IMGDATA_NOTICE.txt").write_text(
+            "AV_ImgData installs ExifTool from the official Unix/Linux distribution.\n"
+            "The files copied here are the upstream top-level license/readme notices found during installation.\n"
+            "Upstream project: https://exiftool.org/\n"
+            "License: Perl Artistic License or GNU General Public License, as documented by ExifTool.\n"
+            "Copied notice files: %s\n" % (", ".join(copied) if copied else "none found"),
+            encoding="utf-8",
+        )
 
     def _detectLocalExifTool(self, configured_path: str) -> Dict[str, Any]:
         resolved_path, found_via = self._resolveExecutable(configured_path)

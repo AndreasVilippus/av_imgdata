@@ -30,6 +30,8 @@ class ExifToolServiceTests(unittest.TestCase):
             source_executable.parent.mkdir(parents=True, exist_ok=True)
             source_lib.mkdir(parents=True, exist_ok=True)
             source_executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (source_executable.parent / "README").write_text("ExifTool readme\n", encoding="utf-8")
+            (source_executable.parent / "LICENSE").write_text("ExifTool license\n", encoding="utf-8")
             (source_lib / "ExifTool.pm").write_text("package Image::ExifTool;\n1;\n", encoding="utf-8")
             source_executable.chmod(0o755)
 
@@ -37,11 +39,15 @@ class ExifToolServiceTests(unittest.TestCase):
                 ExifToolService._installPackageTargetExecutable(source_executable, source_executable.parent / "lib")
                 target_path = ExifToolService._packageTargetExecutablePath()
                 target_lib_path = ExifToolService._packageTargetLibPath()
+                target_license_path = ExifToolService._packageTargetLicensePath()
 
             self.assertTrue(target_path.exists())
             self.assertEqual(target_path.read_text(encoding="utf-8"), source_executable.read_text(encoding="utf-8"))
             self.assertTrue(target_path.stat().st_mode & stat.S_IXUSR)
             self.assertTrue((target_lib_path / "Image" / "ExifTool.pm").exists())
+            self.assertEqual((target_license_path / "LICENSE").read_text(encoding="utf-8"), "ExifTool license\n")
+            self.assertEqual((target_license_path / "README").read_text(encoding="utf-8"), "ExifTool readme\n")
+            self.assertIn("https://exiftool.org/", (target_license_path / "AV_IMGDATA_NOTICE.txt").read_text(encoding="utf-8"))
 
     def test_install_package_target_executable_replaces_existing_target_executable_and_lib(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -82,6 +88,9 @@ class ExifToolServiceTests(unittest.TestCase):
             target_lib = target_bin / "lib"
             target_lib.mkdir(parents=True, exist_ok=True)
             (target_lib / "Image.pm").write_text("x", encoding="utf-8")
+            target_license = package_dest / "share/licenses/AV_ImgData/exiftool"
+            target_license.mkdir(parents=True, exist_ok=True)
+            (target_license / "AV_IMGDATA_NOTICE.txt").write_text("x", encoding="utf-8")
 
             config_service = ConfigService(str(config_path))
             config_service.writeConfig({
@@ -98,6 +107,7 @@ class ExifToolServiceTests(unittest.TestCase):
                 result = service.removeInstalled()
 
             self.assertTrue(result["success"])
+            self.assertFalse(target_license.exists())
             updated = config_service.readMergedConfig()["files"]
             self.assertTrue(updated["USE_EXIFTOOL"])
             self.assertTrue(updated["USE_MANUAL_PATHEXIFTOOL"])

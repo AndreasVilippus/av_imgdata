@@ -130,6 +130,8 @@ def test_native_face_processor_config_is_visible_without_python_fallback():
     assert "native_face_processor_license_hint" in view
     assert "native_processors" in mixin
     assert "INSIGHTFACE_LICENSE_ACKNOWLEDGED: false" in mixin
+    assert "normalizeExternalLibrariesBoolean" in mixin
+    assert "INSIGHTFACE_LICENSE_ACKNOWLEDGED: this.normalizeExternalLibrariesBoolean" in mixin
     assert "label_enable_native_face_processor" not in view
     assert "label_native_face_processor_path" not in view
     face_mixin_block = mixin.split("FACE_PROCESSOR: {", 1)[1].split("IMAGE_PROCESSOR_VIPS", 1)[0]

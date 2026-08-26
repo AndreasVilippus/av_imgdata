@@ -466,6 +466,8 @@ write_worker_model_readme
 bundle_face_processor_if_available
 bundle_vips_processor
 
+python3 "${PROJECT_DIR}/tools/verify-third-party-licenses.py" --root "${DIST_DIR}" --write
+
 case "${TARGET}" in
   windows-x86_64)
     cp -a --no-preserve=ownership "${PROJECT_DIR}/worker/packaging/windows/README.md" "${DIST_DIR}/" 2>/dev/null || true

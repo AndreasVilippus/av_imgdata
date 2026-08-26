@@ -209,6 +209,7 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "install_runtime_dependency_notice" in build_vips
     assert "share/licenses/AV_ImgData/runtime-dependencies" in build_vips
     assert "packaged-libraries.txt" in build_vips
+    assert "verify-third-party-licenses.py --root \"$package_tgz_dir\" --write" in install_script
     assert "$VIPS_INSTALL/share/licenses" in install_script
     assert "patch_libvips_source" in build_vips
     assert "vips_foreign_load_heif_get_cicp" not in build_vips
@@ -396,6 +397,19 @@ def test_native_face_processor_packages_third_party_license_notices():
     assert "libjpeg-turbo.LICENSE" in build_script
     assert "$NATIVE_INSTALL/share/licenses" in install_script
     assert "$VIPS_INSTALL/share/licenses" in install_script
+
+
+def test_worker_build_generates_and_verifies_third_party_notices():
+    build_worker = Path("tools/build-worker.sh").read_text(encoding="utf-8")
+    verifier = Path("tools/verify-third-party-licenses.py").read_text(encoding="utf-8")
+
+    assert "verify-third-party-licenses.py" in build_worker
+    assert "--root \"${DIST_DIR}\" --write" in build_worker
+    assert "THIRD-PARTY-NOTICES.json" in verifier
+    assert "bundled native runtime files without license mapping" in verifier
+    assert "libstdc\\+\\+-6\\.dll" in verifier
+    assert "libvips" in verifier
+    assert "onnxruntime" in verifier
 
 
 def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
