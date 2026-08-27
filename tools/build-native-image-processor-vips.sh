@@ -829,6 +829,49 @@ replace_binary_string_with_padding() {
   ' "${file}"
 }
 
+replace_text_string() {
+  local file="$1"
+  local old="$2"
+  local new="$3"
+
+  [ -f "${file}" ] || return
+  if ! grep -Fq -- "${old}" "${file}"; then
+    return
+  fi
+  if ! command -v perl >/dev/null 2>&1; then
+    echo "ERROR: perl is required to sanitize native build metadata." >&2
+    exit 1
+  fi
+
+  OLD_TEXT_STRING="${old}" NEW_TEXT_STRING="${new}" perl -0pi -e '
+    my $old = $ENV{OLD_TEXT_STRING};
+    my $new = $ENV{NEW_TEXT_STRING};
+    s/\Q$old\E/$new/g;
+  ' "${file}"
+}
+
+sanitize_native_text_metadata_paths() {
+  local file
+  local metadata_dir
+  local file_list
+
+  file_list="$(mktemp "${BUILD_ROOT}/native-metadata-paths.XXXXXX")"
+  for metadata_dir in "${VIPS_PREFIX}/lib/pkgconfig" "${VIPS_PREFIX}/lib"; do
+    [ -d "${metadata_dir}" ] || continue
+    find "${metadata_dir}" -maxdepth 1 -type f \( -name '*.pc' -o -name '*.la' \) -print0 >> "${file_list}" 2>/dev/null || true
+  done
+
+  while IFS= read -r -d '' file; do
+    replace_text_string "${file}" "${VIPS_PREFIX}" "${VIPS_RUNTIME_PREFIX}"
+    if grep -Eq '(/home/andreas|//source/av_imgdata|/source/av_imgdata)' "${file}"; then
+      echo "ERROR: native build path remains embedded in metadata ${file}" >&2
+      grep -E '(/home/andreas|//source/av_imgdata|/source/av_imgdata)' "${file}" >&2 || true
+      exit 1
+    fi
+  done < "${file_list}"
+  rm -f "${file_list}"
+}
+
 sanitize_native_build_paths() {
   local file
   local file_list
@@ -862,6 +905,7 @@ prepare_build_dirs
 build_heif_stack
 build_libvips
 copy_libvips_runtime_dependencies
+sanitize_native_text_metadata_paths
 sanitize_native_build_paths
 
 export PKG_CONFIG_PATH="${VIPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
@@ -888,6 +932,7 @@ fi
 cmake "${CMAKE_ARGS[@]}"
 make -j"$(nproc 2>/dev/null || echo 2)"
 make install DESTDIR="${INSTALL_DIR}"
+sanitize_native_text_metadata_paths
 sanitize_native_build_paths
 
 NATIVE_BINARY="${VIPS_PREFIX}/bin/av-imgdata-image-processor"
