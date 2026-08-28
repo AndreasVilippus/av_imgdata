@@ -4,7 +4,19 @@
 
 This document defines the architectural rules, development constraints, and project premises for `av_imgdata`.
 
-It is intentionally compact to stay adapter-safe. The source guideline document was reviewed and folded into this repository plan. Future changes should keep this file concise and move large implementation plans into separate focused documents under `docs/`.
+It is intentionally compact to stay adapter-safe. Large implementation plans and domain-specific designs belong in separate focused documents under `docs/`.
+
+These guidelines define the cross-cutting architectural baseline. Focused concept documents define domain behavior within that baseline. A concept must not silently override these guidelines, and these guidelines must not silently invalidate an intentional domain decision.
+
+## Documentation Governance
+
+- Cross-cutting architecture, boundaries, persistence, write safety, status identity, configuration, packaging, and testing rules belong here.
+- Focused domain behavior belongs in the matching concept document under `docs/`.
+- `docs/status-concept-integrated.md` is authoritative for runtime status/progress semantics and the set of global long-running operation identities.
+- Domain concepts may define internal findings, detail states, source models, or workflow actions, but must not create a parallel global status model.
+- If a concept conflicts with these guidelines, determine explicitly whether the domain requirement justifies changing the architecture or whether the concept must be corrected. Do not implement the conflict first and document it later.
+- If a new requirement needs a new global operation, persistence model, write path, external-worker responsibility, or package dependency, update the relevant architecture/status concept before implementation.
+- Documentation changes that intentionally alter an established contract must update all directly affected concepts in the same change where practical.
 
 ## Core Rules
 
@@ -21,6 +33,8 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - Keep behavior close to DSM and Synology Photos conventions.
 - Keep the package installable on DSM without manual post-installation steps.
 - Keep native package components self-contained in the SPK when they are enabled by default.
+- Preserve raw source facts separately from normalized, derived, suggested, or user-selected values.
+- Keep read, review/decision, and write phases separable for workflows that can modify files or Synology Photos.
 
 ### Must Not
 
@@ -31,6 +45,8 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - Add broad CSS, broad component structure, or decorative UI without concrete need.
 - Introduce dependencies, assets, models, or bundled components that prevent compliant SPK distribution under the project license and the bundled components' own licenses.
 - Require manual DSM shell steps, manual file copying, or manual patching after package installation.
+- Treat a derived value, majority result, confidence score, or heuristic as verified source data.
+- Silently normalize ambiguous metadata, timezones, paths, filenames, identities, or remote API behavior.
 
 ## Distribution And Optional Dependencies
 
@@ -48,10 +64,11 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - New settings must be normalized in `ConfigService.normalizeConfig()`.
 - UI config editors must preserve the full config shape.
 - Runtime config and state live below `SYNOPKG_PKGVAR`.
-- Operational findings, suppressions, mappings, and runtime state should go through `src/av_imgdata/db` repositories, `RuntimeStateService`, `FileAnalysisService`, or a successor storage abstraction.
+- Operational findings, suppressions, mappings, analysis results, audits, and runtime state should go through `src/av_imgdata/db` repositories, `RuntimeStateService`, `FileAnalysisService`, or a successor storage abstraction.
 - Legacy JSON files are migration or compatibility inputs unless the current storage abstraction still owns that file.
 - Remaining runtime JSON writes should remain change-aware and atomic.
 - Legacy config migration is allowed only when deterministic and idempotent.
+- Configurable source selection, parser rules, priorities, tolerances, and write targets must be represented explicitly; call sites must not embed a second hidden configuration hierarchy.
 
 ## Backend Architecture
 
@@ -65,6 +82,8 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - Shared multi-step workflows must not be duplicated between API routes, cleanup flows, checks flows, and face-match flows.
 - Synology Photos person creation must go through the shared person creation and person-id resolution path.
 - Session handling, authentication bootstrap, and Photos API retries belong in `SessionManager`.
+- Unified status payload construction belongs in the central status builder/service. Operation adapters may supply domain counters and values, but must not recreate schema semantics independently.
+- Domain analyzers should return normalized domain results and findings; API/UI formatting must not become the owner of comparison or correction decisions.
 
 ## Native Processor Architecture
 
@@ -94,11 +113,12 @@ It is intentionally compact to stay adapter-safe. The source guideline document 
 - Raw worker results must be normalized through the same processor normalization rules used by local execution before domain logic sees them.
 - Result consumption must be idempotent and should purge raw external result payloads after normalized state is stored successfully.
 - Byte-only inputs must stay local until a bounded explicit byte/staged-asset input contract exists; do not overload path fields.
+- External workers must not become direct writers to Synology Photos or authoritative file-metadata correction paths unless the architecture is deliberately changed and documented first.
 - The detailed current contract is documented in `docs/external-worker-pre-pipeline-concept.md` and `docs/external-worker-gui-coverage.md`.
 
 ## Long-Running Process Rules
 
-The long-running operation set is:
+The global long-running operation set is:
 
 - `file_analysis`
 - `checks`
@@ -116,6 +136,8 @@ Rules:
 - `scan` and `findings` must not overwrite each other without explicit transition.
 - Cross-operation start blocking must be explicit.
 - A stale stopping state may stop blocking only through an explicit timeout/staleness rule.
+- A new domain check does not create a new global operation merely because it has a dedicated UI or data model. It should normally be an action below `checks` unless its lifecycle genuinely differs and `docs/status-concept-integrated.md` is updated first.
+- Photo capture-datetime consistency analysis and later review/correction are therefore modeled below `checks` with `scan` and `findings` semantics unless a deliberate architecture change is documented.
 
 ## Unified Status Schema
 
@@ -143,10 +165,17 @@ Details are defined in `docs/status-concept-integrated.md`.
 ## Write Safety
 
 - File writes and Synology Photos writes are sensitive operations.
+- New correction workflows should stabilize a read-only analysis path before enabling batch writes.
+- Analysis, proposed correction, approval, and application should be distinct states even if a later UI combines them into one guided flow.
+- A write-capable workflow must expose the intended target system explicitly. Do not infer whether Synology Photos, image metadata, filesystem metadata, filename, or path should be changed.
+- Batch or rule-based correction must support a dry-run/change preview showing target, previous value, proposed value, reference/source, and rule or user decision before application.
 - Concurrent writes to the same image, sidecar, face, or Photos object should be guarded by explicit locks or sequencing.
 - Before writing after a long-running read phase, detect changed target objects where practical.
 - If a target changed, fail with a clear conflict state instead of silently writing stale data.
 - Retrying writes requires an idempotency argument or verified safe retry condition.
+- Successful corrective writes must be auditable with enough old/new state to explain the change and support restoration where the target API/file format permits it.
+- Automatic writes must not be based solely on heuristic confidence, majority voting, or timezone suspicion unless an explicit rule authorizes that case and the dry-run shows the exact result.
+- Ambiguous, parser-warning, or insufficient-data findings must not be silently auto-corrected.
 
 ## Frontend Architecture
 
@@ -158,6 +187,8 @@ Details are defined in `docs/status-concept-integrated.md`.
 - Keep counters and derived progress values explicit.
 - Use operation-id and revision guards when applying polled progress.
 - New UI strings must be added in English and German together.
+- Review UIs must distinguish raw source values, normalized comparison values, suggested values, and values selected for writing.
+- A default filter such as “show inconsistencies only” must not cause consistent/raw data to be discarded from persisted analysis results.
 
 ## Metadata And Face Geometry
 
@@ -169,6 +200,25 @@ Details are defined in `docs/status-concept-integrated.md`.
 - Unnamed ACD faces remain opt-in only.
 - MWG AppliedToDimensions, orientation, and dimension mismatch context must be preserved.
 
+## Photo Capture Datetime Consistency
+
+The detailed domain design is defined in `docs/PHOTO_DATETIME_CONSISTENCY_CONCEPT.md`.
+
+Architectural rules:
+
+- Capture datetime is a multi-source analysis problem; no single source, including Synology Photos, is implicitly authoritative.
+- EXIF, XMP, IPTC, QuickTime/container metadata, Synology Photos, filename, path, sidecar, and filesystem values remain separately attributable sources.
+- Raw datetime values must be preserved. Parsing and normalization must not erase whether a timezone/offset was absent, explicit, or format-specific.
+- A datetime without a known timezone remains a local datetime with unknown timezone. Do not silently apply the NAS timezone.
+- Comparison must respect the lower common precision. A year/month/day source must not be fabricated into a second-precision timestamp.
+- Filename and path extraction must use explicit configurable parser rules; arbitrary numeric strings must not become dates through broad heuristics.
+- Filesystem timestamps are auxiliary evidence by default, not primary capture-time truth.
+- Source priority, tolerance, parser rules, and participation in consistency checks must be configurable and normalized through the existing config architecture.
+- Confidence and majority grouping may propose a reference value but do not constitute permission to write.
+- The first implementation stage is read-only and stores/shows findings. Later correction uses the global write-safety rules above.
+- Synology Photos read/write behavior, storage unit, timezone interpretation, and side effects must be verified from observed behavior before product logic depends on them.
+- Photo datetime findings should reuse the existing checks persistence/review model rather than creating a parallel findings system unless a documented storage limitation requires a successor abstraction.
+
 ## File, Sidecar, And ExifTool Rules
 
 - Native file access and ExifTool-backed access are both valid, but responsibilities must stay visible in `tests/function_matrix.md`.
@@ -178,6 +228,9 @@ Details are defined in `docs/status-concept-integrated.md`.
 - ExifTool persistent mode is optional and timeout-bounded.
 - ExifTool installation and update checks must remain explicit and status-visible.
 - libvips-backed image decode and normalization is optional, status-visible, and controlled by `IMAGE_PROCESSOR_VIPS`.
+- Metadata and datetime workflows should reuse the central ExifTool access layer instead of spawning independent ExifTool parsing conventions.
+- ExifTool datetime parsing must preserve group/source identity and the raw representation required to distinguish local timestamps, offsets, UTC markers, and subseconds.
+- Sidecar values that can override or supplement embedded metadata must remain attributable to the sidecar source rather than being merged invisibly into embedded metadata.
 - If parser/file access behavior changes, update `tests/function_matrix.md`.
 
 ## Synology API Rules
@@ -186,6 +239,8 @@ Details are defined in `docs/status-concept-integrated.md`.
 - Verify API behavior with HAR, browser traces, direct API inspection, or reproducible logs before changing product logic.
 - Do not rely on undocumented or ineffective parameters.
 - Preserve remote API names and safe error context in structured errors.
+- Before adding a corrective Photos write, verify whether the operation changes only Photos state or also mutates file metadata, indexing state, related assets, or timestamps.
+- Read and write adapters should expose the raw Photos value/identifier needed for conflict detection and audit rather than only a display-formatted datetime.
 
 ## Testing And Verification
 
@@ -198,6 +253,9 @@ Details are defined in `docs/status-concept-integrated.md`.
 - Native build, packaging, licensing, and binary-contract changes require static package/build contract tests.
 - Native processor runtime behavior requires focused service tests before relying on SPK-level validation.
 - External worker changes require focused dispatch/result tests plus transport/build validation for each affected worker platform.
+- Metadata parser changes require source-specific fixtures and tests that preserve raw source identity.
+- Datetime changes require focused tests for timezone-known versus timezone-unknown values, UTC equivalence, precision-only differences, tolerance boundaries, filename/path parser false positives, dependent-source grouping, ambiguous findings, and dry-run behavior.
+- Corrective write tests must verify no-write dry runs, stale-target conflicts, audit creation, idempotent re-application behavior, and target-specific failure handling.
 
 ## Decision Checklist
 
@@ -211,7 +269,12 @@ Before implementing a change, verify:
 6. Can behavior stay out of the view component?
 7. Are operation identity, mode, and revision ordering preserved?
 8. Does schema status already provide the data the UI should use?
-9. Does the change affect findings, runtime state, ignore lists, or config migration?
+9. Does the change affect findings, runtime state, ignore lists, analysis persistence, audit, or config migration?
 10. Does the change add or alter an optional dependency, external tool, model, or license-sensitive asset?
 11. Does the change add or alter a native processor command, binary, packaged library, or runtime fallback path?
 12. Does an external-worker change preserve the processor/domain boundary and avoid introducing workflow-specific pipeline behavior?
+13. Does the change preserve raw source data separately from normalized or suggested values?
+14. Does a write-capable workflow provide explicit target selection, dry-run/preview, conflict detection, idempotency, and auditability?
+15. Does a datetime change preserve timezone uncertainty and source precision rather than inventing missing information?
+16. Does the requirement fit an existing `checks`, `file_analysis`, `face_match`, or `cleanup` action instead of introducing an unnecessary new global operation?
+17. Do these guidelines and the affected focused concept agree? If not, has the conflict been resolved in documentation before implementation?
