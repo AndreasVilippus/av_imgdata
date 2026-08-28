@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
+import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -120,6 +123,275 @@ class TestWorkerApiService(unittest.TestCase):
         state = service.store.read()
         self.assertEqual(heartbeat["status"], "ok")
         self.assertEqual(state["workers"]["worker-01"]["last_seen_at"], "2026-08-09T18:04:00Z")
+
+    def test_concurrent_claims_cannot_claim_same_job_twice(self):
+        token_1 = self.service.create_token(token_id="worker-1")["token"]
+        token_2 = self.service.create_token(token_id="worker-2")["token"]
+        self.service.register_worker(
+            token=token_1,
+            worker_id="worker-1",
+            version="0.10.1",
+            capabilities=["face_native_embed"],
+        )
+        self.service.register_worker(
+            token=token_2,
+            worker_id="worker-2",
+            version="0.10.1",
+            capabilities=["face_native_embed"],
+        )
+        self.service.enqueue_job(job_id="job-1", job_type="face_native_embed", payload={})
+        barrier = threading.Barrier(2)
+
+        def claim(token, worker_id):
+            barrier.wait(timeout=5)
+            return self.service.claim_job(
+                token=token,
+                worker_id=worker_id,
+                capabilities=["face_native_embed"],
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda args: claim(*args), [(token_1, "worker-1"), (token_2, "worker-2")]))
+
+        statuses = sorted(result["status"] for result in results)
+        claimed = [result["job"] for result in results if result["status"] == "claimed"]
+        state = self.service.store.read()
+
+        self.assertEqual(statuses, ["claimed", "empty"])
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0]["job_id"], "job-1")
+        self.assertEqual(state["jobs"]["job-1"]["status"], "claimed")
+        self.assertIn(state["jobs"]["job-1"]["claimed_by"], {"worker-1", "worker-2"})
+
+    def test_concurrent_enrollment_redemption_issues_single_bound_token(self):
+        from services.worker_provisioning_service import WorkerProvisioningService
+
+        provisioning = WorkerProvisioningService(package_var=self.package_var, state_store=self.service.store)
+        enrollment = provisioning.create_enrollment(enrollment_id="enroll-1")
+        barrier = threading.Barrier(2)
+
+        def redeem(worker_id):
+            barrier.wait(timeout=5)
+            try:
+                return provisioning.redeem_enrollment(
+                    enrollment_code=enrollment["enrollment_code"],
+                    worker_id=worker_id,
+                )
+            except WorkerApiError as exc:
+                return {"status": "error", "code": exc.code, "worker_id": worker_id}
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(redeem, ["worker-1", "worker-2"]))
+
+        enrolled = [result for result in results if result["status"] == "enrolled"]
+        rejected = [result for result in results if result["status"] == "error"]
+        state = self.service.store.read()
+
+        self.assertEqual(len(enrolled), 1)
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]["code"], "enrollment_code_used")
+        self.assertEqual(len(state["tokens"]), 2)
+        enrollment_state = state["enrollments"]["enroll-1"]
+        self.assertEqual(enrollment_state["worker_id"], enrolled[0]["worker_id"])
+        self.assertTrue(enrollment_state["used_at"])
+        bound_tokens = [
+            entry for token_id, entry in state["tokens"].items()
+            if token_id == enrolled[0]["token_id"]
+        ]
+        self.assertEqual(bound_tokens[0]["worker_id"], enrolled[0]["worker_id"])
+
+    def test_enrollment_redemption_write_failure_leaves_code_unused_and_no_new_token(self):
+        from services.worker_provisioning_service import WorkerProvisioningService
+
+        provisioning = WorkerProvisioningService(package_var=self.package_var, state_store=self.service.store)
+        enrollment = provisioning.create_enrollment(enrollment_id="enroll-1")
+        original_token_ids = set(self.service.store.read()["tokens"])
+        original_json_dumps = self.service.store._json_dumps
+        calls = {"count": 0}
+
+        def fail_after_transition(value):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return original_json_dumps(value)
+
+        self.service.store._json_dumps = fail_after_transition
+        with self.assertRaises(WorkerApiError) as ctx:
+            provisioning.redeem_enrollment(
+                enrollment_code=enrollment["enrollment_code"],
+                worker_id="worker-1",
+            )
+        self.service.store._json_dumps = original_json_dumps
+
+        state = self.service.store.read()
+        redeemed = provisioning.redeem_enrollment(
+            enrollment_code=enrollment["enrollment_code"],
+            worker_id="worker-1",
+        )
+
+        self.assertEqual(ctx.exception.code, "state_write_failed")
+        self.assertEqual(set(state["tokens"]), original_token_ids)
+        self.assertIsNone(state["enrollments"]["enroll-1"]["used_at"])
+        self.assertIsNone(state["enrollments"]["enroll-1"]["worker_id"])
+        self.assertEqual(redeemed["status"], "enrolled")
+
+    def test_restart_preserves_queued_claimed_and_unconsumed_completed_jobs(self):
+        self.service.register_worker(
+            token=self.token,
+            worker_id="worker-01",
+            version="0.10.1",
+            capabilities=["face_native_embed"],
+        )
+        self.service.enqueue_job(
+            job_id="completed",
+            job_type="face_native_embed",
+            payload={"source": "completed"},
+            priority=10,
+        )
+        self.service.enqueue_job(
+            job_id="claimed",
+            job_type="face_native_embed",
+            payload={"source": "claimed"},
+            priority=20,
+        )
+        self.service.enqueue_job(
+            job_id="queued",
+            job_type="face_native_embed",
+            payload={"source": "queued"},
+            priority=30,
+        )
+        self.service.claim_job(token=self.token, worker_id="worker-01", capabilities=["face_native_embed"])
+        self.service.record_result(
+            token=self.token,
+            worker_id="worker-01",
+            job_id="completed",
+            result={"faces": []},
+        )
+        self.service.claim_job(token=self.token, worker_id="worker-01", capabilities=["face_native_embed"])
+
+        restarted = WorkerApiService(package_var=self.package_var)
+        state = restarted.store.read()
+        status = restarted.status()
+        listed = restarted.list_jobs(status=["queued", "claimed", "completed"])
+        by_id = {job["job_id"]: job for job in listed}
+
+        self.assertEqual(state["jobs"]["queued"]["status"], "queued")
+        self.assertEqual(state["jobs"]["claimed"]["status"], "claimed")
+        self.assertEqual(state["jobs"]["completed"]["status"], "completed")
+        self.assertNotIn("result_consumed_at", state["jobs"]["completed"])
+        self.assertEqual(by_id["queued"]["status"], "queued")
+        self.assertEqual(by_id["claimed"]["status"], "claimed")
+        self.assertEqual(by_id["completed"]["result"], {"faces": []})
+        self.assertEqual(status["jobs"]["by_status"], {"completed": 1, "claimed": 1, "queued": 1})
+
+    def test_restart_preserves_claimed_job_without_requeueing(self):
+        self.service.register_worker(
+            token=self.token,
+            worker_id="worker-01",
+            version="0.10.1",
+            capabilities=["face_native_embed"],
+        )
+        self.service.enqueue_job(job_id="claimed", job_type="face_native_embed", payload={})
+        self.service.claim_job(token=self.token, worker_id="worker-01", capabilities=["face_native_embed"])
+
+        restarted = WorkerApiService(package_var=self.package_var)
+        state = restarted.store.read()
+        empty = restarted.claim_job(
+            token=self.token,
+            worker_id="worker-01",
+            capabilities=["face_native_embed"],
+        )
+
+        self.assertEqual(state["jobs"]["claimed"]["status"], "claimed")
+        self.assertEqual(state["jobs"]["claimed"]["claimed_by"], "worker-01")
+        self.assertEqual(empty["status"], "empty")
+
+    def test_revoked_token_is_rejected_during_active_worker_lifecycle(self):
+        self.service.register_worker(
+            token=self.token,
+            worker_id="worker-01",
+            version="0.10.1",
+            capabilities=["face_native_embed"],
+        )
+        self.service.enqueue_job(job_id="job-1", job_type="face_native_embed", payload={})
+        self.service.claim_job(token=self.token, worker_id="worker-01", capabilities=["face_native_embed"])
+
+        state = self.service.store.read()
+        state["tokens"]["test-worker"]["revoked"] = True
+        self.service.store.write(state)
+
+        with self.assertRaises(WorkerApiError) as heartbeat_ctx:
+            self.service.heartbeat(token=self.token, worker_id="worker-01", status="ready")
+        with self.assertRaises(WorkerApiError) as result_ctx:
+            self.service.record_result(
+                token=self.token,
+                worker_id="worker-01",
+                job_id="job-1",
+                result={"faces": []},
+            )
+
+        self.assertEqual(heartbeat_ctx.exception.code, "unauthorized")
+        self.assertEqual(result_ctx.exception.code, "unauthorized")
+        self.assertEqual(self.service.store.read()["jobs"]["job-1"]["status"], "claimed")
+
+    def test_job_result_write_failure_rolls_back_job_and_worker_transition(self):
+        self.service.register_worker(
+            token=self.token,
+            worker_id="worker-01",
+            version="0.10.1",
+            capabilities=["face_native_embed"],
+        )
+        self.service.enqueue_job(job_id="job-1", job_type="face_native_embed", payload={})
+        self.service.claim_job(token=self.token, worker_id="worker-01", capabilities=["face_native_embed"])
+        original_json_dumps = self.service.store._json_dumps
+        calls = {"count": 0}
+
+        def fail_after_transition(value):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return original_json_dumps(value)
+
+        self.service.store._json_dumps = fail_after_transition
+        with self.assertRaises(WorkerApiError) as ctx:
+            self.service.record_result(
+                token=self.token,
+                worker_id="worker-01",
+                job_id="job-1",
+                result={"faces": []},
+            )
+        self.service.store._json_dumps = original_json_dumps
+        state = self.service.store.read()
+
+        self.assertEqual(ctx.exception.code, "state_write_failed")
+        self.assertEqual(state["jobs"]["job-1"]["status"], "claimed")
+        self.assertNotIn("result", state["jobs"]["job-1"])
+        self.assertNotIn("finished_at", state["jobs"]["job-1"])
+        self.assertEqual(state["workers"]["worker-01"]["status"], "processing")
+
+    def test_package_upgrade_keeps_existing_sqlite_worker_runtime(self):
+        self.service.register_worker(
+            token=self.token,
+            worker_id="worker-01",
+            version="0.10.1",
+            capabilities=["face_native_embed"],
+        )
+        self.service.enqueue_job(job_id="job-1", job_type="face_native_embed", payload={})
+
+        upgraded = WorkerApiService(package_var=self.package_var)
+        heartbeat = upgraded.heartbeat(token=self.token, worker_id="worker-01", status="ready")
+        claimed = upgraded.claim_job(
+            token=self.token,
+            worker_id="worker-01",
+            capabilities=["face_native_embed"],
+        )
+        state = upgraded.store.read()
+
+        self.assertEqual(heartbeat["status"], "ok")
+        self.assertEqual(claimed["status"], "claimed")
+        self.assertIn("test-worker", state["tokens"])
+        self.assertIn("worker-01", state["workers"])
+        self.assertEqual(state["jobs"]["job-1"]["status"], "claimed")
 
     def test_claim_respects_capabilities(self):
         self.service.enqueue_job(job_id="job-1", job_type="face_native_detect", payload={})

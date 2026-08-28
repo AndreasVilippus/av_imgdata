@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -67,6 +68,75 @@ def test_state_store_distinguishes_missing_invalid_and_read_failure(tmp_path: Pa
     monkeypatch.setattr(store.database, "read", fail_read)
     with pytest.raises(WorkerApiError, match="state_read_failed"):
         store.read()
+
+
+def test_state_store_migrates_supported_older_schema_versions(tmp_path: Path):
+    store = WorkerStateStore(package_var=tmp_path)
+
+    migrated = store.migrate({
+        "schema_version": 1,
+        "tokens": {
+            "legacy-token": {
+                "token_hash": "hash",
+                "created_at": "2026-07-12T12:00:00Z",
+            },
+        },
+        "workers": {"worker-1": {"status": "ready"}},
+        "jobs": {"job-1": {"status": "queued"}},
+        "enrollments": {},
+        "custom": {"preserved": True},
+    })
+
+    assert migrated["schema_version"] == WorkerProtocol.SCHEMA_VERSION
+    assert migrated["tokens"]["legacy-token"]["revoked"] is False
+    assert migrated["tokens"]["legacy-token"]["scopes"] == list(WorkerProtocol.DEFAULT_TOKEN_SCOPES)
+    assert migrated["workers"]["worker-1"]["status"] == "ready"
+    assert migrated["jobs"]["job-1"]["status"] == "queued"
+    assert migrated["custom"] == {"preserved": True}
+
+
+def test_state_store_write_rolls_back_when_sqlite_transaction_fails(tmp_path: Path, monkeypatch):
+    store = WorkerStateStore(package_var=tmp_path)
+    original_state = {
+        "schema_version": WorkerProtocol.SCHEMA_VERSION,
+        "tokens": {
+            "token-1": {
+                "token_hash": "hash",
+                "created_at": "2026-07-12T12:00:00Z",
+                "revoked": False,
+                "worker_id": "worker-1",
+                "scopes": list(WorkerProtocol.DEFAULT_TOKEN_SCOPES),
+                "issued_via": "admin",
+                "enrollment_id": "",
+            },
+        },
+        "workers": {"worker-1": {"worker_id": "worker-1", "status": "ready"}},
+        "jobs": {"job-1": {"job_id": "job-1", "type": "face_native_embed", "status": "queued"}},
+        "enrollments": {"enroll-1": {"created_at": "2026-07-12T12:00:00Z"}},
+    }
+    store.write(original_state)
+
+    original_json_dumps = store._json_dumps
+    calls = {"count": 0}
+
+    def fail_after_deletes(value):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return original_json_dumps(value)
+
+    monkeypatch.setattr(store, "_json_dumps", fail_after_deletes)
+    with pytest.raises(WorkerApiError, match="state_write_failed"):
+        store.write({
+            "schema_version": WorkerProtocol.SCHEMA_VERSION,
+            "tokens": {},
+            "workers": {},
+            "jobs": {},
+            "enrollments": {},
+        })
+
+    monkeypatch.setattr(store, "_json_dumps", original_json_dumps)
+    assert store.read() == store.migrate(original_state)
 
 
 def test_enrollment_token_is_enforced_by_normal_worker_api(tmp_path: Path):
