@@ -163,22 +163,6 @@ export default {
 			if (status.schema_version === 1 && status.progress && typeof status.progress === 'object') {
 				return status.progress;
 			}
-			const legacy = progress.analysis_progress && typeof progress.analysis_progress === 'object'
-				? progress.analysis_progress
-				: {};
-			if (Number(legacy.total) > 0) {
-				return {
-					kind: 'files',
-					current: Number(legacy.current) || 0,
-					total: Number(legacy.total) || 0,
-					title_key: 'status:files_matched',
-					fallback_title: 'Matching files',
-					primary_label_key: 'status:files_analyzed',
-					fallback_primary_label: 'Analyzed',
-					secondary_label_key: 'status:files_to_analyze',
-					fallback_secondary_label: 'to analyze',
-				};
-			}
 			return {};
 		},
 		getFileAnalysisStatusText(progress) {

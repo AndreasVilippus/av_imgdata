@@ -22,6 +22,10 @@ def test_cleanup_ui_has_schema_status_helpers_before_rendering_progress():
     progress_helper = _method_body(source, "getCleanupStatusProgress")
     assert "status.schema_version === 1" in progress_helper
     assert "status.progress" in progress_helper
+    assert "progress.total_files" not in progress_helper
+    assert "progress.persons_total" not in progress_helper
+    assert "progress.persons_scanned" not in progress_helper
+    assert "progress.files_scanned" not in progress_helper
 
     assert "getCleanupStatusCounters(" in source
     counter_helper = _method_body(source, "getCleanupStatusCounters")
@@ -40,6 +44,7 @@ def test_file_analysis_ui_has_schema_status_helpers_before_rendering_progress():
     progress_helper = _method_body(source, "getFileAnalysisStatusProgress")
     assert "status.schema_version === 1" in progress_helper
     assert "status.progress" in progress_helper
+    assert "analysis_progress" not in progress_helper
 
     assert "getFileAnalysisStatusCounters(" in source
     counter_helper = _method_body(source, "getFileAnalysisStatusCounters")

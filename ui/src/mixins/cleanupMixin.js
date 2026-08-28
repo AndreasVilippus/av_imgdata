@@ -444,45 +444,6 @@ export default {
 			if (status.schema_version === 1 && status.progress && typeof status.progress === 'object') {
 				return status.progress;
 			}
-			if (this.selectedCleanupAction === 'recognition_build_profiles' && Number(progress.persons_total) > 0) {
-				return {
-					kind: 'persons',
-					current: Number(progress.persons_scanned) || 0,
-					total: Number(progress.persons_total) || 0,
-					title_key: 'cleanup:label_persons',
-					fallback_title: 'Persons',
-					primary_label_key: 'cleanup:label_scanned',
-					fallback_primary_label: 'scanned',
-					secondary_label_key: 'cleanup:label_persons_remaining',
-					fallback_secondary_label: 'remaining',
-				};
-			}
-			if (Number(progress.total_files) > 0) {
-				return {
-					kind: 'files',
-					current: Number(progress.files_scanned) || 0,
-					total: Number(progress.total_files) || 0,
-					title_key: 'cleanup:label_images',
-					fallback_title: 'Images',
-					primary_label_key: 'cleanup:label_scanned',
-					fallback_primary_label: 'scanned',
-					secondary_label_key: 'cleanup:label_files_remaining',
-					fallback_secondary_label: 'remaining',
-				};
-			}
-			if (Number(progress.persons_total) > 0) {
-				return {
-					kind: 'persons',
-					current: Number(progress.persons_scanned) || 0,
-					total: Number(progress.persons_total) || 0,
-					title_key: 'cleanup:label_persons',
-					fallback_title: 'Persons',
-					primary_label_key: 'cleanup:label_scanned',
-					fallback_primary_label: 'scanned',
-					secondary_label_key: 'cleanup:label_persons_remaining',
-					fallback_secondary_label: 'remaining',
-				};
-			}
 			return {};
 		},
 		getCleanupStatusProgressTitle() {

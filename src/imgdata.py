@@ -2129,33 +2129,11 @@ class ImgDataService:
     def getFaceMatchingProgress(self, user_key: str, *, compact_for_response: bool = False) -> Dict[str, Any]:
         normalized_user = str(user_key or "").strip()
 
-        candidate_keys: List[str] = []
-        for method_name in (
-            "_faceMatchingStateKey",
-            "_faceMatchStateKey",
-            "_faceMatchingProgressStateKey",
-        ):
-            method = getattr(self, method_name, None)
-            if callable(method):
-                try:
-                    candidate_keys.append(method(normalized_user))
-                except Exception:
-                    pass
-        if normalized_user:
-            candidate_keys.extend([
-                normalized_user,
-                f"{normalized_user}:face_match",
-                f"{normalized_user}_face_match",
-            ])
-        candidate_keys.append("face_match")
-
         memory_progress: Dict[str, Any] = {}
         with self.runtime_state.lock("face_match_progress"):
-            for key in candidate_keys:
-                progress = self.runtime_state.memory("face_match_progress").get(key)
-                if isinstance(progress, dict) and progress:
-                    memory_progress = dict(progress)
-                    break
+            progress = self.runtime_state.memory("face_match_progress").get(normalized_user)
+            if isinstance(progress, dict) and progress:
+                memory_progress = dict(progress)
             if not memory_progress and len(self.runtime_state.memory("face_match_progress")) == 1:
                 only_progress = next(iter(self.runtime_state.memory("face_match_progress").values()))
                 if isinstance(only_progress, dict) and only_progress:
