@@ -351,6 +351,7 @@ bundle_vips_processor() {
     "${PROJECT_DIR}/build/native/local/vips-image-processor-install/usr/local/AV_ImgData/bin/${target_binary_name}"
     "${PROJECT_DIR}/dist/av-imgdata-image-processor-${processor_target}/bin/${target_binary_name}"
     "${PROJECT_DIR}/dist/native-image-processor-vips-${processor_target}/bin/${target_binary_name}"
+    "${PROJECT_DIR}/dist/av-imgdata-worker-docker-linux-x86_64/bin/${target_binary_name}"
     "${PROJECT_DIR}/worker/native_deps/${processor_target}/vips/bin/${target_binary_name}"
   )
 

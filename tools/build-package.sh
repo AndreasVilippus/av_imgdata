@@ -24,6 +24,8 @@ SANITIZE_DIRS=(
   ".test-venv"
   "ui/node_modules"
   "src/__pycache__"
+  "src/av_imgdata/__pycache__"
+  "src/av_imgdata/db/__pycache__"
   "src/services/__pycache__"
   "app/__pycache__"
 )
@@ -42,6 +44,7 @@ SANITIZE_NATIVE_BUILD_PATTERNS=(
 )
 SANITIZE_BACKUP_ROOT=""
 STALE_GENERATED_BACKUP_ROOT=""
+PRESERVED_LINUX_WORKER_VIPS_ROOT=""
 SANITIZED_DIRS=()
 TEST_PKGVAR=""
 
@@ -68,9 +71,23 @@ restore_local_build_artifacts() {
     rm -rf "${SANITIZE_BACKUP_ROOT}"
   fi
 
+  if [[ -n "${STALE_GENERATED_BACKUP_ROOT}" && -d "${STALE_GENERATED_BACKUP_ROOT}" ]]; then
+    rm -rf "${STALE_GENERATED_BACKUP_ROOT}"
+  fi
+
   if [[ -n "${TEST_PKGVAR}" ]]; then
     rm -rf "${TEST_PKGVAR}"
   fi
+}
+
+cleanup_stale_generated_backup_roots() {
+  local stale_root
+
+  for stale_root in "${PACKAGE_ROOT}"/.av_imgdata-stale-generated.*; do
+    [[ -e "${stale_root}" ]] || continue
+    [[ -d "${stale_root}" ]] || fail "Stale generated backup path is not a directory: ${stale_root}"
+    rm -rf "${stale_root}"
+  done
 }
 
 move_stale_generated_path_out_of_way() {
@@ -106,7 +123,7 @@ assert_no_nobody_generated_paths() {
   local rel
   local matches
 
-  for rel in build dist worker/native_deps; do
+  for rel in build/worker build/native dist worker/native_deps; do
     [[ -e "${PACKAGE_ROOT}/${rel}" ]] && roots+=("${PACKAGE_ROOT}/${rel}")
   done
 
@@ -224,6 +241,91 @@ ensure_linux_native_deps() {
   bash tools/fetch-worker-native-deps.sh --target linux-x86_64 --no-update-check
 }
 
+find_existing_linux_worker_vips_artifact_root() {
+  local root
+
+  for root in \
+    "${PACKAGE_ROOT}/build/native/linux-x86_64/vips-image-processor-install/usr/local/AV_ImgData" \
+    "${PACKAGE_ROOT}/dist/av-imgdata-image-processor-linux-x86_64" \
+    "${PACKAGE_ROOT}/dist/native-image-processor-vips-linux-x86_64" \
+    "${PACKAGE_ROOT}/dist/av-imgdata-worker-linux-x86_64" \
+    "${PACKAGE_ROOT}/dist/av-imgdata-worker-docker-linux-x86_64" \
+    "${PACKAGE_ROOT}/worker/native_deps/linux-x86_64/vips"; do
+    [[ -f "${root}/bin/av-imgdata-image-processor" ]] || continue
+    compgen -G "${root}/lib/libvips.so*" >/dev/null || continue
+    printf '%s\n' "${root}"
+    return 0
+  done
+
+  return 1
+}
+
+existing_linux_worker_vips_artifact_ready() {
+  find_existing_linux_worker_vips_artifact_root >/dev/null
+}
+
+preserve_existing_linux_worker_vips_artifact() {
+  local source_root
+  local target_root
+
+  source_root="$(find_existing_linux_worker_vips_artifact_root)" || return 1
+  target_root="${PACKAGE_ROOT}/build/native/linux-x86_64/package-worker-vips-artifact/usr/local/AV_ImgData"
+
+  rm -rf "${target_root}"
+  mkdir -p "${target_root}"
+  cp -RL --no-preserve=ownership "${source_root}/bin" "${target_root}/bin"
+  cp -RL --no-preserve=ownership "${source_root}/lib" "${target_root}/lib"
+  if [[ -d "${source_root}/share" ]]; then
+    cp -RL --no-preserve=ownership "${source_root}/share" "${target_root}/share"
+  fi
+
+  PRESERVED_LINUX_WORKER_VIPS_ROOT="${target_root}"
+  export AV_IMGDATA_VIPS_PROCESSOR_ROOT="${target_root}"
+  export AV_IMGDATA_VIPS_PROCESSOR_BIN="${target_root}/bin/av-imgdata-image-processor"
+}
+
+host_linux_worker_vips_build_dependencies_ready() {
+  local package
+
+  command -v pkg-config >/dev/null 2>&1 || return 1
+  for package in glib-2.0 gio-2.0 gobject-2.0 expat libjpeg libpng libtiff-4 libwebp lcms2 zlib; do
+    pkg-config --exists "${package}" || return 1
+  done
+}
+
+configure_noninteractive_linux_worker_vips_build() {
+  if [[ -n "${AV_IMGDATA_LINUX_CHROOT+x}" ]]; then
+    return 0
+  fi
+  if [[ -n "${AV_IMGDATA_BUILD_WORKER_VIPS+x}" ]]; then
+    return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    export AV_IMGDATA_LINUX_CHROOT=1
+    export AV_IMGDATA_LINUX_CHROOT_ROOT="${AV_IMGDATA_LINUX_CHROOT_ROOT:-${WORKSPACE_ROOT}/build_env/${PACKAGE_NAME}-linux-chroot/linux-x86_64}"
+    return 0
+  fi
+
+  if existing_linux_worker_vips_artifact_ready; then
+    preserve_existing_linux_worker_vips_artifact
+    export AV_IMGDATA_BUILD_WORKER_VIPS=0
+    log "Using existing Linux worker libvips artifact because non-interactive sudo is not available"
+    return 0
+  fi
+
+  if host_linux_worker_vips_build_dependencies_ready; then
+    export AV_IMGDATA_LINUX_CHROOT=0
+    log "Using host build for Linux worker libvips because non-interactive sudo is not available"
+    return 0
+  fi
+
+  export AV_IMGDATA_LINUX_CHROOT=0
+  fail "Cannot build Linux worker libvips non-interactively.
+non-interactive sudo is not available, no existing Linux libvips worker artifact was found, and host pkg-config dependencies are incomplete.
+Install host packages for libjpeg/libpng/libtiff/libwebp/lcms2/zlib, allow non-interactive sudo for the chroot build, or provide an existing artifact with AV_IMGDATA_BUILD_WORKER_VIPS=0."
+}
+
 ensure_windows_native_deps() {
   windows_native_deps_ready && return 0
 
@@ -244,9 +346,20 @@ run_pkgcreate() {
   local pkgcreate_log
 
   pkgcreate_log="$(mktemp)"
-  if ! AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 "${PKGCREATE}" "$@" "${PACKAGE_NAME}" 2>&1 | tee "${pkgcreate_log}"; then
+  if [[ "$(id -u)" == "0" ]]; then
+    if ! AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 "${PKGCREATE}" "$@" "${PACKAGE_NAME}" 2>&1 | tee "${pkgcreate_log}"; then
+      rm -f "${pkgcreate_log}"
+      fail "PkgCreate.py failed"
+    fi
+  elif command -v sudo >/dev/null 2>&1 && { sudo -n true >/dev/null 2>&1 || [[ -t 0 ]]; }; then
+    if ! sudo env AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 "${PKGCREATE}" "$@" "${PACKAGE_NAME}" 2>&1 | tee "${pkgcreate_log}"; then
+      rm -f "${pkgcreate_log}"
+      fail "PkgCreate.py failed"
+    fi
+  else
     rm -f "${pkgcreate_log}"
-    fail "PkgCreate.py failed"
+    fail "PkgCreate.py requires root privileges for the Synology Toolkit chroot step.
+Run tools/build-package.sh with sudo, or configure non-interactive sudo for the current user."
   fi
   assert_pkgcreate_log_has_no_critical_errors "${pkgcreate_log}"
   rm -f "${pkgcreate_log}"
@@ -326,6 +439,7 @@ esac
 
 cd "${PACKAGE_ROOT}"
 trap restore_local_build_artifacts EXIT
+cleanup_stale_generated_backup_roots
 
 [[ -d "tests" ]] || fail "Required directory not found: tests"
 [[ -d "ui" ]] || fail "Required directory not found: ui"
@@ -343,6 +457,7 @@ PYTHONPATH=src python3 -m pytest tests
 
 assert_no_nobody_generated_paths
 ensure_linux_native_deps
+configure_noninteractive_linux_worker_vips_build
 build_external_worker_bundles
 assert_no_nobody_generated_paths
 

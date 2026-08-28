@@ -417,11 +417,34 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
 
     assert "sanitize_project_for_toolkit_link" in build_package
     assert "restore_local_build_artifacts" in build_package
+    assert "cleanup_stale_generated_backup_roots" in build_package
+    assert "configure_noninteractive_linux_worker_vips_build" in build_package
+    assert "find_existing_linux_worker_vips_artifact_root" in build_package
+    assert "existing_linux_worker_vips_artifact_ready" in build_package
+    assert "preserve_existing_linux_worker_vips_artifact" in build_package
+    assert "host_linux_worker_vips_build_dependencies_ready" in build_package
     assert "move_stale_generated_path_out_of_way" in build_package
     assert "prepare_generated_worker_paths" in build_package
     assert "assert_no_nobody_generated_paths" in build_package
     assert "-user nobody -o -group nogroup" in build_package
+    assert "build/worker build/native dist worker/native_deps" in build_package
+    assert "for rel in build dist worker/native_deps" not in build_package
     assert '"${PACKAGE_ROOT}/.av_imgdata-stale-generated.XXXXXX"' in build_package
+    assert '"${PACKAGE_ROOT}"/.av_imgdata-stale-generated.*' in build_package
+    assert 'rm -rf "${STALE_GENERATED_BACKUP_ROOT}"' in build_package
+    assert "sudo -n true" in build_package
+    assert 'AV_IMGDATA_LINUX_CHROOT_ROOT:-${WORKSPACE_ROOT}/build_env/${PACKAGE_NAME}-linux-chroot/linux-x86_64}' in build_package
+    assert "export AV_IMGDATA_BUILD_WORKER_VIPS=0" in build_package
+    assert "export AV_IMGDATA_VIPS_PROCESSOR_ROOT" in build_package
+    assert "export AV_IMGDATA_VIPS_PROCESSOR_BIN" in build_package
+    assert "package-worker-vips-artifact" in build_package
+    assert "dist/av-imgdata-worker-linux-x86_64" in build_package
+    assert "dist/av-imgdata-worker-docker-linux-x86_64" in build_package
+    assert "cp -RL --no-preserve=ownership" in build_package
+    assert "export AV_IMGDATA_LINUX_CHROOT=0" in build_package
+    assert "Using existing Linux worker libvips artifact because non-interactive sudo is not available" in build_package
+    assert "non-interactive sudo is not available" in build_package
+    assert "libjpeg libpng libtiff-4 libwebp lcms2 zlib" in build_package
     assert '"build/worker/${target}"' in build_package
     assert '"dist/av-imgdata-worker-${target}"' in build_package
     assert '[[ "${target}" == "windows-x86_64" ]] && continue' in build_package
@@ -437,6 +460,10 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert "assert_pkgcreate_log_has_no_critical_errors" in build_package
     assert "PkgCreate.py returned success" in build_package
     assert "AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 \"${PKGCREATE}\"" in build_package
+    assert "sudo -n true" in build_package
+    assert "[[ -t 0 ]]" in build_package
+    assert "sudo env AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 \"${PKGCREATE}\"" in build_package
+    assert "PkgCreate.py requires root privileges for the Synology Toolkit chroot step" in build_package
     assert "tee \"${pkgcreate_log}\"" in build_package
     assert "ERROR: (native|optional|external worker|Windows external worker|ui/index.cgi|libjpeg|ONNXRuntime)" in build_package
     assert "tools/fetch-worker-windows-deps.sh" in build_package
@@ -469,10 +496,15 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert '"build/native/*/vips-image-processor-install"' not in build_package
     assert "build/native/*/deps" not in build_package
     assert '"ui/node_modules"' in build_package
+    assert '"src/av_imgdata/__pycache__"' in build_package
+    assert '"src/av_imgdata/db/__pycache__"' in build_package
     assert 'mktemp -d "${PACKAGE_ROOT}/../.av_imgdata-link-sanitize.XXXXXX"' in build_package
     assert "sanitize_project_for_toolkit_link" in build_package.split('log "Building Synology package"', 1)[0]
     assert "assert_no_nobody_generated_paths" in build_package.split("build_external_worker_bundles", 1)[0]
     assert "assert_no_nobody_generated_paths" in build_package.split('log "Temporarily moving local build artifacts out of the Toolkit link tree"', 1)[0]
+
+    build_worker = Path("tools/build-worker.sh").read_text(encoding="utf-8")
+    assert '"${PROJECT_DIR}/dist/av-imgdata-worker-docker-linux-x86_64/bin/${target_binary_name}"' in build_worker
 
 
 def test_package_info_is_platform_specific_for_native_binary():
