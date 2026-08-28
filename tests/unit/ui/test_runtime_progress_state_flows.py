@@ -515,6 +515,42 @@ def test_cleanup_progress_action_prefers_runtime_action_runtime():
     assert result == {"action": "recognition_check_person_assignments"}
 
 
+def test_profile_build_unavailable_progress_does_not_open_notice_modal_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            let modalCalls = 0;
+            const component = createComponent({
+              selectedCleanupAction: 'recognition_build_profiles',
+              cleanupRuntimeAction: 'recognition_build_profiles',
+              cleanupLoading: true,
+              getOptionalComponentUnavailableMessage: () => 'InsightFace and an active model are required.',
+              showOptionalComponentUnavailableNotice: () => { modalCalls += 1; },
+            });
+
+            const applied = component.applyCleanupProgress({
+              action: 'recognition_build_profiles',
+              available: false,
+              message_key: 'cleanup:recognition_insightface_unavailable',
+              message: 'InsightFace and an active model are required.',
+            });
+
+            assert.strictEqual(applied, true);
+            assert.strictEqual(modalCalls, 0);
+            assert.strictEqual(component.cleanupStatusMessage, 'InsightFace and an active model are required.');
+            console.log(JSON.stringify({ applied, modalCalls, status: component.cleanupStatusMessage }));
+            """
+        )
+    )
+
+    assert result == {
+        "applied": True,
+        "modalCalls": 0,
+        "status": "InsightFace and an active model are required.",
+    }
+
+
 def test_checks_reconnect_adopts_running_insightface_assignment_cleanup_runtime():
     result = run_node(
         mixin_runtime_script(

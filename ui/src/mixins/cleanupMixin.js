@@ -522,7 +522,8 @@ export default {
 			const unavailableMessage = typeof this.getOptionalComponentUnavailableMessage === 'function'
 				? this.getOptionalComponentUnavailableMessage(nextProgress)
 				: '';
-			if (unavailableMessage && this.cleanupLoading) {
+			const progressAction = String(nextProgress.action || this.cleanupRuntimeAction || this.selectedCleanupAction || '').trim();
+			if (unavailableMessage && this.cleanupLoading && progressAction !== 'recognition_build_profiles') {
 				this.showOptionalComponentUnavailableNotice(unavailableMessage);
 			}
 			if (nextProgress.message_key || nextProgress.message) {
