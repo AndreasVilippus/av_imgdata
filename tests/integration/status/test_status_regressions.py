@@ -208,3 +208,140 @@ def test_regression_persisted_face_match_progress_gets_status_payload():
     assert progress["status"]["schema_version"] == 1
     assert progress["status"]["operation"] == "face_match"
     assert progress["status"]["phase"] == "finished"
+
+
+def test_regression_persisted_running_file_analysis_progress_survives_backend_restart():
+    service = _service()
+    service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+        "running": True,
+        "finished": False,
+        "operation_id": "file-analysis-running",
+        "revision": 9,
+        "files_seen_total": 100,
+        "files_matched_total": 40,
+        "files_analyzed": 11,
+    } if state_type == "file_analysis_progress" and state_key == "default" else {}
+
+    progress = service.getFileAnalysisProgress()
+
+    assert progress["running"] is True
+    assert progress["operation"] == "file_analysis"
+    assert progress["operation_id"] == "file-analysis-running"
+    assert progress["revision"] == 9
+    assert progress["status"]["schema_version"] == 1
+    assert progress["status"]["operation"] == "file_analysis"
+    assert progress["status"]["progress"]["current"] == 11
+    assert progress["status"]["progress"]["total"] == 40
+
+
+def test_regression_persisted_running_checks_progress_survives_backend_restart_with_identity():
+    service = _service()
+    service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+        "running": True,
+        "finished": False,
+        "source_mode": "scan",
+        "check_type": "name_conflicts",
+        "operation_id": "checks-name-conflicts-running",
+        "revision": 5,
+        "files_scanned": 7,
+        "total_files": 20,
+        "result": {
+            "item": {
+                "review_type": "name_conflicts",
+                "left_face_target": {"source_format": "ACD", "name": "A"},
+                "right_face_target": {"source_format": "MWG_REGIONS", "name": "B"},
+            }
+        },
+    } if state_type == "checks_progress" and state_key == "user_name_conflicts" else {}
+
+    progress = service.getChecksProgress("user", "name_conflicts")
+
+    assert progress["running"] is True
+    assert progress["operation"] == "checks"
+    assert progress["action"] == "name_conflicts"
+    assert progress["mode"] == "scan"
+    assert progress["operation_id"] == "checks-name-conflicts-running"
+    assert progress["revision"] == 5
+    assert progress["status"]["schema_version"] == 1
+    assert progress["status"]["operation"] == "checks"
+    assert progress["status"]["action"] == "name_conflicts"
+    assert progress["result"]["item"]["left_face_target"]["source_format"] == "ACD"
+
+
+def test_regression_persisted_running_cleanup_progress_survives_backend_restart_with_schema():
+    service = _service()
+    service.file_analysis.readRuntimeState = lambda state_type, state_key: {
+        "running": True,
+        "finished": False,
+        "action": "normalize_names",
+        "operation_id": "cleanup-normalize-running",
+        "revision": 4,
+        "persons_total": 10,
+        "persons_scanned": 3,
+        "persons_updated": 1,
+        "current_name": "Original Name",
+    } if state_type == "cleanup_progress" and state_key == "user_normalize_names" else {}
+
+    progress = service.getCleanupProgress("user", "normalize_names")
+
+    assert progress["running"] is True
+    assert progress["operation"] == "cleanup"
+    assert progress["action"] == "normalize_names"
+    assert progress["operation_id"] == "cleanup-normalize-running"
+    assert progress["revision"] == 4
+    assert progress["current_name"] == "Original Name"
+    assert progress["status"]["schema_version"] == 1
+    assert progress["status"]["operation"] == "cleanup"
+    assert progress["status"]["action"] == "normalize_names"
+    assert progress["status"]["progress"]["kind"] == "persons"
+    assert progress["status"]["progress"]["current"] == 3
+
+
+def test_regression_status_attach_preserves_face_match_result_details():
+    service = _service()
+    payload = service._attachFaceMatchStatusPayload({
+        "running": False,
+        "finished": True,
+        "action": "search_photo_face_in_file",
+        "result": {
+            "metadata_face": {
+                "source_format": "MWG_REGIONS",
+                "name": "Person A",
+                "x": 0.1,
+                "y": 0.2,
+                "w": 0.3,
+                "h": 0.4,
+            },
+            "photos_face": {
+                "face_id": 123,
+                "item_id": 456,
+                "person_id": 789,
+            },
+        },
+    })
+
+    assert payload["status"]["schema_version"] == 1
+    assert payload["result"]["metadata_face"]["source_format"] == "MWG_REGIONS"
+    assert payload["result"]["photos_face"]["face_id"] == 123
+
+
+def test_regression_status_attach_preserves_checks_result_face_details():
+    service = _service()
+    payload = service._attachChecksStatusPayload({
+        "running": False,
+        "finished": True,
+        "source_mode": "findings",
+        "check_type": "position_deviations",
+        "result": {
+            "item": {
+                "review_type": "position_deviations",
+                "left_face_target": {"source_format": "MICROSOFT", "name": "Person A", "face_id": 1},
+                "right_face_target": {"source_format": "PHOTOS", "name": "Person A", "face_id": 2},
+            }
+        },
+    }, check_type="position_deviations")
+
+    assert payload["status"]["schema_version"] == 1
+    assert payload["status"]["mode"] == "findings"
+    assert payload["result"]["item"]["left_face_target"]["source_format"] == "MICROSOFT"
+    assert payload["result"]["item"]["right_face_target"]["face_id"] == 2

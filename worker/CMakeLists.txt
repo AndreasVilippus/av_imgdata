@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(AV_IMGDATA_WORKER_VERSION "0.10.0" CACHE STRING "External worker bundle version")
+set(AV_IMGDATA_WORKER_VERSION "0.10.1" CACHE STRING "External worker bundle version")
 
 option(AV_IMGDATA_WORKER_BUILD_TESTS "Build external worker tests" OFF)
 option(AV_IMGDATA_WORKER_BUNDLE_FACE_PROCESSOR "Bundle av-imgdata-face-processor with the worker artifact" ON)

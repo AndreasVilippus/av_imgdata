@@ -3,7 +3,7 @@
 source /pkgscripts-ng/include/pkg_util.sh
 
 package="AV_ImgData"
-version="0.10.0"
+version="0.10.1"
 displayname="ImgData"
 description="Photo metadata and face matching with Python, shell, native C++, and external worker packages for offloading compute-intensive image processing."
 description_enu="Photo metadata and face matching with Python, shell, native C++, and external worker packages for offloading compute-intensive image processing."

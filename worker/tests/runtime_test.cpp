@@ -10,7 +10,7 @@ int main() {
     namespace runtime = av_imgdata::worker::runtime;
 
     assert(std::string(av_imgdata::worker::kProtocolVersion) == "1.0");
-    assert(std::string(av_imgdata::worker::kWorkerVersion) == "0.10.0");
+    assert(std::string(av_imgdata::worker::kWorkerVersion) == "0.10.1");
     assert(av_imgdata::worker::kCapabilities.size() == 7);
     assert(av_imgdata::worker::kInputModes.size() == 1);
     assert(av_imgdata::worker::capabilities_json().find("face_native_embed") != std::string::npos);

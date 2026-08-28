@@ -2490,6 +2490,70 @@ class ImgDataService:
             **_ignored,
         )
 
+    def _buildFileAnalysisStatusPayload(
+        self,
+        *,
+        action: str = "file_analysis",
+        mode: str = "scan",
+        phase: str = "idle",
+        files_analyzed: Any = 0,
+        files_matched_total: Any = 0,
+        files_seen_total: Any = 0,
+        faces_total: Any = 0,
+        faces_named: Any = 0,
+        faces_unnamed: Any = 0,
+        **_ignored: Any,
+    ) -> Dict[str, Any]:
+        return self.status_builder.file_analysis_payload(
+            action=action,
+            mode=mode,
+            phase=phase,
+            files_analyzed=files_analyzed,
+            files_matched_total=files_matched_total,
+            files_seen_total=files_seen_total,
+            faces_total=faces_total,
+            faces_named=faces_named,
+            faces_unnamed=faces_unnamed,
+            **_ignored,
+        )
+
+    def _buildCleanupStatusPayload(
+        self,
+        *,
+        action: str,
+        mode: str = "scan",
+        phase: str = "idle",
+        persons_scanned: Any = 0,
+        persons_total: Any = 0,
+        persons_updated: Any = 0,
+        faces_reassigned: Any = 0,
+        files_scanned: Any = 0,
+        total_files: Any = 0,
+        files_updated: Any = 0,
+        metadata_faces_updated: Any = 0,
+        errors_count: Any = 0,
+        entries_current: Any = 0,
+        entries_total: Any = 0,
+        **_ignored: Any,
+    ) -> Dict[str, Any]:
+        return self.status_builder.cleanup_payload(
+            action=action,
+            mode=mode,
+            phase=phase,
+            persons_scanned=persons_scanned,
+            persons_total=persons_total,
+            persons_updated=persons_updated,
+            faces_reassigned=faces_reassigned,
+            files_scanned=files_scanned,
+            total_files=total_files,
+            files_updated=files_updated,
+            metadata_faces_updated=metadata_faces_updated,
+            errors_count=errors_count,
+            entries_current=entries_current,
+            entries_total=entries_total,
+            **_ignored,
+        )
+
     def _attachChecksStatusPayload(self, payload: Dict[str, Any], *, check_type: str = "") -> Dict[str, Any]:
         if not isinstance(payload, dict):
             return payload
@@ -2552,31 +2616,55 @@ class ImgDataService:
             )
         if existing_status_text:
             payload["status_text"] = existing_status_text
-        progress = self._buildStatusProgress(
-            kind="files",
-            current=payload.get("files_analyzed", 0),
-            total=payload.get("files_matched_total", 0),
-            title_key="status:files_matched",
-            fallback_title="Matching files",
-            primary_label_key="status:files_analyzed",
-            fallback_primary_label="Analyzed",
-            secondary_label_key="status:files_to_analyze",
-            fallback_secondary_label="to analyze",
-        )
-        payload["status"] = self._buildStatusPayload(
-            operation="file_analysis",
+        payload["status"] = self._buildFileAnalysisStatusPayload(
             action=str(payload.get("action") or "file_analysis"),
             mode=str(payload.get("mode") or "scan"),
             phase=phase,
-            progress=progress,
-            counters=[
-                self._buildStatusCounter("files_seen", value=payload.get("files_seen_total", 0), label_key="status:files_seen", fallback_label="Files seen"),
-                self._buildStatusCounter("files_matched", value=payload.get("files_matched_total", 0), label_key="status:files_matched", fallback_label="Matching files"),
-                self._buildStatusCounter("files_analyzed", value=payload.get("files_analyzed", 0), label_key="status:files_analyzed", fallback_label="Analyzed files"),
-                self._buildStatusCounter("faces_total", value=payload.get("faces_total", 0), label_key="status:faces_total", fallback_label="Faces"),
-                self._buildStatusCounter("faces_named", value=payload.get("faces_named", 0), label_key="status:faces_named", fallback_label="Named faces"),
-                self._buildStatusCounter("faces_unnamed", value=payload.get("faces_unnamed", 0), label_key="status:faces_unnamed", fallback_label="Unnamed faces"),
-            ],
+            files_analyzed=payload.get("files_analyzed", 0),
+            files_matched_total=payload.get("files_matched_total", 0),
+            files_seen_total=payload.get("files_seen_total", 0),
+            faces_total=payload.get("faces_total", 0),
+            faces_named=payload.get("faces_named", 0),
+            faces_unnamed=payload.get("faces_unnamed", 0),
+        )
+        return payload
+
+    def _attachCleanupStatusPayload(self, payload: Dict[str, Any], *, action: str = "") -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+        existing_status = payload.get("status")
+        if isinstance(existing_status, dict) and existing_status.get("schema_version") == 1:
+            return payload
+        existing_status_text = existing_status if isinstance(existing_status, str) else ""
+        normalized_action = self._normalizeCleanupAction(action or payload.get("action"))
+        source_mode = str(payload.get("mode") or payload.get("source_mode") or "scan").strip().lower() or "scan"
+        options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+        operation_mode = str(options.get("operation_mode") or payload.get("operation_mode") or "").strip().lower()
+        if operation_mode in {"findings"}:
+            source_mode = "findings"
+        phase = self._deriveStatusPhase(
+            running=payload.get("running"),
+            finished=payload.get("finished"),
+            stop_requested=payload.get("stop_requested"),
+            paused=payload.get("paused"),
+            message_key=str(payload.get("message_key") or payload.get("message") or ""),
+            status=existing_status_text,
+        )
+        payload["status"] = self._buildCleanupStatusPayload(
+            action=normalized_action,
+            mode=source_mode,
+            phase=phase,
+            persons_scanned=payload.get("persons_scanned", 0),
+            persons_total=payload.get("persons_total", 0),
+            persons_updated=payload.get("persons_updated", 0),
+            faces_reassigned=payload.get("faces_reassigned", 0),
+            files_scanned=payload.get("files_scanned", 0),
+            total_files=payload.get("total_files", 0),
+            files_updated=payload.get("files_updated", 0),
+            metadata_faces_updated=payload.get("metadata_faces_updated", 0),
+            errors_count=payload.get("errors_count", 0),
+            entries_current=payload.get("entries_current", payload.get("current", 0)),
+            entries_total=payload.get("entries_total", payload.get("count", payload.get("total", 0))),
         )
         return payload
 
@@ -2682,7 +2770,10 @@ class ImgDataService:
         if not isinstance(current, dict) or not current:
             with self.runtime_state.lock("checks_progress"):
                 current = self.runtime_state.memory("checks_progress").get(state_key, {})
-        return self._normalizeChecksProgress(user_key, normalized_type, dict(current) if isinstance(current, dict) else {})
+        return self._attachChecksStatusPayload(
+            self._normalizeChecksProgress(user_key, normalized_type, dict(current) if isinstance(current, dict) else {}),
+            check_type=normalized_type,
+        )
 
     def requestStopChecks(self, user_key: str, check_type: str) -> Dict[str, Any]:
         normalized_type = self._normalizeChecksType(check_type)
@@ -2766,7 +2857,7 @@ class ImgDataService:
             FaceRecognitionService.ACTION_ASSIGNMENT,
         }:
             current = self._syncRecognitionProgressFindingsCount(user_key, normalized_action, current)
-        return current
+        return self._attachCleanupStatusPayload(current, action=normalized_action)
 
     def _syncRecognitionProgressFindingsCount(self, user_key: str, action: str, progress: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(progress) if isinstance(progress, dict) else {}

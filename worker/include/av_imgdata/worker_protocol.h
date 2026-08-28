@@ -8,7 +8,7 @@
 namespace av_imgdata::worker {
 
 inline constexpr const char* kProtocolVersion = "1.0";
-inline constexpr const char* kWorkerVersion = "0.10.0";
+inline constexpr const char* kWorkerVersion = "0.10.1";
 inline constexpr int kConfigSchemaVersion = 1;
 inline constexpr int kStateSchemaVersion = 2;
 

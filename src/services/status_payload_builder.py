@@ -211,3 +211,125 @@ class StatusPayloadBuilder:
                 if self.to_int(value) > 0:
                     counters.append(self.counter(key, value=value, label_key=label_key, fallback_label=fallback))
         return self.payload(operation="face_match", action=normalized_action, mode=mode, phase=phase, save_only=save_only, progress=status_progress, counters=counters)
+
+    def file_analysis_payload(
+        self,
+        *,
+        action: str = "file_analysis",
+        mode: str = "scan",
+        phase: str = "idle",
+        files_analyzed: Any = 0,
+        files_matched_total: Any = 0,
+        files_seen_total: Any = 0,
+        faces_total: Any = 0,
+        faces_named: Any = 0,
+        faces_unnamed: Any = 0,
+        **_ignored: Any,
+    ) -> Dict[str, Any]:
+        status_progress = self.progress(
+            kind="files" if self.to_int(files_matched_total) > 0 else "none",
+            current=files_analyzed,
+            total=files_matched_total,
+            title_key="status:files_matched",
+            fallback_title="Matching files",
+            primary_label_key="status:files_analyzed",
+            fallback_primary_label="Analyzed",
+            secondary_label_key="status:files_to_analyze",
+            fallback_secondary_label="to analyze",
+        )
+        return self.payload(
+            operation="file_analysis",
+            action=str(action or "file_analysis").strip() or "file_analysis",
+            mode=str(mode or "scan").strip().lower() or "scan",
+            phase=phase,
+            progress=status_progress,
+            counters=[
+                self.counter("files_seen", value=files_seen_total, label_key="status:files_seen", fallback_label="Files seen"),
+                self.counter("files_matched", value=files_matched_total, label_key="status:files_matched", fallback_label="Matching files"),
+                self.counter("files_analyzed", value=files_analyzed, label_key="status:files_analyzed", fallback_label="Analyzed files"),
+                self.counter("faces_total", value=faces_total, label_key="status:faces_total", fallback_label="Faces"),
+                self.counter("faces_named", value=faces_named, label_key="status:faces_named", fallback_label="Named faces"),
+                self.counter("faces_unnamed", value=faces_unnamed, label_key="status:faces_unnamed", fallback_label="Unnamed faces"),
+            ],
+        )
+
+    def cleanup_payload(
+        self,
+        *,
+        action: str,
+        mode: str = "scan",
+        phase: str = "idle",
+        persons_scanned: Any = 0,
+        persons_total: Any = 0,
+        persons_updated: Any = 0,
+        faces_reassigned: Any = 0,
+        files_scanned: Any = 0,
+        total_files: Any = 0,
+        files_updated: Any = 0,
+        metadata_faces_updated: Any = 0,
+        errors_count: Any = 0,
+        entries_current: Any = 0,
+        entries_total: Any = 0,
+        **_ignored: Any,
+    ) -> Dict[str, Any]:
+        normalized_mode = str(mode or "scan").strip().lower() or "scan"
+        files_total = self.to_int(total_files)
+        persons_total_value = self.to_int(persons_total)
+        if normalized_mode == "findings":
+            status_progress = self.progress(
+                kind="entries",
+                current=entries_current,
+                total=entries_total,
+                title_key="cleanup:label_entries",
+                fallback_title="Entries",
+                primary_label_key="cleanup:label_scanned",
+                fallback_primary_label="checked",
+                secondary_label_key="checks:label_entries_remaining",
+                fallback_secondary_label="remaining",
+            )
+        elif files_total > 0 or self.to_int(files_scanned) > 0:
+            status_progress = self.progress(
+                kind="files",
+                current=files_scanned,
+                total=files_total,
+                title_key="cleanup:label_images",
+                fallback_title="Images",
+                primary_label_key="cleanup:label_scanned",
+                fallback_primary_label="scanned",
+                secondary_label_key="cleanup:label_files_remaining",
+                fallback_secondary_label="remaining",
+            )
+        elif persons_total_value > 0 or self.to_int(persons_scanned) > 0:
+            status_progress = self.progress(
+                kind="persons",
+                current=persons_scanned,
+                total=persons_total_value,
+                title_key="cleanup:label_persons",
+                fallback_title="Persons",
+                primary_label_key="cleanup:label_scanned",
+                fallback_primary_label="scanned",
+                secondary_label_key="cleanup:label_persons_remaining",
+                fallback_secondary_label="remaining",
+            )
+        else:
+            status_progress = self.progress(kind="none")
+
+        processed_count = self.to_int(files_scanned) + self.to_int(persons_scanned)
+        updated_count = (
+            self.to_int(persons_updated)
+            + self.to_int(files_updated)
+            + self.to_int(metadata_faces_updated)
+            + self.to_int(faces_reassigned)
+        )
+        return self.payload(
+            operation="cleanup",
+            action=str(action or "").strip().lower(),
+            mode=normalized_mode,
+            phase=phase,
+            progress=status_progress,
+            counters=[
+                self.counter("processed", value=processed_count, label_key="checks:counter_processed", fallback_label="Processed"),
+                self.counter("updated", value=updated_count, label_key="face_match:counter_updated", fallback_label="Updated"),
+                self.counter("errors", value=errors_count, label_key="cleanup:label_errors", fallback_label="Errors"),
+            ],
+        )

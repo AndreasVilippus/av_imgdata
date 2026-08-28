@@ -44,7 +44,7 @@ def test_delete_worker_removes_bound_tokens_and_requeues_claimed_jobs(tmp_path):
     api.register_worker(
         token=enrolled["token"],
         worker_id="windows-worker-01",
-        version="0.10.0",
+        version="0.10.1",
         capabilities=["face_native_embed"],
     )
     api.enqueue_job(job_id="job-1", job_type="face_native_embed", payload={})

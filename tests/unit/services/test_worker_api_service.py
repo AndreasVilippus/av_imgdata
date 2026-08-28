@@ -73,7 +73,7 @@ class TestWorkerApiService(unittest.TestCase):
         service.register_worker(
             token=token,
             worker_id="worker-01",
-            version="0.10.0",
+            version="0.10.1",
             capabilities=["face_native_embed"],
         )
 
@@ -155,7 +155,7 @@ class TestWorkerApiService(unittest.TestCase):
         service.register_worker(
             token=token,
             worker_id="worker-01",
-            version="0.10.0",
+            version="0.10.1",
             capabilities=["face_native_embed"],
         )
         calls = []
@@ -264,7 +264,7 @@ class TestWorkerApiService(unittest.TestCase):
         self.service.register_worker(
             token=self.token,
             worker_id="worker-01",
-            version="0.10.0",
+            version="0.10.1",
             capabilities=["face_native_embed"],
         )
         self.service.enqueue_job(
@@ -320,7 +320,7 @@ class TestWorkerApiService(unittest.TestCase):
         self.service.register_worker(
             token=self.token,
             worker_id="worker-01",
-            version="0.10.0",
+            version="0.10.1",
             capabilities=["face_native_embed"],
         )
         self.service.enqueue_job(job_id="job-1", job_type="face_native_embed", payload={})

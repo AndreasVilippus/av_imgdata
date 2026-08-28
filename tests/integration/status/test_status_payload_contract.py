@@ -31,6 +31,8 @@ def test_generic_status_builder_methods_exist():
         "_buildStatusPayload",
         "_buildChecksStatusPayload",
         "_buildFaceMatchStatusPayload",
+        "_buildFileAnalysisStatusPayload",
+        "_buildCleanupStatusPayload",
     ):
         assert hasattr(service, method_name), f"Missing backend status builder: {method_name}"
 
@@ -373,3 +375,75 @@ def test_face_match_findings_review_status_uses_entries_progress_and_action_coun
 
     assert _counter_keys(status) == ["transferred", "skipped"]
     assert "findings" not in _counter_keys(status)
+
+
+def test_file_analysis_status_payload_uses_schema_progress_and_counters():
+    service = _service()
+
+    status = service._buildFileAnalysisStatusPayload(
+        phase="running",
+        files_seen_total=120,
+        files_matched_total=80,
+        files_analyzed=25,
+        faces_total=9,
+        faces_named=7,
+        faces_unnamed=2,
+    )
+
+    assert status["schema_version"] == 1
+    assert status["operation"] == "file_analysis"
+    assert status["action"] == "file_analysis"
+    assert status["mode"] == "scan"
+    assert status["phase"] == "running"
+    assert status["progress"]["kind"] == "files"
+    assert status["progress"]["current"] == 25
+    assert status["progress"]["total"] == 80
+    assert _counter_keys(status) == [
+        "files_seen",
+        "files_matched",
+        "files_analyzed",
+        "faces_total",
+        "faces_named",
+        "faces_unnamed",
+    ]
+
+
+def test_cleanup_name_normalization_status_payload_uses_schema_without_legacy_counters():
+    service = _service()
+
+    status = service._buildCleanupStatusPayload(
+        action="normalize_names",
+        phase="running",
+        persons_total=12,
+        persons_scanned=5,
+        persons_updated=2,
+        files_updated=1,
+        metadata_faces_updated=3,
+    )
+
+    assert status["schema_version"] == 1
+    assert status["operation"] == "cleanup"
+    assert status["action"] == "normalize_names"
+    assert status["mode"] == "scan"
+    assert status["phase"] == "running"
+    assert status["progress"]["kind"] == "persons"
+    assert status["progress"]["current"] == 5
+    assert status["progress"]["total"] == 12
+    assert _counter_keys(status) == ["processed", "updated"]
+
+
+def test_cleanup_file_phase_prefers_file_progress_when_files_are_active():
+    service = _service()
+
+    status = service._buildCleanupStatusPayload(
+        action="normalize_names",
+        phase="running",
+        persons_total=12,
+        persons_scanned=12,
+        files_scanned=4,
+        total_files=20,
+    )
+
+    assert status["progress"]["kind"] == "files"
+    assert status["progress"]["current"] == 4
+    assert status["progress"]["total"] == 20
