@@ -2,44 +2,36 @@
 
 ## Purpose
 
-This document defines the production architecture for external processor execution
-before a central asynchronous pipeline is introduced.
+This document defines the architectural boundary for external processor execution before a central asynchronous pipeline is introduced.
 
-The goal is to maximize use of the existing external Windows worker without copying
-DSM workflows or moving Synology-specific authority away from the package.
+It describes the required behavior and remaining validation scope only. Historical implementation steps, completed activities and speculative runtime optimizations are intentionally not tracked here.
 
 ## Architectural boundary
 
 DSM remains authoritative for:
 
 - operation identity and user-visible progress
-- source selection
+- source and target selection
 - Synology Photos API access
 - metadata and sidecar reads/writes
 - findings and review state
 - person and face mutations
-- target selection and fallback policy
+- execution-target and fallback policy
 - queue state and result consumption
+- final domain writes
 
-The external worker owns only processor execution:
+The external worker executes processor contracts only. This includes image decoding required by a processor, face detection, face embedding, batch detection/embedding, embedding ranking and profile-vector math.
 
-- image decoding required by the processor
-- face detection
-- face embedding
-- multi-image detection/embedding batches
-- embedding ranking
-- profile vector math
+The worker must not write package state, Synology Photos data or authoritative image metadata.
 
-The worker must not write package state, Synology Photos data or image metadata.
+## Shared dispatch boundary
 
-## Shared dispatch rule
-
-All external face work goes through one DSM dispatch/result boundary:
+External processor work must use the shared DSM dispatch/result boundary:
 
 ```text
 Domain workflow
-→ detector/embedder adapter
-→ ExternalWorkerProcessorService / batch extension
+→ detector/embedder or processor adapter
+→ shared external-worker dispatch service
 → WorkerApiService queue
 → compatible external worker
 → processor result
@@ -47,12 +39,15 @@ Domain workflow
 → existing domain workflow continues
 ```
 
-A domain workflow must not implement a second external-worker-specific copy of its
-business logic.
+A domain workflow must not implement an external-worker-specific copy of its business logic.
+
+Raw worker results are transport results, not domain results. DSM must normalize them through the same processor normalization rules used for local execution before domain logic consumes them.
+
+Result consumption must be idempotent. A completed worker result must not be applied twice.
 
 ## Execution target policy
 
-The integrated GUI paths use `external_preferred`.
+The normal integrated policy is `external_preferred`:
 
 ```text
 Worker API disabled
@@ -65,15 +60,26 @@ Compatible worker available
 → enqueue external job and wait
 
 External job already enqueued and later fails
-→ surface failure; do not start a duplicate local execution
+→ surface failure; do not start duplicate local execution
 ```
 
-Fallback is allowed only before enqueue. This prevents duplicate processing and keeps
-write semantics deterministic.
+Fallback is allowed only before enqueue.
 
-## Processor contracts in production dispatch
+A fresh external worker is compatible only when it matches the package worker contract for the current release, including:
 
-The production DSM dispatch layer supports:
+- worker version
+- complete active capability set
+- required input mode
+- processor-contract expectations
+- heartbeat freshness
+
+A fresh but incompatible worker is a contract error. The package must not silently downgrade to an older or incomplete worker behavior.
+
+Vector-only processor jobs do not require a shared image-path input mode.
+
+## Processor contracts
+
+The external worker boundary supports these face processor contracts:
 
 | Contract | Purpose |
 | --- | --- |
@@ -84,26 +90,13 @@ The production DSM dispatch layer supports:
 | `face_native_rank_embeddings` | rank target embeddings against profile embeddings |
 | `face_native_profile_math` | calculate centroid, medoid and intra-person similarity |
 
-The schemas in `processor_contract/` remain the language-neutral authority for native
-processor input and output.
+The schemas in `processor_contract/` are the language-neutral authority for processor input and output.
 
 ## Batch is not the central pipeline
 
-Batch execution combines multiple images inside one claimed processor job:
+Batch execution combines multiple images inside one claimed processor job. It reduces processor startup, model setup and request overhead, but it does not create multiple independent in-flight jobs and does not change workflow ordering.
 
-```text
-DSM workflow
-→ one detect_and_embed_many call
-→ one face_native_embed_batch job
-→ worker processes N images
-→ one batch result
-→ DSM workflow continues
-```
-
-This reduces process startup, model setup and request overhead. It does not create
-multiple independent in-flight jobs and it does not change workflow ordering.
-
-The later central pipeline instead concerns orchestration such as:
+A later central pipeline may introduce orchestration such as:
 
 ```text
 queue work item 1..N
@@ -113,14 +106,13 @@ queue work item 1..N
 → refill the queue while DSM processes completed results
 ```
 
-These two optimizations must remain separate.
+That pipeline must remain a central service. Workflow-specific concurrency must not be added as a substitute.
 
 ## Shared-path contract
 
-DSM never sends its absolute `/volume...` path as a portable worker path.
+DSM must never send absolute NAS paths as portable worker paths.
 
-Single-image jobs use a relative `local_path`.
-Batch jobs use relative `image_paths`.
+Single-image jobs use a relative `local_path`. Batch jobs use relative `image_paths`.
 
 Example:
 
@@ -135,156 +127,62 @@ Example:
 }
 ```
 
-The external API loop validates every relative path and resolves it below its local
-`path_base_dir`.
-
-Examples:
-
-```text
-DSM root:     /volume1/photo
-Windows root: \\savy\photo
-Linux root:   /mnt/savy/photo
-```
-
 Rules:
 
-- paths in transport payloads are relative and use `/`
-- absolute or drive-qualified payload paths are rejected
+- transport paths are relative and use `/`
+- absolute or drive-qualified paths are rejected
 - `..` traversal is rejected
 - every batch entry is validated independently
-- all DSM paths in one batch must belong to the same configured path profile
-- worker-local absolute paths are created only after claim
+- all paths in one batch belong to the same configured path profile
+- worker-local absolute paths are created only after claim below the configured `path_base_dir`
 
-This keeps one DSM job portable across workers with different mount paths.
-
-## GUI/workflow integration
-
-The existing processor boundaries are wrapped rather than replacing the workflows.
-
-### Face-frame standardization
-
-`FaceFrameStandardizationService._prepared_detector()` returns the external-capable
-detector adapter. Existing scan, matching, findings and write behavior stays in the
-service.
-
-### Recognition
-
-`FaceRecognitionService._prepared_embedder()` returns the external-capable embedder.
-The adapter supports single embed, batch embed, ranking and profile math.
-
-The recognition service already performs lookahead and calls `detect_and_embed_many()`.
-That existing call now maps to `face_native_embed_batch` when supported by the worker.
-No pipeline state is introduced.
-
-### Face matching / missing InsightFace faces
-
-The existing detector/embedder factories are wrapped only for the duration of the
-InsightFace missing-face workflow. Its Photos and finding behavior is unchanged.
-
-## Result consumption
-
-Raw external results are not domain results.
-
-The DSM consumer must:
-
-1. verify job type and completed state;
-2. obtain `processor_result`;
-3. normalize through the same native processor normalization helpers used locally;
-4. store the normalized result atomically with `result_consumed_at`;
-5. purge the raw worker result after successful normalization;
-6. return the normalized processor-shaped value to the existing workflow.
-
-Consumption is idempotent. Reading an already consumed result returns the stored
-normalized value instead of applying the raw result again.
+This keeps DSM jobs portable across workers with different local mount paths.
 
 ## Batch result identity
 
-Batch output is mapped back to the DSM source paths supplied when the job was created.
-The processor result order is therefore treated as the contract order for the batch.
-Domain workflows receive:
+Batch output is mapped back to the DSM source paths supplied when the job was created. Processor result order is therefore treated as contract order for the batch.
 
-```text
-{
-  absolute DSM source path → normalized faces,
-  ...
-}
-```
-
-The external worker never decides Photos entity identity or final writes.
-
-## Worker capability selection
-
-A worker is compatible only when:
-
-- heartbeat freshness is within the configured stale timeout;
-- it advertises the required processor capability;
-- image jobs advertise `shared_path` support;
-- the Worker API is enabled.
-
-Vector-only jobs such as ranking and profile math do not require a shared image-path
-input mode.
-
-For backward compatibility, a worker without a batch capability may still process
-single-image jobs. The adapter falls back to individual external calls rather than
-inventing a second batch implementation.
-
-## Planned external warm runtime
-
-The active worker protocol advertises only processor operations that are currently
-executable end to end. `warm_processor_worker` has therefore been removed from active
-capability advertisement and remains a planned runtime feature, not a job type.
-
-The bundled native face processor supports a persistent `worker` command internally,
-but the current external API loop starts `av-imgdata-worker once` for each claimed job.
-Therefore the external runtime does not yet keep the native processor/model process
-alive across jobs.
-
-A correct implementation requires the long-running external runtime to own the
-persistent processor process and to report truthful warm/readiness state. This is a
-worker-runtime lifecycle change, not a DSM domain workflow change and not the central
-pipeline.
-
-Until that implementation exists:
-
-- no warm-runtime capability is advertised;
-- no `warm_processor_worker` job is accepted;
-- no reduced cross-job model-load latency is claimed.
+The external worker never decides Synology Photos entity identity, findings state or final writes.
 
 ## Byte inputs
 
-`detect_and_embed_bytes()` remains local because the current external input mode is
-`shared_path`.
+Byte-only processor inputs remain local while the external worker contract is `shared_path` based.
 
-Supporting embedded previews remotely requires an explicit new transport contract,
-such as staged shared assets or bounded byte upload. It must not be smuggled through
-path fields.
+Remote byte or embedded-preview processing requires a separate bounded transport contract, for example staged shared assets or explicit byte upload. Path fields must not be overloaded for this purpose.
 
-## Platform status
+## Platform validation
 
-Windows single-image shared-path execution is validated against the NAS.
+Windows single-image and batch shared-path execution are considered validated through development use against the NAS.
 
-The architecture and transport format remain platform-neutral. Linux and Docker must
-validate:
+The following platform validations remain open:
+
+### Linux
+
+Validate at minimum:
 
 - path-base mapping
 - HEIC/HEIF decoding
-- processor/model discovery
+- processor and model discovery
 - batch path materialization
 - result reporting
 
-No Linux- or Docker-specific branch belongs in DSM business workflows.
+### Docker
 
-## Before central pipeline: completion criteria
+Validate at minimum:
 
-The pre-pipeline worker integration is complete when:
+- path-base mapping and mounted shared storage
+- HEIC/HEIF decoding
+- processor and model discovery
+- batch path materialization
+- result reporting
+- container runtime/startup behavior
 
-- all six face processor contracts above are dispatched and consumed centrally;
-- recognition uses the existing batch call path when a compatible worker supports it;
-- Windows single and batch execution are validated;
-- local fallback remains valid when no compatible worker exists;
-- worker/runtime warm-state claims are truthful;
-- tests cover single, batch, vector, path-validation and result-consumption behavior;
-- concepts and coverage documentation match the actual implementation.
+Linux- or Docker-specific behavior belongs in worker runtime/path adapters and packaging, not in DSM domain workflows.
 
-After these conditions, further throughput work should be implemented as a central
-pipeline service rather than by adding workflow-specific concurrency.
+## Completion boundary
+
+From the architectural perspective, the pre-pipeline worker model is complete when the shared processor boundary, target-selection rules, path contract, result normalization/idempotency and package-worker compatibility rules remain preserved.
+
+Linux and Docker platform validation remain explicitly open tasks and do not justify workflow-specific deviations from this architecture.
+
+Further throughput orchestration belongs in a central pipeline service rather than in individual domain workflows.
