@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -10,11 +9,11 @@ sys.path.insert(0, str(PROJECT_DIR / "src"))
 
 from services.config_service import ConfigService
 from services.worker_api_service import WorkerApiError, WorkerApiService
+from services.worker_runtime_service import WorkerRuntimePathService
 
 
 def default_package_var() -> Path:
-    configured = os.getenv("SYNOPKG_PKGVAR", "").strip()
-    return Path(configured) if configured else PROJECT_DIR
+    return WorkerRuntimePathService.resolve_package_var(fallback=PROJECT_DIR)
 
 
 def print_json(payload):
@@ -36,7 +35,10 @@ def build_config_service(args):
 
 
 def resolve_database_path(args, config_service=None):
-    return (Path(args.package_var) / "imgdata.sqlite3").resolve()
+    return WorkerRuntimePathService(
+        package_var=Path(args.package_var),
+        config_service=config_service,
+    ).database_path()
 
 
 def build_service(args):

@@ -80,11 +80,20 @@ class WorkerProtocol:
 class WorkerRuntimePathService:
     """Resolve the package-local SQLite runtime database path."""
 
+    DEFAULT_PACKAGE_VAR = Path("/var/packages/AV_ImgData/var")
+
     def __init__(self, *, package_var: Optional[Path] = None, config_service: Optional[Any] = None):
-        self.package_var = Path(
-            package_var if package_var is not None else os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")
-        ).resolve()
+        self.package_var = self.resolve_package_var(package_var)
         self.config_service = config_service
+
+    @classmethod
+    def resolve_package_var(cls, package_var: Optional[Path] = None, *, fallback: Optional[Path] = None) -> Path:
+        if package_var is not None:
+            return Path(package_var).resolve()
+        configured = str(os.getenv("SYNOPKG_PKGVAR") or "").strip()
+        if configured:
+            return Path(configured).resolve()
+        return Path(fallback if fallback is not None else cls.DEFAULT_PACKAGE_VAR).resolve()
 
     def database_path(self) -> Path:
         return (self.package_var / "imgdata.sqlite3").resolve()

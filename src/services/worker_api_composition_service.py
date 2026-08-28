@@ -21,11 +21,10 @@ class WorkerApiConfigurationService:
     """Read Worker API runtime configuration through one precedence contract."""
 
     def __init__(self, *, package_var: Optional[Path] = None, config_service: Optional[ConfigService] = None):
-        self.package_var = Path(
-            package_var if package_var is not None else os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")
-        ).resolve()
+        self.paths = WorkerRuntimePathService(package_var=package_var, config_service=config_service)
+        self.package_var = self.paths.package_var
         self.config_service = config_service or ConfigService(str(self.package_var / "config.json"))
-        self.paths = WorkerRuntimePathService(package_var=self.package_var, config_service=self.config_service)
+        self.paths.config_service = self.config_service
 
     def worker_api_config(self) -> Dict[str, Any]:
         try:

@@ -43,6 +43,13 @@ def test_worker_http_and_admin_routes_use_one_composition_root():
     assert "WorkerApiCompositionService" in worker_api
     assert "WorkerApiCompositionService" in admin_api
     assert "WorkerApiCompositionService" in local_router
+    assert "WorkerRuntimePathService" in worker_api
+    assert "WorkerRuntimePathService" in admin_api
+    assert "WorkerRuntimePathService" in local_router
+    assert "def _package_var" not in worker_api
+    assert "def _package_var" not in admin_api
+    assert 'os.getenv("SYNOPKG_PKGVAR"' not in worker_api
+    assert 'os.getenv("SYNOPKG_PKGVAR"' not in admin_api
     assert "WorkerApiService(" not in worker_api
     assert "WorkerProvisioningService(" not in worker_api
     assert "json.load" not in admin_api
@@ -63,13 +70,22 @@ def test_worker_http_error_mapping_is_defined_once():
 
 def test_worker_cli_uses_canonical_paths_and_store_permissions():
     cli = _read("tools/worker-api-store.py")
+    enrollment_cli = _read("tools/create-worker-enrollment.py")
 
-    assert "imgdata.sqlite3" in cli
+    assert "WorkerRuntimePathService" in cli
+    assert "resolve_package_var" in cli
+    assert ".database_path()" in cli
+    assert "imgdata.sqlite3" not in cli
     assert "worker-api-state.json" not in cli
     assert "repair_runtime_file_permissions" not in cli
     assert "os.chown" not in cli
     assert "os.chmod" not in cli
     assert "DSM_PACKAGE_VAR" not in cli
+    assert 'os.getenv("SYNOPKG_PKGVAR"' not in cli
+
+    assert "WorkerRuntimePathService" in enrollment_cli
+    assert "resolve_package_var" in enrollment_cli
+    assert 'os.getenv("SYNOPKG_PKGVAR"' not in enrollment_cli
 
 
 def test_worker_protocol_is_generated_from_one_descriptor():

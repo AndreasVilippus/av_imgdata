@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Optional FastAPI router for external AV ImgData workers."""
 
-import os
 import sys
 import asyncio
 from functools import lru_cache
@@ -16,15 +15,11 @@ from services.worker_api_composition_service import (
     worker_error_http_status,
 )
 from services.worker_api_endpoints import handle_worker_api_request
-from services.worker_runtime_service import WorkerApiError
+from services.worker_runtime_service import WorkerApiError, WorkerRuntimePathService
 
 
 router = APIRouter(prefix="/worker-api")
 _POST_ACTIONS = {"register", "heartbeat", "claim", "result", "fail"}
-
-
-def _package_var() -> Path:
-    return Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")).resolve()
 
 
 @lru_cache(maxsize=4)
@@ -33,7 +28,7 @@ def _composition_for(package_var: str) -> WorkerApiCompositionService:
 
 
 def _composition() -> WorkerApiCompositionService:
-    return _composition_for(str(_package_var()))
+    return _composition_for(str(WorkerRuntimePathService.resolve_package_var()))
 
 
 async def _json_body(request: Request) -> Dict[str, Any]:

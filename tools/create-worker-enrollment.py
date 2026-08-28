@@ -3,7 +3,6 @@
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -11,11 +10,12 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR / "src"))
 
 from services.worker_api_composition_service import WorkerApiCompositionService
+from services.worker_runtime_service import WorkerRuntimePathService
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--package-var", default=os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var"))
+    parser.add_argument("--package-var", default=str(WorkerRuntimePathService.resolve_package_var()))
     parser.add_argument("--enrollment-id", required=True)
     parser.add_argument("--expires-minutes", type=int, default=15)
     args = parser.parse_args()

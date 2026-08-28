@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """DSM-authenticated administration endpoints for external worker enrollment."""
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -9,18 +8,14 @@ from fastapi import APIRouter, Request
 
 from api.imgdata_api import _prepare_session_request, _read_request_body
 from services.worker_api_composition_service import WorkerApiCompositionService
-from services.worker_runtime_service import WorkerApiError
+from services.worker_runtime_service import WorkerApiError, WorkerRuntimePathService
 
 
 router = APIRouter(prefix="/api")
 
 
-def _package_var() -> Path:
-    return Path(os.getenv("SYNOPKG_PKGVAR", "/var/packages/AV_ImgData/var")).resolve()
-
-
 def _composition(package_var: Optional[Path] = None) -> WorkerApiCompositionService:
-    return WorkerApiCompositionService(package_var=package_var or _package_var())
+    return WorkerApiCompositionService(package_var=package_var or WorkerRuntimePathService.resolve_package_var())
 
 
 def _services(package_var: Optional[Path] = None):

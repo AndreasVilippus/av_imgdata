@@ -17,7 +17,7 @@ if str(SRC_DIR) not in sys.path:
 
 from services.worker_api_composition_service import WorkerApiCompositionService, worker_error_http_status  # noqa: E402
 from services.worker_api_endpoints import handle_worker_api_request  # noqa: E402
-from services.worker_runtime_service import WorkerApiError  # noqa: E402
+from services.worker_runtime_service import WorkerApiError, WorkerRuntimePathService  # noqa: E402
 
 
 ROUTE_PREFIX = "/worker-api"
@@ -138,7 +138,7 @@ def main() -> int:
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
-    package_var = Path(args.package_var).resolve()
+    package_var = WorkerRuntimePathService.resolve_package_var(Path(args.package_var))
     server = WorkerApiHttpServer((args.host, args.port), package_var, args.quiet)
     print(json.dumps({
         "status": "listening",
