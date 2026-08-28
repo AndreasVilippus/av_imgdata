@@ -15,6 +15,8 @@ cleanup_native_build_artifacts() {
 	native_root="$(native_build_root)"
 	rm -rf \
 		"$native_root/deps/source-cache" \
+		"$native_root/face_processor-build" \
+		"$native_root/face_processor-install" \
 		"$native_root/libde265-build" \
 		"$native_root/libde265-source" \
 		"$native_root/libheif-build" \
@@ -146,6 +148,10 @@ package_external_worker_archives() {
 				echo "ERROR: Windows external worker binary missing: $source_dir/bin/av-imgdata-worker.exe"
 				exit 1
 			fi
+			if [ ! -f "$source_dir/bin/av-imgdata-face-processor.exe" ]; then
+				echo "ERROR: Windows external worker face processor missing: $source_dir/bin/av-imgdata-face-processor.exe"
+				exit 1
+			fi
 			if ! command -v zip >/dev/null 2>&1; then
 				echo "ERROR: zip command missing; required to package Windows external worker archive."
 				exit 1
@@ -155,6 +161,10 @@ package_external_worker_archives() {
 		else
 			if [ ! -x "$source_dir/bin/av-imgdata-worker" ]; then
 				echo "ERROR: external worker binary missing or not executable: $source_dir/bin/av-imgdata-worker"
+				exit 1
+			fi
+			if [ ! -x "$source_dir/bin/av-imgdata-face-processor" ]; then
+				echo "ERROR: external worker face processor missing or not executable: $source_dir/bin/av-imgdata-face-processor"
 				exit 1
 			fi
 		fi

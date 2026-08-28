@@ -13,6 +13,7 @@ PACKAGE_NAME="av_imgdata"
 DEFAULT_ARGS=(-v 7.3 -p geminilake -c)
 BUILD_EXTERNAL_WORKERS="${AV_IMGDATA_BUILD_EXTERNAL_WORKERS:-1}"
 EXTERNAL_WORKER_TARGETS="${AV_IMGDATA_WORKER_TARGETS:-linux-x86_64 docker-linux-x86_64 windows-x86_64}"
+BUILD_LINUX_FACE_PROCESSOR="${AV_IMGDATA_BUILD_LINUX_FACE_PROCESSOR:-1}"
 BUILD_WINDOWS_FACE_PROCESSOR="${AV_IMGDATA_BUILD_WINDOWS_FACE_PROCESSOR:-1}"
 WORKER_CLEAN="${AV_IMGDATA_WORKER_CLEAN:-1}"
 
@@ -191,12 +192,21 @@ cleanup_existing_toolkit_link_target() {
 
   error_log="$(mktemp)"
   if ! rm -rf "${target}" 2>"${error_log}"; then
+    if command -v sudo >/dev/null 2>&1 && { sudo -n true >/dev/null 2>&1 || [[ -t 0 ]]; }; then
+      log "Removing Toolkit link target with sudo because it contains files owned by another user: ${target}"
+      if sudo rm -rf "${target}" 2>"${error_log}"; then
+        rm -f "${error_log}"
+        return 0
+      fi
+    fi
     local error_text
     error_text="$(sed -n '1,40p' "${error_log}")"
     rm -f "${error_log}"
     fail "Existing Toolkit link target cannot be removed: ${target}
 This usually means the previous build left files owned by another user in the chroot source tree.
 Fix ownership or remove the target outside this script, then rerun the package build.
+Suggested cleanup:
+sudo rm -rf '${target}'
 First rm errors:
 ${error_text}"
   fi
@@ -210,6 +220,10 @@ target_list_contains() {
     [[ "${target}" == "${wanted}" ]] && return 0
   done
   return 1
+}
+
+target_list_contains_linux_face_worker() {
+  target_list_contains linux-x86_64 || target_list_contains docker-linux-x86_64
 }
 
 worker_clean_args() {
@@ -239,6 +253,40 @@ ensure_linux_native_deps() {
 
   log "Preparing Linux native worker dependencies"
   bash tools/fetch-worker-native-deps.sh --target linux-x86_64 --no-update-check
+}
+
+build_linux_face_processor_for_worker_bundle() {
+  local clean_args=("$@")
+
+  [[ "${BUILD_LINUX_FACE_PROCESSOR}" != "0" ]] || {
+    log "Skipping Linux native face processor build because AV_IMGDATA_BUILD_LINUX_FACE_PROCESSOR=0"
+    return 0
+  }
+
+  ensure_linux_native_deps
+  log "Building Linux native face processor for external worker bundle"
+  bash tools/build-native-face-processor-linux.sh "${clean_args[@]}" --no-fetch-deps --no-update-check
+}
+
+worker_face_processor_path() {
+  local target="$1"
+  local dist_dir="${PACKAGE_ROOT}/dist/av-imgdata-worker-${target}"
+  local binary_name="av-imgdata-face-processor"
+
+  if [[ "${target}" == "windows-x86_64" ]]; then
+    dist_dir="${PACKAGE_ROOT}/dist/av-imgdata-worker-windows-x86_64.package"
+    binary_name="av-imgdata-face-processor.exe"
+  fi
+
+  printf '%s\n' "${dist_dir}/bin/${binary_name}"
+}
+
+assert_worker_face_processor_bundled() {
+  local target="$1"
+  local binary
+
+  binary="$(worker_face_processor_path "${target}")"
+  [[ -x "${binary}" ]] || fail "External worker bundle is incomplete: missing executable face processor for ${target}: ${binary}"
 }
 
 find_existing_linux_worker_vips_artifact_root() {
@@ -377,6 +425,10 @@ build_external_worker_bundles() {
   mapfile -t clean_args < <(worker_clean_args)
   prepare_generated_worker_paths
 
+  if target_list_contains_linux_face_worker; then
+    build_linux_face_processor_for_worker_bundle "${clean_args[@]}"
+  fi
+
   if target_list_contains windows-x86_64 && [[ "${BUILD_WINDOWS_FACE_PROCESSOR}" != "0" ]]; then
     ensure_windows_native_deps
     log "Building Windows native face processor for external worker bundle"
@@ -396,6 +448,7 @@ build_external_worker_bundles() {
     else
       bash tools/build-worker.sh --target "${target}" "${clean_args[@]}"
     fi
+    assert_worker_face_processor_bundled "${target}"
   done
 
   log "External worker bundles built: ${EXTERNAL_WORKER_TARGETS}"
@@ -421,6 +474,8 @@ External worker bundles are built by default before the Synology package build:
 Environment overrides:
   AV_IMGDATA_BUILD_EXTERNAL_WORKERS=0   Skip external worker bundle builds
   AV_IMGDATA_WORKER_TARGETS="..."       Worker targets to build
+  AV_IMGDATA_BUILD_LINUX_FACE_PROCESSOR=0
+                                      Skip Linux face processor build
   AV_IMGDATA_BUILD_WINDOWS_FACE_PROCESSOR=0
                                       Skip Windows face processor build
   AV_IMGDATA_BUILD_WORKER_VIPS=0      Skip rebuilding worker libvips image processor and use existing artifacts only

@@ -154,8 +154,8 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "cleanup_native_build_artifacts" in install_script
     assert "INSTALL_SUCCEEDED=0" in install_script
     assert "Preserving native build artifacts after failed install for diagnostics." in install_script
-    assert '"$native_root/face_processor-build"' not in install_script
-    assert '"$native_root/face_processor-install"' not in install_script
+    assert '"$native_root/face_processor-build"' in install_script
+    assert '"$native_root/face_processor-install"' in install_script
     assert '"$native_root/deps/source-cache"' in install_script
     assert '"$native_root/libde265-build"' in install_script
     assert '"$native_root/libde265-source"' in install_script
@@ -330,13 +330,17 @@ def test_synology_install_requires_native_face_processor_libraries():
     assert "ensure_native_face_processor || return 1" in install_script
     assert "create_install || return 1" in install_script
     assert "./INFO.sh > INFO" in install_script
+    assert "native face processor missing" in install_script
     assert "onnxruntime-native" in install_script
     assert "libonnxruntime.so" in install_script
     assert "libjpeg.so" in install_script
     assert "libheif.so" not in install_script
+    assert 'cp -av --no-preserve=ownership "$NATIVE_INSTALL/bin/av-imgdata-face-processor" "$package_tgz_dir/bin/"' in install_script
     assert 'cp -av "$NATIVE_INSTALL/lib/."' not in install_script
     assert "find \"$NATIVE_INSTALL/lib\" -maxdepth 1" in install_script
     assert "$NATIVE_INSTALL/share/licenses" in install_script
+    assert "Windows external worker face processor missing" in install_script
+    assert "external worker face processor missing or not executable" in install_script
 
 
 def test_synology_install_can_build_missing_vips_processor_before_staging():
@@ -454,8 +458,19 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert "ensure_windows_native_deps" in build_package
     assert "linux_native_deps_ready" in build_package
     assert "ensure_linux_native_deps" in build_package
+    assert "BUILD_LINUX_FACE_PROCESSOR" in build_package
+    assert "AV_IMGDATA_BUILD_LINUX_FACE_PROCESSOR:-1" in build_package
+    assert "target_list_contains_linux_face_worker" in build_package
+    assert "build_linux_face_processor_for_worker_bundle" in build_package
+    assert "tools/build-native-face-processor-linux.sh" in build_package
+    assert "--no-fetch-deps --no-update-check" in build_package
+    assert "worker_face_processor_path" in build_package
+    assert "assert_worker_face_processor_bundled" in build_package
+    assert "External worker bundle is incomplete: missing executable face processor" in build_package
     assert "tools/fetch-worker-native-deps.sh --target linux-x86_64 --no-update-check" in build_package
     assert "ensure_linux_native_deps" in build_package.split("build_external_worker_bundles", 1)[0]
+    assert "build_linux_face_processor_for_worker_bundle" in build_package.split('log "Building Windows native face processor for external worker bundle"', 1)[0]
+    assert "assert_worker_face_processor_bundled" in build_package.split('log "External worker bundles built: ${EXTERNAL_WORKER_TARGETS}"', 1)[0]
     assert "run_pkgcreate" in build_package
     assert "assert_pkgcreate_log_has_no_critical_errors" in build_package
     assert "PkgCreate.py returned success" in build_package
@@ -483,6 +498,9 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert "PYTHONDONTWRITEBYTECODE=1" in build_package
     assert 'target="${WORKSPACE_ROOT}/build_env/ds.${platform}-${version}/source/${PACKAGE_NAME}"' in build_package
     assert '[[ -e "${target}" ]] || return 0' in build_package
+    assert "Removing Toolkit link target with sudo because it contains files owned by another user" in build_package
+    assert "sudo rm -rf \"${target}\"" in build_package
+    assert "Suggested cleanup:" in build_package
     assert "Existing Toolkit link target cannot be removed" in build_package
     assert '"build/native/*/face_processor-build"' in build_package
     assert '"build/native/*/face_processor-install"' not in build_package
