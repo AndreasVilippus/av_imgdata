@@ -15,6 +15,19 @@ def test_external_worker_ui_formats_utc_times_and_deletes_workers():
     assert "formatLocalTime(worker.last_seen_at)" in source
     assert "external_worker_delete" in source
     assert "window.confirm" in source
+    assert "STATE_PATH" not in source
+
+
+def test_configuration_ui_exposes_worker_pipeline_settings():
+    source = (ROOT / "ui" / "src" / "views" / "ConfigurationView.vue").read_text(encoding="utf-8")
+    cleanup = (ROOT / "ui" / "src" / "mixins" / "cleanupMixin.js").read_text(encoding="utf-8")
+
+    assert "config:section_worker_pipeline" in source
+    assert "configModel.worker_api.ENABLED" in source
+    assert "RECOGNITION_BATCH_SIZE" in source
+    assert "RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES" in source
+    assert "recognition_batch_size = Math.max" in cleanup
+    assert "external_worker_prefetch_batches = Boolean" in cleanup
 
 
 def test_windows_initializer_never_silently_ignores_enrollment_code():

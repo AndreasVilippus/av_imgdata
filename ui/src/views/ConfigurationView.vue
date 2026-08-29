@@ -241,6 +241,34 @@
 						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON" type="number" min="0" step="1" class="config-input" :disabled="saving" />
 					</label>
 
+					<label class="config-field">
+						<span class="config-field-label">{{ $avt('config:label_recognition_batch_size', 'Recognition worker batch size') }}</span>
+						<input v-model.number="configModel.analysis.CHECKS.RECOGNITION_BATCH_SIZE" type="number" min="1" max="64" step="1" class="config-input" :disabled="saving" />
+						<span class="config-card-desc">
+							{{ $avt('config:hint_recognition_batch_size', 'Number of images grouped into one native or external worker recognition batch.') }}
+						</span>
+					</label>
+
+					<label class="config-checkbox">
+						<input v-model="configModel.analysis.CHECKS.RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES" type="checkbox" :disabled="saving" />
+						<span>{{ $avt('config:label_recognition_external_worker_prefetch_batches', 'Prefetch the next recognition batch with external workers') }}</span>
+					</label>
+
+				</div>
+			</section>
+
+			<section class="config-card">
+				<div class="sm-section-title">{{ $avt('config:section_worker_pipeline', 'Worker pipeline') }}</div>
+				<div class="config-card-desc">{{ $avt('config:section_worker_pipeline_desc', 'Enable external worker dispatch for supported face-recognition operations. Worker registration and downloads stay in the External worker view.') }}</div>
+
+				<div class="config-form-grid">
+					<label class="config-checkbox">
+						<input v-model="configModel.worker_api.ENABLED" type="checkbox" :disabled="saving" />
+						<span>{{ $avt('external_worker:label_api_enabled', 'Enable Worker API') }}</span>
+					</label>
+					<div class="config-card-desc">
+						{{ $avt('external_worker:api_restart_hint', 'Changes to the Worker API activation require a package restart before the /worker-api route changes state.') }}
+					</div>
 				</div>
 			</section>
 
@@ -467,6 +495,8 @@ export default {
 						RECOGNITION_DET_THRESH: 0.5,
 						RECOGNITION_MIN_FACES_PER_PERSON: 3,
 						RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON: 50,
+						RECOGNITION_BATCH_SIZE: 8,
+						RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES: true,
 						SINGLE_SOURCE_OF_TRUTH: '',
 					},
 				},
@@ -487,6 +517,9 @@ export default {
 				face_match: {
 					FILE_MATCH_SOURCE_SCOPE: 'both',
 					PERSON_SORT_ORDER: 'id_desc',
+				},
+				worker_api: {
+					ENABLED: false,
 				},
 				debug: {
 					IO_METRICS_ENABLED: false,
@@ -525,6 +558,24 @@ export default {
 				.map((entry) => String(entry || '').trim())
 				.filter((entry, index, arr) => entry && allowed.includes(entry) && arr.indexOf(entry) === index);
 			return normalized.length ? normalized : [...fallback];
+		},
+		normalizeBoolean(value, fallback = false) {
+			if (typeof value === 'boolean') {
+				return value;
+			}
+			if (typeof value === 'number') {
+				return value !== 0;
+			}
+			if (typeof value === 'string') {
+				const normalized = value.trim().toLowerCase();
+				if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+					return true;
+				}
+				if (['0', 'false', 'no', 'off'].includes(normalized)) {
+					return false;
+				}
+			}
+			return Boolean(fallback);
 		},
 		normalizeChecksIgnoreListsStatus(value) {
 			const source = (value && typeof value === 'object' && !Array.isArray(value))
@@ -609,6 +660,7 @@ export default {
 			const reviewIgnoreLists = (review.CHECKS_IGNORE_LISTS && typeof review.CHECKS_IGNORE_LISTS === 'object' && !Array.isArray(review.CHECKS_IGNORE_LISTS)) ? review.CHECKS_IGNORE_LISTS : {};
 			const photos = (root.photos && typeof root.photos === 'object' && !Array.isArray(root.photos)) ? root.photos : {};
 			const faceMatch = (root.face_match && typeof root.face_match === 'object' && !Array.isArray(root.face_match)) ? root.face_match : {};
+			const workerApi = (root.worker_api && typeof root.worker_api === 'object' && !Array.isArray(root.worker_api)) ? root.worker_api : {};
 			const debug = (root.debug && typeof root.debug === 'object' && !Array.isArray(root.debug)) ? root.debug : {};
 
 			const imageExtensions = this.normalizeImageExtensions(files.IMAGE_EXTENSIONS, defaults.files.IMAGE_EXTENSIONS);
@@ -676,6 +728,11 @@ export default {
 						RECOGNITION_DET_THRESH: this.clampNumber(checks.RECOGNITION_DET_THRESH, 0, 1, defaults.analysis.CHECKS.RECOGNITION_DET_THRESH),
 						RECOGNITION_MIN_FACES_PER_PERSON: Math.max(2, Math.round(this.clampNumber(checks.RECOGNITION_MIN_FACES_PER_PERSON, 2, 1000, defaults.analysis.CHECKS.RECOGNITION_MIN_FACES_PER_PERSON))),
 						RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON: Math.max(0, Math.round(this.clampNumber(checks.RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON, 0, 10000, defaults.analysis.CHECKS.RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON))),
+						RECOGNITION_BATCH_SIZE: Math.max(1, Math.round(this.clampNumber(checks.RECOGNITION_BATCH_SIZE, 1, 64, defaults.analysis.CHECKS.RECOGNITION_BATCH_SIZE))),
+						RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES: this.normalizeBoolean(
+							checks.RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES,
+							defaults.analysis.CHECKS.RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES
+						),
 						SINGLE_SOURCE_OF_TRUTH: this.normalizeChecksSingleSourceOfTruth(
 							checks.SINGLE_SOURCE_OF_TRUTH,
 							defaults.analysis.CHECKS.SINGLE_SOURCE_OF_TRUTH
@@ -721,6 +778,10 @@ export default {
 					PERSON_SORT_ORDER: ['id_desc', 'id_asc', 'none'].includes(String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase())
 						? String(faceMatch.PERSON_SORT_ORDER || '').trim().toLowerCase()
 						: defaults.face_match.PERSON_SORT_ORDER,
+				},
+				worker_api: {
+					...workerApi,
+					ENABLED: this.normalizeBoolean(workerApi.ENABLED, defaults.worker_api.ENABLED),
 				},
 				debug: {
 					...debug,

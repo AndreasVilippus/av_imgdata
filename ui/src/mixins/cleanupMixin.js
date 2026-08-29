@@ -55,6 +55,8 @@ export default {
 				max_num: 0,
 				min_width_ratio: 0.015,
 				min_height_ratio: 0.015,
+				recognition_batch_size: 8,
+				external_worker_prefetch_batches: true,
 			},
 			recognitionOptionOverrides: {},
 			recognitionConfigDefaultsLoading: false,
@@ -313,12 +315,17 @@ export default {
 				const nextOptions = {};
 				const minFaces = Number(checks.RECOGNITION_MIN_FACES_PER_PERSON);
 				const maxReferences = Number(checks.RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON);
+				const batchSize = Number(checks.RECOGNITION_BATCH_SIZE);
 				if (!this.recognitionOptionOverrides.min_faces_per_person && Number.isFinite(minFaces)) {
 					nextOptions.min_faces_per_person = Math.max(2, Math.round(minFaces));
 				}
 				if (!this.recognitionOptionOverrides.max_profile_reference_faces_per_person && Number.isFinite(maxReferences)) {
 					nextOptions.max_profile_reference_faces_per_person = Math.max(0, Math.round(maxReferences));
 				}
+				if (Number.isFinite(batchSize)) {
+					nextOptions.recognition_batch_size = Math.max(1, Math.min(64, Math.round(batchSize)));
+				}
+				nextOptions.external_worker_prefetch_batches = Boolean(checks.RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES ?? true);
 				if (Object.keys(nextOptions).length) {
 					this.recognitionOptions = {
 						...this.recognitionOptions,

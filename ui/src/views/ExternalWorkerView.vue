@@ -21,11 +21,6 @@
 				<div class="config-card-desc">{{ $avt('external_worker:api_restart_hint', 'Changes to the Worker API activation require a package restart before the /worker-api route changes state.') }}</div>
 				<div class="config-form-grid">
 					<label class="config-checkbox"><input v-model="workerApi.ENABLED" type="checkbox" :disabled="saving" /><span>{{ $avt('external_worker:label_api_enabled', 'Enable Worker API') }}</span></label>
-					<label class="config-field">
-						<span class="config-field-label">{{ $avt('external_worker:label_state_path', 'Worker API state path') }}</span>
-						<input v-model="workerApi.STATE_PATH" type="text" class="config-text-input" :disabled="saving" :placeholder="$avt('external_worker:placeholder_state_path', 'Empty = package var/worker-api-state.json')" />
-						<span class="config-card-desc">{{ $avt('external_worker:hint_state_path', 'Optional override for the Worker API state file. Relative paths are resolved against the package var directory.') }}</span>
-					</label>
 				</div>
 			</section>
 
@@ -115,14 +110,14 @@ export default {
 	mounted() { this.loadAll(); },
 	methods: {
 		createDefaultConfig() { return { worker_api: this.createDefaultWorkerApiConfig() }; },
-		createDefaultWorkerApiConfig() { return { ENABLED: false, STATE_PATH: '' }; },
+		createDefaultWorkerApiConfig() { return { ENABLED: false }; },
 		createDefaultPackageStatus() { return { package_root: '', workers_root: '', workers_root_exists: false, archive_formats_checked: [], bundles: [], download_ready: false, build_process_requires_archives: false }; },
 		formatLocalTime(value) { if (!value) return '-'; const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString(); },
 		readCookie(name) { const escapedName = String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); const match = document.cookie.match(new RegExp('(?:^|; )' + escapedName + '=([^;]*)')); return match ? decodeURIComponent(match[1]) : ''; },
 		getSynoToken() { return (SYNO && SYNO.SDS && SYNO.SDS.Session && SYNO.SDS.Session.SynoToken) || ''; },
 		collectDsmCookies() { return { _SSID: this.readCookie('_SSID'), id: this.readCookie('id'), did: this.readCookie('did') }; },
 		async callApi(apiPath, body = {}) { const resp = await fetch(apiPath, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-SYNO-TOKEN': this.getSynoToken() }, body: JSON.stringify({ ...body, cookies: this.collectDsmCookies(), synoToken: this.getSynoToken() }) }); const data = await resp.json().catch(() => ({})); if (!resp.ok || data.success === false) { const backendError = data.error || `HTTP ${resp.status}`; throw new Error(typeof backendError === 'string' ? backendError : JSON.stringify(backendError)); } return data; },
-		normalizeWorkerApi(input) { const workerApi = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {}; return { ENABLED: Boolean(workerApi.ENABLED), STATE_PATH: String(workerApi.STATE_PATH || '').trim() }; },
+		normalizeWorkerApi(input) { const workerApi = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {}; return { ENABLED: Boolean(workerApi.ENABLED) }; },
 		normalizePackageStatus(input) { const status = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {}; return { ...this.createDefaultPackageStatus(), ...status, archive_formats_checked: Array.isArray(status.archive_formats_checked) ? status.archive_formats_checked : [], bundles: Array.isArray(status.bundles) ? status.bundles : [], download_ready: Boolean(status.download_ready), build_process_requires_archives: Boolean(status.build_process_requires_archives) }; },
 		statusLabel(bundle) { if (bundle.download_ready) return this.$avt('external_worker:status_archive_ready', 'Archive ready'); if (bundle.bundle_exists) return this.$avt('external_worker:status_archive_missing', 'Archive missing'); return this.$avt('external_worker:status_bundle_missing', 'Bundle missing'); },
 		binaryStatusLabel(bundle) { if (!bundle.binary_exists) return this.$avt('external_worker:status_missing', 'missing'); if (bundle.binary_location === 'archive') return this.$avt('external_worker:status_present_in_archive', 'present in archive'); return this.$avt('external_worker:status_present', 'present'); },

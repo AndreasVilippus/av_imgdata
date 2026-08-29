@@ -89,6 +89,14 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
 
         self.assertFalse(face_processor["INSIGHTFACE_LICENSE_ACKNOWLEDGED"])
 
+    def test_worker_api_enabled_rejects_false_string(self):
+        service = ConfigService(str(self.config_file))
+        service.writeConfig({"worker_api": {"ENABLED": "false"}})
+
+        worker_api = service.readMergedConfig()["worker_api"]
+
+        self.assertFalse(worker_api["ENABLED"])
+
     def test_optional_vips_image_processor_config_defaults_and_normalization(self):
         service = ConfigService(str(self.config_file))
         default_config = service.readMergedConfig()
@@ -129,30 +137,40 @@ class TestConfigServiceMtimeCache(unittest.TestCase):
         defaults = service.readMergedConfig()["analysis"]["CHECKS"]
         self.assertEqual(defaults["RECOGNITION_MIN_FACES_PER_PERSON"], 3)
         self.assertEqual(defaults["RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"], 50)
+        self.assertEqual(defaults["RECOGNITION_BATCH_SIZE"], 8)
+        self.assertTrue(defaults["RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES"])
 
         service.writeConfig({
             "analysis": {
                 "CHECKS": {
                     "RECOGNITION_MIN_FACES_PER_PERSON": 1,
                     "RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON": -1,
+                    "RECOGNITION_BATCH_SIZE": 999,
+                    "RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES": 0,
                 },
             },
         })
         checks = service.readMergedConfig()["analysis"]["CHECKS"]
         self.assertEqual(checks["RECOGNITION_MIN_FACES_PER_PERSON"], 2)
         self.assertEqual(checks["RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"], 0)
+        self.assertEqual(checks["RECOGNITION_BATCH_SIZE"], 64)
+        self.assertFalse(checks["RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES"])
 
         service.writeConfig({
             "analysis": {
                 "CHECKS": {
                     "RECOGNITION_MIN_FACES_PER_PERSON": 7,
                     "RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON": 123,
+                    "RECOGNITION_BATCH_SIZE": 4,
+                    "RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES": True,
                 },
             },
         })
         checks = service.readMergedConfig()["analysis"]["CHECKS"]
         self.assertEqual(checks["RECOGNITION_MIN_FACES_PER_PERSON"], 7)
         self.assertEqual(checks["RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON"], 123)
+        self.assertEqual(checks["RECOGNITION_BATCH_SIZE"], 4)
+        self.assertTrue(checks["RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES"])
 
     def test_readMergedConfig_detects_file_change(self):
         """

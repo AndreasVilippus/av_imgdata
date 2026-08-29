@@ -137,6 +137,8 @@ class ConfigService:
                     "RECOGNITION_DET_THRESH": 0.5,
                     "RECOGNITION_MIN_FACES_PER_PERSON": 3,
                     "RECOGNITION_MAX_PROFILE_REFERENCE_FACES_PER_PERSON": 50,
+                    "RECOGNITION_BATCH_SIZE": 8,
+                    "RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES": True,
                     "SINGLE_SOURCE_OF_TRUTH": "",
                 },
             },
@@ -351,7 +353,7 @@ class ConfigService:
         config["native_processors"] = native_processors
 
         worker_api = config.get("worker_api", {}) if isinstance(config.get("worker_api"), dict) else {}
-        worker_api["ENABLED"] = bool(worker_api.get("ENABLED", False))
+        worker_api["ENABLED"] = cls._normalize_bool(worker_api.get("ENABLED"), default=False)
         config["worker_api"] = worker_api
 
         debug = config.get("debug", {}) if isinstance(config.get("debug"), dict) else {}
@@ -409,6 +411,16 @@ class ConfigService:
                 default=50,
                 minimum=0,
                 maximum=10000,
+            )
+            checks["RECOGNITION_BATCH_SIZE"] = cls._clamp_int(
+                checks.get("RECOGNITION_BATCH_SIZE"),
+                default=8,
+                minimum=1,
+                maximum=64,
+            )
+            checks["RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES"] = cls._normalize_bool(
+                checks.get("RECOGNITION_EXTERNAL_WORKER_PREFETCH_BATCHES"),
+                default=True,
             )
 
     @staticmethod
