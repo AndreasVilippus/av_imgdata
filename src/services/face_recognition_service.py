@@ -1565,7 +1565,9 @@ class FaceRecognitionService:
         shared_folder = self.backend.core.getSharedFolder(user_key=user_key, cookies=cookies, base_url=base_url, folder_name="photo")
         if not shared_folder:
             raise RuntimeError("shared_folder_not_found")
-        unknown = self.backend.photos.listFotoTeamPersonUnknown(user_key=user_key, cookies=cookies, base_url=base_url, show_more=True, show_hidden=options["include_hidden_persons"])
+        unknown = self.backend.photos.sortPersonsForFaceMatch(
+            self.backend.photos.listFotoTeamPersonUnknown(user_key=user_key, cookies=cookies, base_url=base_url, show_more=True, show_hidden=options["include_hidden_persons"])
+        )
         folder_cache: Dict[int, str] = {}
         previous = self.findings(
             self.ACTION_SUGGEST,

@@ -792,6 +792,68 @@ def test_finished_face_match_progress_result_is_renderable_runtime():
     }
 
 
+def test_insightface_missing_face_recognition_result_is_renderable_without_source_face_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const metadataFace = {
+              name: 'Recognized Person',
+              source: 'insightface',
+              source_format: 'INSIGHTFACE',
+              x: 0.5,
+              y: 0.5,
+              w: 0.2,
+              h: 0.2,
+            };
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_missing_faces_insightface',
+              faceMatchResult: {
+                action: 'search_missing_faces_insightface',
+                searched: true,
+                image_path: '/volume1/photo/missing.jpg',
+                metadata_face: metadataFace,
+                matched_person: { id: 27353, name: 'Recognized Person' },
+                matched_person_id: 27353,
+                recognition_enabled: true,
+                add_new_faces_to_photos: true,
+              },
+            });
+
+            component.syncFaceMatchEditableName();
+
+            assert.strictEqual(component.faceMatchResultSummary.found, true);
+            assert.strictEqual(component.faceMatchResultSummary.name, 'Recognized Person');
+            assert.strictEqual(component.faceMatchResultSummary.photosPersonId, 27353);
+            assert.strictEqual(component.faceMatchActionMode, 'assign');
+            assert.deepStrictEqual(component.getLeftFaceMatchFace(), metadataFace);
+            console.log(JSON.stringify({
+              found: component.faceMatchResultSummary.found,
+              name: component.faceMatchResultSummary.name,
+              photosPersonId: component.faceMatchResultSummary.photosPersonId,
+              actionMode: component.faceMatchActionMode,
+              leftFace: component.getLeftFaceMatchFace(),
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "found": True,
+        "name": "Recognized Person",
+        "photosPersonId": 27353,
+        "actionMode": "assign",
+        "leftFace": {
+            "name": "Recognized Person",
+            "source": "insightface",
+            "source_format": "INSIGHTFACE",
+            "x": 0.5,
+            "y": 0.5,
+            "w": 0.2,
+            "h": 0.2,
+        },
+    }
+
+
 def test_skipped_stored_finding_stays_filtered_after_reload_runtime():
     result = run_node(
         face_match_runtime_script(

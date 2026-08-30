@@ -6,6 +6,10 @@ rm -rf "$PKG_DIR"
 mkdir -p "$PKG_DIR"
 INSTALL_SUCCEEDED=0
 
+if [ "${NOSTRIP:-}" = "NOSTRIP" ]; then
+	export AV_IMGDATA_NATIVE_STRIP="${AV_IMGDATA_NATIVE_STRIP:-0}"
+fi
+
 cleanup_native_build_artifacts() {
 	if [ "$INSTALL_SUCCEEDED" != "1" ]; then
 		echo "Preserving native build artifacts after failed install for diagnostics."
@@ -71,10 +75,14 @@ EOF
 ensure_native_face_processor() {
 	local install_root
 	install_root="$(native_install_root face_processor-install)"
-	if [ -x "$install_root/bin/av-imgdata-face-processor" ]; then
+	if [ "${NOSTRIP:-}" != "NOSTRIP" ] && [ -x "$install_root/bin/av-imgdata-face-processor" ]; then
 		return 0
 	fi
-	echo "Native face processor missing; building before package staging."
+	if [ "${NOSTRIP:-}" = "NOSTRIP" ]; then
+		echo "Debug package requested; rebuilding native face processor without stripping."
+	else
+		echo "Native face processor missing; building before package staging."
+	fi
 	if ! ./tools/build-native-face-processor.sh; then
 		echo "ERROR: native ONNXRuntime face processor build failed."
 		return 1
@@ -177,6 +185,35 @@ package_external_worker_archives() {
 	done
 }
 
+assert_no_duplicate_package_sonames() {
+	local package_tgz_dir="$1"
+	local lib_dir="$package_tgz_dir/lib"
+	local tmp_file
+	local duplicates
+	local source
+	local soname
+
+	[ -d "$lib_dir" ] || return 0
+	if [ -n "$(find "$lib_dir" -maxdepth 1 -type f -name '*.so*' -print -quit 2>/dev/null)" ] && ! command -v readelf >/dev/null 2>&1; then
+		echo "ERROR: readelf is required to verify packaged runtime library SONAMEs." >&2
+		return 1
+	fi
+	tmp_file="$(mktemp /tmp/av-imgdata-package-sonames.XXXXXX)"
+	find "$lib_dir" -maxdepth 1 -type f -name '*.so*' -print0 2>/dev/null | while IFS= read -r -d '' source; do
+		soname="$(readelf -d "$source" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
+		[ -n "$soname" ] || continue
+		printf '%s\t%s\n' "$soname" "$(basename "$source")"
+	done > "$tmp_file"
+	duplicates="$(cut -f1 "$tmp_file" | sort | uniq -d | tr '\n' ' ')"
+	if [ -n "$duplicates" ]; then
+		echo "ERROR: duplicate package runtime library SONAMEs in $lib_dir: $duplicates" >&2
+		sort "$tmp_file" >&2
+		rm -f "$tmp_file"
+		return 1
+	fi
+	rm -f "$tmp_file"
+}
+
 create_install() {
 	local package_tgz_dir=/tmp/_install
 
@@ -241,6 +278,7 @@ create_install() {
 		fi
 	fi
 	python3 tools/verify-third-party-licenses.py --root "$package_tgz_dir" --write || return 1
+	assert_no_duplicate_package_sonames "$package_tgz_dir" || return 1
 	package_external_worker_archives "$package_tgz_dir"
 	# Fail fast if UI entrypoint didn't get packaged
 	if [ ! -f "$package_tgz_dir/ui/index.cgi" ]; then

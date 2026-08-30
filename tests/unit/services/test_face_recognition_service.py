@@ -310,7 +310,11 @@ def test_unknown_face_suggestions_preload_sparse_persons_as_one_image_batch(tmp_
             {"person_id": 1, "person_name": "One", "used_count": 3, "centroid_embedding": [1.0, 0.0], "medoid": {}},
         ],
     }
-    persons = [{"id": 100 + index, "name": f"Unknown {index}"} for index in range(3)]
+    persons = [
+        {"id": 102, "name": "Unknown 2"},
+        {"id": 100, "name": "Unknown 0"},
+        {"id": 101, "name": "Unknown 1"},
+    ]
     for person in persons:
         path = tmp_path / f"unknown-{person['id']}.jpg"
         path.write_bytes(b"jpeg")
@@ -323,6 +327,7 @@ def test_unknown_face_suggestions_preload_sparse_persons_as_one_image_batch(tmp_
     ]
     service.backend.photos = SimpleNamespace(
         listFotoTeamPersonUnknown=lambda **_kwargs: persons,
+        sortPersonsForFaceMatch=lambda loaded: sorted(loaded, key=lambda person: int(person["id"])),
         list_faceFotoTeamItems=lambda id_item, **_kwargs: [{
             "person_id": int(id_item) // 10,
             "face_id": int(id_item) + 1000,
@@ -502,9 +507,10 @@ def test_unknown_face_resume_passes_previous_image_cursor():
         user_key="u",
     )
     service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
-    service.backend.photos = SimpleNamespace(listFotoTeamPersonUnknown=lambda **_kwargs: [
-        {"id": 9, "name": "Unknown"},
-    ])
+    service.backend.photos = SimpleNamespace(
+        listFotoTeamPersonUnknown=lambda **_kwargs: [{"id": 9, "name": "Unknown"}],
+        sortPersonsForFaceMatch=lambda persons: persons,
+    )
     service._prepared_embedder = lambda _options: SimpleNamespace()
     contexts = []
 
@@ -643,9 +649,10 @@ def test_unknown_face_immediate_review_persists_resume_cursor():
         ],
     }
     service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
-    service.backend.photos = SimpleNamespace(listFotoTeamPersonUnknown=lambda **_kwargs: [
-        {"id": 9, "name": "Unknown"},
-    ])
+    service.backend.photos = SimpleNamespace(
+        listFotoTeamPersonUnknown=lambda **_kwargs: [{"id": 9, "name": "Unknown"}],
+        sortPersonsForFaceMatch=lambda persons: persons,
+    )
     progress_state = {
         "images_scanned": 951,
         "images_total": 990,
@@ -865,7 +872,10 @@ def test_unknown_face_scan_finishes_stopped_when_cleanup_stop_requested():
     service.backend._buildStatusPayload = lambda **kwargs: kwargs
     service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
     service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
-    service.backend.photos = SimpleNamespace(listFotoTeamPersonUnknown=lambda **_kwargs: [{"id": 99, "name": ""}])
+    service.backend.photos = SimpleNamespace(
+        listFotoTeamPersonUnknown=lambda **_kwargs: [{"id": 99, "name": ""}],
+        sortPersonsForFaceMatch=lambda persons: persons,
+    )
     service._prepared_embedder = lambda _options: SimpleNamespace()
 
     def references(**_kwargs):
@@ -1971,7 +1981,10 @@ def test_unknown_face_suggestions_rank_references_in_one_native_call():
             ]
 
     service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
-    service.backend.photos = SimpleNamespace(listFotoTeamPersonUnknown=lambda **_kwargs: [{"id": 100, "name": "Unknown"}])
+    service.backend.photos = SimpleNamespace(
+        listFotoTeamPersonUnknown=lambda **_kwargs: [{"id": 100, "name": "Unknown"}],
+        sortPersonsForFaceMatch=lambda persons: persons,
+    )
     service._prepared_embedder = lambda _options: _Embedder()
     service._person_references = lambda **_kwargs: [
         {"face_id": 31, "image_id": 41, "image_path": "/volume1/photo/u1.jpg", "bbox": {}, "embedding": [1.0, 0.0]},

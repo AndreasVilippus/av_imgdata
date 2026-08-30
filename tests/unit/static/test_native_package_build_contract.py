@@ -165,6 +165,12 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "libvips.so" in install_script
     assert "cleanup_native_build_artifacts" in install_script
     assert "INSTALL_SUCCEEDED=0" in install_script
+    assert 'if [ "${NOSTRIP:-}" = "NOSTRIP" ]; then' in install_script
+    assert 'export AV_IMGDATA_NATIVE_STRIP="${AV_IMGDATA_NATIVE_STRIP:-0}"' in install_script
+    assert "Debug package requested; rebuilding native face processor without stripping." in install_script
+    assert "assert_no_duplicate_package_sonames" in install_script
+    assert "readelf is required to verify packaged runtime library SONAMEs." in install_script
+    assert "duplicate package runtime library SONAMEs" in install_script
     assert "Preserving native build artifacts after failed install for diagnostics." in install_script
     assert '"$native_root/face_processor-build"' in install_script
     assert '"$native_root/face_processor-install"' in install_script
@@ -181,6 +187,7 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "build_fingerprint()" in build_vips
     assert "--print-fingerprint" in build_vips
     assert "fingerprint_contract=av-imgdata-image-processor-vips-v1" in build_vips
+    assert "native_strip=%s" in build_vips
     assert "processors/native/image_backend_vips/src/main.cpp" in build_vips
     assert "processors/native/image_backend_vips/CMakeLists.txt" in build_vips
     assert "tools/build-native-image-processor-vips.sh" in build_vips
@@ -195,6 +202,7 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "sha256sum -c" in build_vips
     assert "build_heif_stack" in build_vips
     assert "require_libvips_host_dependencies" in build_vips
+    assert "require_tool readelf" in build_vips
     assert "require_pkg_config_package glib-2.0 libglib2.0-dev" in build_vips
     assert "require_pkg_config_package gio-2.0 libglib2.0-dev" in build_vips
     assert "require_pkg_config_package gobject-2.0 libglib2.0-dev" in build_vips
@@ -273,6 +281,11 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "-Draw=enabled" not in build_vips
     assert "require_tool strings" in build_vips
     assert "copy_libvips_runtime_dependencies" in build_vips
+    assert "strip_runtime_libraries" in build_vips
+    assert "assert_no_duplicate_runtime_sonames" in build_vips
+    assert "duplicate runtime library SONAMEs staged" in build_vips
+    assert "--strip-unneeded" in build_vips
+    assert "readelf -d" in build_vips
     assert '"libheif.so*"' in build_vips
     assert '"libde265.so*"' in build_vips
     assert '"libmount.so*"' in build_vips

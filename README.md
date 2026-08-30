@@ -137,7 +137,13 @@ result_spk/
 ```
 
 Depending on the toolkit configuration, both a regular package and a
-`_debug.spk` may be generated.
+`_debug.spk` may be generated. The regular SPK is the install artifact for
+normal use. A `_debug.spk` is useful only when the toolkit runs with
+`NOSTRIP`; the package build then keeps native symbols for crash or native
+runtime diagnostics. For normal Python/UI troubleshooting, use the bounded
+`backend-debug.log` instead. External worker archives are still packaged as
+their normal release bundles unless they are built separately with explicit
+debug settings.
 
 Native build artifacts are created under:
 

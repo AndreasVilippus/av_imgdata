@@ -47,6 +47,7 @@ build_fingerprint() {
     printf 'libheif_sha256=%s\n' "${LIBHEIF_SHA256}"
     printf 'libvips_version=%s\n' "${LIBVIPS_VERSION}"
     printf 'libvips_sha256=%s\n' "${LIBVIPS_SHA256}"
+    printf 'native_strip=%s\n' "${AV_IMGDATA_NATIVE_STRIP:-1}"
     sha256sum \
       "${PROJECT_DIR}/tools/build-native-image-processor-vips.sh" \
       "${PROJECT_DIR}/processors/native/image_backend_vips/CMakeLists.txt" \
@@ -97,6 +98,7 @@ require_pkg_config_package() {
 
 require_libvips_host_dependencies() {
   require_tool pkg-config
+  require_tool readelf
   require_pkg_config_package glib-2.0 libglib2.0-dev
   require_pkg_config_package gio-2.0 libglib2.0-dev
   require_pkg_config_package gobject-2.0 libglib2.0-dev
@@ -723,6 +725,10 @@ copy_library_family() {
   local source
   local target
   local multiarch_dir
+  local source_real
+  local source_soname
+  local target_soname
+  local link_name
 
   if command -v gcc >/dev/null 2>&1; then
     multiarch_dir="/usr/lib/$(gcc -dumpmachine 2>/dev/null || true)"
@@ -742,16 +748,77 @@ copy_library_family() {
     [ -d "${dir}" ] || continue
     for source in "${dir}"/${pattern}; do
       [ -e "${source}" ] || continue
+      source_real="$(readlink -f "${source}" 2>/dev/null || printf '%s' "${source}")"
       target="${target_dir}/$(basename "${source}")"
-      if [ "$(readlink -f "${source}")" = "$(readlink -f "${target}" 2>/dev/null || true)" ]; then
+      if [ "${source_real}" = "$(readlink -f "${target}" 2>/dev/null || true)" ]; then
         continue
       fi
-      if [ -e "${target}" ]; then
-        continue
+      source_soname="$(readelf -d "${source_real}" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
+      if [ -e "${target}" ] || [ -L "${target}" ]; then
+        target_soname="$(readelf -d "$(readlink -f "${target}" 2>/dev/null || printf '%s' "${target}")" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
+        if [ -n "${source_soname}" ] && [ "${source_soname}" = "${target_soname}" ]; then
+          find "${target_dir}" -maxdepth 1 \( -type f -o -type l \) -name "${source_soname}*" -exec rm -f {} \;
+          rm -f "${target_dir}/${source_soname%.*}.so"
+        else
+          continue
+        fi
+      elif [ -n "${source_soname}" ] && [ -e "${target_dir}/${source_soname}" ]; then
+        target_soname="$(readelf -d "$(readlink -f "${target_dir}/${source_soname}" 2>/dev/null || printf '%s' "${target_dir}/${source_soname}")" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
+        if [ "${source_soname}" = "${target_soname}" ]; then
+          find "${target_dir}" -maxdepth 1 \( -type f -o -type l \) -name "${source_soname}*" -exec rm -f {} \;
+          rm -f "${target_dir}/${source_soname%.*}.so"
+        else
+          continue
+        fi
       fi
-      cp -aL --no-preserve=ownership "${source}" "${target}"
+      cp -aL --no-preserve=ownership "${source_real}" "${target}"
+      if [ -n "${source_soname}" ] && [ "$(basename "${target}")" != "${source_soname}" ] && [ ! -e "${target_dir}/${source_soname}" ]; then
+        ln -s "$(basename "${target}")" "${target_dir}/${source_soname}"
+      fi
+      if [ -n "${source_soname}" ]; then
+        link_name="${source_soname%.*}.so"
+        if [ "${link_name}" != "${source_soname}" ] && [ ! -e "${target_dir}/${link_name}" ]; then
+          ln -s "${source_soname}" "${target_dir}/${link_name}"
+        fi
+      fi
     done
   done
+}
+
+strip_runtime_libraries() {
+  local strip_tool="${STRIP:-strip}"
+  local library
+  if [ "${AV_IMGDATA_NATIVE_STRIP:-1}" = "0" ]; then
+    return
+  fi
+  if ! command -v "${strip_tool}" >/dev/null 2>&1; then
+    echo "WARNING: strip tool not found: ${strip_tool}; runtime libraries remain unstripped." >&2
+    return
+  fi
+  find "${VIPS_PREFIX}/lib" -maxdepth 1 -type f -name '*.so*' -print0 2>/dev/null | while IFS= read -r -d '' library; do
+    "${strip_tool}" --strip-unneeded "${library}" 2>/dev/null || "${strip_tool}" "${library}" 2>/dev/null || true
+  done
+}
+
+assert_no_duplicate_runtime_sonames() {
+  local lib_dir="${VIPS_PREFIX}/lib"
+  local tmp_file
+  local duplicates
+  tmp_file="$(mktemp "${BUILD_ROOT}/vips-sonames.XXXXXX")"
+  find "${lib_dir}" -maxdepth 1 -type f -name '*.so*' -print0 2>/dev/null | while IFS= read -r -d '' source; do
+    local soname
+    soname="$(readelf -d "${source}" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
+    [ -n "${soname}" ] || continue
+    printf '%s\t%s\n' "${soname}" "$(basename "${source}")"
+  done > "${tmp_file}"
+  duplicates="$(cut -f1 "${tmp_file}" | sort | uniq -d | tr '\n' ' ')"
+  if [ -n "${duplicates}" ]; then
+    echo "ERROR: duplicate runtime library SONAMEs staged in ${lib_dir}: ${duplicates}" >&2
+    sort "${tmp_file}" >&2
+    rm -f "${tmp_file}"
+    exit 1
+  fi
+  rm -f "${tmp_file}"
 }
 
 copy_libvips_runtime_dependencies() {
@@ -905,6 +972,8 @@ prepare_build_dirs
 build_heif_stack
 build_libvips
 copy_libvips_runtime_dependencies
+strip_runtime_libraries
+assert_no_duplicate_runtime_sonames
 sanitize_native_text_metadata_paths
 sanitize_native_build_paths
 

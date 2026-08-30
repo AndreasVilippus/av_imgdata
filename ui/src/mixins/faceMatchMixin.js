@@ -455,12 +455,21 @@ export default {
 				const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
 				const sourceFace = this.faceMatchResult && (this.faceMatchResult.source_face || this.faceMatchResult.face);
 				const matchedPerson = this.faceMatchEffectivePerson;
-				if (metadataFace && sourceFace) {
+				const isInsightFaceMissingFaceAction = this.faceMatchCurrentAction === 'search_missing_faces_insightface';
+				const displayFace = sourceFace || (isInsightFaceMissingFaceAction ? metadataFace : null);
+				const displayName = String(
+					(matchedPerson && matchedPerson.name)
+					|| (sourceFace && sourceFace.name)
+					|| (metadataFace && metadataFace.name)
+					|| (this.faceMatchResult && this.faceMatchResult.source_name)
+					|| ''
+				).trim();
+				if (metadataFace && displayFace) {
 					return {
 						found: true,
-						name: (sourceFace && sourceFace.name) || this.$avt('face_match:unknown_name', '(unnamed)'),
-						source: this.getFaceMatchSourceLabel(sourceFace && sourceFace.source),
-						format: this.getFaceMatchFormatLabel(sourceFace && (sourceFace.source_format || sourceFace.format)),
+						name: displayName || this.$avt('face_match:unknown_name', '(unnamed)'),
+						source: this.getFaceMatchSourceLabel(displayFace && displayFace.source),
+						format: this.getFaceMatchFormatLabel(displayFace && (displayFace.source_format || displayFace.format)),
 						photosPersonId: matchedPerson && matchedPerson.id ? matchedPerson.id : null,
 					};
 				}
@@ -1471,7 +1480,10 @@ export default {
 				return null;
 			}
 			if (this.faceMatchIsFileSourceAction) {
-				return this.faceMatchResult.source_face || this.faceMatchResult.face || null;
+				return this.faceMatchResult.source_face
+					|| this.faceMatchResult.face
+					|| (this.faceMatchCurrentAction === 'search_missing_faces_insightface' ? this.faceMatchResult.metadata_face : null)
+					|| null;
 			}
 			return this.faceMatchResult.face || null;
 		},
@@ -1551,7 +1563,10 @@ export default {
 			if (this.faceMatchIsFileSourceAction) {
 				const sourceFace = this.faceMatchResult && (this.faceMatchResult.source_face || this.faceMatchResult.face);
 				const sourceName = sourceFace && sourceFace.name ? String(sourceFace.name).trim() : '';
-				return sourceName || '';
+				const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
+				const metadataName = metadataFace && metadataFace.name ? String(metadataFace.name).trim() : '';
+				const sourceEntryName = this.faceMatchResult && this.faceMatchResult.source_name ? String(this.faceMatchResult.source_name).trim() : '';
+				return sourceName || metadataName || sourceEntryName || '';
 			}
 			const metadataFace = this.faceMatchResult && this.faceMatchResult.metadata_face;
 			const fallbackName = metadataFace && metadataFace.name ? String(metadataFace.name).trim() : '';
