@@ -421,6 +421,142 @@ def test_cleanup_stopped_backend_progress_releases_stop_button_runtime():
     assert result == {"active": False, "label": "Start", "calls": ["start"]}
 
 
+def test_reopen_resumable_checks_progress_offers_restart_and_resume_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/checksMixin.js",
+            """
+            const calls = [];
+            const component = createComponent({
+              selectedChecksAction: 'scan',
+              selectedChecksType: 'name_conflicts',
+              checksLoading: false,
+              checksProgress: {
+                source_mode: 'scan',
+                check_type: 'name_conflicts',
+                running: false,
+                stop_requested: false,
+                resume_available: true,
+                resume_cursor: { path_index: 42 },
+                status: { phase: 'stopped' },
+              },
+              startChecksScan: async (options) => calls.push(options),
+            });
+
+            assert.strictEqual(component.checksCanResumeProgress, true);
+            assert.strictEqual(component.checksPrimaryButtonLabel, 'Restart');
+
+            await component.resumeChecksProgress();
+
+            console.log(JSON.stringify({
+              canResume: component.checksCanResumeProgress,
+              label: component.checksPrimaryButtonLabel,
+              calls,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "canResume": True,
+        "label": "Restart",
+        "calls": [{"resumeFromProgress": True}],
+    }
+
+
+def test_reopen_resumable_cleanup_progress_offers_restart_and_resume_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const calls = [];
+            const component = createComponent({
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              cleanupLoading: false,
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                stop_requested: false,
+                images_scanned: 120,
+                resume_available: true,
+                status: { phase: 'stopped' },
+              },
+              startCleanupRun: async (options) => calls.push(options),
+            });
+
+            assert.strictEqual(component.cleanupActionActive, false);
+            assert.strictEqual(component.cleanupCanResumeProgress, true);
+            assert.strictEqual(component.cleanupPrimaryButtonLabel, 'Restart');
+
+            await component.resumeCleanupRun();
+
+            console.log(JSON.stringify({
+              active: component.cleanupActionActive,
+              canResume: component.cleanupCanResumeProgress,
+              label: component.cleanupPrimaryButtonLabel,
+              calls,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "active": False,
+        "canResume": True,
+        "label": "Restart",
+        "calls": [{"resumeExisting": True, "skipFaceFrameOptionsDialog": True}],
+    }
+
+
+def test_complete_cleanup_progress_does_not_offer_resume_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const calls = [];
+            const component = createComponent({
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              cleanupLoading: false,
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                stop_requested: false,
+                images_scanned: 512,
+                images_total: 512,
+                persons_scanned: 1596,
+                persons_total: 1596,
+                resume_available: false,
+                status: { phase: 'review_required' },
+              },
+              startCleanupRun: async (options) => calls.push(options),
+            });
+
+            assert.strictEqual(component.cleanupActionActive, false);
+            assert.strictEqual(component.cleanupCanResumeProgress, false);
+            assert.strictEqual(component.cleanupPrimaryButtonLabel, 'Start');
+
+            await component.resumeCleanupRun();
+
+            console.log(JSON.stringify({
+              canResume: component.cleanupCanResumeProgress,
+              label: component.cleanupPrimaryButtonLabel,
+              calls,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "canResume": False,
+        "label": "Start",
+        "calls": [],
+    }
+
+
 def test_cleanup_running_action_rejects_foreign_idle_progress_runtime():
     result = run_node(
         mixin_runtime_script(
@@ -456,6 +592,64 @@ def test_cleanup_running_action_rejects_foreign_idle_progress_runtime():
     )
 
     assert result == {"applied": False, "action": "recognition_check_person_assignments"}
+
+
+def test_last_immediate_recognition_review_does_not_autoresume_when_scan_is_complete_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const requests = [];
+            const starts = [];
+            const component = createComponent({
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              selectedOption: 'cleanup',
+              cleanupLoading: false,
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                images_scanned: 512,
+                images_total: 512,
+                persons_scanned: 1596,
+                persons_total: 1596,
+                resume_available: false,
+                status: { phase: 'review_required' },
+              },
+              recognitionOptions: { operation_mode: 'immediate' },
+              recognitionFindings: [{
+                suggestion_id: 'rec-167698',
+                selection_state: 'review',
+                write_state: 'pending',
+                best_person_name: 'Oskar Meyer',
+              }],
+              callDsmApi: async (path, body) => {
+                requests.push({ path, body });
+                if (path.endsWith('/recognition_findings')) {
+                  return { success: true, data: { entries: [] } };
+                }
+                return { success: true, data: {} };
+              },
+              startCleanupRun: async (options) => starts.push(options),
+            });
+
+            await component.acceptRecognitionCurrent();
+
+            console.log(JSON.stringify({
+              canResume: component.cleanupCanResumeProgress,
+              requests: requests.map((entry) => entry.path.split('/').pop()),
+              starts,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "canResume": False,
+        "requests": ["recognition_review", "recognition_suggestions_apply", "recognition_findings"],
+        "starts": [],
+    }
 
 
 def test_cleanup_progress_request_sends_selected_mode_runtime():

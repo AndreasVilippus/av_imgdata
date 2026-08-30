@@ -93,6 +93,32 @@ export default {
 				&& !this.checksLoading
 			);
 		},
+		checksCanResumeProgress() {
+			if (this.isInsightFaceAssignmentCheck) {
+				return !!(this.cleanupCanResumeProgress && this.selectedChecksAction === 'scan');
+			}
+			const progress = this.checksProgress && typeof this.checksProgress === 'object'
+				? this.checksProgress
+				: {};
+			const sourceMode = String(progress.source_mode || '').trim().toLowerCase();
+			const progressType = String(progress.check_type || '').trim().toLowerCase();
+			const selectedType = String(this.selectedChecksType || '').trim().toLowerCase();
+			const resumeCursor = progress.resume_cursor && typeof progress.resume_cursor === 'object'
+				? progress.resume_cursor
+				: {};
+			return !!(
+				this.selectedChecksAction === 'scan'
+				&& sourceMode === 'scan'
+				&& progressType === selectedType
+				&& !this.isChecksReviewActive
+				&& !this.isChecksReviewStopping
+				&& !this.checksLoading
+				&& (
+					progress.resume_available === true
+					|| Object.keys(resumeCursor).length > 0
+				)
+			);
+		},
 		checksPrimaryButtonLabel() {
 			if (this.isInsightFaceAssignmentCheck) {
 				const cleanupActive = typeof this.cleanupActionActive === 'boolean'
@@ -110,6 +136,9 @@ export default {
 			}
 			if (this.checksLoading) {
 				return this.$avt('checks:button_loading', 'Loading...');
+			}
+			if (this.checksCanResumeProgress) {
+				return this.$avt('checks:button_restart', 'Restart');
 			}
 			if (this.checksCanRestartSavedScan) {
 				return this.$avt('checks:button_restart', 'Restart');
@@ -1603,8 +1632,18 @@ export default {
 					this.checksFindingsActionRunning = false;
 				}
 				this.stopChecksProgressPolling();
-				this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
+			this.checksStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			}
+		},
+		async resumeChecksProgress() {
+			if (!this.checksCanResumeProgress) {
+				return;
+			}
+			if (this.isInsightFaceAssignmentCheck) {
+				await this.resumeCleanupRun({ actionOverride: 'recognition_check_person_assignments' });
+				return;
+			}
+			await this.startChecksScan({ resumeFromProgress: true });
 		},
 		async stopChecksScan() {
 			try {

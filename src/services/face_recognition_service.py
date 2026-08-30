@@ -75,6 +75,7 @@ class FaceRecognitionService:
             return self.sync_review_progress(user_key=user_key, action=normalized_action, operation_mode="findings")
         if normalized_action != self.ACTION_BUILD and not normalized.get("resume_existing"):
             self._clear_active_findings(user_key=user_key, action=normalized_action)
+        retained = self._current_progress_counts(user_key, normalized_action) if normalized_action != self.ACTION_BUILD and normalized.get("resume_existing") else {}
         operation_id = f"cleanup-{normalized_action}-{uuid4().hex}"
         self._set_progress(
             user_key, normalized_action, normalized,
@@ -82,10 +83,13 @@ class FaceRecognitionService:
             stop_requested=False,
             phase="preparing", message_key="cleanup:recognition_preparing",
             message="Preparing face recognition.",
-            persons_scanned=0, persons_total=0,
-            images_scanned=0, images_total=0, images_analyzed=0, images_skipped_unchanged=0,
-            faces_scanned=0, references_count=0,
-            profiles_built=0, findings_count=0, transferred_count=0, errors_count=0,
+            persons_scanned=retained.get("persons_scanned", 0), persons_total=retained.get("persons_total", 0),
+            images_scanned=retained.get("images_scanned", 0), images_total=retained.get("images_total", 0),
+            images_analyzed=retained.get("images_analyzed", 0), images_skipped_unchanged=retained.get("images_skipped_unchanged", 0),
+            faces_scanned=retained.get("faces_scanned", 0), references_count=retained.get("references_count", 0),
+            profiles_built=retained.get("profiles_built", 0), findings_count=retained.get("findings_count", 0),
+            transferred_count=0, errors_count=0,
+            **({"current_name": retained.get("current_name")} if retained.get("current_name") else {}),
         )
         worker = Thread(
             target=self._run,
@@ -1429,24 +1433,66 @@ class FaceRecognitionService:
             operation_mode="immediate" if options.get("resume_existing") else ("save_only" if options["operation_mode"] == "save_only" else ""),
         )
         previous_entries = previous.get("entries") if isinstance(previous.get("entries"), list) else []
-        entries: List[Dict[str, Any]] = list(previous_entries) if options.get("resume_existing") and options["operation_mode"] == "immediate" else []
+        resume_active = bool(options.get("resume_existing") and options["operation_mode"] == "immediate")
+        previous_options = previous.get("options") if isinstance(previous.get("options"), dict) else {}
+        entries: List[Dict[str, Any]] = list(previous_entries) if resume_active else []
         resolved_face_ids = set()
+        resume_start_person_index = self._int_option(previous_options, "resume_start_person_index")
+        resume_after_face_id = self._int_option(previous_options, "resume_after_face_id")
+        resume_person_id = self._int_option(previous_options, "resume_person_id")
         for entry in previous_entries:
             if entry.get("face_id") is None or str(entry.get("selection_state") or "") == "review":
                 continue
+            if resume_active:
+                resume_person_id = self._int_option(entry, "person_id", resume_person_id)
+                resume_after_face_id = self._int_option(entry, "face_id", resume_after_face_id)
             try:
                 resolved_face_ids.add(int(entry.get("face_id")))
             except (TypeError, ValueError):
                 continue
-        for profile in profiles if isinstance(profiles, list) else []:
+        profiles_to_scan = list(profiles if isinstance(profiles, list) else [])
+        if resume_active and resume_person_id:
+            resume_start_person_index = next((
+                index for index, profile in enumerate(profiles_to_scan)
+                if self._profile_person_id(profile) == resume_person_id
+            ), resume_start_person_index)
+        resume_progress = previous_options.get("resume_progress_counts") if isinstance(previous_options.get("resume_progress_counts"), dict) else {}
+        if resume_active and (resume_start_person_index or resume_after_face_id):
+            self._debug_log(
+                "recognition_outliers_resume_cursor",
+                resume_start_person_index=resume_start_person_index,
+                resume_after_face_id=resume_after_face_id,
+                resume_person_id=resume_person_id,
+                previous_entries_count=len(previous_entries),
+                resolved_face_ids_count=len(resolved_face_ids),
+            )
+        self._set_progress(
+            user_key, self.ACTION_OUTLIERS, options, running=True, finished=False, phase="building_outliers",
+            message_key="cleanup:recognition_building_outliers", message="Building reference-face outlier findings.",
+            persons_scanned=resume_progress.get("persons_scanned", resume_start_person_index),
+            persons_total=len(profiles_to_scan), findings_count=len(entries),
+            images_scanned=resume_progress.get("images_scanned", 0), images_total=resume_progress.get("images_total", 0),
+            images_analyzed=resume_progress.get("images_analyzed", 0), images_skipped_unchanged=resume_progress.get("images_skipped_unchanged", 0),
+            faces_scanned=resume_progress.get("faces_scanned", 0), references_count=resume_progress.get("references_count", 0),
+            errors_count=0,
+        )
+        for profile_index, profile in enumerate(profiles_to_scan):
+            if resume_active and profile_index < resume_start_person_index:
+                continue
             if self._should_stop(user_key, self.ACTION_OUTLIERS):
                 self._finish_stopped_scan(user_key, self.ACTION_OUTLIERS, options, entries)
                 return
             centroid = profile.get("centroid_embedding") or []
             medoid = profile.get("medoid") if isinstance(profile.get("medoid"), dict) else {}
             candidate_references = []
+            resume_after_face_seen = not (resume_active and profile_index == resume_start_person_index and resume_after_face_id)
             for reference in profile.get("references", []):
-                if int(reference.get("face_id") or 0) in resolved_face_ids:
+                face_id = self._int_option(reference, "face_id")
+                if not resume_after_face_seen:
+                    if face_id == resume_after_face_id:
+                        resume_after_face_seen = True
+                    continue
+                if face_id in resolved_face_ids:
                     continue
                 similarity = self._similarity(reference.get("embedding") or [], centroid)
                 if similarity >= options["outlier_similarity_threshold"]:
@@ -1485,8 +1531,16 @@ class FaceRecognitionService:
                     "write_state": "internal_only",
                 })
                 if options["operation_mode"] == "immediate" and entries[-1]["selection_state"] == "review":
-                    self._write_findings(self.FINDING_OUTLIERS, self.ACTION_OUTLIERS, options, entries, user_key=user_key)
-                    self._finish_review_scan(user_key, self.ACTION_OUTLIERS, options, entries)
+                    pause_options = self._resume_scan_options(
+                        user_key=user_key,
+                        action=self.ACTION_OUTLIERS,
+                        options=options,
+                        resume_start_person_index=profile_index,
+                        resume_after_face_id=self._int_option(reference, "face_id"),
+                        resume_person_id=self._profile_person_id(profile) or 0,
+                    )
+                    self._write_findings(self.FINDING_OUTLIERS, self.ACTION_OUTLIERS, pause_options, entries, user_key=user_key)
+                    self._finish_review_scan(user_key, self.ACTION_OUTLIERS, pause_options, entries)
                     return
         self._write_findings(self.FINDING_OUTLIERS, self.ACTION_OUTLIERS, options, entries, user_key=user_key)
         if options["selection_mode"] == "exclude_confirmed":
@@ -1519,28 +1573,56 @@ class FaceRecognitionService:
             operation_mode="immediate" if options.get("resume_existing") else ("save_only" if options["operation_mode"] == "save_only" else ""),
         )
         previous_entries = previous.get("entries") if isinstance(previous.get("entries"), list) else []
-        entries: List[Dict[str, Any]] = list(previous_entries) if options.get("resume_existing") and options["operation_mode"] == "immediate" else []
+        resume_active = bool(options.get("resume_existing") and options["operation_mode"] == "immediate")
+        previous_options = previous.get("options") if isinstance(previous.get("options"), dict) else {}
+        entries: List[Dict[str, Any]] = list(previous_entries) if resume_active else []
         resolved_face_ids = set()
+        resume_start_person_index = self._int_option(previous_options, "resume_start_person_index")
+        resume_after_image_id = self._int_option(previous_options, "resume_after_image_id")
+        resume_person_id = self._int_option(previous_options, "resume_person_id")
         for entry in previous_entries:
             if entry.get("unknown_face_id") is None or str(entry.get("selection_state") or "") == "review":
                 continue
+            if resume_active:
+                resume_person_id = self._int_option(entry, "unknown_person_id", resume_person_id)
+                resume_after_image_id = self._int_option(entry, "image_id", resume_after_image_id)
             try:
                 resolved_face_ids.add(int(entry.get("unknown_face_id")))
             except (TypeError, ValueError):
                 continue
+        if resume_active and resume_person_id:
+            resume_start_person_index = next((
+                person_index for person_index, person in enumerate(unknown)
+                if self._profile_person_id(person) == resume_person_id
+            ), resume_start_person_index)
+        resume_progress = previous_options.get("resume_progress_counts") if isinstance(previous_options.get("resume_progress_counts"), dict) else {}
+        if resume_active and (resume_start_person_index or resume_after_image_id):
+            self._debug_log(
+                "recognition_unknown_resume_cursor",
+                resume_start_person_index=resume_start_person_index,
+                resume_after_image_id=resume_after_image_id,
+                resume_person_id=resume_person_id,
+                previous_entries_count=len(previous_entries),
+                resolved_face_ids_count=len(resolved_face_ids),
+            )
         self._set_progress(
             user_key, self.ACTION_SUGGEST, options, running=True, finished=False, phase="unknown_loaded",
             message_key="cleanup:recognition_unknown_loaded", message="Unknown Photos faces loaded.",
-            persons_scanned=0, persons_total=len(unknown), findings_count=len(entries),
-            images_scanned=0, images_total=0, images_analyzed=0, images_skipped_unchanged=0,
-            faces_scanned=0, references_count=0, transferred_count=0, errors_count=0,
+            persons_scanned=resume_progress.get("persons_scanned", resume_start_person_index), persons_total=len(unknown), findings_count=len(entries),
+            images_scanned=resume_progress.get("images_scanned", 0), images_total=resume_progress.get("images_total", 0),
+            images_analyzed=resume_progress.get("images_analyzed", 0), images_skipped_unchanged=resume_progress.get("images_skipped_unchanged", 0),
+            faces_scanned=resume_progress.get("faces_scanned", 0), references_count=resume_progress.get("references_count", 0),
+            transferred_count=0, errors_count=0,
         )
         operation_id = self._current_operation_id(user_key, self.ACTION_SUGGEST)
-        next_preload_index = 0
+        next_preload_index = resume_start_person_index if resume_active else 0
         for index, person in enumerate(unknown):
+            if resume_active and index < resume_start_person_index:
+                continue
             if self._should_stop(user_key, self.ACTION_SUGGEST):
                 self._finish_stopped_scan(user_key, self.ACTION_SUGGEST, options, entries)
                 return
+            current_person_id = self._profile_person_id(person)
             if index >= next_preload_index:
                 next_preload_index = self._preload_person_reference_embeddings(
                     user_key=user_key,
@@ -1570,6 +1652,7 @@ class FaceRecognitionService:
                     "persons_scanned": index,
                     "persons_total": len(unknown),
                     "findings_count": len(entries),
+                    **({"resume_after_image_id": resume_after_image_id} if resume_active and resume_after_image_id and index == resume_start_person_index else {}),
                 },
             )
             if self._should_stop(user_key, self.ACTION_SUGGEST):
@@ -1621,6 +1704,7 @@ class FaceRecognitionService:
                 entries.append({
                     "suggestion_id": f"rec-{reference.get('face_id')}", "image_path": reference.get("image_path"),
                     "image_id": reference.get("image_id"), "unknown_face_id": reference.get("face_id"), "bbox": reference.get("bbox"),
+                    "unknown_person_id": current_person_id,
                     "best_person_id": best.get("person_id"), "best_person_name": best.get("person_name"), "best_score": best_score,
                     "profile_image_path": (best.get("medoid") or {}).get("image_path"), "profile_bbox": (best.get("medoid") or {}).get("bbox"),
                     "second_person_id": second.get("person_id"), "second_person_name": second.get("person_name"), "second_score": second_score,
@@ -1629,8 +1713,16 @@ class FaceRecognitionService:
                     "write_state": "pending", "profile_key": self._model_key(options),
                 })
                 if options["operation_mode"] == "immediate" and entries[-1]["selection_state"] == "review":
-                    self._write_findings(self.FINDING_SUGGESTIONS, self.ACTION_SUGGEST, options, entries, user_key=user_key)
-                    self._finish_review_scan(user_key, self.ACTION_SUGGEST, options, entries)
+                    pause_options = self._resume_scan_options(
+                        user_key=user_key,
+                        action=self.ACTION_SUGGEST,
+                        options=options,
+                        resume_start_person_index=index,
+                        resume_after_image_id=self._int_option(reference, "image_id"),
+                        resume_person_id=current_person_id,
+                    )
+                    self._write_findings(self.FINDING_SUGGESTIONS, self.ACTION_SUGGEST, pause_options, entries, user_key=user_key)
+                    self._finish_review_scan(user_key, self.ACTION_SUGGEST, pause_options, entries)
                     return
             self._debug_log(
                 "recognition_unknown_ranking_finished",
@@ -1679,12 +1771,15 @@ class FaceRecognitionService:
             operation_mode="immediate" if options.get("resume_existing") else ("save_only" if options["operation_mode"] == "save_only" else ""),
         )
         previous_entries = previous.get("entries") if isinstance(previous.get("entries"), list) else []
-        entries: List[Dict[str, Any]] = list(previous_entries) if options.get("resume_existing") and options["operation_mode"] == "immediate" else []
+        resume_active = bool(options.get("resume_existing") and options["operation_mode"] == "immediate")
+        previous_options = previous.get("options") if isinstance(previous.get("options"), dict) else {}
+        entries: List[Dict[str, Any]] = list(previous_entries) if resume_active else []
         resolved_face_ids = set()
-        resume_person_id: Optional[int] = None
-        resume_after_image_id = 0
+        resume_start_person_index = self._int_option(previous_options, "resume_start_person_index")
+        resume_person_id: Optional[int] = self._int_option(previous_options, "resume_person_id") or None
+        resume_after_image_id = self._int_option(previous_options, "resume_after_image_id")
         for entry in previous_entries:
-            if options.get("resume_existing") and options["operation_mode"] == "immediate":
+            if resume_active:
                 try:
                     entry_person_id = int(entry.get("current_person_id") or 0)
                 except (TypeError, ValueError):
@@ -1702,11 +1797,12 @@ class FaceRecognitionService:
             except (TypeError, ValueError):
                 continue
         persons_to_scan = list(persons if isinstance(persons, list) else [])
+        persons_total_count = len(persons_to_scan)
         if resume_person_id:
             resume_start_index = next((
                 index for index, person in enumerate(persons_to_scan)
                 if self._profile_person_id(person) == resume_person_id
-            ), 0)
+            ), resume_start_person_index)
             if resume_start_index:
                 self._debug_log(
                     "recognition_assignment_resume_person",
@@ -1717,14 +1813,15 @@ class FaceRecognitionService:
                     previous_entries_count=len(previous_entries),
                 )
                 persons_to_scan = persons_to_scan[resume_start_index:]
+            resume_start_person_index = resume_start_index
         self._set_progress(
             user_key, self.ACTION_ASSIGNMENT, options, running=True, finished=False, phase="persons_loaded",
             message_key="cleanup:recognition_persons_loaded", message="Photos persons loaded.",
-            persons_scanned=0, persons_total=len(persons_to_scan), findings_count=len(entries),
+            persons_scanned=resume_start_person_index if resume_active else 0, persons_total=persons_total_count, findings_count=len(entries),
         )
         operation_id = self._current_operation_id(user_key, self.ACTION_ASSIGNMENT)
         next_preload_index = 0
-        for index, person in enumerate(persons_to_scan):
+        for scan_index, person in enumerate(persons_to_scan):
             if self._should_stop(user_key, self.ACTION_ASSIGNMENT):
                 self._finish_stopped_scan(user_key, self.ACTION_ASSIGNMENT, options, entries)
                 return
@@ -1733,14 +1830,14 @@ class FaceRecognitionService:
             except (AttributeError, TypeError, ValueError):
                 continue
             current_person_name = str(person.get("name") or "")
-            if index >= next_preload_index and not (resume_after_image_id and current_person_id == resume_person_id):
+            if scan_index >= next_preload_index and not (resume_after_image_id and current_person_id == resume_person_id):
                 next_preload_index = self._preload_person_reference_embeddings(
                     user_key=user_key,
                     cookies=cookies,
                     base_url=base_url,
                     shared_folder=shared_folder,
                     persons=persons_to_scan,
-                    start_index=index,
+                    start_index=scan_index,
                     embedder=embedder,
                     options=options,
                     folder_cache=folder_cache,
@@ -1759,8 +1856,8 @@ class FaceRecognitionService:
                     "phase": "reading_assigned_images",
                     "message_key": "cleanup:recognition_reading_assigned_images",
                     "message": "Reading assigned Photos face images.",
-                    "persons_scanned": index,
-                    "persons_total": len(persons_to_scan),
+                    "persons_scanned": resume_start_person_index + scan_index if resume_active else scan_index,
+                    "persons_total": persons_total_count,
                     "findings_count": len(entries),
                     "current_name": current_person_name,
                     **({"resume_after_image_id": resume_after_image_id} if resume_after_image_id and current_person_id == resume_person_id else {}),
@@ -1817,14 +1914,23 @@ class FaceRecognitionService:
                     "write_state": "pending", "profile_key": self._model_key(options),
                 })
                 if options["operation_mode"] == "immediate" and entries[-1]["selection_state"] == "review":
-                    self._write_findings(self.FINDING_ASSIGNMENTS, self.ACTION_ASSIGNMENT, options, entries, user_key=user_key)
-                    self._finish_review_scan(user_key, self.ACTION_ASSIGNMENT, options, entries)
+                    pause_options = self._resume_scan_options(
+                        user_key=user_key,
+                        action=self.ACTION_ASSIGNMENT,
+                        options=options,
+                        resume_start_person_index=resume_start_person_index + scan_index,
+                        resume_after_image_id=self._int_option(reference, "image_id"),
+                        resume_person_id=current_person_id,
+                    )
+                    self._write_findings(self.FINDING_ASSIGNMENTS, self.ACTION_ASSIGNMENT, pause_options, entries, user_key=user_key)
+                    self._finish_review_scan(user_key, self.ACTION_ASSIGNMENT, pause_options, entries)
                     return
             self._set_progress(
                 user_key, self.ACTION_ASSIGNMENT, options, running=True, finished=False, phase="building_assignment_suggestions",
                 message_key="cleanup:recognition_building_assignment_suggestions",
                 message="Building person assignment suggestions.",
-                persons_scanned=index + 1, persons_total=len(persons_to_scan), findings_count=len(entries),
+                persons_scanned=resume_start_person_index + scan_index + 1 if resume_active else scan_index + 1,
+                persons_total=persons_total_count, findings_count=len(entries),
             )
         self._write_findings(self.FINDING_ASSIGNMENTS, self.ACTION_ASSIGNMENT, options, entries, user_key=user_key)
         self._finish_review_scan(user_key, self.ACTION_ASSIGNMENT, options, entries)
@@ -1843,10 +1949,23 @@ class FaceRecognitionService:
     def _open_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return [entry for entry in entries if str(entry.get("selection_state") or "review") == "review" and str(entry.get("write_state") or "pending") in {"pending", "internal_only"}]
 
+    @staticmethod
+    def _review_entry_name(action: str, entry: Dict[str, Any]) -> str:
+        if action == FaceRecognitionService.ACTION_OUTLIERS:
+            return str(entry.get("person_name") or entry.get("nearest_other_person_name") or "").strip()
+        if action == FaceRecognitionService.ACTION_ASSIGNMENT:
+            current_name = str(entry.get("current_person_name") or "").strip()
+            best_name = str(entry.get("best_person_name") or "").strip()
+            if current_name and best_name:
+                return f"{current_name} -> {best_name}"
+            return best_name or current_name
+        return str(entry.get("best_person_name") or entry.get("person_name") or "").strip()
+
     def _finish_stopped_scan(self, user_key: str, action: str, options: Dict[str, Any], entries: List[Dict[str, Any]]) -> None:
         if entries:
             self._write_findings(self._finding_type(action), action, options, entries, user_key=user_key)
         retained = self._current_progress_counts(user_key, action)
+        retained.pop("findings_count", None)
         self._set_progress(
             user_key, action, options, running=False, finished=True, stop_requested=True, phase="stopped",
             message_key="cleanup:progress_stopped", message="Cleanup stopped.",
@@ -1873,20 +1992,61 @@ class FaceRecognitionService:
             "persons_scanned",
             "persons_total",
             "profiles_built",
+            "findings_count",
             "current_name",
         ):
             if current.get(key) is not None:
                 retained[key] = current.get(key)
         return retained
 
+    @staticmethod
+    def _int_option(source: Any, key: str, default: int = 0) -> int:
+        if not isinstance(source, dict):
+            return default
+        try:
+            return max(0, int(source.get(key) or default))
+        except (TypeError, ValueError):
+            return default
+
+    def _resume_scan_options(
+        self,
+        *,
+        user_key: str,
+        action: str,
+        options: Dict[str, Any],
+        resume_start_person_index: int,
+        resume_after_image_id: int = 0,
+        resume_person_id: int = 0,
+        resume_after_face_id: int = 0,
+    ) -> Dict[str, Any]:
+        next_options = dict(options)
+        next_options["resume_start_person_index"] = max(0, int(resume_start_person_index or 0))
+        if resume_after_image_id:
+            next_options["resume_after_image_id"] = max(0, int(resume_after_image_id or 0))
+        if resume_person_id:
+            next_options["resume_person_id"] = max(0, int(resume_person_id or 0))
+        if resume_after_face_id:
+            next_options["resume_after_face_id"] = max(0, int(resume_after_face_id or 0))
+        retained = self._current_progress_counts(user_key, action)
+        if retained:
+            next_options["resume_progress_counts"] = retained
+        return next_options
+
     def _finish_review_scan(self, user_key: str, action: str, options: Dict[str, Any], entries: List[Dict[str, Any]]) -> None:
         open_entries = self._open_entries(entries)
+        current = open_entries[0] if open_entries else {}
         review_required = options["operation_mode"] == "immediate" and bool(open_entries)
+        retained = self._current_progress_counts(user_key, action)
+        retained.pop("findings_count", None)
+        retained.pop("current_name", None)
         self._set_progress(
             user_key, action, options, running=False, finished=True, phase="review_required" if review_required else "finished",
             message_key="cleanup:recognition_review_required" if review_required else "cleanup:recognition_scan_finished",
             message="Manual review required for the next recognition finding." if review_required else "Recognition scan finished.",
             findings_count=len(entries),
+            current_path=str(current.get("image_path") or ""),
+            current_name=self._review_entry_name(action, current) if current else "",
+            **retained,
         )
 
     def update_review(self, *, action: str, item_id: str, decision: str, user_key: str = "", operation_mode: str = "findings") -> Dict[str, Any]:
@@ -1984,7 +2144,9 @@ class FaceRecognitionService:
             user_key, action, options, running=False, finished=True, phase="review_required" if open_entries else "finished",
             message_key="cleanup:recognition_review_required" if open_entries else "cleanup:recognition_scan_finished",
             message="Manual review required for the next recognition finding." if open_entries else "Recognition scan finished.",
-            current_path=str(current.get("image_path") or ""), findings_count=len(entries),
+            current_path=str(current.get("image_path") or ""),
+            current_name=self._review_entry_name(action, current) if current else "",
+            findings_count=len(entries),
             entries_current=len(entries) - len(open_entries), entries_total=len(entries),
         )
         return self.backend.getCleanupProgress(user_key, action)
@@ -2050,6 +2212,13 @@ class FaceRecognitionService:
             self.backend._buildStatusCounter("images_analyzed", value=int(updates.get("images_analyzed") or 0), label_key="cleanup:label_images_analyzed", fallback_label="Analyzed images", show_when_zero=False),
             self.backend._buildStatusCounter("images_skipped_unchanged", value=int(updates.get("images_skipped_unchanged") or 0), label_key="cleanup:label_images_skipped_unchanged", fallback_label="Skipped unchanged images", show_when_zero=False),
         ]
+        persons_scanned = int(updates.get("persons_scanned") or 0)
+        persons_total = int(updates.get("persons_total") or 0)
+        if action != self.ACTION_BUILD and persons_total > 0:
+            counters.extend([
+                self.backend._buildStatusCounter("persons", value=persons_scanned, label_key="cleanup:label_persons_scanned", fallback_label="Persons scanned", show_when_zero=False),
+                self.backend._buildStatusCounter("persons_remaining", value=max(0, persons_total - persons_scanned), label_key="cleanup:label_persons_remaining_count", fallback_label="Persons remaining", show_when_zero=False),
+            ])
         if action != self.ACTION_BUILD:
             counters.append(self.backend._buildStatusCounter("faces", value=int(updates.get("faces_scanned") or 0), label_key="cleanup:label_faces_processed", fallback_label="Faces", show_when_zero=False))
         counters.extend([

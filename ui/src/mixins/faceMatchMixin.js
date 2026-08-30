@@ -375,6 +375,25 @@ export default {
 				&& !this.faceMatchAuthRequired
 			);
 		},
+		faceMatchCanResumeProgress() {
+			const progress = this.faceMatchProgress && typeof this.faceMatchProgress === 'object'
+				? this.faceMatchProgress
+				: {};
+			const resumeCursor = progress.resume_cursor && typeof progress.resume_cursor === 'object'
+				? progress.resume_cursor
+				: {};
+			return !!(
+				!this.faceMatchRecognitionActionSelected
+				&& !this.faceMatchUseStoredFindings
+				&& !this.faceMatchHasActiveProgressState
+				&& !this.faceMatchLoading
+				&& this.faceMatchProgressMatchesSelectedAction(progress)
+				&& (
+					progress.resume_available === true
+					|| Object.keys(resumeCursor).length > 0
+				)
+			);
+		},
 		faceMatchRecognitionCleanupActive() {
 			if (!this.faceMatchRecognitionActionSelected) {
 				return false;
@@ -409,6 +428,9 @@ export default {
 					if (this.faceMatchUseStoredFindings) {
 						return this.$avt('cleanup:face_frames_operation_findings', 'Process saved findings list');
 					}
+					if (this.cleanupCanResumeProgress) {
+						return this.$avt('face_match:button_restart', 'Restart');
+					}
 					return this.$avt('face_match:button_start', 'Start');
 				}
 				if (this.faceMatchHasActiveProgressState) {
@@ -418,6 +440,9 @@ export default {
 				return this.$avt('face_match:button_resume_login', 'Resume after login');
 			}
 			if (this.faceMatchCanRestartSavedFileSearch) {
+				return this.$avt('face_match:button_restart', 'Restart');
+			}
+			if (this.faceMatchCanResumeProgress) {
 				return this.$avt('face_match:button_restart', 'Restart');
 			}
 			return this.$avt('face_match:button_start', 'Start');
@@ -2093,6 +2118,21 @@ export default {
 			await this.startFaceMatchingAction({
 				resetSkippedFaceIds: !this.faceMatchAuthRequired,
 				resumeFromProgress: this.faceMatchAuthRequired,
+			});
+		},
+		async resumeFaceMatchingAction() {
+			if (this.faceMatchRecognitionActionSelected) {
+				this.syncFaceMatchRecognitionOptions();
+				this.cleanupRuntimeAction = 'recognition_analyze_unknown_faces';
+				await this.resumeCleanupRun({ actionOverride: 'recognition_analyze_unknown_faces' });
+				return;
+			}
+			if (!this.faceMatchCanResumeProgress) {
+				return;
+			}
+			await this.startFaceMatchingAction({
+				resetSkippedFaceIds: false,
+				resumeFromProgress: true,
 			});
 		},
 		async stopFaceMatchingAction() {

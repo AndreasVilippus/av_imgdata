@@ -62,6 +62,14 @@
 						{{ vm.checksPrimaryButtonLabel }}
 					</v-button>
 					<v-button
+						v-if="vm.checksCanResumeProgress"
+						@click="vm.resumeChecksProgress"
+						:disabled="vm.checksLoading"
+						style="width: 160px;"
+					>
+						{{ vm.$avt('checks:button_resume', 'Resume') }}
+					</v-button>
+					<v-button
 						v-if="vm.checksCurrentItem && vm.canIgnoreChecksItem()"
 						@click="vm.ignoreChecksCurrentItem"
 						:disabled="vm.checksLoading"

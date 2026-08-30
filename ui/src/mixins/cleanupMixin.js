@@ -137,7 +137,20 @@ export default {
 			) {
 				return this.$avt('cleanup:face_frames_operation_findings', 'Process saved findings list');
 			}
+			if (this.cleanupCanResumeProgress) {
+				return this.$avt('cleanup:button_restart', 'Restart');
+			}
 			return this.$avt('cleanup:button_start', 'Start');
+			},
+			cleanupCanResumeProgress() {
+				const action = this.getCleanupProgressAction();
+				return !!(
+					this.isCleanupResumableAction(action)
+					&& this.isCleanupProgressForAction(action)
+					&& !this.cleanupActionActive
+					&& !this.cleanupLoading
+					&& this.cleanupProgressHasRemainingWork(this.cleanupProgress)
+				);
 			},
 			activeCleanupAction() {
 				return String(this.cleanupRuntimeAction || this.selectedCleanupAction || 'normalize_names');
@@ -229,9 +242,46 @@ export default {
 		this.stopCleanupProgressPolling();
 	},
 		methods: {
-		isCleanupProgressForAction(action) {
-			const expectedAction = String(action || '').trim();
-			if (!expectedAction) {
+			isCleanupResumableAction(action) {
+				return [
+					'standardize_face_frames',
+					'recognition_check_reference_outliers',
+					'recognition_analyze_unknown_faces',
+					'recognition_check_person_assignments',
+				].includes(String(action || '').trim());
+			},
+			cleanupProgressHasRemainingWork(progress) {
+				const current = progress && typeof progress === 'object' ? progress : {};
+				const resumeCursor = current.resume_cursor && typeof current.resume_cursor === 'object'
+					? current.resume_cursor
+					: {};
+				if (current.resume_available === true || Object.keys(resumeCursor).length > 0) {
+					return true;
+				}
+				const hasRemainingCounter = (scannedKey, totalKey) => {
+					const scanned = Number(current[scannedKey]);
+					const total = Number(current[totalKey]);
+					return Number.isFinite(scanned) && Number.isFinite(total) && total > 0 && scanned >= 0 && scanned < total;
+				};
+				if (
+					hasRemainingCounter('images_scanned', 'images_total')
+					|| hasRemainingCounter('persons_scanned', 'persons_total')
+					|| hasRemainingCounter('files_scanned', 'files_total')
+					|| hasRemainingCounter('entries_current', 'entries_total')
+				) {
+					return true;
+				}
+				const nextPathIndex = Number(current.scan_next_path_index);
+				const totalPaths = Number(current.scan_total_paths || current.files_total);
+				return Number.isFinite(nextPathIndex)
+					&& Number.isFinite(totalPaths)
+					&& totalPaths > 0
+					&& nextPathIndex > 0
+					&& nextPathIndex < totalPaths;
+			},
+			isCleanupProgressForAction(action) {
+				const expectedAction = String(action || '').trim();
+				if (!expectedAction) {
 				return false;
 			}
 			const progress = this.cleanupProgress && typeof this.cleanupProgress === 'object'
@@ -617,6 +667,16 @@ export default {
 				}
 				await this.startCleanupRun();
 			},
+			async resumeCleanupRun(options = {}) {
+				if (!this.cleanupCanResumeProgress) {
+					return;
+				}
+				await this.startCleanupRun({
+					...options,
+					resumeExisting: true,
+					skipFaceFrameOptionsDialog: true,
+				});
+			},
 			async startCleanupRun() {
 				const options = arguments[0] && typeof arguments[0] === 'object' ? arguments[0] : {};
 				const cleanupAction = String(options.actionOverride || this.selectedCleanupAction || 'normalize_names');
@@ -789,7 +849,11 @@ export default {
 				}
 					await this.fetchRecognitionFindings();
 					this.recognitionCurrentIndex = 0;
-					if (this.recognitionOptions.operation_mode === 'immediate' && !this.recognitionReviewFindings.length) {
+					if (
+						this.recognitionOptions.operation_mode === 'immediate'
+						&& !this.recognitionReviewFindings.length
+						&& this.cleanupCanResumeProgress
+					) {
 						await this.startCleanupRun({
 							actionOverride: this.selectedRecognitionAction,
 							resumeExisting: true,
@@ -880,7 +944,7 @@ export default {
 				await this.fetchFaceFrameFindings();
 				if (this.faceFrameReviewFindings.length) {
 					this.faceFrameCurrentIndex = 0;
-				} else if (this.faceFrameOptions.operation_mode === 'immediate') {
+				} else if (this.faceFrameOptions.operation_mode === 'immediate' && this.cleanupCanResumeProgress) {
 					await this.startCleanupRun({ skipFaceFrameOptionsDialog: true, resumeExisting: true });
 				}
 			} catch (err) {
@@ -915,9 +979,13 @@ export default {
 			this.faceFrameApplyLoading = true;
 			try {
 				await this.applyFaceFrameItems(selectedItemIds);
-				if (this.faceFrameOptions.operation_mode === 'immediate' && !this.faceFrameReviewFindings.length) {
-					await this.startCleanupRun({ skipFaceFrameOptionsDialog: true, resumeExisting: true });
-				}
+					if (
+						this.faceFrameOptions.operation_mode === 'immediate'
+						&& !this.faceFrameReviewFindings.length
+						&& this.cleanupCanResumeProgress
+					) {
+						await this.startCleanupRun({ skipFaceFrameOptionsDialog: true, resumeExisting: true });
+					}
 			} catch (err) {
 				this.cleanupStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {

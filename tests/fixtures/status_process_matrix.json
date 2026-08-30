@@ -1,0 +1,909 @@
+{
+  "schema_version": 1,
+  "status_schema_version": 1,
+  "core_phases": [
+    "idle",
+    "preparing",
+    "running",
+    "paused",
+    "stopping",
+    "stopped",
+    "finished",
+    "failed",
+    "empty",
+    "blocked"
+  ],
+  "global_rules": {
+    "identity_fields": ["operation", "action", "mode", "operation_id"],
+    "progress_totals_may_be_zero": true,
+    "ui_uses_schema_counters_only": true,
+    "stale_progress_must_not_overwrite_active_identity": true,
+    "blocked_start_mode": "none"
+  },
+  "coverage": {
+    "status_payload_contracts": "covered",
+    "ui_action_coverage": "covered",
+    "parameter_domains": "covered_by_declared_domains",
+    "parameter_cross_product_execution": "covered_by_representative_boundaries",
+    "review_resume_contracts": "covered"
+  },
+  "status_concepts": {
+    "identity": {
+      "required_fields": ["operation", "action", "mode", "operation_id"],
+      "rule": "Every progress response must identify the logical process that produced it."
+    },
+    "run_lifecycle": {
+      "non_terminal_phases": ["idle", "preparing", "running", "paused", "stopping"],
+      "terminal_phases": ["stopped", "finished", "failed", "empty", "blocked", "review_required", "needs_profiles"],
+      "rule": "A process chain must define the phases it can emit for every supported mode."
+    },
+    "review_lifecycle": {
+      "entry_states": ["review", "selected", "skipped"],
+      "write_states": ["pending", "internal_only", "written", "failed", "skipped"],
+      "rule": "Review mutations must either remove/update the current finding or resume from a persisted cursor."
+    },
+    "resume": {
+      "flags": ["resume_existing", "resume_from_progress"],
+      "cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_after_face_id", "resume_person_id", "resume_progress_counts", "scan_next_path_index", "skip_face_ids", "skip_targets"],
+      "rule": "After a review mutation, the next scan must continue after the last reviewed unit and must retain prior counters. After backend reopen with resumable stopped or unfinished progress, the UI must offer an explicit restart-or-resume choice at the owning view."
+    },
+    "storage": {
+      "runtime_modes": ["immediate"],
+      "persisted_modes": ["save_only", "findings"],
+      "rule": "Saved findings and immediate review state must be distinguishable by mode and action."
+    },
+    "stop_blocking_reconnect": {
+      "required_capabilities": ["progress", "stop", "blocked_start", "stale_progress_filter", "stopped_terminal_releases_operation"],
+      "rule": "Every long-running scan must expose progress and stop routes; concurrent incompatible starts must report blocked; after terminal stopped progress a different operation may start without inheriting stale identity or stop flags."
+    }
+  },
+  "process_chains": [
+    {
+      "id": "checks.scan",
+      "processes": ["checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts"],
+      "modes": ["scan"],
+      "entry_route": "/checks_start",
+      "progress_route": "/checks_progress",
+      "stop_route": "/checks_stop",
+      "status_route": "/checks_findings_status",
+      "parameters": ["check_type", "source_mode", "save_only", "resume_from_progress", "advance_current_result", "changed_since_days", "auto_apply_suggested_names", "auto_apply_suggested_duplicates"]
+    },
+    {
+      "id": "checks.findings_review",
+      "processes": ["checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts"],
+      "modes": ["findings"],
+      "entry_route": "/checks_start",
+      "item_route": "/checks_item",
+      "progress_route": "/checks_progress",
+      "stop_route": "/checks_stop",
+      "status_route": "/checks_findings_status",
+      "mutation_routes": ["/checks_ignore_entry", "/checks_delete_metadata_face", "/checks_replace_metadata_face_name", "/checks_replace_metadata_face_position", "/checks_assign_face_person", "/face_person_suggest"],
+      "parameters": ["check_type", "source_mode", "resume_from_progress", "advance_current_result"]
+    },
+    {
+      "id": "checks.recognition_assignment_delegate",
+      "processes": ["checks.recognition_check_person_assignments", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan", "findings"],
+      "entry_route": "/cleanup_start",
+      "progress_route": "/cleanup_progress",
+      "stop_route": "/cleanup_stop",
+      "findings_route": "/recognition_findings",
+      "review_route": "/recognition_review",
+      "apply_route": "/recognition_suggestions_apply",
+      "resume_trigger": "recognition_review",
+      "parameters": ["action", "operation_mode", "selection_mode", "include_hidden_persons", "changed_since_days", "resume_existing", "recognition_batch_size", "external_worker_prefetch_batches"]
+    },
+    {
+      "id": "face_match.scan",
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface"],
+      "modes": ["scan"],
+      "entry_route": "/face_matching_action",
+      "progress_route": "/face_matching_progress",
+      "stop_route": "/face_matching_stop",
+      "status_route": "/face_matching_findings_status",
+      "mutation_routes": ["/face_assign_match", "/face_create_match", "/face_skip_match", "/face_apply_metadata_match", "/face_assign_metadata_match", "/face_create_metadata_match", "/face_delete_metadata_match", "/face_person_suggest"],
+      "parameters": ["action", "save_only", "auto", "recognize_persons", "skip_unknown_persons", "resume_from_progress", "changed_since_days", "skip_face_ids", "skip_targets"]
+    },
+    {
+      "id": "face_match.findings_load",
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface", "face_match.load_photo_face_match_findings"],
+      "modes": ["findings"],
+      "entry_route": "/face_matching_action",
+      "status_route": "/face_matching_findings_status",
+      "mutation_routes": ["/face_assign_match", "/face_create_match", "/face_skip_match", "/face_apply_metadata_match", "/face_assign_metadata_match", "/face_create_metadata_match", "/face_delete_metadata_match", "/face_person_suggest"],
+      "parameters": ["action", "findings_action", "source_action", "refresh", "changed_since_days"]
+    },
+    {
+      "id": "face_match.recognition_unknown_delegate",
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "entry_route": "/cleanup_start",
+      "progress_route": "/cleanup_progress",
+      "stop_route": "/cleanup_stop",
+      "findings_route": "/recognition_findings",
+      "review_route": "/recognition_review",
+      "apply_route": "/recognition_suggestions_apply",
+      "resume_trigger": "recognition_review",
+      "parameters": ["action", "operation_mode", "selection_mode", "include_hidden_persons", "changed_since_days", "resume_existing", "recognition_batch_size", "external_worker_prefetch_batches"]
+    },
+    {
+      "id": "file_analysis.scan",
+      "processes": ["file_analysis.file_analysis"],
+      "modes": ["scan", "snapshot"],
+      "entry_route": "/file_analysis_start",
+      "progress_route": "/file_analysis_progress",
+      "stop_route": "/file_analysis_stop",
+      "parameters": ["force"]
+    },
+    {
+      "id": "cleanup.normalize_names",
+      "processes": ["cleanup.normalize_names"],
+      "modes": ["scan"],
+      "entry_route": "/cleanup_start",
+      "progress_route": "/cleanup_progress",
+      "stop_route": "/cleanup_stop",
+      "parameters": ["action", "targets", "changed_since_days"]
+    },
+    {
+      "id": "cleanup.standardize_face_frames",
+      "processes": ["cleanup.standardize_face_frames", "checks.face_frame_standardization"],
+      "modes": ["scan", "findings"],
+      "entry_route": "/cleanup_start",
+      "progress_route": "/cleanup_progress",
+      "stop_route": "/cleanup_stop",
+      "findings_route": "/cleanup_face_frames_findings",
+      "select_route": "/cleanup_face_frames_select",
+      "apply_route": "/cleanup_face_frames_apply",
+      "resume_trigger": "cleanup_face_frames_select",
+      "parameters": ["action", "operation_mode", "selection_mode", "targets", "changed_since_days", "scan_next_path_index", "face_frame_selection_mode", "face_frame_strategy", "face_frame_profile"]
+    },
+    {
+      "id": "cleanup.recognition_build_profiles",
+      "processes": ["cleanup.recognition_build_profiles"],
+      "modes": ["scan"],
+      "entry_route": "/cleanup_start",
+      "progress_route": "/cleanup_progress",
+      "stop_route": "/cleanup_stop",
+      "parameters": ["action", "include_hidden_persons", "exclude_outliers", "rebuild_all", "changed_since_days", "recognition_batch_size", "external_worker_prefetch_batches"]
+    },
+    {
+      "id": "cleanup.recognition_reference_outliers",
+      "processes": ["cleanup.recognition_check_reference_outliers"],
+      "modes": ["scan", "findings"],
+      "entry_route": "/cleanup_start",
+      "progress_route": "/cleanup_progress",
+      "stop_route": "/cleanup_stop",
+      "findings_route": "/recognition_findings",
+      "review_route": "/recognition_review",
+      "resume_trigger": "recognition_review",
+      "parameters": ["action", "operation_mode", "selection_mode", "include_hidden_persons", "changed_since_days", "resume_existing", "recognition_batch_size", "external_worker_prefetch_batches"]
+    },
+    {
+      "id": "cleanup.recognition_unknown",
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "entry_route": "/cleanup_start",
+      "progress_route": "/cleanup_progress",
+      "stop_route": "/cleanup_stop",
+      "findings_route": "/recognition_findings",
+      "review_route": "/recognition_review",
+      "apply_route": "/recognition_suggestions_apply",
+      "resume_trigger": "recognition_review",
+      "parameters": ["action", "operation_mode", "selection_mode", "include_hidden_persons", "changed_since_days", "resume_existing", "recognition_batch_size", "external_worker_prefetch_batches"]
+    },
+    {
+      "id": "cleanup.recognition_assignment",
+      "processes": ["cleanup.recognition_check_person_assignments"],
+      "modes": ["scan", "findings"],
+      "entry_route": "/cleanup_start",
+      "progress_route": "/cleanup_progress",
+      "stop_route": "/cleanup_stop",
+      "findings_route": "/recognition_findings",
+      "review_route": "/recognition_review",
+      "apply_route": "/recognition_suggestions_apply",
+      "resume_trigger": "recognition_review",
+      "parameters": ["action", "operation_mode", "selection_mode", "include_hidden_persons", "changed_since_days", "resume_existing", "recognition_batch_size", "external_worker_prefetch_batches"]
+    }
+  ],
+  "usage_scenarios": [
+    {
+      "id": "file_analysis_initial_scan",
+      "chains": ["file_analysis.scan"],
+      "processes": ["file_analysis.file_analysis"],
+      "modes": ["scan"],
+      "steps": ["start", "poll_progress", "stop_or_finish", "reconnect_poll"]
+    },
+    {
+      "id": "checks_save_only_then_review_findings",
+      "chains": ["checks.scan", "checks.findings_review"],
+      "processes": ["checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_save_only_scan", "poll_progress", "load_findings", "mutate_or_ignore_entry", "reload_item"]
+    },
+    {
+      "id": "checks_interactive_review_resume_after_mutation",
+      "chains": ["checks.scan", "checks.findings_review"],
+      "processes": ["checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_interactive_scan", "review_required", "mutate_entry", "resume_from_progress", "poll_progress"]
+    },
+    {
+      "id": "face_match_interactive_mutation_resume",
+      "chains": ["face_match.scan"],
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface"],
+      "modes": ["scan"],
+      "steps": ["start_scan", "poll_progress", "assign_create_skip_or_metadata_mutation", "resume_from_progress_with_skip_cursor"]
+    },
+    {
+      "id": "face_match_save_only_then_load_findings",
+      "chains": ["face_match.scan", "face_match.findings_load"],
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface", "face_match.load_photo_face_match_findings"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_save_only_scan", "load_photo_face_match_findings", "assign_create_skip_or_metadata_mutation", "refresh_findings_status"]
+    },
+    {
+      "id": "cleanup_normalize_names",
+      "chains": ["cleanup.normalize_names"],
+      "processes": ["cleanup.normalize_names"],
+      "modes": ["scan"],
+      "steps": ["start", "poll_progress", "stop_or_finish"]
+    },
+    {
+      "id": "face_frame_immediate_review_resume",
+      "chains": ["cleanup.standardize_face_frames"],
+      "processes": ["cleanup.standardize_face_frames", "checks.face_frame_standardization"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_immediate", "review_required", "select_or_apply", "resume_existing_with_scan_next_path_index"]
+    },
+    {
+      "id": "recognition_build_profiles",
+      "chains": ["cleanup.recognition_build_profiles"],
+      "processes": ["cleanup.recognition_build_profiles"],
+      "modes": ["scan"],
+      "steps": ["start", "poll_progress", "finish_or_needs_profiles"]
+    },
+    {
+      "id": "recognition_unknown_immediate_apply_resume",
+      "chains": ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"],
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_immediate", "review_required", "recognition_review", "recognition_suggestions_apply", "resume_existing_with_image_cursor"]
+    },
+    {
+      "id": "recognition_unknown_current_person_images_complete_but_persons_remaining",
+      "chains": ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"],
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan"],
+      "steps": ["start_immediate", "image_subprogress_reaches_total", "persons_remaining_counter_visible", "review_required", "recognition_suggestions_apply", "resume_existing_allowed_only_as_continuation", "blocked_start_payload_for_other_operation_until_resume_finishes"]
+    },
+    {
+      "id": "recognition_assignment_from_checks_apply_resume",
+      "chains": ["checks.recognition_assignment_delegate", "cleanup.recognition_assignment"],
+      "processes": ["checks.recognition_check_person_assignments", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_from_checks", "review_required", "recognition_review", "recognition_suggestions_apply", "resume_existing_with_image_cursor"]
+    },
+    {
+      "id": "recognition_outlier_exclude_resume",
+      "chains": ["cleanup.recognition_reference_outliers"],
+      "processes": ["cleanup.recognition_check_reference_outliers"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_immediate_or_save_only", "review_required", "recognition_review_excluded", "resume_existing_with_face_cursor"]
+    },
+    {
+      "id": "all_scan_chains_stop_request",
+      "chains": ["file_analysis.scan", "checks.scan", "checks.recognition_assignment_delegate", "face_match.scan", "face_match.recognition_unknown_delegate", "cleanup.normalize_names", "cleanup.standardize_face_frames", "cleanup.recognition_build_profiles", "cleanup.recognition_reference_outliers", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["file_analysis.file_analysis", "checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts", "face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface", "cleanup.normalize_names", "cleanup.standardize_face_frames", "cleanup.recognition_build_profiles", "cleanup.recognition_check_reference_outliers", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan"],
+      "steps": ["start_scan", "poll_progress", "stop_route", "stop_requested_phase", "terminal_stopped_or_finished"]
+    },
+    {
+      "id": "cross_operation_parallel_start_blocked",
+      "chains": ["file_analysis.scan", "checks.scan", "face_match.scan", "cleanup.normalize_names"],
+      "processes": ["file_analysis.file_analysis", "checks.dimension_issues", "face_match.search_photo_face_in_file", "cleanup.normalize_names"],
+      "modes": ["scan"],
+      "steps": ["start_first_operation", "start_incompatible_second_operation", "blocked_start_payload", "status_phase_blocked", "active_identity_not_overwritten"]
+    },
+    {
+      "id": "cross_operation_stopped_then_other_operation_starts",
+      "chains": ["file_analysis.scan", "checks.scan", "face_match.scan", "cleanup.normalize_names", "cleanup.recognition_unknown"],
+      "processes": ["file_analysis.file_analysis", "checks.dimension_issues", "face_match.search_photo_face_in_file", "cleanup.normalize_names", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan"],
+      "steps": ["start_first_operation", "poll_progress", "stop_route", "terminal_stopped", "start_different_operation", "old_progress_marked_terminal_or_stale", "new_operation_id_created", "new_active_identity_not_overwritten", "old_stop_requested_not_inherited"]
+    },
+    {
+      "id": "backend_reopen_resumable_stopped_or_uncontinued_process_offers_restart_or_resume",
+      "chains": ["checks.scan", "checks.recognition_assignment_delegate", "face_match.scan", "face_match.recognition_unknown_delegate", "cleanup.standardize_face_frames", "cleanup.recognition_reference_outliers", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts", "face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface", "cleanup.standardize_face_frames", "cleanup.recognition_check_reference_outliers", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan"],
+      "steps": ["backend_reopen", "load_persisted_stopped_or_uncontinued_progress", "resume_available_or_resume_cursor_present", "owning_view_shows_restart_choice", "owning_view_shows_resume_choice", "restart_clears_resume_cursor_and_skip_state", "resume_uses_resume_cursor_or_resume_existing", "new_operation_id_created", "old_stop_requested_not_inherited"]
+    },
+    {
+      "id": "operation_reconnect_stale_progress_filter",
+      "chains": ["file_analysis.scan", "checks.scan", "face_match.scan", "cleanup.recognition_unknown"],
+      "processes": ["file_analysis.file_analysis", "checks.dimension_issues", "face_match.search_photo_face_in_file", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan"],
+      "steps": ["browser_reconnect", "poll_progress_for_requested_identity", "stale_progress_filter", "stale_terminal_progress_does_not_overwrite_active_identity"]
+    },
+    {
+      "id": "checks_incremental_changed_since_scan",
+      "chains": ["checks.scan"],
+      "processes": ["checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts"],
+      "modes": ["scan"],
+      "steps": ["set_changed_since_days_positive", "start_scan", "persist_resume_cursor_changed_since_days", "finish_or_review"]
+    },
+    {
+      "id": "checks_auto_apply_suggested_names_and_duplicates",
+      "chains": ["checks.scan"],
+      "processes": ["checks.duplicate_faces", "checks.name_conflicts"],
+      "modes": ["scan"],
+      "steps": ["enable_auto_apply_suggested_names", "enable_auto_apply_suggested_duplicates", "start_scan", "auto_resolve_safe_findings", "persist_remaining_review_findings"]
+    },
+    {
+      "id": "face_match_auto_assign_known_during_scan",
+      "chains": ["face_match.scan"],
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface"],
+      "modes": ["scan"],
+      "steps": ["enable_auto_assign_known", "start_scan", "record_transfer_progress", "resume_cursor_tracks_skip_face_ids_and_skip_targets"]
+    },
+    {
+      "id": "face_match_stored_findings_auto_apply_known",
+      "chains": ["face_match.findings_load"],
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface", "face_match.load_photo_face_match_findings"],
+      "modes": ["findings"],
+      "steps": ["load_photo_face_match_findings", "enable_auto_assign_known", "poll_progress", "remove_transferred_findings", "refresh_findings_status"]
+    },
+    {
+      "id": "recognition_unknown_save_only_then_findings_review",
+      "chains": ["cleanup.recognition_unknown"],
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_save_only", "persist_suggestion_findings", "load_findings", "recognition_review", "recognition_suggestions_apply"]
+    },
+    {
+      "id": "recognition_assignment_save_only_then_findings_review",
+      "chains": ["checks.recognition_assignment_delegate", "cleanup.recognition_assignment"],
+      "processes": ["checks.recognition_check_person_assignments", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_save_only_from_checks_or_cleanup", "persist_assignment_findings", "load_findings", "recognition_review", "recognition_suggestions_apply"]
+    },
+    {
+      "id": "recognition_outlier_save_only_then_findings_review",
+      "chains": ["cleanup.recognition_reference_outliers"],
+      "processes": ["cleanup.recognition_check_reference_outliers"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_save_only", "persist_outlier_findings", "load_findings", "recognition_review_excluded", "profile_reference_excluded"]
+    },
+    {
+      "id": "recognition_safe_only_auto_apply",
+      "chains": ["face_match.recognition_unknown_delegate", "checks.recognition_assignment_delegate", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["face_match.recognition_analyze_unknown_faces", "checks.recognition_check_person_assignments", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan"],
+      "steps": ["set_selection_mode_safe_only", "start_immediate_or_save_only", "safe_suggestions_selected", "unsafe_suggestions_remain_review", "resume_cursor_if_immediate_review_stops"]
+    },
+    {
+      "id": "recognition_needs_profiles_before_suggestions",
+      "chains": ["cleanup.recognition_reference_outliers", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["cleanup.recognition_check_reference_outliers", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan"],
+      "steps": ["start_without_profile_state", "terminal_needs_profiles", "run_recognition_build_profiles", "restart_original_action"]
+    },
+    {
+      "id": "insightface_optional_component_missing",
+      "chains": ["face_match.scan", "cleanup.standardize_face_frames", "cleanup.recognition_build_profiles", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["face_match.search_missing_faces_insightface", "cleanup.standardize_face_frames", "cleanup.recognition_build_profiles", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan"],
+      "steps": ["probe_insightface_or_native_processor", "optional_component_unavailable", "status_phase_failed_or_empty", "ui_shows_non_blocking_notice"]
+    },
+    {
+      "id": "insightface_models_missing_or_unlicensed",
+      "chains": ["face_match.scan", "cleanup.standardize_face_frames", "cleanup.recognition_build_profiles", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["face_match.search_missing_faces_insightface", "cleanup.standardize_face_frames", "cleanup.recognition_build_profiles", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan"],
+      "steps": ["probe_model_root_and_model_name", "model_missing_or_license_not_acknowledged", "status_phase_failed", "message_identifies_required_component"]
+    },
+    {
+      "id": "external_worker_prefetch_enabled",
+      "chains": ["cleanup.recognition_build_profiles", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["cleanup.recognition_build_profiles", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan"],
+      "steps": ["enable_external_worker_prefetch_batches", "start_recognition_scan", "batch_prefetch_reference_embeddings", "fallback_to_local_processor_if_worker_unavailable", "preserve_progress_and_resume_cursor"]
+    },
+    {
+      "id": "face_frame_save_only_then_findings_apply",
+      "chains": ["cleanup.standardize_face_frames"],
+      "processes": ["cleanup.standardize_face_frames", "checks.face_frame_standardization"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_save_only", "persist_face_frame_findings", "load_findings", "select_items", "apply_selected", "checks_face_frame_standardization_findings_alias"]
+    },
+    {
+      "id": "empty_result_terminal_state",
+      "chains": ["file_analysis.scan", "checks.scan", "face_match.scan", "cleanup.standardize_face_frames", "cleanup.recognition_unknown"],
+      "processes": ["file_analysis.file_analysis", "checks.dimension_issues", "face_match.search_photo_face_in_file", "cleanup.standardize_face_frames", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan"],
+      "steps": ["start_with_no_candidates_or_no_findings", "terminal_empty", "progress_total_zero_allowed", "ui_does_not_offer_invalid_resume"]
+    },
+    {
+      "id": "mutation_error_reconcile_findings",
+      "chains": ["checks.findings_review", "face_match.findings_load", "cleanup.standardize_face_frames", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["checks.dimension_issues", "face_match.load_photo_face_match_findings", "cleanup.standardize_face_frames", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["findings"],
+      "steps": ["load_finding", "mutation_fails", "refresh_findings", "preserve_or_reconcile_current_index", "status_phase_failed_without_losing_identity"]
+    }
+  ],
+  "parameter_domains": {
+    "checks": {
+      "selected_action": ["scan", "findings"],
+      "save_only": [false, true],
+      "changed_since_days": ["0", "positive"],
+      "auto_apply_suggested_names": [false, true],
+      "auto_apply_suggested_duplicates": [false, true],
+      "include_hidden_persons": [false, true],
+      "insightface_assignment_selection_mode": ["review_all", "safe_only"],
+      "insightface_assignment_operation_mode": ["immediate", "save_only", "findings"]
+    },
+    "face_match": {
+      "save_only": [false, true],
+      "use_stored_findings": [false, true],
+      "auto_assign_known": [false, true],
+      "auto_apply_safe_insightface_persons": [false, true],
+      "recognize_missing_insightface_persons": [false, true],
+      "skip_unknown_persons": [false, true],
+      "changed_since_days": ["0", "positive"],
+      "preview_mode": ["photo", "face"]
+    },
+    "cleanup": {
+      "targets": ["ACD", "MICROSOFT", "MWG_REGIONS"],
+      "changed_since_days": ["0", "positive"],
+      "operation_mode": ["immediate", "save_only", "findings"],
+      "selection_mode": ["review_all", "safe_only", "exclude_confirmed"],
+      "include_hidden_persons": [false, true],
+      "exclude_outliers": [false, true],
+      "rebuild_all": [false, true],
+      "resume_existing": [false, true],
+      "recognition_batch_size": [1, 8, 64],
+      "external_worker_prefetch_batches": [false, true],
+      "face_frame_selection_mode": ["review_all", "safe_matches"],
+      "face_frame_strategy": ["insightface", "metadata"],
+      "face_frame_profile": ["photos", "metadata"]
+    }
+  },
+  "processes": [
+    {
+      "id": "checks.dimension_issues",
+      "operation": "checks",
+      "action": "dimension_issues",
+      "ui_sources": ["ChecksView.selectedChecksType"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "files",
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": {
+            "save_only": ["findings", "resolved"],
+            "interactive": ["findings", "resolved", "ignored", "skipped", "errors"]
+          }
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["resolved", "ignored", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "checks.duplicate_faces",
+      "operation": "checks",
+      "action": "duplicate_faces",
+      "ui_sources": ["ChecksView.selectedChecksType"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "files",
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": {
+            "save_only": ["findings", "resolved"],
+            "interactive": ["findings", "resolved", "ignored", "skipped", "errors"]
+          }
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["resolved", "ignored", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "checks.position_deviations",
+      "operation": "checks",
+      "action": "position_deviations",
+      "ui_sources": ["ChecksView.selectedChecksType"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "files",
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": {
+            "save_only": ["findings", "resolved"],
+            "interactive": ["findings", "resolved", "ignored", "skipped", "errors"]
+          }
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["resolved", "ignored", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "checks.name_conflicts",
+      "operation": "checks",
+      "action": "name_conflicts",
+      "ui_sources": ["ChecksView.selectedChecksType"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "files",
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": {
+            "save_only": ["findings", "resolved"],
+            "interactive": ["findings", "resolved", "ignored", "skipped", "errors"]
+          }
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["resolved", "ignored", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "checks.recognition_check_person_assignments",
+      "operation": "checks",
+      "action": "recognition_check_person_assignments",
+      "delegates_to": "cleanup.recognition_check_person_assignments",
+      "ui_sources": ["ChecksView.selectedChecksType"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "images",
+          "running_phases": ["preparing", "persons_loaded", "reading_assigned_images", "building_assignment_suggestions"],
+          "terminal_phases": ["review_required", "finished", "needs_profiles", "stopped", "failed", "blocked"],
+          "counters": ["profiles", "findings", "images", "images_analyzed", "images_skipped_unchanged", "faces", "references", "errors"],
+          "reviewable": true,
+          "resume_required_after_review": true,
+          "resume_strategy": "cursor",
+          "resume_cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_person_id", "resume_progress_counts"]
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["transferred", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "checks.face_frame_standardization",
+      "operation": "checks",
+      "action": "face_frame_standardization",
+      "delegates_to": "cleanup.standardize_face_frames",
+      "ui_sources": ["CleanupView.selectedCleanupAction"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "files",
+          "running_phases": ["preparing", "listing_files", "preparing_detector", "running"],
+          "terminal_phases": ["review_required", "finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["findings", "resolved"],
+          "reviewable": true,
+          "resume_required_after_review": true,
+          "resume_strategy": "path_index_cursor"
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["review_required", "finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["resolved", "ignored", "skipped", "errors"],
+          "reviewable": true
+        }
+      }
+    },
+    {
+      "id": "face_match.search_photo_face_in_file",
+      "operation": "face_match",
+      "action": "search_photo_face_in_file",
+      "ui_sources": ["FaceMatchView.selectedFaceMatchingAction"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "persons",
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopping", "stopped", "failed", "blocked"],
+          "counters": {
+            "save_only": ["findings"],
+            "interactive": ["transferred", "skipped", "created", "assigned", "updated", "errors"]
+          }
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["transferred", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "face_match.search_file_face_in_sources",
+      "operation": "face_match",
+      "action": "search_file_face_in_sources",
+      "ui_sources": ["FaceMatchView.selectedFaceMatchingAction"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "persons",
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopping", "stopped", "failed", "blocked"],
+          "counters": {
+            "save_only": ["findings"],
+            "interactive": ["transferred", "skipped", "created", "assigned", "updated", "errors"]
+          }
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["transferred", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "face_match.mark_missing_photos_faces",
+      "operation": "face_match",
+      "action": "mark_missing_photos_faces",
+      "ui_sources": ["FaceMatchView.selectedFaceMatchingAction"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "persons",
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopping", "stopped", "failed", "blocked"],
+          "counters": {
+            "save_only": ["findings"],
+            "interactive": ["transferred", "skipped", "created", "assigned", "updated", "errors"]
+          }
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["transferred", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "face_match.search_missing_faces_insightface",
+      "operation": "face_match",
+      "action": "search_missing_faces_insightface",
+      "ui_sources": ["FaceMatchView.selectedFaceMatchingAction"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "persons",
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopping", "stopped", "failed", "blocked"],
+          "counters": {
+            "save_only": ["findings"],
+            "interactive": ["transferred", "skipped", "created", "assigned", "updated", "errors"]
+          }
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["transferred", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "face_match.recognition_analyze_unknown_faces",
+      "operation": "face_match",
+      "action": "recognition_analyze_unknown_faces",
+      "delegates_to": "cleanup.recognition_analyze_unknown_faces",
+      "ui_sources": ["FaceMatchView.selectedFaceMatchingAction"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "images",
+          "running_phases": ["preparing", "unknown_loaded", "reading_unknown_images", "building_suggestions"],
+          "terminal_phases": ["review_required", "finished", "needs_profiles", "stopped", "failed", "blocked"],
+          "counters": ["profiles", "findings", "images", "images_analyzed", "images_skipped_unchanged", "faces", "references", "errors"],
+          "reviewable": true,
+          "resume_required_after_review": true,
+          "resume_strategy": "cursor"
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["transferred", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "face_match.load_photo_face_match_findings",
+      "operation": "face_match",
+      "action": "load_photo_face_match_findings",
+      "ui_sources": ["FaceMatchView.faceMatchUseStoredFindings"],
+      "modes": {
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["transferred", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "file_analysis.file_analysis",
+      "operation": "file_analysis",
+      "action": "file_analysis",
+      "ui_sources": ["StatusView"],
+      "modes": {
+        "scan": {
+          "progress_kind": "files",
+          "alternate_progress_kinds": ["none"],
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["files_seen", "files_matched", "files_analyzed", "faces_total", "faces_named", "faces_unnamed"]
+        },
+        "snapshot": {
+          "progress_kind": "none",
+          "running_phases": [],
+          "terminal_phases": ["idle", "finished", "empty", "failed"],
+          "counters": ["files_seen", "files_matched", "files_analyzed", "faces_total", "faces_named", "faces_unnamed"]
+        }
+      }
+    },
+    {
+      "id": "cleanup.normalize_names",
+      "operation": "cleanup",
+      "action": "normalize_names",
+      "ui_sources": ["CleanupView.selectedCleanupAction"],
+      "modes": {
+        "scan": {
+          "progress_kind": "persons",
+          "alternate_progress_kinds": ["files"],
+          "running_phases": ["preparing", "running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["processed", "updated", "errors"]
+        }
+      }
+    },
+    {
+      "id": "cleanup.standardize_face_frames",
+      "operation": "cleanup",
+      "action": "standardize_face_frames",
+      "ui_sources": ["CleanupView.selectedCleanupAction"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "files",
+          "running_phases": ["preparing", "listing_files", "preparing_detector", "running"],
+          "terminal_phases": ["review_required", "finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["processed", "updated", "errors"],
+          "reviewable": true,
+          "resume_required_after_review": true,
+          "resume_strategy": "path_index_cursor"
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["review_required", "finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["processed", "updated", "errors"],
+          "reviewable": true
+        }
+      }
+    },
+    {
+      "id": "cleanup.recognition_build_profiles",
+      "operation": "cleanup",
+      "action": "recognition_build_profiles",
+      "ui_sources": ["CleanupView.selectedCleanupAction"],
+      "modes": {
+        "scan": {
+          "progress_kind": "images",
+          "alternate_progress_kinds": ["persons"],
+          "running_phases": ["preparing", "persons_loaded", "reading_reference_images", "building_profiles"],
+          "terminal_phases": ["finished", "stopped", "failed", "blocked"],
+          "counters": ["profiles", "findings", "images", "images_analyzed", "images_skipped_unchanged", "references", "errors"]
+        }
+      }
+    },
+    {
+      "id": "cleanup.recognition_check_reference_outliers",
+      "operation": "cleanup",
+      "action": "recognition_check_reference_outliers",
+      "ui_sources": ["CleanupView.selectedCleanupAction"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "persons",
+          "alternate_progress_kinds": ["images"],
+          "running_phases": ["preparing", "building_outliers"],
+          "terminal_phases": ["review_required", "finished", "needs_profiles", "stopped", "failed", "blocked"],
+          "counters": ["profiles", "findings", "images", "images_analyzed", "images_skipped_unchanged", "faces", "references", "errors"],
+          "reviewable": true,
+          "resume_required_after_review": true,
+          "resume_strategy": "cursor",
+          "resume_cursor_fields": ["resume_start_person_index", "resume_after_face_id", "resume_person_id", "resume_progress_counts"]
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["review_required", "finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["processed", "updated", "errors"],
+          "reviewable": true
+        }
+      }
+    },
+    {
+      "id": "cleanup.recognition_analyze_unknown_faces",
+      "operation": "cleanup",
+      "action": "recognition_analyze_unknown_faces",
+      "ui_sources": ["FaceMatchView.selectedFaceMatchingAction"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "images",
+          "running_phases": ["preparing", "unknown_loaded", "reading_unknown_images", "building_suggestions"],
+          "terminal_phases": ["review_required", "finished", "needs_profiles", "stopped", "failed", "blocked"],
+          "counters": ["profiles", "findings", "images", "images_analyzed", "images_skipped_unchanged", "faces", "references", "errors"],
+          "reviewable": true,
+          "resume_required_after_review": true,
+          "resume_strategy": "cursor",
+          "resume_cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_person_id", "resume_progress_counts"]
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["transferred", "skipped", "errors"]
+        }
+      }
+    },
+    {
+      "id": "cleanup.recognition_check_person_assignments",
+      "operation": "cleanup",
+      "action": "recognition_check_person_assignments",
+      "ui_sources": ["ChecksView.selectedChecksType"],
+      "modes": {
+        "scan": {
+          "save_only_variants": [false, true],
+          "progress_kind": "images",
+          "running_phases": ["preparing", "persons_loaded", "reading_assigned_images", "building_assignment_suggestions"],
+          "terminal_phases": ["review_required", "finished", "needs_profiles", "stopped", "failed", "blocked"],
+          "counters": ["profiles", "findings", "images", "images_analyzed", "images_skipped_unchanged", "faces", "references", "errors"],
+          "reviewable": true,
+          "resume_required_after_review": true,
+          "resume_strategy": "cursor",
+          "resume_cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_person_id", "resume_progress_counts"]
+        },
+        "findings": {
+          "progress_kind": "entries",
+          "running_phases": ["running"],
+          "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
+          "counters": ["transferred", "skipped", "errors"]
+        }
+      }
+    }
+  ]
+}

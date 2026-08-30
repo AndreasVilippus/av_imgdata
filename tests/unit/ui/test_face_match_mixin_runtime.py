@@ -2097,3 +2097,47 @@ def test_primary_button_starts_recognition_when_cleanup_progress_is_stopped_runt
 
     assert result["label"] == "Start"
     assert [entry["type"] for entry in result["calls"]] == ["sync", "start-cleanup"]
+
+
+def test_reopen_resumable_face_match_progress_offers_restart_and_resume_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const calls = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'search_file_face_in_sources',
+              faceMatchLoading: false,
+              faceMatchProgress: {
+                action: 'search_file_face_in_sources',
+                running: false,
+                stop_requested: false,
+                resume_available: true,
+                resume_cursor: {
+                  path_index: 12,
+                  skip_targets: ['target-a'],
+                },
+                status: { phase: 'stopped' },
+              },
+              startFaceMatchingAction: async (options) => calls.push(options),
+            });
+
+            assert.strictEqual(component.faceMatchHasActiveProgressState, false);
+            assert.strictEqual(component.faceMatchCanResumeProgress, true);
+            assert.strictEqual(component.faceMatchPrimaryButtonLabel, 'Restart');
+
+            await component.resumeFaceMatchingAction();
+
+            console.log(JSON.stringify({
+              canResume: component.faceMatchCanResumeProgress,
+              label: component.faceMatchPrimaryButtonLabel,
+              calls,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "canResume": True,
+        "label": "Restart",
+        "calls": [{"resetSkippedFaceIds": False, "resumeFromProgress": True}],
+    }

@@ -19,6 +19,14 @@
 							{{ vm.faceMatchPrimaryButtonLabel }}
 						</v-button>
 						<v-button
+							v-if="vm.faceMatchCanResumeProgress || (vm.faceMatchRecognitionActionSelected && vm.cleanupCanResumeProgress)"
+							@click="vm.resumeFaceMatchingAction"
+							:disabled="vm.faceMatchActionLocked || vm.faceMatchLoading || vm.cleanupLoading"
+							style="width: 160px;"
+						>
+							{{ vm.$avt('face_match:button_resume', 'Resume') }}
+						</v-button>
+						<v-button
 							v-if="vm.hasNextFaceMatch || (vm.faceMatchReviewingStoredFindings && vm.faceMatchFindingEntries.length > 0)"
 							@click="vm.loadNextFaceMatch"
 							:disabled="vm.faceMatchInteractionDisabled || !vm.hasNextFaceMatch"

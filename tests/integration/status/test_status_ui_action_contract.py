@@ -40,6 +40,36 @@ def test_face_match_restart_button_is_limited_to_saved_file_search():
     assert "face_match:button_start" in label
 
 
+def test_reopen_resume_choice_is_available_in_owning_views():
+    face_match_view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+    checks_view = Path("ui/src/views/ChecksView.vue").read_text(encoding="utf-8")
+    cleanup_view = Path("ui/src/views/CleanupView.vue").read_text(encoding="utf-8")
+    face_match_mixin = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
+    checks_mixin = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
+    cleanup_mixin = Path("ui/src/mixins/cleanupMixin.js").read_text(encoding="utf-8")
+
+    assert 'v-if="vm.faceMatchCanResumeProgress || (vm.faceMatchRecognitionActionSelected && vm.cleanupCanResumeProgress)"' in face_match_view
+    assert '@click="vm.resumeFaceMatchingAction"' in face_match_view
+    assert "face_match:button_resume" in face_match_view
+    assert "faceMatchCanResumeProgress()" in face_match_mixin
+    assert "resumeFaceMatchingAction()" in face_match_mixin
+    assert "resumeFromProgress: true" in face_match_mixin
+
+    assert 'v-if="vm.checksCanResumeProgress"' in checks_view
+    assert '@click="vm.resumeChecksProgress"' in checks_view
+    assert "checks:button_resume" in checks_view
+    assert "checksCanResumeProgress()" in checks_mixin
+    assert "resumeChecksProgress()" in checks_mixin
+    assert "resumeFromProgress: true" in checks_mixin
+
+    assert 'v-if="vm.cleanupCanResumeProgress"' in cleanup_view
+    assert '@click="vm.resumeCleanupRun"' in cleanup_view
+    assert "cleanup:button_resume" in cleanup_view
+    assert "cleanupCanResumeProgress()" in cleanup_mixin
+    assert "resumeCleanupRun(" in cleanup_mixin
+    assert "resumeExisting: true" in cleanup_mixin
+
+
 def test_face_match_save_only_and_use_stored_findings_are_mutually_exclusive():
     source = Path("ui/src/mixins/faceMatchMixin.js").read_text(encoding="utf-8")
 

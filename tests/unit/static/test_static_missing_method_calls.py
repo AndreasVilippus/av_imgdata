@@ -26,6 +26,7 @@ UI_ALLOWED_MISSING_THIS_METHODS = {
     "normalizeConfig",
     "normalizeFaceMatchName",
     "resolveLocalIconUrl",
+    "resumeCleanupRun",
     "startCleanupRun",
     "startCleanupProgressPolling",
     "startNamedPolling",

@@ -34,6 +34,7 @@ def _service():
         _buildStatusProgress=lambda **kwargs: kwargs,
         _buildStatusPayload=lambda **kwargs: kwargs,
         _setCleanupProgress=lambda *args, **kwargs: None,
+        getCleanupProgress=lambda *_args, **_kwargs: {},
     )
     return FaceRecognitionService(backend), file_analysis
 
@@ -457,6 +458,211 @@ def test_assignment_resume_skips_persons_before_previous_review_finding():
     service._build_assignment_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
 
     assert scanned_person_ids == [2, 3]
+
+
+def test_unknown_face_resume_passes_previous_image_cursor():
+    service, findings = _service()
+    options = service.normalize_options({"operation_mode": "immediate", "resume_existing": True})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {"person_id": 100, "person_name": "Target", "used_count": 3, "centroid_embedding": [1.0, 0.0], "medoid": {}},
+        ],
+    }
+    service._write_findings(
+        service.FINDING_SUGGESTIONS,
+        service.ACTION_SUGGEST,
+        {
+            **options,
+            "resume_start_person_index": 0,
+            "resume_after_image_id": 22,
+            "resume_person_id": 9,
+        },
+        [{
+            "suggestion_id": "rec-220",
+            "unknown_person_id": 9,
+            "unknown_face_id": 220,
+            "image_id": 22,
+            "selection_state": "selected",
+            "write_state": "written",
+        }],
+        user_key="u",
+    )
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
+    service.backend.photos = SimpleNamespace(listFotoTeamPersonUnknown=lambda **_kwargs: [
+        {"id": 9, "name": "Unknown"},
+    ])
+    service._prepared_embedder = lambda _options: SimpleNamespace()
+    contexts = []
+
+    def references(**kwargs):
+        contexts.append(kwargs["progress_context"])
+        return []
+
+    service._person_references = references
+
+    service._build_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    assert contexts[0]["resume_after_image_id"] == 22
+
+
+def test_outlier_resume_skips_profiles_and_references_before_cursor():
+    service, findings = _service()
+    options = service.normalize_options({"operation_mode": "immediate", "resume_existing": True})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {
+                "person_id": 1,
+                "person_name": "One",
+                "used_count": 3,
+                "centroid_embedding": [1.0, 0.0],
+                "medoid": {},
+                "references": [{"face_id": 11, "image_id": 111, "embedding": [11.0], "image_path": "one.jpg"}],
+            },
+            {
+                "person_id": 2,
+                "person_name": "Two",
+                "used_count": 3,
+                "centroid_embedding": [1.0, 0.0],
+                "medoid": {},
+                "references": [
+                    {"face_id": 21, "image_id": 211, "embedding": [21.0], "image_path": "two-1.jpg"},
+                    {"face_id": 22, "image_id": 222, "embedding": [22.0], "image_path": "two-2.jpg"},
+                    {"face_id": 23, "image_id": 223, "embedding": [23.0], "image_path": "two-3.jpg"},
+                ],
+            },
+            {
+                "person_id": 3,
+                "person_name": "Three",
+                "used_count": 3,
+                "centroid_embedding": [1.0, 0.0],
+                "medoid": {},
+                "references": [{"face_id": 31, "image_id": 311, "embedding": [31.0], "image_path": "three.jpg"}],
+            },
+        ],
+    }
+    service._write_findings(
+        service.FINDING_OUTLIERS,
+        service.ACTION_OUTLIERS,
+        {
+            **options,
+            "resume_start_person_index": 1,
+            "resume_after_face_id": 22,
+            "resume_person_id": 2,
+        },
+        [{
+            "outlier_id": "out-22",
+            "person_id": 2,
+            "face_id": 22,
+            "selection_state": "selected",
+            "write_state": "written",
+        }],
+        user_key="u",
+    )
+    seen_embeddings = []
+    service._prepared_embedder = lambda _options: SimpleNamespace()
+    service._similarity = lambda embedding, _centroid: seen_embeddings.append(embedding[0]) or 0.0
+    service._rank_profiles = lambda *_args, **_kwargs: [(0.1, {}, 0.0, {}, 0.0)]
+
+    service._build_outliers(user_key="u", options=options)
+
+    assert seen_embeddings == [23.0]
+
+
+def test_assignment_immediate_review_persists_explicit_resume_cursor():
+    service, findings = _service()
+    options = service.normalize_options({"operation_mode": "immediate"})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {"person_id": 1, "person_name": "One", "used_count": 3, "centroid_embedding": [1.0, 0.0], "medoid": {}},
+            {"person_id": 2, "person_name": "Two", "used_count": 3, "centroid_embedding": [0.0, 1.0], "medoid": {}},
+        ],
+    }
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
+    service.backend.photos = SimpleNamespace(listFotoTeamPersonKnown=lambda **_kwargs: [
+        {"id": 1, "name": "One"},
+        {"id": 2, "name": "Two"},
+    ])
+    progress_updates = []
+    service.backend._setCleanupProgress = lambda *args, **kwargs: progress_updates.append(kwargs)
+    service.backend.getCleanupProgress = lambda *_args, **_kwargs: {
+        "images_scanned": 12,
+        "images_total": 20,
+        "persons_scanned": 1,
+        "persons_total": 2,
+    }
+    service._prepared_embedder = lambda _options: SimpleNamespace()
+    service._person_references = lambda **kwargs: [{
+        "face_id": 220,
+        "image_id": 22,
+        "image_path": "/volume1/photo/image.jpg",
+        "bbox": {},
+        "embedding": [1.0, 0.0],
+    }] if int(kwargs["person"]["id"]) == 2 else []
+    service._rank_profiles = lambda *_args, **_kwargs: [(0.5, {
+        "person_id": 1,
+        "person_name": "One",
+        "medoid": {},
+    }, 0.1, {}, 0.4)]
+
+    service._build_assignment_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    payload = service.findings(service.ACTION_ASSIGNMENT, user_key="u", operation_mode="immediate")
+    assert payload["options"]["resume_start_person_index"] == 1
+    assert payload["options"]["resume_after_image_id"] == 22
+    assert payload["options"]["resume_person_id"] == 2
+    assert payload["options"]["resume_progress_counts"]["images_scanned"] == 12
+    assert progress_updates[0]["persons_scanned"] == 0
+    assert progress_updates[0]["persons_total"] == 2
+    assert progress_updates[-1]["persons_scanned"] == 1
+    assert progress_updates[-1]["persons_total"] == 2
+
+
+def test_unknown_face_immediate_review_persists_resume_cursor():
+    service, findings = _service()
+    options = service.normalize_options({"operation_mode": "immediate"})
+    state_key = service._profile_state_key(options)
+    findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
+        "profiles": [
+            {"person_id": 100, "person_name": "Target", "used_count": 3, "centroid_embedding": [1.0, 0.0], "medoid": {}},
+        ],
+    }
+    service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: "/volume1/photo")
+    service.backend.photos = SimpleNamespace(listFotoTeamPersonUnknown=lambda **_kwargs: [
+        {"id": 9, "name": "Unknown"},
+    ])
+    service.backend.getCleanupProgress = lambda *_args, **_kwargs: {
+        "images_scanned": 951,
+        "images_total": 990,
+        "persons_scanned": 0,
+        "persons_total": 1596,
+        "faces_scanned": 12,
+        "references_count": 1,
+    }
+    service._prepared_embedder = lambda _options: SimpleNamespace()
+    service._person_references = lambda **_kwargs: [{
+        "face_id": 220,
+        "image_id": 22,
+        "image_path": "/volume1/photo/image.jpg",
+        "bbox": {},
+        "embedding": [1.0, 0.0],
+    }]
+    service._rank_profiles = lambda *_args, **_kwargs: [(0.5, {
+        "person_id": 100,
+        "person_name": "Target",
+        "medoid": {},
+    }, 0.1, {}, 0.4)]
+
+    service._build_suggestions(user_key="u", cookies={}, base_url="https://dsm", options=options)
+
+    payload = service.findings(service.ACTION_SUGGEST, user_key="u", operation_mode="immediate")
+    assert payload["entries"][0]["unknown_person_id"] == 9
+    assert payload["options"]["resume_start_person_index"] == 0
+    assert payload["options"]["resume_after_image_id"] == 22
+    assert payload["options"]["resume_person_id"] == 9
+    assert payload["options"]["resume_progress_counts"]["images_scanned"] == 951
 
 
 def test_person_reference_resume_skips_images_through_previous_review_image(tmp_path):
@@ -1786,3 +1992,80 @@ def test_recognition_status_schema_uses_integrated_modes_for_operation_modes():
 
     service.sync_review_progress(user_key="u", action=service.ACTION_SUGGEST, operation_mode="findings")
     assert progress_updates[-1][1]["status"]["mode"] == "findings"
+
+
+def test_finish_review_scan_uses_open_finding_name_instead_of_stale_current_name():
+    service, _findings = _service()
+    progress_updates = []
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+    service.backend.getCleanupProgress = lambda _user_key, _action: {
+        "current_name": "Alter Name",
+        "images_scanned": 512,
+        "images_total": 512,
+        "persons_scanned": 1,
+        "persons_total": 1596,
+    }
+
+    service._finish_review_scan(
+        "u",
+        service.ACTION_SUGGEST,
+        service.normalize_options({"operation_mode": "immediate"}),
+        [{
+            "suggestion_id": "rec-1",
+            "selection_state": "selected",
+            "write_state": "written",
+            "best_person_name": "Geschrieben",
+            "image_path": "/volume1/photo/written.heic",
+        }, {
+            "suggestion_id": "rec-2",
+            "selection_state": "review",
+            "write_state": "pending",
+            "best_person_name": "Oskar Meyer",
+            "image_path": "/volume1/photo/review.heic",
+        }],
+    )
+
+    update = progress_updates[-1][1]
+    assert update["phase"] == "review_required"
+    assert update["current_name"] == "Oskar Meyer"
+    assert update["current_path"] == "/volume1/photo/review.heic"
+    assert update["images_scanned"] == 512
+    assert update["images_total"] == 512
+    counter_values = {counter["key"]: counter["value"] for counter in update["status"]["counters"]}
+    assert counter_values["persons"] == 1
+    assert counter_values["persons_remaining"] == 1595
+
+
+def test_finish_review_scan_clears_current_name_when_no_open_finding_remains():
+    service, _findings = _service()
+    progress_updates = []
+    service.backend._buildStatusProgress = lambda **kwargs: kwargs
+    service.backend._buildStatusCounter = lambda key, **kwargs: {"key": key, **kwargs}
+    service.backend._buildStatusPayload = lambda **kwargs: kwargs
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
+    service.backend.getCleanupProgress = lambda _user_key, _action: {
+        "current_name": "Alter Name",
+        "images_scanned": 512,
+        "images_total": 512,
+    }
+
+    service._finish_review_scan(
+        "u",
+        service.ACTION_SUGGEST,
+        service.normalize_options({"operation_mode": "immediate"}),
+        [{
+            "suggestion_id": "rec-1",
+            "selection_state": "selected",
+            "write_state": "written",
+            "best_person_name": "Geschrieben",
+            "image_path": "/volume1/photo/written.heic",
+        }],
+    )
+
+    update = progress_updates[-1][1]
+    assert update["phase"] == "finished"
+    assert update["current_name"] == ""
+    assert update["current_path"] == ""

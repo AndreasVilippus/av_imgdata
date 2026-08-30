@@ -27,6 +27,14 @@
 							{{ vm.cleanupPrimaryButtonLabel }}
 						</v-button>
 						<v-button
+							v-if="vm.cleanupCanResumeProgress"
+							@click="vm.resumeCleanupRun"
+							:disabled="!vm.cleanupCanStart"
+							style="width: 160px;"
+						>
+							{{ vm.$avt('cleanup:button_resume', 'Resume') }}
+						</v-button>
+						<v-button
 							v-if="vm.selectedCleanupAction === 'standardize_face_frames' && vm.faceFrameSelectedCount > 0"
 							@click="vm.applySelectedFaceFrames"
 							:disabled="vm.cleanupLoading || vm.faceFrameApplyLoading"
