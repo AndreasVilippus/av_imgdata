@@ -594,6 +594,112 @@ def test_cleanup_running_action_rejects_foreign_idle_progress_runtime():
     assert result == {"applied": False, "action": "recognition_check_person_assignments"}
 
 
+def test_face_match_reconnect_adopts_running_unknown_recognition_cleanup_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              selectedCleanupAction: 'recognition_check_person_assignments',
+              cleanupRuntimeAction: '',
+              cleanupLoading: false,
+              recognitionOptions: {
+                operation_mode: 'immediate',
+                include_hidden_persons: false,
+                min_faces_per_person: 3,
+                changed_since_days: 30,
+                recognition_batch_size: 8,
+              },
+            });
+
+            const applied = component.applyCleanupProgress({
+              action: 'recognition_analyze_unknown_faces',
+              operation: 'cleanup',
+              mode: 'scan',
+              running: true,
+              phase: 'unknown_loaded',
+              operation_id: 'cleanup-recognition_analyze_unknown_faces-1',
+              options: {
+                operation_mode: 'immediate',
+                selection_mode: 'review_all',
+                include_hidden_persons: true,
+                min_faces_per_person: 5,
+                changed_since_days: 0,
+                max_profile_reference_faces_per_person: 1000,
+                recognition_batch_size: 12,
+                external_worker_prefetch_batches: true,
+              },
+            });
+
+            assert.strictEqual(applied, true);
+            assert.strictEqual(component.cleanupRuntimeAction, 'recognition_analyze_unknown_faces');
+            assert.strictEqual(component.selectedFaceMatchingAction, 'recognition_analyze_unknown_faces');
+            assert.strictEqual(component.selectedCleanupAction, 'recognition_check_person_assignments');
+            assert.strictEqual(component.recognitionOptions.include_hidden_persons, true);
+            assert.strictEqual(component.recognitionOptions.min_faces_per_person, 5);
+            assert.strictEqual(component.recognitionOptions.changed_since_days, 0);
+            assert.strictEqual(component.recognitionOptions.recognition_batch_size, 12);
+            console.log(JSON.stringify({
+              applied,
+              runtimeAction: component.cleanupRuntimeAction,
+              faceMatchAction: component.selectedFaceMatchingAction,
+              cleanupAction: component.selectedCleanupAction,
+              options: {
+                includeHidden: component.recognitionOptions.include_hidden_persons,
+                minFaces: component.recognitionOptions.min_faces_per_person,
+                changedSince: component.recognitionOptions.changed_since_days,
+                batchSize: component.recognitionOptions.recognition_batch_size,
+              },
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "applied": True,
+        "runtimeAction": "recognition_analyze_unknown_faces",
+        "faceMatchAction": "recognition_analyze_unknown_faces",
+        "cleanupAction": "recognition_check_person_assignments",
+        "options": {
+            "includeHidden": True,
+            "minFaces": 5,
+            "changedSince": 0,
+            "batchSize": 12,
+        },
+    }
+
+
+def test_unknown_recognition_face_progress_counts_allow_resume_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              cleanupLoading: false,
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                resume_available: false,
+                unknown_faces_scanned: 8,
+                unknown_faces_total: 12,
+                status: { phase: 'review_required' },
+              },
+            });
+
+            assert.strictEqual(component.cleanupCanResumeProgress, true);
+            console.log(JSON.stringify({ canResume: component.cleanupCanResumeProgress }));
+            """
+        )
+    )
+
+    assert result == {"canResume": True}
+
+
 def test_last_immediate_recognition_review_does_not_autoresume_when_scan_is_complete_runtime():
     result = run_node(
         mixin_runtime_script(

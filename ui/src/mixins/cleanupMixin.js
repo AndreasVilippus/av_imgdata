@@ -265,6 +265,8 @@ export default {
 				};
 				if (
 					hasRemainingCounter('images_scanned', 'images_total')
+					|| hasRemainingCounter('faces_scanned', 'faces_total')
+					|| hasRemainingCounter('unknown_faces_scanned', 'unknown_faces_total')
 					|| hasRemainingCounter('persons_scanned', 'persons_total')
 					|| hasRemainingCounter('files_scanned', 'files_total')
 					|| hasRemainingCounter('entries_current', 'entries_total')
@@ -335,6 +337,34 @@ export default {
 				this.recognitionOptionOverrides = {
 					...this.recognitionOptionOverrides,
 					[key]: true,
+				};
+			}
+		},
+		adoptRunningRecognitionProgress(progress) {
+			const current = progress && typeof progress === 'object' ? progress : {};
+			const action = String(current.action || '').trim();
+			if (![
+				'recognition_build_profiles',
+				'recognition_check_reference_outliers',
+				'recognition_analyze_unknown_faces',
+				'recognition_check_person_assignments',
+			].includes(action)) {
+				return;
+			}
+			this.cleanupRuntimeAction = action;
+			if (String(this.selectedOption || '').trim() === 'face_match' && action === 'recognition_analyze_unknown_faces') {
+				this.selectedFaceMatchingAction = 'recognition_analyze_unknown_faces';
+			}
+			if (String(this.selectedOption || '').trim() === 'cleanup') {
+				this.selectedCleanupAction = action;
+			}
+			const options = current.options && typeof current.options === 'object' && !Array.isArray(current.options)
+				? current.options
+				: {};
+			if (Object.keys(options).length) {
+				this.recognitionOptions = {
+					...this.recognitionOptions,
+					...options,
 				};
 			}
 		},
@@ -580,6 +610,9 @@ export default {
 				? this.getOptionalComponentUnavailableMessage(nextProgress)
 				: '';
 			const progressAction = String(nextProgress.action || this.cleanupRuntimeAction || this.selectedCleanupAction || '').trim();
+			if (nextProgress.running || nextProgress.active || nextProgress.paused) {
+				this.adoptRunningRecognitionProgress(nextProgress);
+			}
 			if (unavailableMessage && this.cleanupLoading && progressAction !== 'recognition_build_profiles') {
 				this.showOptionalComponentUnavailableNotice(unavailableMessage);
 			}

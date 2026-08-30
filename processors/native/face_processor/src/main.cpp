@@ -31,6 +31,13 @@
 #endif
 #include <onnxruntime_c_api.h>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 
 const char* kProcessorName = "av-imgdata-face-processor";
@@ -43,6 +50,30 @@ double elapsed_ms(const Clock::time_point& start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
+#ifdef _WIN32
+std::wstring windows_path_from_text(const std::string& path) {
+    if (path.empty()) {
+        return L"";
+    }
+    int wide_size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.c_str(), -1, NULL, 0);
+    UINT code_page = CP_UTF8;
+    DWORD flags = MB_ERR_INVALID_CHARS;
+    if (wide_size <= 0) {
+        code_page = CP_ACP;
+        flags = 0;
+        wide_size = MultiByteToWideChar(code_page, flags, path.c_str(), -1, NULL, 0);
+    }
+    if (wide_size <= 0) {
+        return L"";
+    }
+    std::wstring wide(static_cast<std::size_t>(wide_size), L'\0');
+    if (!MultiByteToWideChar(code_page, flags, path.c_str(), -1, &wide[0], wide_size)) {
+        return L"";
+    }
+    return wide;
+}
+#endif
+
 std::string arg_value(const std::vector<std::string>& args, const std::string& name) {
     for (std::size_t i = 0; i + 1 < args.size(); ++i) {
         if (args[i] == name) {
@@ -53,8 +84,15 @@ std::string arg_value(const std::vector<std::string>& args, const std::string& n
 }
 
 bool file_exists(const std::string& path) {
+#ifdef _WIN32
+    const std::wstring wide = windows_path_from_text(path);
+    if (wide.empty()) return false;
+    const DWORD attrs = GetFileAttributesW(wide.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+#else
     struct stat st;
     return !path.empty() && stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+#endif
 }
 
 std::string lowercase(std::string value) {
@@ -74,8 +112,15 @@ std::string extension_of(const std::string& path) {
 }
 
 bool dir_exists(const std::string& path) {
+#ifdef _WIN32
+    const std::wstring wide = windows_path_from_text(path);
+    if (wide.empty()) return false;
+    const DWORD attrs = GetFileAttributesW(wide.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+#else
     struct stat st;
     return !path.empty() && stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+#endif
 }
 
 std::string join_path(const std::string& left, const std::string& right) {
@@ -409,7 +454,12 @@ extern "C" void jpeg_error_exit_handler(j_common_ptr cinfo) {
 }
 
 bool decode_jpeg(const std::string& path, Image* image, std::string* error) {
+#ifdef _WIN32
+    const std::wstring wide_path = windows_path_from_text(path);
+    FILE* file = wide_path.empty() ? NULL : _wfopen(wide_path.c_str(), L"rb");
+#else
     FILE* file = fopen(path.c_str(), "rb");
+#endif
     if (!file) {
         *error = "image could not be opened: " + path;
         return false;

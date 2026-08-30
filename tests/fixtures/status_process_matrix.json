@@ -55,6 +55,14 @@
     "stop_blocking_reconnect": {
       "required_capabilities": ["progress", "stop", "blocked_start", "stale_progress_filter", "stopped_terminal_releases_operation"],
       "rule": "Every long-running scan must expose progress and stop routes; concurrent incompatible starts must report blocked; after terminal stopped progress a different operation may start without inheriting stale identity or stop flags."
+    },
+    "delegated_reconnect_options": {
+      "required_capabilities": ["delegated_progress_identity", "owning_view_action_adoption", "running_options_restore", "foreign_default_progress_ignored"],
+      "rule": "When a process is started through one UI domain but owned by another backend operation, reconnect must adopt the backend action and restore the running options in the owning view."
+    },
+    "slow_auxiliary_endpoints": {
+      "required_capabilities": ["progress_source_of_truth", "empty_findings_not_terminal", "timeout_does_not_clear_running_identity", "status_probe_non_blocking"],
+      "rule": "Slow or empty auxiliary endpoints such as findings or InsightFace status must not clear, replace, or hide a running process identity while progress still reports an active operation."
     }
   },
   "process_chains": [
@@ -326,6 +334,20 @@
       "steps": ["browser_reconnect", "poll_progress_for_requested_identity", "stale_progress_filter", "stale_terminal_progress_does_not_overwrite_active_identity"]
     },
     {
+      "id": "delegated_running_process_reconnect_adopts_owner_action_and_options",
+      "chains": ["face_match.recognition_unknown_delegate", "checks.recognition_assignment_delegate", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["face_match.recognition_analyze_unknown_faces", "checks.recognition_check_person_assignments", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan"],
+      "steps": ["browser_reconnect", "poll_cleanup_progress_returns_delegated_running_action", "owning_view_updates_selected_action", "running_options_loaded_into_settings", "foreign_default_progress_does_not_hide_running_identity"]
+    },
+    {
+      "id": "running_process_findings_empty_or_timeout_preserves_progress",
+      "chains": ["face_match.recognition_unknown_delegate", "checks.recognition_assignment_delegate", "cleanup.recognition_reference_outliers", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["face_match.recognition_analyze_unknown_faces", "checks.recognition_check_person_assignments", "cleanup.recognition_check_reference_outliers", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_immediate", "recognition_findings_returns_empty_or_times_out", "progress_poll_remains_source_of_truth", "ui_keeps_running_state", "manual_review_controls_wait_for_review_entry", "process_continues_or_reports_failed_terminal"]
+    },
+    {
       "id": "checks_incremental_changed_since_scan",
       "chains": ["checks.scan"],
       "processes": ["checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts"],
@@ -394,6 +416,13 @@
       "processes": ["face_match.search_missing_faces_insightface", "cleanup.standardize_face_frames", "cleanup.recognition_build_profiles", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
       "modes": ["scan"],
       "steps": ["probe_insightface_or_native_processor", "optional_component_unavailable", "status_phase_failed_or_empty", "ui_shows_non_blocking_notice"]
+    },
+    {
+      "id": "insightface_status_probe_slow_does_not_block_reconnect_or_progress",
+      "chains": ["face_match.scan", "face_match.recognition_unknown_delegate", "cleanup.standardize_face_frames", "cleanup.recognition_build_profiles", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
+      "processes": ["face_match.search_missing_faces_insightface", "face_match.recognition_analyze_unknown_faces", "cleanup.standardize_face_frames", "cleanup.recognition_build_profiles", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan"],
+      "steps": ["poll_insightface_status_slow_or_timeout", "progress_poll_remains_available", "ui_keeps_running_state", "worker_enqueue_or_component_failure_sets_explicit_terminal_phase"]
     },
     {
       "id": "insightface_models_missing_or_unlicensed",
@@ -722,10 +751,11 @@
       "modes": {
         "scan": {
           "save_only_variants": [false, true],
-          "progress_kind": "images",
+          "progress_kind": "faces",
+          "alternate_progress_kinds": ["images"],
           "running_phases": ["preparing", "unknown_loaded", "reading_unknown_images", "building_suggestions"],
           "terminal_phases": ["review_required", "finished", "needs_profiles", "stopped", "failed", "blocked"],
-          "counters": ["profiles", "findings", "images", "images_analyzed", "images_skipped_unchanged", "faces", "references", "errors"],
+          "counters": ["profiles", "findings", "persons", "persons_remaining", "images", "images_analyzed", "images_skipped_unchanged", "faces", "faces_remaining", "references", "errors"],
           "reviewable": true,
           "resume_required_after_review": true,
           "resume_strategy": "cursor"
@@ -863,10 +893,11 @@
       "modes": {
         "scan": {
           "save_only_variants": [false, true],
-          "progress_kind": "images",
+          "progress_kind": "faces",
+          "alternate_progress_kinds": ["images"],
           "running_phases": ["preparing", "unknown_loaded", "reading_unknown_images", "building_suggestions"],
           "terminal_phases": ["review_required", "finished", "needs_profiles", "stopped", "failed", "blocked"],
-          "counters": ["profiles", "findings", "images", "images_analyzed", "images_skipped_unchanged", "faces", "references", "errors"],
+          "counters": ["profiles", "findings", "persons", "persons_remaining", "images", "images_analyzed", "images_skipped_unchanged", "faces", "faces_remaining", "references", "errors"],
           "reviewable": true,
           "resume_required_after_review": true,
           "resume_strategy": "cursor",

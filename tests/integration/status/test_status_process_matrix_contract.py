@@ -106,6 +106,8 @@ def test_status_process_matrix_declares_core_concepts():
         "resume",
         "storage",
         "stop_blocking_reconnect",
+        "delegated_reconnect_options",
+        "slow_auxiliary_endpoints",
     }
     assert concepts["identity"]["required_fields"] == _matrix()["global_rules"]["identity_fields"]
     assert set(concepts["run_lifecycle"]["non_terminal_phases"]).issubset(_matrix()["core_phases"])
@@ -244,6 +246,8 @@ def test_usage_scenarios_cover_real_process_flows():
         "cross_operation_stopped_then_other_operation_starts",
         "backend_reopen_resumable_stopped_or_uncontinued_process_offers_restart_or_resume",
         "operation_reconnect_stale_progress_filter",
+        "delegated_running_process_reconnect_adopts_owner_action_and_options",
+        "running_process_findings_empty_or_timeout_preserves_progress",
         "checks_incremental_changed_since_scan",
         "checks_auto_apply_suggested_names_and_duplicates",
         "face_match_auto_assign_known_during_scan",
@@ -255,6 +259,7 @@ def test_usage_scenarios_cover_real_process_flows():
         "recognition_needs_profiles_before_suggestions",
         "insightface_optional_component_missing",
         "insightface_models_missing_or_unlicensed",
+        "insightface_status_probe_slow_does_not_block_reconnect_or_progress",
         "external_worker_prefetch_enabled",
         "face_frame_save_only_then_findings_apply",
         "empty_result_terminal_state",
@@ -296,10 +301,14 @@ def test_usage_scenarios_cover_operational_reality_classes():
         "start_different_operation",
         "restart_or_resume",
         "reconnect",
+        "delegated",
+        "running_options_loaded",
         "stale",
         "auto",
         "changed_since_days",
         "optional_component",
+        "timeout",
+        "progress_poll_remains",
         "model_missing",
         "external_worker",
         "empty",
@@ -387,6 +396,41 @@ def test_usage_scenarios_cover_component_failure_for_insightface_processes():
     assert expected.issubset(represented_processes)
 
 
+def test_usage_scenarios_cover_delegated_reconnect_options_and_auxiliary_timeouts():
+    scenarios = {scenario["id"]: scenario for scenario in _scenarios()}
+
+    delegated = scenarios["delegated_running_process_reconnect_adopts_owner_action_and_options"]
+    assert {
+        "face_match.recognition_unknown_delegate",
+        "checks.recognition_assignment_delegate",
+        "cleanup.recognition_unknown",
+        "cleanup.recognition_assignment",
+    }.issubset(set(delegated["chains"]))
+    assert {
+        "browser_reconnect",
+        "poll_cleanup_progress_returns_delegated_running_action",
+        "owning_view_updates_selected_action",
+        "running_options_loaded_into_settings",
+        "foreign_default_progress_does_not_hide_running_identity",
+    }.issubset(set(delegated["steps"]))
+
+    findings_timeout = scenarios["running_process_findings_empty_or_timeout_preserves_progress"]
+    assert {
+        "recognition_findings_returns_empty_or_times_out",
+        "progress_poll_remains_source_of_truth",
+        "ui_keeps_running_state",
+        "manual_review_controls_wait_for_review_entry",
+    }.issubset(set(findings_timeout["steps"]))
+
+    status_timeout = scenarios["insightface_status_probe_slow_does_not_block_reconnect_or_progress"]
+    assert {
+        "poll_insightface_status_slow_or_timeout",
+        "progress_poll_remains_available",
+        "ui_keeps_running_state",
+        "worker_enqueue_or_component_failure_sets_explicit_terminal_phase",
+    }.issubset(set(status_timeout["steps"]))
+
+
 def test_usage_scenarios_cover_save_only_then_findings_for_reviewable_processes():
     save_only_findings_processes = {
         process_id
@@ -448,7 +492,7 @@ def test_status_process_matrix_reviewable_processes_define_review_and_resume_con
                 continue
             reviewable.append((process["id"], mode, spec))
             assert "review_required" in spec.get("terminal_phases", [])
-            assert spec.get("progress_kind") in {"entries", "files", "images", "persons"}
+            assert spec.get("progress_kind") in {"entries", "faces", "files", "images", "persons"}
             if mode == "scan":
                 assert spec.get("resume_required_after_review") is True
                 assert spec.get("resume_strategy") in {"cursor", "path_index_cursor"}
@@ -486,6 +530,21 @@ def test_status_process_matrix_does_not_allow_weak_resume_strategies():
         for mode, spec in process["modes"].items():
             assert spec.get("resume_cursor_coverage") is None
             assert spec.get("resume_strategy") not in {"resolved_id_filter", "entry_person_image_cursor"}
+
+
+def test_unknown_face_recognition_uses_faces_as_primary_progress_unit():
+    process_ids = {
+        "face_match.recognition_analyze_unknown_faces",
+        "cleanup.recognition_analyze_unknown_faces",
+    }
+
+    for process in _processes():
+        if process["id"] not in process_ids:
+            continue
+        spec = process["modes"]["scan"]
+        assert spec["progress_kind"] == "faces"
+        assert set(spec.get("alternate_progress_kinds", [])) == {"images"}
+        assert {"faces", "faces_remaining", "persons", "persons_remaining"}.issubset(set(spec.get("counters", [])))
 
 
 def test_recognition_parameter_domains_match_normalization_contract():

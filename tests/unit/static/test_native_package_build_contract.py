@@ -71,6 +71,18 @@ def test_native_face_processor_build_uses_runtime_heif_loader():
     assert 'candidates.push_back("libheif.so.1")' in source
 
 
+def test_native_face_processor_uses_windows_wide_paths_for_image_files():
+    source = Path("processors/native/face_processor/src/main.cpp").read_text(encoding="utf-8")
+
+    assert "windows_path_from_text" in source
+    assert "MultiByteToWideChar(CP_UTF8" in source
+    assert "GetFileAttributesW(wide.c_str())" in source
+    decode_jpeg = source.split("bool decode_jpeg", 1)[1].split("jpeg_decompress_struct", 1)[0]
+    assert "_wfopen(wide_path.c_str(), L\"rb\")" in decode_jpeg
+    assert "fopen(path.c_str(), \"rb\")" in decode_jpeg
+    assert "#ifdef _WIN32" in decode_jpeg
+
+
 def test_native_face_processor_cmake_does_not_mix_host_headers_into_cross_builds():
     cmake = Path("processors/native/face_processor/CMakeLists.txt").read_text(encoding="utf-8")
     windows_build = Path("tools/build-native-face-processor-windows.sh").read_text(encoding="utf-8")

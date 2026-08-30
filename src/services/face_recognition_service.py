@@ -1596,6 +1596,8 @@ class FaceRecognitionService:
                 if self._profile_person_id(person) == resume_person_id
             ), resume_start_person_index)
         resume_progress = previous_options.get("resume_progress_counts") if isinstance(previous_options.get("resume_progress_counts"), dict) else {}
+        unknown_faces_scanned = self._int_option(resume_progress, "unknown_faces_scanned", self._int_option(resume_progress, "faces_scanned"))
+        unknown_faces_total = self._int_option(resume_progress, "unknown_faces_total", self._int_option(resume_progress, "faces_total", unknown_faces_scanned))
         if resume_active and (resume_start_person_index or resume_after_image_id):
             self._debug_log(
                 "recognition_unknown_resume_cursor",
@@ -1608,10 +1610,13 @@ class FaceRecognitionService:
         self._set_progress(
             user_key, self.ACTION_SUGGEST, options, running=True, finished=False, phase="unknown_loaded",
             message_key="cleanup:recognition_unknown_loaded", message="Unknown Photos faces loaded.",
+            progress_kind="faces",
             persons_scanned=resume_progress.get("persons_scanned", resume_start_person_index), persons_total=len(unknown), findings_count=len(entries),
             images_scanned=resume_progress.get("images_scanned", 0), images_total=resume_progress.get("images_total", 0),
             images_analyzed=resume_progress.get("images_analyzed", 0), images_skipped_unchanged=resume_progress.get("images_skipped_unchanged", 0),
-            faces_scanned=resume_progress.get("faces_scanned", 0), references_count=resume_progress.get("references_count", 0),
+            faces_scanned=unknown_faces_scanned, faces_total=unknown_faces_total,
+            unknown_faces_scanned=unknown_faces_scanned, unknown_faces_total=unknown_faces_total,
+            references_count=resume_progress.get("references_count", 0),
             transferred_count=0, errors_count=0,
         )
         operation_id = self._current_operation_id(user_key, self.ACTION_SUGGEST)
@@ -1662,6 +1667,7 @@ class FaceRecognitionService:
                 reference for reference in references
                 if int(reference.get("face_id") or 0) not in resolved_face_ids
             ]
+            unknown_faces_total += len(candidate_references)
             self._debug_log(
                 "recognition_unknown_references_collected",
                 action=self.ACTION_SUGGEST,
@@ -1674,6 +1680,16 @@ class FaceRecognitionService:
                 resolved_face_ids_count=len(resolved_face_ids),
                 profiles_count=len(profiles),
                 findings_count=len(entries),
+                unknown_faces_scanned=unknown_faces_scanned,
+                unknown_faces_total=unknown_faces_total,
+            )
+            self._set_progress(
+                user_key, self.ACTION_SUGGEST, options, running=True, finished=False, phase="building_suggestions",
+                message_key="cleanup:recognition_building_suggestions", message="Building recognition suggestions.",
+                progress_kind="faces",
+                persons_scanned=index, persons_total=len(unknown), findings_count=len(entries),
+                faces_scanned=unknown_faces_scanned, faces_total=unknown_faces_total,
+                unknown_faces_scanned=unknown_faces_scanned, unknown_faces_total=unknown_faces_total,
             )
             if self._should_stop(user_key, self.ACTION_SUGGEST):
                 self._finish_stopped_scan(user_key, self.ACTION_SUGGEST, options, entries)
@@ -1689,6 +1705,7 @@ class FaceRecognitionService:
                 if self._should_stop(user_key, self.ACTION_SUGGEST):
                     self._finish_stopped_scan(user_key, self.ACTION_SUGGEST, options, entries)
                     return
+                unknown_faces_scanned += 1
                 if not reference.get("embedding"):
                     continue
                 if rank_index >= len(ranks):
@@ -1713,6 +1730,14 @@ class FaceRecognitionService:
                     "write_state": "pending", "profile_key": self._model_key(options),
                 })
                 if options["operation_mode"] == "immediate" and entries[-1]["selection_state"] == "review":
+                    self._set_progress(
+                        user_key, self.ACTION_SUGGEST, options, running=True, finished=False, phase="building_suggestions",
+                        message_key="cleanup:recognition_building_suggestions", message="Building recognition suggestions.",
+                        progress_kind="faces",
+                        persons_scanned=index, persons_total=len(unknown), findings_count=len(entries),
+                        faces_scanned=unknown_faces_scanned, faces_total=unknown_faces_total,
+                        unknown_faces_scanned=unknown_faces_scanned, unknown_faces_total=unknown_faces_total,
+                    )
                     pause_options = self._resume_scan_options(
                         user_key=user_key,
                         action=self.ACTION_SUGGEST,
@@ -1737,7 +1762,10 @@ class FaceRecognitionService:
             self._set_progress(
                 user_key, self.ACTION_SUGGEST, options, running=True, finished=False, phase="building_suggestions",
                 message_key="cleanup:recognition_building_suggestions", message="Building recognition suggestions.",
+                progress_kind="faces",
                 persons_scanned=index + 1, persons_total=len(unknown), findings_count=len(entries),
+                faces_scanned=unknown_faces_scanned, faces_total=unknown_faces_total,
+                unknown_faces_scanned=unknown_faces_scanned, unknown_faces_total=unknown_faces_total,
             )
         self._write_findings(self.FINDING_SUGGESTIONS, self.ACTION_SUGGEST, options, entries, user_key=user_key)
         self._finish_review_scan(user_key, self.ACTION_SUGGEST, options, entries)
@@ -1988,6 +2016,9 @@ class FaceRecognitionService:
             "images_analyzed",
             "images_skipped_unchanged",
             "faces_scanned",
+            "faces_total",
+            "unknown_faces_scanned",
+            "unknown_faces_total",
             "references_count",
             "persons_scanned",
             "persons_total",
@@ -2193,6 +2224,12 @@ class FaceRecognitionService:
             title_key, fallback_title = "cleanup:label_images", "Bilder"
             primary_key, primary_label = "cleanup:label_scanned", "geprüft"
             secondary_key, secondary_label = "cleanup:label_files_remaining", "verbleibend"
+        elif kind == "faces":
+            current = int(updates.get("faces_scanned") or updates.get("unknown_faces_scanned") or 0)
+            total = int(updates.get("faces_total") or updates.get("unknown_faces_total") or 0)
+            title_key, fallback_title = "cleanup:label_faces", "Gesichter"
+            primary_key, primary_label = "cleanup:label_scanned", "geprüft"
+            secondary_key, secondary_label = "cleanup:label_faces_remaining", "verbleibend"
         elif kind == "entries":
             current = int(updates.get("entries_current") or 0)
             total = int(updates.get("entries_total") or 0)
@@ -2220,7 +2257,11 @@ class FaceRecognitionService:
                 self.backend._buildStatusCounter("persons_remaining", value=max(0, persons_total - persons_scanned), label_key="cleanup:label_persons_remaining_count", fallback_label="Persons remaining", show_when_zero=False),
             ])
         if action != self.ACTION_BUILD:
-            counters.append(self.backend._buildStatusCounter("faces", value=int(updates.get("faces_scanned") or 0), label_key="cleanup:label_faces_processed", fallback_label="Faces", show_when_zero=False))
+            faces_total = int(updates.get("faces_total") or updates.get("unknown_faces_total") or 0)
+            faces_scanned = int(updates.get("faces_scanned") or updates.get("unknown_faces_scanned") or 0)
+            counters.append(self.backend._buildStatusCounter("faces", value=faces_scanned, label_key="cleanup:label_faces_processed", fallback_label="Faces", show_when_zero=False))
+            if faces_total > 0:
+                counters.append(self.backend._buildStatusCounter("faces_remaining", value=max(0, faces_total - faces_scanned), label_key="cleanup:label_faces_remaining_count", fallback_label="Faces remaining", show_when_zero=False))
         counters.extend([
             self.backend._buildStatusCounter("references", value=int(updates.get("references_count") or 0), label_key="cleanup:label_references", fallback_label="Reference faces"),
             self.backend._buildStatusCounter("errors", value=int(updates.get("errors_count") or 0), label_key="cleanup:label_errors", fallback_label="Errors"),

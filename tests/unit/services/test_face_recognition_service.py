@@ -302,6 +302,7 @@ def test_assignment_suggestion_ranks_person_references_in_one_native_call():
 
 def test_unknown_face_suggestions_preload_sparse_persons_as_one_image_batch(tmp_path):
     service, findings = _service()
+    progress_updates = []
     options = service.normalize_options({"operation_mode": "save_only", "review_score": 0.1, "min_margin": 0.0, "recognition_batch_size": 3})
     state_key = service._profile_state_key(options)
     findings.values[(service.PROFILE_STATE_TYPE, state_key)] = {
@@ -316,6 +317,7 @@ def test_unknown_face_suggestions_preload_sparse_persons_as_one_image_batch(tmp_
 
     service.backend.core = SimpleNamespace(getSharedFolder=lambda **_kwargs: str(tmp_path))
     service.backend.getCleanupProgress = lambda _user_key, _action: {"operation_id": "cleanup-recognition-suggest-1"}
+    service.backend._setCleanupProgress = lambda user_key, **updates: progress_updates.append((user_key, updates)) or updates
     service.backend._listAllPhotoItemsForPerson = lambda person_id, **_kwargs: [
         {"id": int(person_id) * 10, "folder_id": 20, "filename": f"unknown-{person_id}.jpg"}
     ]
@@ -356,6 +358,17 @@ def test_unknown_face_suggestions_preload_sparse_persons_as_one_image_batch(tmp_
 
     assert detect_calls == [["unknown-100.jpg", "unknown-101.jpg", "unknown-102.jpg"]]
     assert len(findings.values[service.FINDING_SUGGESTIONS]["entries"]) == 3
+    face_progress = [
+        update for _user_key, update in progress_updates
+        if update.get("progress_kind") == "faces" and update.get("faces_total")
+    ]
+    assert face_progress[-1]["faces_scanned"] == 3
+    assert face_progress[-1]["faces_total"] == 3
+    assert face_progress[-1]["unknown_faces_scanned"] == 3
+    assert face_progress[-1]["unknown_faces_total"] == 3
+    assert face_progress[-1]["status"]["progress"]["kind"] == "faces"
+    assert face_progress[-1]["status"]["progress"]["current"] == 3
+    assert face_progress[-1]["status"]["progress"]["total"] == 3
 
 
 def test_assignment_suggestions_preload_sparse_persons_as_one_image_batch(tmp_path):
@@ -633,7 +646,7 @@ def test_unknown_face_immediate_review_persists_resume_cursor():
     service.backend.photos = SimpleNamespace(listFotoTeamPersonUnknown=lambda **_kwargs: [
         {"id": 9, "name": "Unknown"},
     ])
-    service.backend.getCleanupProgress = lambda *_args, **_kwargs: {
+    progress_state = {
         "images_scanned": 951,
         "images_total": 990,
         "persons_scanned": 0,
@@ -641,6 +654,8 @@ def test_unknown_face_immediate_review_persists_resume_cursor():
         "faces_scanned": 12,
         "references_count": 1,
     }
+    service.backend.getCleanupProgress = lambda *_args, **_kwargs: dict(progress_state)
+    service.backend._setCleanupProgress = lambda _user_key, **updates: progress_state.update(updates) or updates
     service._prepared_embedder = lambda _options: SimpleNamespace()
     service._person_references = lambda **_kwargs: [{
         "face_id": 220,
@@ -662,7 +677,10 @@ def test_unknown_face_immediate_review_persists_resume_cursor():
     assert payload["options"]["resume_start_person_index"] == 0
     assert payload["options"]["resume_after_image_id"] == 22
     assert payload["options"]["resume_person_id"] == 9
-    assert payload["options"]["resume_progress_counts"]["images_scanned"] == 951
+    assert payload["options"]["resume_progress_counts"]["images_scanned"] == 0
+    assert payload["options"]["resume_progress_counts"]["progress_kind"] == "faces"
+    assert payload["options"]["resume_progress_counts"]["unknown_faces_scanned"] == 1
+    assert payload["options"]["resume_progress_counts"]["unknown_faces_total"] == 1
 
 
 def test_person_reference_resume_skips_images_through_previous_review_image(tmp_path):
