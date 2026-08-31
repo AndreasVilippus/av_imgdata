@@ -859,8 +859,12 @@ export default {
 					? this.fetchInsightFaceStatus()
 					: Promise.resolve();
 				const progressPromise = this.fetchFaceMatchingProgress({ applyRunningState: false });
+				const cleanupProgressPromise = this.normalizeFaceMatchAction(this.selectedFaceMatchingAction) === 'recognition_analyze_unknown_faces' && typeof this.fetchCleanupProgress === 'function'
+					? this.fetchCleanupProgress({ actionOverride: 'recognition_analyze_unknown_faces' })
+					: Promise.resolve();
 				await findingsStatusPromise;
 				const progress = await progressPromise;
+				await cleanupProgressPromise;
 				if (this.isFaceMatchFindingsReviewActive() && this.getFaceMatchProgressMode(progress) === 'scan') {
 					await insightFaceStatusPromise;
 					return;

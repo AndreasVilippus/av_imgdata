@@ -2203,3 +2203,48 @@ def test_reopen_resumable_face_match_progress_offers_restart_and_resume_runtime(
         "label": "Restart",
         "calls": [{"resetSkippedFaceIds": False, "resumeFromProgress": True}],
     }
+
+
+def test_reopen_recognition_face_match_fetches_cleanup_progress_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const calls = [];
+            const component = createComponent({
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              fetchFaceMatchFindingsStatus: async () => calls.push({ type: 'findings' }),
+              fetchInsightFaceStatus: async () => calls.push({ type: 'insightface' }),
+              fetchFaceMatchingProgress: async () => {
+                calls.push({ type: 'face-progress' });
+                return {
+                  action: 'recognition_analyze_unknown_faces',
+                  running: false,
+                  finished: false,
+                  status: { phase: 'idle' },
+                };
+              },
+              fetchCleanupProgress: async (options) => {
+                calls.push({ type: 'cleanup-progress', options });
+                return {
+                  action: 'recognition_analyze_unknown_faces',
+                  running: false,
+                  resume_available: true,
+                  resume_cursor: { resume_start_person_index: 17 },
+                };
+              },
+              applyFaceMatchingProgress: () => true,
+            });
+
+            await component.refreshFaceMatchSessionState();
+
+            console.log(JSON.stringify({ calls }));
+            """
+        )
+    )
+
+    assert result["calls"] == [
+        {"type": "findings"},
+        {"type": "insightface"},
+        {"type": "face-progress"},
+        {"type": "cleanup-progress", "options": {"actionOverride": "recognition_analyze_unknown_faces"}},
+    ]

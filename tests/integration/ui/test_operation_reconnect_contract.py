@@ -48,8 +48,11 @@ def test_face_match_reconnect_uses_persisted_runtime_progress_for_running_operat
 
     assert "const findingsStatusPromise = this.fetchFaceMatchFindingsStatus()" in method
     assert "const progressPromise = this.fetchFaceMatchingProgress({ applyRunningState: false })" in method
+    assert "const cleanupProgressPromise = this.normalizeFaceMatchAction(this.selectedFaceMatchingAction) === 'recognition_analyze_unknown_faces'" in method
+    assert "this.fetchCleanupProgress({ actionOverride: 'recognition_analyze_unknown_faces' })" in method
     assert "await findingsStatusPromise" in method
     assert "const progress = await progressPromise" in method
+    assert "await cleanupProgressPromise" in method
     assert "if (progress.running)" in method
     assert "this.startFaceMatchProgressPolling()" in method
 

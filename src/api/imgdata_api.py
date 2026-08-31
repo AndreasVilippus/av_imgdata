@@ -1258,6 +1258,30 @@ async def face_matching_findings_status(request: Request):
 
     body = await _read_request_body(request)
     requested_action = str(body.get("action") or body.get("source_action") or "").strip().lower()
+    if requested_action == "recognition_analyze_unknown_faces":
+        backend_debug_log(
+            "face_matching_findings_status",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            user_key_hash=_debug_user_key(session_ctx["user_key"]),
+            requested_action=requested_action,
+            findings_action=requested_action,
+            status="",
+            count=0,
+            transferred_count=0,
+        )
+        return {
+            "success": True,
+            "data": {
+                "status": "",
+                "action": requested_action,
+                "source_action": requested_action,
+                "requested_action": requested_action,
+                "count": 0,
+                "transferred_count": 0,
+                "save_only": False,
+                "auto": False,
+            },
+        }
     findings = await _run_backend_call(lambda: IMGDATA.getFaceMatchFindingsStatus())
     findings_action = str(findings.get("action") or "").strip().lower()
     action_mismatch = bool(requested_action and findings_action and requested_action != findings_action)

@@ -104,6 +104,32 @@ def test_face_matching_findings_status_uses_count_without_entries(monkeypatch):
     assert len(calls) == 1
 
 
+def test_face_matching_findings_status_neutralizes_delegated_recognition_action(monkeypatch):
+    async def request_body(_request):
+        return {"action": "recognition_analyze_unknown_faces"}
+
+    calls = _install_backend_call_recorder(monkeypatch)
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api, "_read_request_body", request_body)
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA,
+        "getFaceMatchFindingsStatus",
+        Mock(side_effect=AssertionError("delegated recognition must not read face-match findings status")),
+    )
+
+    payload = _run(imgdata_api.face_matching_findings_status(object()))
+
+    assert payload["success"] is True
+    assert payload["data"]["count"] == 0
+    assert payload["data"]["action"] == "recognition_analyze_unknown_faces"
+    assert payload["data"]["source_action"] == "recognition_analyze_unknown_faces"
+    assert payload["data"]["requested_action"] == "recognition_analyze_unknown_faces"
+    assert payload["data"]["status"] == ""
+    assert payload["data"]["save_only"] is False
+    assert payload["data"]["auto"] is False
+    assert len(calls) == 0
+
+
 def test_face_matching_progress_neutralizes_finished_foreign_requested_action(monkeypatch):
     async def request_body(_request):
         return {"action": "search_photo_face_in_file"}

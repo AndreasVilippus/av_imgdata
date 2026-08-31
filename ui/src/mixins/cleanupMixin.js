@@ -657,7 +657,9 @@ export default {
 						].includes(finishedAction)) {
 							this.fetchRecognitionFindings();
 						}
-						this.cleanupRuntimeAction = '';
+						if (!this.cleanupProgressHasRemainingWork(progress)) {
+							this.cleanupRuntimeAction = '';
+						}
 					}
 					return progress;
 				} catch (err) {

@@ -468,6 +468,49 @@ def test_status_process_matrix_delegates_point_to_existing_processes():
             assert delegate in ids
 
 
+def test_status_process_matrix_delegated_processes_declare_reconnect_status_boundaries():
+    api_routes = _api_routes()
+    chain_by_process = {
+        process_id: chain
+        for chain in _chains()
+        for process_id in chain["processes"]
+        if "progress_route" in chain
+    }
+
+    for process in _processes():
+        if not process.get("delegates_to"):
+            continue
+
+        source_route = process.get("delegate_reconnect_source_route")
+        foreign_status_routes = process.get("foreign_status_routes")
+
+        assert source_route == "/cleanup_progress"
+        assert isinstance(foreign_status_routes, list)
+        assert foreign_status_routes
+        assert source_route in api_routes
+        assert set(foreign_status_routes).issubset(api_routes)
+        assert source_route not in foreign_status_routes
+
+        owner_chain = chain_by_process[process["delegates_to"]]
+        assert owner_chain["progress_route"] == source_route
+
+
+def test_status_process_matrix_scenarios_cover_delegated_foreign_status_neutralization():
+    delegated_processes = {
+        process["id"]
+        for process in _processes()
+        if process.get("delegates_to") and process.get("foreign_status_routes")
+    }
+    covered_processes = {
+        process_id
+        for scenario in _scenarios()
+        if "foreign_status_route_neutralized" in scenario["steps"]
+        for process_id in scenario["processes"]
+    }
+
+    assert delegated_processes.issubset(covered_processes)
+
+
 def test_status_process_matrix_phases_are_explicit_and_terminal_complete():
     core_phases = set(_matrix()["core_phases"])
 

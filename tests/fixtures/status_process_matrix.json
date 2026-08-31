@@ -57,8 +57,8 @@
       "rule": "Every long-running scan must expose progress and stop routes; concurrent incompatible starts must report blocked; after terminal stopped progress a different operation may start without inheriting stale identity or stop flags."
     },
     "delegated_reconnect_options": {
-      "required_capabilities": ["delegated_progress_identity", "owning_view_action_adoption", "running_options_restore", "foreign_default_progress_ignored"],
-      "rule": "When a process is started through one UI domain but owned by another backend operation, reconnect must adopt the backend action and restore the running options in the owning view."
+      "required_capabilities": ["delegated_progress_identity", "owning_view_action_adoption", "running_options_restore", "foreign_default_progress_ignored", "foreign_status_route_neutralized"],
+      "rule": "When a process is started through one UI domain but owned by another backend operation, reconnect must adopt the backend action and restore the running options in the owning view. Legacy status routes from the starting UI domain must not replace the delegated owner progress identity."
     },
     "slow_auxiliary_endpoints": {
       "required_capabilities": ["progress_source_of_truth", "empty_findings_not_terminal", "timeout_does_not_clear_running_identity", "status_probe_non_blocking"],
@@ -261,7 +261,7 @@
       "chains": ["cleanup.standardize_face_frames"],
       "processes": ["cleanup.standardize_face_frames", "checks.face_frame_standardization"],
       "modes": ["scan", "findings"],
-      "steps": ["start_immediate", "review_required", "select_or_apply", "resume_existing_with_scan_next_path_index"]
+      "steps": ["start_immediate", "review_required", "select_or_apply", "resume_existing_with_scan_next_path_index", "foreign_status_route_neutralized"]
     },
     {
       "id": "recognition_build_profiles",
@@ -338,7 +338,7 @@
       "chains": ["face_match.recognition_unknown_delegate", "checks.recognition_assignment_delegate", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
       "processes": ["face_match.recognition_analyze_unknown_faces", "checks.recognition_check_person_assignments", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
       "modes": ["scan"],
-      "steps": ["browser_reconnect", "poll_cleanup_progress_returns_delegated_running_action", "owning_view_updates_selected_action", "running_options_loaded_into_settings", "foreign_default_progress_does_not_hide_running_identity"]
+      "steps": ["browser_reconnect", "poll_cleanup_progress_returns_delegated_running_action", "owning_view_updates_selected_action", "running_options_loaded_into_settings", "foreign_default_progress_does_not_hide_running_identity", "foreign_status_route_neutralized"]
     },
     {
       "id": "running_process_findings_empty_or_timeout_preserves_progress",
@@ -599,6 +599,8 @@
       "operation": "checks",
       "action": "recognition_check_person_assignments",
       "delegates_to": "cleanup.recognition_check_person_assignments",
+      "delegate_reconnect_source_route": "/cleanup_progress",
+      "foreign_status_routes": ["/checks_findings_status"],
       "ui_sources": ["ChecksView.selectedChecksType"],
       "modes": {
         "scan": {
@@ -625,6 +627,8 @@
       "operation": "checks",
       "action": "face_frame_standardization",
       "delegates_to": "cleanup.standardize_face_frames",
+      "delegate_reconnect_source_route": "/cleanup_progress",
+      "foreign_status_routes": ["/checks_findings_status"],
       "ui_sources": ["CleanupView.selectedCleanupAction"],
       "modes": {
         "scan": {
@@ -747,6 +751,8 @@
       "operation": "face_match",
       "action": "recognition_analyze_unknown_faces",
       "delegates_to": "cleanup.recognition_analyze_unknown_faces",
+      "delegate_reconnect_source_route": "/cleanup_progress",
+      "foreign_status_routes": ["/face_matching_findings_status"],
       "ui_sources": ["FaceMatchView.selectedFaceMatchingAction"],
       "modes": {
         "scan": {

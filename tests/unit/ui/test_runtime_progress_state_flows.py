@@ -795,6 +795,50 @@ def test_cleanup_progress_request_sends_selected_mode_runtime():
     }
 
 
+def test_cleanup_progress_keeps_runtime_action_for_resumable_stopped_scan_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              selectedCleanupAction: 'normalize_names',
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              recognitionOptions: {
+                operation_mode: 'immediate',
+              },
+              callDsmApi: async () => ({
+                success: true,
+                data: {
+                  action: 'recognition_analyze_unknown_faces',
+                  running: false,
+                  active: false,
+                  resume_available: true,
+                  resume_cursor: { resume_start_person_index: 4 },
+                  status: { phase: 'stopped' },
+                },
+              }),
+              stopCleanupProgressPolling: () => {},
+              fetchRecognitionFindings: async () => {},
+            });
+
+            await component.fetchCleanupProgress({ actionOverride: 'recognition_analyze_unknown_faces' });
+
+            console.log(JSON.stringify({
+              runtimeAction: component.cleanupRuntimeAction,
+              canResume: component.cleanupCanResumeProgress,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "runtimeAction": "recognition_analyze_unknown_faces",
+        "canResume": True,
+    }
+
+
 def test_cleanup_progress_action_prefers_runtime_action_runtime():
     result = run_node(
         mixin_runtime_script(
