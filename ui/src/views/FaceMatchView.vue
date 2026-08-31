@@ -201,7 +201,7 @@
 							/>
 						</div>
 					</div>
-					<div class="face-match-status-card face-match-status-card-result">
+					<div v-if="!vm.faceMatchRecognitionActionSelected" class="face-match-status-card face-match-status-card-result">
 						<div class="face-match-status-head">
 							<div class="sm-section-title">{{ vm.$avt('face_match:card_result', 'Result') }}</div>
 						</div>

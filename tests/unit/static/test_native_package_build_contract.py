@@ -19,7 +19,9 @@ def test_synology_build_uses_onnxruntime_native_face_processor():
 def test_synology_install_propagates_native_build_failures_to_script_exit():
     install_script = Path("SynoBuildConf/install").read_text(encoding="utf-8")
 
-    assert "create_install || return 1" in install_script
+    assert "create_install\n\tcreate_spk" in install_script
+    assert "create_install || return 1" not in install_script
+    assert "create_spk || return 1" not in install_script
     assert "main \"$@\"\nexit $?" in install_script
 
 
@@ -169,8 +171,12 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert 'export AV_IMGDATA_NATIVE_STRIP="${AV_IMGDATA_NATIVE_STRIP:-0}"' in install_script
     assert "Debug package requested; rebuilding native face processor without stripping." in install_script
     assert "assert_no_duplicate_package_sonames" in install_script
+    assert "copy_runtime_library_family" in install_script
     assert "readelf is required to verify packaged runtime library SONAMEs." in install_script
     assert "duplicate package runtime library SONAMEs" in install_script
+    assert 'copy_runtime_library_family "$NATIVE_INSTALL/lib" "$package_tgz_dir/lib" \'libonnxruntime.so*\' \'libjpeg.so*\'' in install_script
+    assert 'copy_runtime_library_family "$VIPS_INSTALL/lib" "$package_tgz_dir/lib" \'*.so*\'' in install_script
+    assert 'find "$VIPS_INSTALL/lib" -maxdepth 1 \\( -type f -o -type l \\) -name \'*.so*\' -exec cp -av' not in install_script
     assert "Preserving native build artifacts after failed install for diagnostics." in install_script
     assert '"$native_root/face_processor-build"' in install_script
     assert '"$native_root/face_processor-install"' in install_script
@@ -220,11 +226,12 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "x265/GPL must stay out of this package" in build_vips
     assert "install_heif_stack_license_files" in build_vips
     assert "share/licenses/AV_ImgData/heif-stack" in build_vips
-    assert "sources/${LIBDE265_TARBALL}" in build_vips
-    assert "sources/${LIBHEIF_TARBALL}" in build_vips
+    assert "sources/${LIBDE265_TARBALL}" not in build_vips
+    assert "sources/${LIBHEIF_TARBALL}" not in build_vips
+    assert "Source tarballs are intentionally not embedded in the runtime package" in build_vips
     assert "install_libvips_license_files" in build_vips
     assert "share/licenses/AV_ImgData/libvips" in build_vips
-    assert "sources/${LIBVIPS_TARBALL}" in build_vips
+    assert "sources/${LIBVIPS_TARBALL}" not in build_vips
     assert "vips-${LIBVIPS_VERSION}-av-imgdata.patch" in build_vips
     assert "install_runtime_dependency_notice" in build_vips
     assert "share/licenses/AV_ImgData/runtime-dependencies" in build_vips
@@ -281,32 +288,79 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "-Draw=enabled" not in build_vips
     assert "require_tool strings" in build_vips
     assert "copy_libvips_runtime_dependencies" in build_vips
+    assert "copy_library_family" not in build_vips
+    assert "shared_library_link_name" not in build_vips
+    assert 'source_soname%.*}.so' not in build_vips
+    assert 'for dir in /usr/local/*/*/sys-root/usr/lib' not in build_vips
+    assert 'multiarch_dir="/usr/lib/$(gcc -dumpmachine' not in build_vips
+    assert "for dir in /usr/lib/*-linux-gnu /lib/*-linux-gnu" not in build_vips
     assert "strip_runtime_libraries" in build_vips
     assert "assert_no_duplicate_runtime_sonames" in build_vips
     assert "duplicate runtime library SONAMEs staged" in build_vips
+    assert "BUILD_HOST_LD_LIBRARY_PATH" in build_vips
+    assert "restore_build_host_library_path" in build_vips
+    assert 'LD_LIBRARY_PATH="${VIPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"\nexport PKG_CONFIG_SYSROOT_DIR' not in build_vips
+    assert "runtime_probe_library_path" in build_vips
+    assert 'probe_path="${probe_path}:${synology_sysroot}/usr/lib"' in build_vips
+    assert 'LD_LIBRARY_PATH="$(runtime_probe_library_path)" "${NATIVE_BINARY}" probe' in build_vips
+    assert not re.search(r'build_env/ds\.\$\{platform_lower\}-[0-9.]+/env(64)?\.mak', build_vips)
+    assert '[ -d "${env_root}/${value#/}" ]' in build_vips
+    assert "configure_synology_host_toolchain_if_available" not in build_vips
+    assert 'export CC="${toolchain_bin}/${host}-gcc"' not in build_vips
+    assert 'export CXX="${toolchain_bin}/${host}-g++"' not in build_vips
+    assert "Using Synology host toolchain compiler:" not in build_vips
+    assert 'pkg_config_overlay="${BUILD_ROOT}/pkgconfig-overlay"' in build_vips
+    assert 'cp -a --no-preserve=ownership "${synology_sysroot}/usr/lib/pkgconfig/"*.pc "${pkg_config_overlay}/"' in build_vips
+    assert "glib_genmarshal=$(command -v glib-genmarshal" in build_vips
+    assert "glib_mkenums=$(command -v glib-mkenums" in build_vips
+    assert 'meson_pkg_config_path="${meson_pkg_config_path}:${pkg_config_overlay}"' in build_vips
+    assert 'PKG_CONFIG_PATH="${meson_pkg_config_path}" meson "${meson_args[@]}"' in build_vips
     assert "--strip-unneeded" in build_vips
     assert "readelf -d" in build_vips
-    assert '"libheif.so*"' in build_vips
-    assert '"libde265.so*"' in build_vips
-    assert '"libmount.so*"' in build_vips
-    assert '"libblkid.so*"' in build_vips
-    assert '"libuuid.so*"' in build_vips
-    assert 'multiarch_dir="/usr/lib/$(gcc -dumpmachine' in build_vips
-    assert "for dir in /usr/lib/*-linux-gnu /lib/*-linux-gnu" in build_vips
+    assert "-name 'libheif.so*'" in build_vips
+    assert "-name 'libde265.so*'" in build_vips
+    assert '"libmount.so*"' not in build_vips
+    assert '"libblkid.so*"' not in build_vips
+    assert '"libuuid.so*"' not in build_vips
+    assert '"libglib-2.0.so*"' not in build_vips
+    assert '"libgio-2.0.so*"' not in build_vips
+    assert '"libjpeg.so*"' not in build_vips
+    assert '"libpng16.so*"' not in build_vips
+    assert '"libtiff.so*"' not in build_vips
+    assert '"libwebp.so*"' not in build_vips
+    assert '"liblcms2.so*"' not in build_vips
+    assert '"libz.so*"' not in build_vips
+    assert "prune_non_runtime_install_artifacts" in build_vips
+    assert '"${VIPS_PREFIX}/include"' in build_vips
+    assert '"${VIPS_PREFIX}/lib/cmake"' in build_vips
+    assert '"${VIPS_PREFIX}/lib/pkgconfig"' in build_vips
+    assert '"${VIPS_PREFIX}/share/locale"' in build_vips
+    assert '"${VIPS_PREFIX}/share/man"' in build_vips
+    assert '"${VIPS_PREFIX}/share/mime"' in build_vips
+    assert '"${VIPS_PREFIX}/share/thumbnailers"' in build_vips
+    assert "packaged libheif runtime library missing" in build_vips
+    assert "packaged libde265 runtime library missing" in build_vips
     assert "-DCMAKE_BUILD_TYPE=Release" in build_vips
     assert "AV_IMGDATA_NATIVE_STRIP:-1" in build_vips
     assert "libvips image processor is only the skeleton binary" in build_vips
     assert "libvips_not_linked" in build_vips
     assert "strings \"${NATIVE_BINARY}\"" in build_vips
-    assert "runtime probe skipped: Toolkit build runtime is older than packaged Synology sysroot libraries" in build_vips
+    assert "is_toolkit_runtime_probe_unavailable" in build_vips
+    assert "runtime probe skipped: Toolkit build runtime cannot execute packaged Synology-targeted libraries" in build_vips
     assert "GLIBC_[0-9.]+" in build_vips
+    assert "libsyno[^[:space:]]*\\.so" in build_vips
     assert "add_executable(av-imgdata-image-processor" in cmake
     assert "pkg_check_modules(VIPS REQUIRED vips)" in cmake
     assert "find_library(VIPS_SHARED_LIBRARY" in cmake
     assert "VIPS_DIRECT_RUNTIME_LIBS" in cmake
     assert 'VIPS_LIB MATCHES "^(glib-2.0|gobject-2.0|gio-2.0)$"' in cmake
-    assert "find_library(VIPS_DIRECT_${VIPS_LIB_VAR}_LIBRARY" in cmake
-    assert "libvips direct runtime library not found" in cmake
+    assert "find_library(VIPS_DIRECT_${VIPS_LIB_VAR}_LIBRARY" not in cmake
+    assert "list(APPEND VIPS_DIRECT_RUNTIME_LIBS ${VIPS_LIB})" in cmake
+    vips_library_lookup = cmake.split("find_library(VIPS_SHARED_LIBRARY", 1)[1].split("if(NOT VIPS_SHARED_LIBRARY)", 1)[0]
+    assert "PATHS ${VIPS_LIBRARY_DIRS}" in vips_library_lookup
+    assert "NO_DEFAULT_PATH" in vips_library_lookup
+    assert "libvips direct runtime library not found" not in cmake
+    assert "link_directories(${VIPS_LIBRARY_DIRS})" in cmake
     assert "target_link_libraries(av-imgdata-image-processor PRIVATE ${VIPS_SHARED_LIBRARY} ${VIPS_DIRECT_RUNTIME_LIBS})" in cmake
     assert "target_link_libraries(av-imgdata-image-processor PRIVATE ${VIPS_LIBRARIES})" not in cmake
     assert "-Wl,--allow-shlib-undefined" in cmake
@@ -353,7 +407,7 @@ def test_synology_install_requires_native_face_processor_libraries():
     assert "./tools/smoke-native-face-processor.sh" in install_script
     assert "./tools/functional-native-face-processor.sh" in install_script
     assert "ensure_native_face_processor || return 1" in install_script
-    assert "create_install || return 1" in install_script
+    assert "create_install\n\tcreate_spk" in install_script
     assert "./INFO.sh > INFO" in install_script
     assert "native face processor missing" in install_script
     assert "onnxruntime-native" in install_script
@@ -366,6 +420,10 @@ def test_synology_install_requires_native_face_processor_libraries():
     assert "$NATIVE_INSTALL/share/licenses" in install_script
     assert "Windows external worker face processor missing" in install_script
     assert "external worker face processor missing or not executable" in install_script
+    assert 'AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS:-1' in install_script
+    assert "Skipping external worker archive packaging because AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS=0." in install_script
+    assert 'rm -f "/image/packages/$(pkg_get_spk_family_name)"' in install_script
+    assert 'rm -f "/image/packages/${package_name}-"*"-${package_version}"*.spk' not in install_script
 
 
 def test_synology_install_can_build_missing_vips_processor_before_staging():
@@ -444,6 +502,17 @@ def test_worker_build_generates_and_verifies_third_party_notices():
 def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     build_package = Path("tools/build-package.sh").read_text(encoding="utf-8")
 
+    assert 'BUILD_EXTERNAL_WORKERS="${AV_IMGDATA_BUILD_EXTERNAL_WORKERS:-1}"' in build_package
+    assert "External worker bundles are built by default before the Synology package build:" in build_package
+    assert "AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS=0 Skip embedding external worker archives in the DSM package" in build_package
+    assert "cleanup_existing_image_packages" in build_package
+    assert "info_sh_value" in build_package
+    assert 'image_package_dir="${WORKSPACE_ROOT}/build_env/ds.${platform}-${version}/image/packages"' in build_package
+    assert 'pattern="${image_package_dir}/${package_title}-*-${package_version}*.spk"' in build_package
+    assert 'cleanup_existing_image_packages "$@"' in build_package
+    assert 'cleanup_existing_image_packages "${DEFAULT_ARGS[@]}"' in build_package
+    assert build_package.index("cleanup_existing_toolkit_link_target") < build_package.index('log "Running structure checks"')
+    assert build_package.index("cleanup_existing_image_packages") < build_package.index('log "Running structure checks"')
     assert "sanitize_project_for_toolkit_link" in build_package
     assert "restore_local_build_artifacts" in build_package
     assert "cleanup_stale_generated_backup_roots" in build_package
@@ -451,7 +520,7 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert "find_existing_linux_worker_vips_artifact_root" in build_package
     assert "existing_linux_worker_vips_artifact_ready" in build_package
     assert "preserve_existing_linux_worker_vips_artifact" in build_package
-    assert "host_linux_worker_vips_build_dependencies_ready" in build_package
+    assert "host_linux_worker_vips_build_dependencies_ready" not in build_package
     assert "move_stale_generated_path_out_of_way" in build_package
     assert "prepare_generated_worker_paths" in build_package
     assert "assert_no_nobody_generated_paths" in build_package
@@ -470,10 +539,12 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert "dist/av-imgdata-worker-linux-x86_64" in build_package
     assert "dist/av-imgdata-worker-docker-linux-x86_64" in build_package
     assert "cp -RL --no-preserve=ownership" in build_package
-    assert "export AV_IMGDATA_LINUX_CHROOT=0" in build_package
+    assert "export AV_IMGDATA_LINUX_CHROOT=0" not in build_package
     assert "Using existing Linux worker libvips artifact because non-interactive sudo is not available" in build_package
     assert "non-interactive sudo is not available" in build_package
-    assert "libjpeg libpng libtiff-4 libwebp lcms2 zlib" in build_package
+    assert "Using host build for Linux worker libvips because non-interactive sudo is not available" not in build_package
+    assert "host pkg-config dependencies are incomplete" not in build_package
+    assert "libjpeg libpng libtiff-4 libwebp lcms2 zlib" not in build_package
     assert '"build/worker/${target}"' in build_package
     assert '"dist/av-imgdata-worker-${target}"' in build_package
     assert '[[ "${target}" == "windows-x86_64" ]] && continue' in build_package
@@ -503,9 +574,12 @@ def test_package_wrapper_moves_local_artifacts_before_toolkit_link():
     assert "sudo -n true" in build_package
     assert "[[ -t 0 ]]" in build_package
     assert "sudo env AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 \"${PKGCREATE}\"" in build_package
+    assert "PkgCreate.py failed; preserved PkgCreate output log:" in build_package
+    assert "rm -f \"${pkgcreate_log}\"\n      fail \"PkgCreate.py failed" not in build_package
     assert "PkgCreate.py requires root privileges for the Synology Toolkit chroot step" in build_package
     assert "tee \"${pkgcreate_log}\"" in build_package
-    assert "ERROR: (native|optional|external worker|Windows external worker|ui/index.cgi|libjpeg|ONNXRuntime)" in build_package
+    assert "ERROR: (native|optional|external worker|Windows external worker|ui/index.cgi|libjpeg|ONNXRuntime|duplicate package runtime library SONAMEs)" in build_package
+    assert "duplicate package runtime library SONAMEs" in build_package
     assert "tools/fetch-worker-windows-deps.sh" in build_package
     assert 'onnxruntime/include/onnxruntime_c_api.h' in build_package
     assert 'jpeg/include/jpeglib.h' in build_package

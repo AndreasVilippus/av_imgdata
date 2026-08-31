@@ -64,6 +64,14 @@ export default {
 			recognitionFindingsLoading: false,
 			recognitionCurrentIndex: 0,
 			recognitionDecisionLoading: false,
+			recognitionPersonFindingId: '',
+			recognitionPersonName: '',
+			recognitionSelectedPerson: null,
+			recognitionPersonSuggestions: [],
+			recognitionPersonSuggestLoading: false,
+			recognitionShowSuggestions: false,
+			recognitionSuggestTimer: null,
+			recognitionSuggestRequestId: 0,
 		};
 	},
 	created() {
@@ -829,8 +837,10 @@ export default {
 					const payload = this.getResponseData(data);
 					this.recognitionFindings = payload && Array.isArray(payload.entries) ? payload.entries : [];
 					this.recognitionCurrentIndex = Math.min(this.recognitionCurrentIndex, Math.max(0, this.recognitionReviewFindings.length - 1));
+					this.syncRecognitionPersonSelection();
 			} catch (err) {
 				this.recognitionFindings = [];
+				this.clearRecognitionPersonSuggestions();
 			} finally {
 				this.recognitionFindingsLoading = false;
 			}
@@ -856,7 +866,110 @@ export default {
 			}
 			return String((finding && (finding.best_person_name || finding.person_name)) || this.$avt('face_match:unknown_name', '(unnamed)'));
 		},
+		getRecognitionFindingId(finding) {
+			if (!finding) {
+				return '';
+			}
+			return String(this.isRecognitionOutlierAction ? finding.outlier_id : finding.suggestion_id || '').trim();
+		},
+		clearRecognitionPersonSuggestions() {
+			this.recognitionPersonSuggestions = [];
+			this.recognitionPersonSuggestLoading = false;
+			this.recognitionShowSuggestions = false;
+		},
+		syncRecognitionPersonSelection() {
+			const finding = this.recognitionCurrentFinding;
+			const findingId = this.getRecognitionFindingId(finding);
+			if (this.recognitionPersonFindingId === findingId) {
+				return;
+			}
+			if (this.recognitionSuggestTimer) {
+				window.clearTimeout(this.recognitionSuggestTimer);
+				this.recognitionSuggestTimer = null;
+			}
+			this.recognitionPersonFindingId = findingId;
+			if (!finding || this.isRecognitionOutlierAction) {
+				this.recognitionPersonName = '';
+				this.recognitionSelectedPerson = null;
+				this.clearRecognitionPersonSuggestions();
+				return;
+			}
+			const personId = Number(finding.best_person_id || 0);
+			const personName = String(finding.best_person_name || '').trim();
+			this.recognitionPersonName = personName;
+			this.recognitionSelectedPerson = personId ? { id: personId, name: personName } : null;
+			this.clearRecognitionPersonSuggestions();
+		},
+		handleRecognitionPersonNameFocus() {
+			this.syncRecognitionPersonSelection();
+			if (this.recognitionPersonSuggestions.length) {
+				this.recognitionShowSuggestions = true;
+			}
+		},
+		handleRecognitionPersonNameInput(value) {
+			this.recognitionPersonName = String(value || '');
+			const selectedPerson = this.recognitionSelectedPerson;
+			if (selectedPerson && this.normalizeFaceMatchName(this.recognitionPersonName) !== this.normalizeFaceMatchName(selectedPerson.name)) {
+				this.recognitionSelectedPerson = null;
+			}
+			this.scheduleRecognitionPersonSuggestions();
+		},
+		scheduleRecognitionPersonSuggestions() {
+			if (this.recognitionSuggestTimer) {
+				window.clearTimeout(this.recognitionSuggestTimer);
+				this.recognitionSuggestTimer = null;
+			}
+			const query = String(this.recognitionPersonName || '').trim();
+			if (!query) {
+				this.clearRecognitionPersonSuggestions();
+				return;
+			}
+			this.recognitionSuggestTimer = window.setTimeout(() => {
+				this.fetchRecognitionPersonSuggestions(query);
+			}, 200);
+		},
+		async fetchRecognitionPersonSuggestions(query) {
+			const currentQuery = String(query || '').trim();
+			if (!currentQuery) {
+				this.clearRecognitionPersonSuggestions();
+				return;
+			}
+			const requestId = this.recognitionSuggestRequestId + 1;
+			this.recognitionSuggestRequestId = requestId;
+			this.recognitionPersonSuggestLoading = true;
+			this.recognitionShowSuggestions = true;
+			try {
+				const data = await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/face_person_suggest', {
+					name_prefix: currentQuery,
+					limit: 10,
+				});
+				if (this.recognitionSuggestRequestId !== requestId) {
+					return;
+				}
+				const root = this.getResponseData(data);
+				this.recognitionPersonSuggestions = Array.isArray(root.list) ? root.list : [];
+				this.recognitionShowSuggestions = this.recognitionPersonSuggestions.length > 0;
+			} catch (err) {
+				if (this.recognitionSuggestRequestId !== requestId) {
+					return;
+				}
+				this.clearRecognitionPersonSuggestions();
+			} finally {
+				if (this.recognitionSuggestRequestId === requestId) {
+					this.recognitionPersonSuggestLoading = false;
+				}
+			}
+		},
+		selectRecognitionPersonSuggestion(person) {
+			if (!person || !person.id) {
+				return;
+			}
+			this.recognitionSelectedPerson = person;
+			this.recognitionPersonName = person.name || '';
+			this.clearRecognitionPersonSuggestions();
+		},
 		async acceptRecognitionCurrent() {
+			this.syncRecognitionPersonSelection();
 			await this.decideRecognitionCurrent(this.isRecognitionOutlierAction ? 'excluded' : 'selected', {
 				apply: !this.isRecognitionOutlierAction,
 			});
@@ -876,13 +989,20 @@ export default {
 						operation_mode: this.recognitionOptions.operation_mode,
 					});
 				if (options.apply) {
+					const selectedPerson = this.recognitionSelectedPerson && this.recognitionSelectedPerson.id
+						? this.recognitionSelectedPerson
+						: null;
 					await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/recognition_suggestions_apply', {
 						action: this.selectedRecognitionAction,
 						selected_suggestion_ids: [itemId],
 						operation_mode: this.recognitionOptions.operation_mode,
+						...(selectedPerson ? { override_person_id: selectedPerson.id, override_person_name: selectedPerson.name || '' } : {}),
 					});
 				}
 					await this.fetchRecognitionFindings();
+					if (this.recognitionOptions.operation_mode === 'immediate') {
+						await this.fetchCleanupProgress({ actionOverride: this.selectedRecognitionAction });
+					}
 					this.recognitionCurrentIndex = 0;
 					if (
 						this.recognitionOptions.operation_mode === 'immediate'

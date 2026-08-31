@@ -9,6 +9,8 @@ AV_IMGDATA_BUNDLE_WORKER_VIPS="${AV_IMGDATA_BUNDLE_WORKER_VIPS:-${AV_IMGDATA_WOR
 AV_IMGDATA_BUILD_WORKER_VIPS="${AV_IMGDATA_BUILD_WORKER_VIPS:-1}"
 AV_IMGDATA_LINUX_CHROOT="${AV_IMGDATA_LINUX_CHROOT:-1}"
 AV_IMGDATA_REQUIRE_WORKER_VIPS="${AV_IMGDATA_REQUIRE_WORKER_VIPS:-1}"
+AV_IMGDATA_WORKER_BUILD_TYPE="${AV_IMGDATA_WORKER_BUILD_TYPE:-Release}"
+AV_IMGDATA_WORKER_STRIP="${AV_IMGDATA_WORKER_STRIP:-1}"
 
 usage() {
   cat <<'EOF'
@@ -32,6 +34,8 @@ Environment:
   AV_IMGDATA_REQUIRE_WORKER_VIPS  Defaults to 1. Set to 0 to allow worker bundles without a libvips image processor.
   AV_IMGDATA_LINUX_CHROOT         Defaults to 1. Set to 0 to build Linux libvips on the host instead of in a chroot.
   AV_IMGDATA_LINUX_CHROOT_ROOT    Optional chroot path. Default: build/chroot/linux-x86_64.
+  AV_IMGDATA_WORKER_BUILD_TYPE    Defaults to Release.
+  AV_IMGDATA_WORKER_STRIP         Defaults to 1. Set to 0 for debug worker artifacts.
   AV_IMGDATA_MINGW_BIN            Optional MinGW bin directory containing runtime DLLs.
 
 Defaults:
@@ -147,6 +151,85 @@ copy_matching_files_if_exists() {
       [ -e "${source}" ] || continue
       cp -L "${source}" "${target_dir}/"
     done
+  done
+}
+
+copy_runtime_library_family() {
+  local source_dir="$1"
+  local target_dir="$2"
+  shift 2
+  local tmp_file
+  local pattern
+  local source
+  local real_source
+  local real_name
+  local source_name
+  local soname
+
+  [ -d "${source_dir}" ] || return 0
+  mkdir -p "${target_dir}"
+  require_command readelf
+  tmp_file="$(mktemp)"
+  find "${target_dir}" -maxdepth 1 -type f -name '*.so*' -print0 2>/dev/null | while IFS= read -r -d '' source; do
+    soname="$(readelf -d "${source}" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
+    [ -n "${soname}" ] || continue
+    printf '%s\n' "${soname}"
+  done > "${tmp_file}"
+
+  for pattern in "$@"; do
+    find "${source_dir}" -maxdepth 1 \( -type f -o -type l \) -name "${pattern}" -print0 2>/dev/null | sort -zV | while IFS= read -r -d '' source; do
+      real_source="$(readlink -f "${source}" 2>/dev/null || printf '%s' "${source}")"
+      [ -f "${real_source}" ] || continue
+      soname="$(readelf -d "${real_source}" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
+      [ -n "${soname}" ] || continue
+      if grep -Fxq "${soname}" "${tmp_file}"; then
+        continue
+      fi
+      real_name="$(basename "${real_source}")"
+      source_name="$(basename "${source}")"
+      cp -L "${real_source}" "${target_dir}/${real_name}"
+      if [ "${soname}" != "${real_name}" ]; then
+        ln -sfn "${real_name}" "${target_dir}/${soname}"
+      fi
+      if [ "${source_name}" != "${real_name}" ] && [ "${source_name}" != "${soname}" ]; then
+        ln -sfn "${soname}" "${target_dir}/${source_name}"
+      fi
+      printf '%s\n' "${soname}" >> "${tmp_file}"
+    done
+  done
+  rm -f "${tmp_file}"
+}
+
+prune_worker_bundle_non_runtime_artifacts() {
+  find "${DIST_DIR}/lib" -maxdepth 1 -type f \( -name '*.a' -o -name '*.la' \) -delete 2>/dev/null || true
+  find "${DIST_DIR}/share/licenses/AV_ImgData" -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tar.xz' -o -name '*.tgz' \) -delete 2>/dev/null || true
+}
+
+worker_strip_tool() {
+  if [ "${TARGET}" = "windows-x86_64" ]; then
+    printf '%s\n' "${STRIP:-x86_64-w64-mingw32-strip}"
+  else
+    printf '%s\n' "${STRIP:-strip}"
+  fi
+}
+
+strip_worker_binaries() {
+  local strip_tool
+  local binary
+
+  [ "${AV_IMGDATA_WORKER_STRIP}" = "1" ] || return 0
+  strip_tool="$(worker_strip_tool)"
+  if ! command -v "${strip_tool}" >/dev/null 2>&1; then
+    echo "WARNING: worker strip tool not found: ${strip_tool}; worker binaries remain unstripped." >&2
+    return 0
+  fi
+
+  find "${DIST_DIR}/bin" -maxdepth 1 -type f \( \
+    -name 'av-imgdata-worker*' -o \
+    -name 'av-imgdata-face-processor*' -o \
+    -name 'av-imgdata-image-processor*' \
+  \) -print0 2>/dev/null | while IFS= read -r -d '' binary; do
+    "${strip_tool}" --strip-unneeded "${binary}" 2>/dev/null || "${strip_tool}" "${binary}" 2>/dev/null || true
   done
 }
 
@@ -274,13 +357,15 @@ bundle_face_processor_if_available() {
 
   if [ "${copied}" = "1" ]; then
     echo "Bundled face processor: ${DIST_DIR}/bin/${target_binary_name}"
-    copy_dir_if_exists "${source_base}/lib" "${DIST_DIR}/lib" || true
     copy_dir_if_exists "${source_base}/share/licenses" "${DIST_DIR}/share/licenses" || true
     if [ "${TARGET}" = "windows-x86_64" ]; then
       copy_matching_files_if_exists "${source_base}/bin" "${DIST_DIR}/bin" "*.dll" "*.DLL"
       copy_matching_files_if_exists "${source_base}/lib" "${DIST_DIR}/bin" "*.dll" "*.DLL"
       copy_mingw_runtime_dlls "${DIST_DIR}/bin"
       echo "Bundled Windows face processor runtime DLLs into ${DIST_DIR}/bin"
+    else
+      copy_runtime_library_family "${source_base}/lib" "${DIST_DIR}/lib" '*.so*'
+      prune_worker_bundle_non_runtime_artifacts
     fi
   else
     echo "WARNING: optional face processor binary not found for ${TARGET}; worker probe will report face_processor_binary_exists=false." >&2
@@ -385,13 +470,15 @@ bundle_vips_processor() {
   fi
 
   echo "Bundled libvips image processor: ${DIST_DIR}/bin/${target_binary_name}"
-  copy_dir_if_exists "${source_base}/lib" "${DIST_DIR}/lib" || true
   copy_dir_if_exists "${source_base}/share/licenses" "${DIST_DIR}/share/licenses" || true
   if [ "${TARGET}" = "windows-x86_64" ]; then
     copy_matching_files_if_exists "${source_base}/bin" "${DIST_DIR}/bin" "*.dll" "*.DLL"
     copy_matching_files_if_exists "${source_base}/lib" "${DIST_DIR}/bin" "*.dll" "*.DLL"
     copy_mingw_runtime_dlls "${DIST_DIR}/bin"
     echo "Bundled Windows libvips image processor runtime DLLs into ${DIST_DIR}/bin"
+  else
+    copy_runtime_library_family "${source_base}/lib" "${DIST_DIR}/lib" '*.so*'
+    prune_worker_bundle_non_runtime_artifacts
   fi
 }
 
@@ -437,6 +524,7 @@ require_command cmake
 CMAKE_ARGS=(
   -S "${PROJECT_DIR}/worker"
   -B "${BUILD_DIR}"
+  -DCMAKE_BUILD_TYPE="${AV_IMGDATA_WORKER_BUILD_TYPE}"
   -DCMAKE_INSTALL_PREFIX="${DIST_DIR}"
 )
 
@@ -466,6 +554,8 @@ write_worker_model_readme
 
 bundle_face_processor_if_available
 bundle_vips_processor
+prune_worker_bundle_non_runtime_artifacts
+strip_worker_binaries
 
 python3 "${PROJECT_DIR}/tools/verify-third-party-licenses.py" --root "${DIST_DIR}" --write
 

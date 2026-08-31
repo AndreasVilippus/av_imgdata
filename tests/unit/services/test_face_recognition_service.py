@@ -188,6 +188,38 @@ def test_apply_uses_persisted_selected_suggestion_and_existing_assign_orchestrat
     assert findings.values[service.FINDING_SUGGESTIONS]["entries"][0]["write_state"] == "written"
 
 
+def test_apply_suggestion_can_override_target_person():
+    service, findings = _service()
+    calls = []
+    service.backend.assignMatchedFaceToKnownPerson = lambda **kwargs: calls.append(kwargs) or {"updated": True}
+    findings.values[service.FINDING_SUGGESTIONS] = {
+        "entries": [{
+            "suggestion_id": "rec-1",
+            "selection_state": "selected",
+            "write_state": "pending",
+            "unknown_face_id": 11,
+            "best_person_id": 22,
+            "best_person_name": "Wrong",
+            "image_id": 33,
+            "image_path": "/volume1/photo/a.jpg",
+        }]
+    }
+
+    result = service.apply_suggestions(
+        user_key="u",
+        cookies={},
+        base_url="https://dsm",
+        selected_ids=["rec-1"],
+        override_person_id=44,
+        override_person_name="Correct",
+    )
+
+    assert result["written_count"] == 1
+    assert calls[0]["person_id"] == 44
+    assert calls[0]["person_name"] == "Correct"
+    assert findings.values[service.FINDING_SUGGESTIONS]["entries"][0]["applied_person_id"] == 44
+
+
 def test_assignment_scan_finds_known_photos_face_matching_other_profile():
     service, findings = _service()
     options = service.normalize_options({"operation_mode": "save_only", "review_score": 0.5, "min_margin": 0.05})
@@ -688,6 +720,41 @@ def test_unknown_face_immediate_review_persists_resume_cursor():
     assert payload["options"]["resume_progress_counts"]["progress_kind"] == "faces"
     assert payload["options"]["resume_progress_counts"]["unknown_faces_scanned"] == 1
     assert payload["options"]["resume_progress_counts"]["unknown_faces_total"] == 1
+
+
+def test_sync_review_progress_preserves_resume_cursor_after_last_review_entry():
+    service, _findings = _service()
+    updates = []
+    service.backend._setCleanupProgress = lambda _user_key, **kwargs: updates.append(kwargs) or kwargs
+    service.backend.getCleanupProgress = lambda *_args, **_kwargs: updates[-1]
+    service._write_active_findings(
+        user_key="u",
+        action=service.ACTION_SUGGEST,
+        payload={
+            "entries": [{
+                "suggestion_id": "rec-1",
+                "selection_state": "selected",
+                "write_state": "written",
+            }],
+            "options": {
+                "operation_mode": "immediate",
+                "resume_start_person_index": 4,
+                "resume_person_id": 42,
+                "resume_progress_counts": {"persons_scanned": 4, "persons_total": 10},
+            },
+        },
+    )
+
+    progress = service.sync_review_progress(
+        user_key="u",
+        action=service.ACTION_SUGGEST,
+        operation_mode="immediate",
+    )
+
+    assert progress["finished"] is False
+    assert progress["phase"] == "stopped"
+    assert progress["resume_cursor"]["resume_start_person_index"] == 4
+    assert progress["resume_cursor"]["resume_person_id"] == 42
 
 
 def test_person_reference_resume_skips_images_through_previous_review_image(tmp_path):

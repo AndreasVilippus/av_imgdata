@@ -1259,26 +1259,40 @@ async def face_matching_findings_status(request: Request):
     body = await _read_request_body(request)
     requested_action = str(body.get("action") or body.get("source_action") or "").strip().lower()
     if requested_action == "recognition_analyze_unknown_faces":
+        findings = await _run_backend_call(lambda: IMGDATA.face_recognition.findings(
+            requested_action,
+            user_key=session_ctx["user_key"],
+            operation_mode=str(body.get("operation_mode") or ""),
+        ))
+        entries = findings.get("entries") if isinstance(findings.get("entries"), list) else []
+        try:
+            count = max(0, int(findings.get("count") if "count" in findings else len(entries)))
+        except (TypeError, ValueError):
+            count = len(entries)
+        transferred_count = len([
+            entry for entry in entries
+            if str(entry.get("write_state") or "").strip().lower() == "written"
+        ])
         backend_debug_log(
             "face_matching_findings_status",
             duration_ms=round((time.monotonic() - started) * 1000, 2),
             user_key_hash=_debug_user_key(session_ctx["user_key"]),
             requested_action=requested_action,
             findings_action=requested_action,
-            status="",
-            count=0,
-            transferred_count=0,
+            status=str(findings.get("status") or ""),
+            count=count,
+            transferred_count=transferred_count,
         )
         return {
             "success": True,
             "data": {
-                "status": "",
+                "status": str(findings.get("status") or ""),
                 "action": requested_action,
                 "source_action": requested_action,
                 "requested_action": requested_action,
-                "count": 0,
-                "transferred_count": 0,
-                "save_only": False,
+                "count": count,
+                "transferred_count": transferred_count,
+                "save_only": str((findings.get("options") or {}).get("operation_mode") or "").strip().lower() == "save_only" if isinstance(findings.get("options"), dict) else False,
                 "auto": False,
             },
         }
@@ -2359,6 +2373,12 @@ async def recognition_suggestions_apply(request: Request):
     body = await _read_request_body(request)
     selected_ids = body.get("selected_suggestion_ids")
     action = str(body.get("action") or "recognition_analyze_unknown_faces")
+    override_person = body.get("override_person")
+    override_person_id = body.get("override_person_id")
+    override_person_name = body.get("override_person_name")
+    if isinstance(override_person, dict):
+        override_person_id = override_person.get("id", override_person_id)
+        override_person_name = override_person.get("name", override_person_name)
     try:
         result = await _run_backend_call(lambda: IMGDATA.face_recognition.apply_suggestions(
             user_key=session_ctx["user_key"],
@@ -2367,6 +2387,8 @@ async def recognition_suggestions_apply(request: Request):
             selected_ids=selected_ids if isinstance(selected_ids, list) else None,
             operation_mode=str(body.get("operation_mode") or "findings"),
             action=action,
+            override_person_id=override_person_id,
+            override_person_name=override_person_name,
         ))
         await _run_backend_call(lambda: IMGDATA.face_recognition.sync_review_progress(
             user_key=session_ctx["user_key"],

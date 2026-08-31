@@ -2065,6 +2065,21 @@ class FaceRecognitionService:
             next_options["resume_progress_counts"] = retained
         return next_options
 
+    @staticmethod
+    def _resume_cursor_from_options(options: Dict[str, Any]) -> Dict[str, Any]:
+        cursor: Dict[str, Any] = {}
+        for key in (
+            "resume_start_person_index",
+            "resume_after_image_id",
+            "resume_after_face_id",
+            "resume_person_id",
+            "resume_progress_counts",
+        ):
+            value = options.get(key) if isinstance(options, dict) else None
+            if value not in (None, "", {}):
+                cursor[key] = value
+        return cursor
+
     def _finish_review_scan(self, user_key: str, action: str, options: Dict[str, Any], entries: List[Dict[str, Any]]) -> None:
         open_entries = self._open_entries(entries)
         current = open_entries[0] if open_entries else {}
@@ -2079,6 +2094,7 @@ class FaceRecognitionService:
             findings_count=len(entries),
             current_path=str(current.get("image_path") or ""),
             current_name=self._review_entry_name(action, current) if current else "",
+            resume_cursor=self._resume_cursor_from_options(options) if review_required else {},
             **retained,
         )
 
@@ -2173,18 +2189,39 @@ class FaceRecognitionService:
         current = open_entries[0] if open_entries else {}
         options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
         options = {**options, "operation_mode": status_mode}
+        resume_cursor = self._resume_cursor_from_options(options)
+        can_resume = bool(resume_cursor) and status_mode == "scan"
+        phase = "review_required" if open_entries else ("stopped" if can_resume else "finished")
+        message_key = "cleanup:recognition_review_required" if open_entries else (
+            "cleanup:recognition_scan_stopped" if can_resume else "cleanup:recognition_scan_finished"
+        )
+        message = "Manual review required for the next recognition finding." if open_entries else (
+            "Recognition scan can continue." if can_resume else "Recognition scan finished."
+        )
         self._set_progress(
-            user_key, action, options, running=False, finished=True, phase="review_required" if open_entries else "finished",
-            message_key="cleanup:recognition_review_required" if open_entries else "cleanup:recognition_scan_finished",
-            message="Manual review required for the next recognition finding." if open_entries else "Recognition scan finished.",
+            user_key, action, options, running=False, finished=not can_resume, phase=phase,
+            message_key=message_key,
+            message=message,
             current_path=str(current.get("image_path") or ""),
             current_name=self._review_entry_name(action, current) if current else "",
             findings_count=len(entries),
             entries_current=len(entries) - len(open_entries), entries_total=len(entries),
+            resume_cursor=resume_cursor if can_resume or open_entries else {},
         )
         return self.backend.getCleanupProgress(user_key, action)
 
-    def apply_suggestions(self, *, user_key: str, cookies: Dict[str, str], base_url: str, selected_ids: Optional[List[str]] = None, operation_mode: str = "findings", action: str = ACTION_SUGGEST) -> Dict[str, Any]:
+    def apply_suggestions(
+        self,
+        *,
+        user_key: str,
+        cookies: Dict[str, str],
+        base_url: str,
+        selected_ids: Optional[List[str]] = None,
+        operation_mode: str = "findings",
+        action: str = ACTION_SUGGEST,
+        override_person_id: Any = None,
+        override_person_name: Any = None,
+    ) -> Dict[str, Any]:
         requested = {str(value) for value in selected_ids or []}
         mode = str(operation_mode or "findings").strip().lower()
         normalized_action = str(action or self.ACTION_SUGGEST).strip().lower()
@@ -2192,6 +2229,12 @@ class FaceRecognitionService:
             normalized_action = self.ACTION_SUGGEST
         payload = self.findings(normalized_action, user_key=user_key, operation_mode=mode)
         entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+        override_id = 0
+        try:
+            override_id = int(override_person_id or 0)
+        except (TypeError, ValueError):
+            override_id = 0
+        override_name = str(override_person_name or "").strip()
         written = skipped = errors = 0
         for entry in entries:
             suggestion_id = str(entry.get("suggestion_id") or "")
@@ -2199,11 +2242,15 @@ class FaceRecognitionService:
             if not selected or entry.get("write_state") == "written":
                 continue
             try:
+                person_id = override_id or int(entry["best_person_id"])
+                person_name = override_name or str(entry["best_person_name"])
                 self.backend.assignMatchedFaceToKnownPerson(
                     user_key=user_key, cookies=cookies, base_url=base_url,
-                    face_id=int(entry["unknown_face_id"]), person_id=int(entry["best_person_id"]),
-                    person_name=str(entry["best_person_name"]), item_id=int(entry["image_id"]), image_path=str(entry["image_path"]),
+                    face_id=int(entry["unknown_face_id"]), person_id=person_id,
+                    person_name=person_name, item_id=int(entry["image_id"]), image_path=str(entry["image_path"]),
                 )
+                entry["applied_person_id"] = person_id
+                entry["applied_person_name"] = person_name
                 entry["write_state"] = "written"
                 written += 1
             except Exception as exc:

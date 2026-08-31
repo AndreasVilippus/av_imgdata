@@ -115,6 +115,14 @@ def test_worker_bundle_builds_and_integrates_vips_image_processor_by_default_wit
     assert 'AV_IMGDATA_BUNDLE_WORKER_VIPS="${AV_IMGDATA_BUNDLE_WORKER_VIPS:-${AV_IMGDATA_WORKER_BUNDLE_VIPS_PROCESSOR:-1}}"' in script
     assert 'AV_IMGDATA_BUILD_WORKER_VIPS="${AV_IMGDATA_BUILD_WORKER_VIPS:-1}"' in script
     assert 'AV_IMGDATA_REQUIRE_WORKER_VIPS="${AV_IMGDATA_REQUIRE_WORKER_VIPS:-1}"' in script
+    assert 'AV_IMGDATA_WORKER_BUILD_TYPE="${AV_IMGDATA_WORKER_BUILD_TYPE:-Release}"' in script
+    assert 'AV_IMGDATA_WORKER_STRIP="${AV_IMGDATA_WORKER_STRIP:-1}"' in script
+    assert '-DCMAKE_BUILD_TYPE="${AV_IMGDATA_WORKER_BUILD_TYPE}"' in script
+    assert "strip_worker_binaries()" in script
+    assert "worker_strip_tool()" in script
+    assert "x86_64-w64-mingw32-strip" in script
+    assert "--strip-unneeded" in script
+    assert "Set to 0 for debug worker artifacts" in script
     assert "bundle_vips_processor" in script
     assert "require_worker_vips_build_tools" in script
     assert 'AV_IMGDATA_LINUX_CHROOT="${AV_IMGDATA_LINUX_CHROOT:-1}"' in script
@@ -141,6 +149,27 @@ def test_worker_bundle_builds_and_integrates_vips_image_processor_by_default_wit
     assert "AV_IMGDATA_WINDOWS_VIPS_REPO_TAG" in windows_script
     assert "Keeping bundled runtime DLL already provided by dependency root" in windows_script
     assert "Keeping bundled runtime DLL already provided by processor bundle" in script
+    face_bundle_block = script.split("bundle_face_processor_if_available()", 1)[1].split("build_vips_processor_if_missing()", 1)[0]
+    windows_face_branch = face_bundle_block.split('if [ "${TARGET}" = "windows-x86_64" ]; then', 1)[1].split("else", 1)[0]
+    non_windows_face_branch = face_bundle_block.split("else", 1)[1].split("\n    fi", 1)[0]
+    assert 'copy_matching_files_if_exists "${source_base}/lib" "${DIST_DIR}/bin" "*.dll" "*.DLL"' in windows_face_branch
+    assert 'copy_dir_if_exists "${source_base}/lib" "${DIST_DIR}/lib"' not in windows_face_branch
+    assert 'copy_runtime_library_family "${source_base}/lib" "${DIST_DIR}/lib" \'*.so*\'' in non_windows_face_branch
+    assert 'prune_worker_bundle_non_runtime_artifacts' in non_windows_face_branch
+    vips_bundle_block = script.split("bundle_vips_processor()", 1)[1].split("write_worker_model_readme()", 1)[0]
+    vips_copy_block = vips_bundle_block.split('echo "Bundled libvips image processor:', 1)[1]
+    windows_vips_branch = vips_copy_block.split('if [ "${TARGET}" = "windows-x86_64" ]; then', 1)[1].split("else", 1)[0]
+    non_windows_vips_branch = vips_copy_block.split("else", 1)[1].split("\n  fi", 1)[0]
+    assert 'copy_matching_files_if_exists "${source_base}/lib" "${DIST_DIR}/bin" "*.dll" "*.DLL"' in windows_vips_branch
+    assert 'copy_dir_if_exists "${source_base}/lib" "${DIST_DIR}/lib"' not in windows_vips_branch
+    assert 'copy_runtime_library_family "${source_base}/lib" "${DIST_DIR}/lib" \'*.so*\'' in non_windows_vips_branch
+    assert "-name '*.a' -o -name '*.la'" in script
+    assert "copy_runtime_library_family()" in script
+    assert "readelf -d" in script
+    assert "sort -zV" in script
+    assert "prune_worker_bundle_non_runtime_artifacts()" in script
+    assert "-name '*.tar.xz'" in script
+    assert "-name '*.tar.gz'" in script
     assert 'MXE_TMPDIR="${AV_IMGDATA_WINDOWS_VIPS_TMPDIR:-${BUILD_ROOT}/mxe-tmp}"' in windows_script
     assert 'MXE_PODMAN_RUNTIME_DIR="${AV_IMGDATA_WINDOWS_VIPS_PODMAN_RUNTIME_DIR:-}"' in windows_script
     assert 'MXE_PODMAN_HOME="${AV_IMGDATA_WINDOWS_VIPS_PODMAN_HOME:-}"' in windows_script

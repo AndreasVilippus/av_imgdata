@@ -104,7 +104,7 @@ def test_face_matching_findings_status_uses_count_without_entries(monkeypatch):
     assert len(calls) == 1
 
 
-def test_face_matching_findings_status_neutralizes_delegated_recognition_action(monkeypatch):
+def test_face_matching_findings_status_reads_delegated_recognition_findings(monkeypatch):
     async def request_body(_request):
         return {"action": "recognition_analyze_unknown_faces"}
 
@@ -116,18 +116,35 @@ def test_face_matching_findings_status_neutralizes_delegated_recognition_action(
         "getFaceMatchFindingsStatus",
         Mock(side_effect=AssertionError("delegated recognition must not read face-match findings status")),
     )
+    monkeypatch.setattr(
+        imgdata_api.IMGDATA.face_recognition,
+        "findings",
+        Mock(return_value={
+            "status": "finished",
+            "entries": [
+                {"suggestion_id": "rec-1", "write_state": "written"},
+                {"suggestion_id": "rec-2", "write_state": "pending"},
+            ],
+        }),
+    )
 
     payload = _run(imgdata_api.face_matching_findings_status(object()))
 
     assert payload["success"] is True
-    assert payload["data"]["count"] == 0
+    assert payload["data"]["count"] == 2
+    assert payload["data"]["transferred_count"] == 1
     assert payload["data"]["action"] == "recognition_analyze_unknown_faces"
     assert payload["data"]["source_action"] == "recognition_analyze_unknown_faces"
     assert payload["data"]["requested_action"] == "recognition_analyze_unknown_faces"
-    assert payload["data"]["status"] == ""
+    assert payload["data"]["status"] == "finished"
     assert payload["data"]["save_only"] is False
     assert payload["data"]["auto"] is False
-    assert len(calls) == 0
+    assert len(calls) == 1
+    imgdata_api.IMGDATA.face_recognition.findings.assert_called_once_with(
+        "recognition_analyze_unknown_faces",
+        user_key="user-1",
+        operation_mode="",
+    )
 
 
 def test_face_matching_progress_neutralizes_finished_foreign_requested_action(monkeypatch):

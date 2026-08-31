@@ -11,6 +11,7 @@ VIPS_PREFIX="${INSTALL_DIR}/usr/local/AV_ImgData"
 VIPS_RUNTIME_PREFIX="${AV_IMGDATA_VIPS_RUNTIME_PREFIX:-/usr/local/AV_ImgData}"
 DEPS_ROOT="${BUILD_ROOT}/deps"
 SOURCE_CACHE="${DEPS_ROOT}/source-cache"
+BUILD_HOST_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 
 LIBDE265_VERSION="${AV_IMGDATA_LIBDE265_VERSION:-1.0.16}"
 LIBDE265_TARBALL="libde265-${LIBDE265_VERSION}.tar.gz"
@@ -80,6 +81,14 @@ require_tool() {
   if ! command -v "${tool}" >/dev/null 2>&1; then
     echo "ERROR: required tool not found: ${tool}" >&2
     exit 1
+  fi
+}
+
+restore_build_host_library_path() {
+  if [ -n "${BUILD_HOST_LD_LIBRARY_PATH}" ]; then
+    export LD_LIBRARY_PATH="${BUILD_HOST_LD_LIBRARY_PATH}"
+  else
+    unset LD_LIBRARY_PATH
   fi
 }
 
@@ -175,11 +184,9 @@ download_heif_stack() {
 
 install_heif_stack_license_files() {
   local license_dir="${VIPS_PREFIX}/share/licenses/AV_ImgData/heif-stack"
-  mkdir -p "${license_dir}/sources"
+  mkdir -p "${license_dir}"
   cp -a --no-preserve=ownership "${LIBDE265_SOURCE_DIR}/COPYING" "${license_dir}/libde265.COPYING"
   cp -a --no-preserve=ownership "${LIBHEIF_SOURCE_DIR}/COPYING" "${license_dir}/libheif.COPYING"
-  cp -a --no-preserve=ownership "${SOURCE_CACHE}/${LIBDE265_TARBALL}" "${license_dir}/sources/${LIBDE265_TARBALL}"
-  cp -a --no-preserve=ownership "${SOURCE_CACHE}/${LIBHEIF_TARBALL}" "${license_dir}/sources/${LIBHEIF_TARBALL}"
   cat > "${license_dir}/README.txt" <<EOF
 AV_ImgData ships libheif and libde265 as dynamically linked shared libraries for HEIC decoding.
 
@@ -193,7 +200,8 @@ Source: ${LIBDE265_URL}
 SHA256: ${LIBDE265_SHA256}
 License: LGPL, see libde265.COPYING
 
-The packaged source tarballs are included under sources/.
+Source tarballs are intentionally not embedded in the runtime package. The
+source URLs and checksums above identify the exact upstream sources used.
 EOF
 }
 
@@ -208,15 +216,11 @@ copy_optional_license_file() {
 
 install_libvips_license_files() {
   local license_dir="${VIPS_PREFIX}/share/licenses/AV_ImgData/libvips"
-  local tarball_path="${SOURCE_CACHE}/${LIBVIPS_TARBALL}"
   local patch_file="${license_dir}/sources/vips-${LIBVIPS_VERSION}-av-imgdata.patch"
   mkdir -p "${license_dir}/sources"
 
   copy_optional_license_file "${LIBVIPS_SOURCE_DIR}/COPYING" "${license_dir}/libvips.COPYING"
   copy_optional_license_file "${LIBVIPS_SOURCE_DIR}/LICENSE" "${license_dir}/libvips.LICENSE"
-  if [ -f "${tarball_path}" ]; then
-    cp -a --no-preserve=ownership "${tarball_path}" "${license_dir}/sources/${LIBVIPS_TARBALL}"
-  fi
 
   if [ -d "${LIBVIPS_ORIGINAL_SOURCE_DIR}" ] && command -v diff >/dev/null 2>&1; then
     (
@@ -238,9 +242,10 @@ Source: ${LIBVIPS_URL}
 SHA256: ${LIBVIPS_SHA256}
 License: LGPL-2.1-or-later, see libvips.COPYING
 
-The original source tarball is included under sources/.
 AV_ImgData applies Toolkit compatibility patches during the build; the generated
 patch diff is included as sources/vips-${LIBVIPS_VERSION}-av-imgdata.patch.
+The upstream source tarball is intentionally not embedded in the runtime
+package. The source URL and checksum above identify the exact source used.
 EOF
 }
 
@@ -277,29 +282,15 @@ install_runtime_dependency_notice() {
   find "${VIPS_PREFIX}/lib" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -printf '%f\n' 2>/dev/null | sort > "${libs_file}" || true
 
   cat > "${license_dir}/README.txt" <<EOF
-AV_ImgData ships additional shared runtime libraries required by the native processors.
+AV_ImgData ships only shared runtime libraries that are not provided by the
+target DSM runtime, or that need package-specific codec support.
 The exact packaged library files are listed in packaged-libraries.txt.
 
-Expected native runtime dependency license families:
-- ONNXRuntime: MIT
-- libjpeg/libjpeg-turbo compatible runtime: permissive IJG/BSD/zlib-style terms depending on provider
-- GLib/GObject/GIO/GModule/GThread: LGPL-2.1-or-later
-- libffi: MIT-style
-- PCRE: BSD-style
-- libmount/libblkid/libuuid from util-linux/e2fsprogs: LGPL/BSD-style components depending on provider
-- Expat: MIT
-- libpng: libpng license
-- libtiff: BSD-style
-- libwebp/libwebpmux/libwebpdemux: BSD-style
-- Little CMS/lcms2: MIT
-- zlib: zlib license
-- liblzma/xz: public-domain/LGPL/GPL mix as documented by the provider
-
-When the Synology Toolkit sysroot exposes matching license files under
-usr/share/licenses or usr/share/doc, they are copied into copied/.
+Expected native image runtime dependency license families:
+- libvips: LGPL-2.1-or-later
+- libheif: LGPL
+- libde265: LGPL
 EOF
-
-  copy_runtime_dependency_license_files
 }
 
 build_heif_stack() {
@@ -470,18 +461,26 @@ resolve_synology_toolchain_sysroot() {
   local env_file
   local value
   local candidate
+  local env_root
 
   if [ -n "${AV_IMGDATA_SYNOLOGY_SYSROOT:-}" ] && [ -d "${AV_IMGDATA_SYNOLOGY_SYSROOT}" ]; then
     printf '%s\n' "${AV_IMGDATA_SYNOLOGY_SYSROOT}"
     return
   fi
 
-  for env_file in /env64.mak /env.mak; do
+  for env_file in \
+    /env64.mak \
+    /env.mak; do
     [ -f "${env_file}" ] || continue
     value="$(grep -E '^ToolChainSysRoot[[:space:]]*=' "${env_file}" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
     value="${value%$'\r'}"
     if [ -n "${value}" ] && [ -d "${value}" ]; then
       printf '%s\n' "${value}"
+      return
+    fi
+    env_root="$(dirname "${env_file}")"
+    if [ -n "${value}" ] && [ "${value#/}" != "${value}" ] && [ -d "${env_root}/${value#/}" ]; then
+      printf '%s\n' "${env_root}/${value#/}"
       return
     fi
   done
@@ -629,6 +628,8 @@ build_libvips() {
   install_libvips_license_files
 
   local synology_sysroot
+  local pkg_config_overlay
+  local meson_pkg_config_path="${VIPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
   local meson_args=(
     setup "${LIBVIPS_BUILD_DIR}" "${LIBVIPS_SOURCE_DIR}"
     "--prefix=${VIPS_RUNTIME_PREFIX}"
@@ -688,6 +689,21 @@ build_libvips() {
     fi
     if [ -d "${synology_sysroot}/usr/lib" ]; then
       echo "Using Synology sysroot libraries for libvips: ${synology_sysroot}/usr/lib"
+      if [ -d "${synology_sysroot}/usr/lib/pkgconfig" ]; then
+        pkg_config_overlay="${BUILD_ROOT}/pkgconfig-overlay"
+        mkdir -p "${pkg_config_overlay}"
+        cp -a --no-preserve=ownership "${synology_sysroot}/usr/lib/pkgconfig/"*.pc "${pkg_config_overlay}/" 2>/dev/null || true
+        if [ -f "${pkg_config_overlay}/glib-2.0.pc" ]; then
+          sed -i \
+            -e "s|^glib_genmarshal=.*|glib_genmarshal=$(command -v glib-genmarshal 2>/dev/null || printf '%s' glib-genmarshal)|" \
+            -e "s|^glib_mkenums=.*|glib_mkenums=$(command -v glib-mkenums 2>/dev/null || printf '%s' glib-mkenums)|" \
+            "${pkg_config_overlay}/glib-2.0.pc"
+        fi
+        meson_pkg_config_path="${meson_pkg_config_path}:${pkg_config_overlay}"
+      fi
+      if [ -d "${synology_sysroot}/usr/share/pkgconfig" ]; then
+        meson_pkg_config_path="${meson_pkg_config_path}:${synology_sysroot}/usr/share/pkgconfig"
+      fi
       meson_args+=(
         "-Dc_link_args=-L${synology_sysroot}/usr/lib"
       )
@@ -695,7 +711,7 @@ build_libvips() {
   fi
 
   echo "Running meson setup for libvips ${LIBVIPS_VERSION}"
-  meson "${meson_args[@]}"
+  PKG_CONFIG_PATH="${meson_pkg_config_path}" meson "${meson_args[@]}"
   if [ -n "${synology_sysroot}" ]; then
     patch_libvips_ninja_link_args "${synology_sysroot}"
   fi
@@ -710,79 +726,6 @@ build_libvips() {
     echo "ERROR: libvips build did not install libvips.so*." >&2
     exit 1
   fi
-}
-
-copy_library_family() {
-  local pattern="$1"
-  local target_dir="${VIPS_PREFIX}/lib"
-  local dirs=(
-    "${target_dir}"
-    "/usr/lib"
-    "/usr/lib64"
-    "/usr/local/lib"
-  )
-  local dir
-  local source
-  local target
-  local multiarch_dir
-  local source_real
-  local source_soname
-  local target_soname
-  local link_name
-
-  if command -v gcc >/dev/null 2>&1; then
-    multiarch_dir="/usr/lib/$(gcc -dumpmachine 2>/dev/null || true)"
-    if [ -n "${multiarch_dir}" ]; then
-      dirs+=("${multiarch_dir}")
-    fi
-  fi
-  for dir in /usr/lib/*-linux-gnu /lib/*-linux-gnu; do
-    dirs+=("${dir}")
-  done
-  for dir in /usr/local/*/*/sys-root/usr/lib; do
-    dirs+=("${dir}")
-  done
-
-  mkdir -p "${target_dir}"
-  for dir in "${dirs[@]}"; do
-    [ -d "${dir}" ] || continue
-    for source in "${dir}"/${pattern}; do
-      [ -e "${source}" ] || continue
-      source_real="$(readlink -f "${source}" 2>/dev/null || printf '%s' "${source}")"
-      target="${target_dir}/$(basename "${source}")"
-      if [ "${source_real}" = "$(readlink -f "${target}" 2>/dev/null || true)" ]; then
-        continue
-      fi
-      source_soname="$(readelf -d "${source_real}" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
-      if [ -e "${target}" ] || [ -L "${target}" ]; then
-        target_soname="$(readelf -d "$(readlink -f "${target}" 2>/dev/null || printf '%s' "${target}")" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
-        if [ -n "${source_soname}" ] && [ "${source_soname}" = "${target_soname}" ]; then
-          find "${target_dir}" -maxdepth 1 \( -type f -o -type l \) -name "${source_soname}*" -exec rm -f {} \;
-          rm -f "${target_dir}/${source_soname%.*}.so"
-        else
-          continue
-        fi
-      elif [ -n "${source_soname}" ] && [ -e "${target_dir}/${source_soname}" ]; then
-        target_soname="$(readelf -d "$(readlink -f "${target_dir}/${source_soname}" 2>/dev/null || printf '%s' "${target_dir}/${source_soname}")" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
-        if [ "${source_soname}" = "${target_soname}" ]; then
-          find "${target_dir}" -maxdepth 1 \( -type f -o -type l \) -name "${source_soname}*" -exec rm -f {} \;
-          rm -f "${target_dir}/${source_soname%.*}.so"
-        else
-          continue
-        fi
-      fi
-      cp -aL --no-preserve=ownership "${source_real}" "${target}"
-      if [ -n "${source_soname}" ] && [ "$(basename "${target}")" != "${source_soname}" ] && [ ! -e "${target_dir}/${source_soname}" ]; then
-        ln -s "$(basename "${target}")" "${target_dir}/${source_soname}"
-      fi
-      if [ -n "${source_soname}" ]; then
-        link_name="${source_soname%.*}.so"
-        if [ "${link_name}" != "${source_soname}" ] && [ ! -e "${target_dir}/${link_name}" ]; then
-          ln -s "${source_soname}" "${target_dir}/${link_name}"
-        fi
-      fi
-    done
-  done
 }
 
 strip_runtime_libraries() {
@@ -821,40 +764,29 @@ assert_no_duplicate_runtime_sonames() {
   rm -f "${tmp_file}"
 }
 
+prune_non_runtime_install_artifacts() {
+  find "${VIPS_PREFIX}/lib" -maxdepth 1 -type f \( -name '*.la' -o -name '*.a' \) -delete 2>/dev/null || true
+  rm -rf \
+    "${VIPS_PREFIX}/include" \
+    "${VIPS_PREFIX}/lib/cmake" \
+    "${VIPS_PREFIX}/lib/pkgconfig" \
+    "${VIPS_PREFIX}/share/locale" \
+    "${VIPS_PREFIX}/share/man" \
+    "${VIPS_PREFIX}/share/mime" \
+    "${VIPS_PREFIX}/share/thumbnailers"
+}
+
 copy_libvips_runtime_dependencies() {
-  local patterns=(
-    "libvips.so*"
-    "libglib-2.0.so*"
-    "libgobject-2.0.so*"
-    "libgio-2.0.so*"
-    "libgmodule-2.0.so*"
-    "libgthread-2.0.so*"
-    "libffi.so*"
-    "libpcre.so*"
-    "libmount.so*"
-    "libblkid.so*"
-    "libuuid.so*"
-    "libexpat.so*"
-    "libjpeg.so*"
-    "libpng16.so*"
-    "libtiff.so*"
-    "libwebp.so*"
-    "libwebpmux.so*"
-    "libwebpdemux.so*"
-    "libheif.so*"
-    "libde265.so*"
-    "liblcms2.so*"
-    "libz.so*"
-    "liblzma.so*"
-  )
-  local pattern
-
-  for pattern in "${patterns[@]}"; do
-    copy_library_family "${pattern}"
-  done
-
   if [ -z "$(find "${VIPS_PREFIX}/lib" -maxdepth 1 -name 'libvips.so*' -print -quit 2>/dev/null)" ]; then
     echo "ERROR: libvips runtime library missing from ${VIPS_PREFIX}/lib." >&2
+    exit 1
+  fi
+  if [ -z "$(find "${VIPS_PREFIX}/lib" -maxdepth 1 -name 'libheif.so*' -print -quit 2>/dev/null)" ]; then
+    echo "ERROR: packaged libheif runtime library missing from ${VIPS_PREFIX}/lib." >&2
+    exit 1
+  fi
+  if [ -z "$(find "${VIPS_PREFIX}/lib" -maxdepth 1 -name 'libde265.so*' -print -quit 2>/dev/null)" ]; then
+    echo "ERROR: packaged libde265 runtime library missing from ${VIPS_PREFIX}/lib." >&2
     exit 1
   fi
   install_runtime_dependency_notice
@@ -977,8 +909,8 @@ assert_no_duplicate_runtime_sonames
 sanitize_native_text_metadata_paths
 sanitize_native_build_paths
 
+restore_build_host_library_path
 export PKG_CONFIG_PATH="${VIPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-export LD_LIBRARY_PATH="${VIPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PKG_CONFIG_SYSROOT_DIR="${INSTALL_DIR}"
 HOST_GLIB_CFLAGS="$(
   PKG_CONFIG_SYSROOT_DIR= pkg-config --cflags glib-2.0 gio-2.0 gobject-2.0
@@ -1019,9 +951,27 @@ if strings "${NATIVE_BINARY}" | grep -Eq '0\.1\.0-skeleton|libvips_not_linked'; 
   exit 1
 fi
 
-if ! PROBE_OUTPUT="$("${NATIVE_BINARY}" probe 2>&1)"; then
-  if printf '%s\n' "${PROBE_OUTPUT}" | grep -Eq 'GLIBC_[0-9.]+|version `GLIBC_|version .*GLIBC_'; then
-    echo "WARNING: libvips image processor runtime probe skipped: Toolkit build runtime is older than packaged Synology sysroot libraries." >&2
+is_toolkit_runtime_probe_unavailable() {
+  printf '%s\n' "$1" | grep -Eq 'GLIBC_[0-9.]+|version `GLIBC_|version .*GLIBC_|libsyno[^[:space:]]*\.so[^[:space:]]*: cannot open shared object file'
+}
+
+runtime_probe_library_path() {
+  local synology_sysroot
+  local probe_path="${VIPS_PREFIX}/lib"
+
+  synology_sysroot="$(resolve_synology_toolchain_sysroot || true)"
+  if [ -n "${synology_sysroot}" ] && [ -d "${synology_sysroot}/usr/lib" ]; then
+    probe_path="${probe_path}:${synology_sysroot}/usr/lib"
+  fi
+  if [ -n "${BUILD_HOST_LD_LIBRARY_PATH}" ]; then
+    probe_path="${probe_path}:${BUILD_HOST_LD_LIBRARY_PATH}"
+  fi
+  printf '%s\n' "${probe_path}"
+}
+
+if ! PROBE_OUTPUT="$(LD_LIBRARY_PATH="$(runtime_probe_library_path)" "${NATIVE_BINARY}" probe 2>&1)"; then
+  if is_toolkit_runtime_probe_unavailable "${PROBE_OUTPUT}"; then
+    echo "WARNING: libvips image processor runtime probe skipped: Toolkit build runtime cannot execute packaged Synology-targeted libraries." >&2
     echo "${PROBE_OUTPUT}" >&2
   else
     echo "ERROR: libvips image processor probe failed."
@@ -1030,5 +980,6 @@ if ! PROBE_OUTPUT="$("${NATIVE_BINARY}" probe 2>&1)"; then
   fi
 fi
 
+prune_non_runtime_install_artifacts
 mkdir -p "$(dirname "${BUILD_FINGERPRINT_FILE}")"
 build_fingerprint > "${BUILD_FINGERPRINT_FILE}"

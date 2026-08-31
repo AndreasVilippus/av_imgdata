@@ -753,8 +753,75 @@ def test_last_immediate_recognition_review_does_not_autoresume_when_scan_is_comp
 
     assert result == {
         "canResume": False,
-        "requests": ["recognition_review", "recognition_suggestions_apply", "recognition_findings"],
+        "requests": ["recognition_review", "recognition_suggestions_apply", "recognition_findings", "cleanup_progress"],
         "starts": [],
+    }
+
+
+def test_last_immediate_recognition_review_autoresumes_when_scan_has_resume_cursor_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const requests = [];
+            const starts = [];
+            const component = createComponent({
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              cleanupLoading: false,
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                resume_available: false,
+                status: { phase: 'review_required' },
+              },
+              recognitionOptions: { operation_mode: 'immediate' },
+              recognitionFindings: [{
+                suggestion_id: 'rec-167698',
+                selection_state: 'review',
+                write_state: 'pending',
+                best_person_id: 27353,
+                best_person_name: 'Oskar Meyer',
+              }],
+              callDsmApi: async (path, body) => {
+                requests.push({ path, body });
+                if (path.endsWith('/recognition_findings')) {
+                  return { success: true, data: { entries: [] } };
+                }
+                if (path.endsWith('/cleanup_progress')) {
+                  return {
+                    success: true,
+                    data: {
+                      action: 'recognition_analyze_unknown_faces',
+                      running: false,
+                      active: false,
+                      resume_available: true,
+                      resume_cursor: { resume_start_person_index: 4 },
+                      status: { phase: 'stopped' },
+                    },
+                  };
+                }
+                return { success: true, data: {} };
+              },
+              startCleanupRun: async (options) => starts.push(options),
+            });
+
+            await component.acceptRecognitionCurrent();
+
+            console.log(JSON.stringify({
+              requests: requests.map((entry) => entry.path.split('/').pop()),
+              starts,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "requests": ["recognition_review", "recognition_suggestions_apply", "recognition_findings", "cleanup_progress", "recognition_findings"],
+        "starts": [{"actionOverride": "recognition_analyze_unknown_faces", "resumeExisting": True}],
     }
 
 

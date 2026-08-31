@@ -17,6 +17,38 @@
 					<span v-if="vm.recognitionCurrentFinding.best_score !== undefined">{{ vm.$avt('cleanup:recognition_score', 'Score') }}: {{ Number(vm.recognitionCurrentFinding.best_score || 0).toFixed(3) }}</span>
 					<span v-if="vm.recognitionCurrentFinding.decision">{{ vm.$avt('cleanup:recognition_decision', 'Decision') }}: {{ vm.recognitionCurrentFinding.decision }}</span>
 				</div>
+				<label v-if="!vm.isRecognitionOutlierAction" class="face-match-result-name-field recognition-person-field">
+					<strong>{{ vm.$avt('face_match:label_photos_person', 'Photos person:') }}</strong>
+					<input
+						:value="vm.recognitionPersonName"
+						type="text"
+						class="face-match-result-name-input"
+						:placeholder="vm.$avt('face_match:name_placeholder', 'Name of the match')"
+						:disabled="vm.recognitionDecisionLoading"
+						@input="vm.handleRecognitionPersonNameInput($event.target.value)"
+						@focus="vm.handleRecognitionPersonNameFocus"
+					/>
+					<div v-if="vm.recognitionShowSuggestions && (vm.recognitionPersonSuggestLoading || vm.recognitionPersonSuggestions.length)" class="face-match-suggest-list">
+						<div v-if="vm.recognitionPersonSuggestLoading" class="face-match-suggest-loading">
+							<span class="sm-loader"></span>
+							{{ vm.$avt('face_match:suggest_loading', 'Loading suggestions...') }}
+						</div>
+						<button
+							v-for="person in vm.recognitionPersonSuggestions"
+							:key="`recognition-person-suggest-${person.id}`"
+							type="button"
+							class="face-match-suggest-item"
+							:disabled="vm.recognitionDecisionLoading"
+							@click="vm.selectRecognitionPersonSuggestion(person)"
+						>
+							<img :src="vm.getFaceMatchPersonPreviewUrl(person)" alt="" class="face-match-suggest-thumb" />
+							<span class="face-match-suggest-text">
+								<span class="face-match-suggest-name">{{ person.name || vm.$avt('face_match:unknown_name', '(unnamed)') }}</span>
+								<span class="face-match-suggest-meta">{{ vm.$avt('face_match:suggest_person_id', 'Photos Person-ID: {id}', { id: person.id }) }}</span>
+							</span>
+						</button>
+					</div>
+				</label>
 			</div>
 			<div class="face-match-split">
 				<button

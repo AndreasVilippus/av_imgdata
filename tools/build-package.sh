@@ -213,6 +213,59 @@ ${error_text}"
   rm -f "${error_log}"
 }
 
+info_sh_value() {
+  local key="$1"
+  awk -F= -v key="${key}" '$1 == key {
+    value = $2
+    gsub(/^"/, "", value)
+    gsub(/"$/, "", value)
+    print value
+    exit
+  }' "${PACKAGE_ROOT}/INFO.sh"
+}
+
+cleanup_existing_image_packages() {
+  local args=("$@")
+  local version
+  local platform
+  local image_package_dir
+  local package_title
+  local package_version
+  local pattern
+  local error_log
+
+  version="$(pkgcreate_option_value -v 7.3 "${args[@]}")"
+  platform="$(pkgcreate_option_value -p geminilake "${args[@]}")"
+  image_package_dir="${WORKSPACE_ROOT}/build_env/ds.${platform}-${version}/image/packages"
+
+  [[ -d "${image_package_dir}" ]] || return 0
+
+  package_title="$(info_sh_value package)"
+  package_version="$(info_sh_value version)"
+  [[ -n "${package_title}" && -n "${package_version}" ]] || return 0
+
+  pattern="${image_package_dir}/${package_title}-*-${package_version}*.spk"
+  compgen -G "${pattern}" >/dev/null || return 0
+
+  error_log="$(mktemp)"
+  if ! rm -f ${pattern} 2>"${error_log}"; then
+    if command -v sudo >/dev/null 2>&1 && { sudo -n true >/dev/null 2>&1 || [[ -t 0 ]]; }; then
+      log "Removing stale Toolkit image packages with sudo: ${image_package_dir}/${package_title}-*-${package_version}*.spk"
+      if sudo rm -f ${pattern} 2>"${error_log}"; then
+        rm -f "${error_log}"
+        return 0
+      fi
+    fi
+    local error_text
+    error_text="$(sed -n '1,20p' "${error_log}")"
+    rm -f "${error_log}"
+    fail "Existing Toolkit image packages cannot be removed: ${image_package_dir}/${package_title}-*-${package_version}*.spk
+First rm errors:
+${error_text}"
+  fi
+  rm -f "${error_log}"
+}
+
 target_list_contains() {
   local wanted="$1"
   local target
@@ -332,15 +385,6 @@ preserve_existing_linux_worker_vips_artifact() {
   export AV_IMGDATA_VIPS_PROCESSOR_BIN="${target_root}/bin/av-imgdata-image-processor"
 }
 
-host_linux_worker_vips_build_dependencies_ready() {
-  local package
-
-  command -v pkg-config >/dev/null 2>&1 || return 1
-  for package in glib-2.0 gio-2.0 gobject-2.0 expat libjpeg libpng libtiff-4 libwebp lcms2 zlib; do
-    pkg-config --exists "${package}" || return 1
-  done
-}
-
 configure_noninteractive_linux_worker_vips_build() {
   if [[ -n "${AV_IMGDATA_LINUX_CHROOT+x}" ]]; then
     return 0
@@ -362,16 +406,9 @@ configure_noninteractive_linux_worker_vips_build() {
     return 0
   fi
 
-  if host_linux_worker_vips_build_dependencies_ready; then
-    export AV_IMGDATA_LINUX_CHROOT=0
-    log "Using host build for Linux worker libvips because non-interactive sudo is not available"
-    return 0
-  fi
-
-  export AV_IMGDATA_LINUX_CHROOT=0
   fail "Cannot build Linux worker libvips non-interactively.
-non-interactive sudo is not available, no existing Linux libvips worker artifact was found, and host pkg-config dependencies are incomplete.
-Install host packages for libjpeg/libpng/libtiff/libwebp/lcms2/zlib, allow non-interactive sudo for the chroot build, or provide an existing artifact with AV_IMGDATA_BUILD_WORKER_VIPS=0."
+non-interactive sudo is not available and no existing Linux libvips worker artifact was found.
+Run tools/build-package.sh with sudo, configure non-interactive sudo for the chroot build, or provide an existing artifact with AV_IMGDATA_BUILD_WORKER_VIPS=0."
 }
 
 ensure_windows_native_deps() {
@@ -385,7 +422,7 @@ assert_pkgcreate_log_has_no_critical_errors() {
   local pkgcreate_log="$1"
   local critical_errors
 
-  critical_errors="$(grep -E '(^|[[:space:]])ERROR: (native|optional|external worker|Windows external worker|ui/index.cgi|libjpeg|ONNXRuntime)' "${pkgcreate_log}" || true)"
+  critical_errors="$(grep -E '(^|[[:space:]])ERROR: (native|optional|external worker|Windows external worker|ui/index.cgi|libjpeg|ONNXRuntime|duplicate package runtime library SONAMEs)' "${pkgcreate_log}" || true)"
   [[ -z "${critical_errors}" ]] || fail "Synology package build output contained critical errors although PkgCreate.py returned success:
 ${critical_errors}"
 }
@@ -396,13 +433,11 @@ run_pkgcreate() {
   pkgcreate_log="$(mktemp)"
   if [[ "$(id -u)" == "0" ]]; then
     if ! AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 "${PKGCREATE}" "$@" "${PACKAGE_NAME}" 2>&1 | tee "${pkgcreate_log}"; then
-      rm -f "${pkgcreate_log}"
-      fail "PkgCreate.py failed"
+      fail "PkgCreate.py failed; preserved PkgCreate output log: ${pkgcreate_log}"
     fi
   elif command -v sudo >/dev/null 2>&1 && { sudo -n true >/dev/null 2>&1 || [[ -t 0 ]]; }; then
     if ! sudo env AV_IMGDATA_NATIVE_FETCH_DEPS=0 python3 "${PKGCREATE}" "$@" "${PACKAGE_NAME}" 2>&1 | tee "${pkgcreate_log}"; then
-      rm -f "${pkgcreate_log}"
-      fail "PkgCreate.py failed"
+      fail "PkgCreate.py failed; preserved PkgCreate output log: ${pkgcreate_log}"
     fi
   else
     rm -f "${pkgcreate_log}"
@@ -473,6 +508,7 @@ External worker bundles are built by default before the Synology package build:
 
 Environment overrides:
   AV_IMGDATA_BUILD_EXTERNAL_WORKERS=0   Skip external worker bundle builds
+  AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS=0 Skip embedding external worker archives in the DSM package
   AV_IMGDATA_WORKER_TARGETS="..."       Worker targets to build
   AV_IMGDATA_BUILD_LINUX_FACE_PROCESSOR=0
                                       Skip Linux face processor build
@@ -496,6 +532,14 @@ cd "${PACKAGE_ROOT}"
 trap restore_local_build_artifacts EXIT
 cleanup_stale_generated_backup_roots
 
+if [[ "$#" -gt 0 ]]; then
+  cleanup_existing_toolkit_link_target "$@"
+  cleanup_existing_image_packages "$@"
+else
+  cleanup_existing_toolkit_link_target "${DEFAULT_ARGS[@]}"
+  cleanup_existing_image_packages "${DEFAULT_ARGS[@]}"
+fi
+
 [[ -d "tests" ]] || fail "Required directory not found: tests"
 [[ -d "ui" ]] || fail "Required directory not found: ui"
 [[ -f "${PKGCREATE}" ]] || fail "PkgCreate.py not found: ${PKGCREATE}"
@@ -518,11 +562,6 @@ assert_no_nobody_generated_paths
 
 log "Temporarily moving local build artifacts out of the Toolkit link tree"
 sanitize_project_for_toolkit_link
-if [[ "$#" -gt 0 ]]; then
-  cleanup_existing_toolkit_link_target "$@"
-else
-  cleanup_existing_toolkit_link_target "${DEFAULT_ARGS[@]}"
-fi
 
 log "Building Synology package"
 cd "${TOOLKIT_ROOT}"

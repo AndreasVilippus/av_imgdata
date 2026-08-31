@@ -570,6 +570,8 @@ def test_recognition_suggestions_apply_forwards_assignment_action(monkeypatch):
         selected_ids=["assign-1"],
         operation_mode="findings",
         action="recognition_check_person_assignments",
+        override_person_id=None,
+        override_person_name=None,
     )
     imgdata_api.IMGDATA.face_recognition.sync_review_progress.assert_called_once_with(
         user_key="user-1",

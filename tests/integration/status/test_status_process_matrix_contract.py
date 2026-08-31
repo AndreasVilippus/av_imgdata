@@ -79,6 +79,15 @@ def _counter_keys(status):
     return [counter.get("key") for counter in status.get("counters", [])]
 
 
+def _function_source(source, function_name):
+    pattern = rf"^(?:async\s+)?def {re.escape(function_name)}\("
+    match = re.search(pattern, source, re.M)
+    assert match, function_name
+    next_match = re.search(r"^(?:async\s+)?def [a-zA-Z0-9_]+\(", source[match.end():], re.M)
+    end = match.end() + next_match.start() if next_match else len(source)
+    return source[match.start():end]
+
+
 def test_status_process_matrix_is_machine_readable_and_unique():
     matrix = _matrix()
 
@@ -103,6 +112,7 @@ def test_status_process_matrix_declares_core_concepts():
         "identity",
         "run_lifecycle",
         "review_lifecycle",
+        "basic_review_workflow",
         "resume",
         "storage",
         "stop_blocking_reconnect",
@@ -112,6 +122,16 @@ def test_status_process_matrix_declares_core_concepts():
     assert concepts["identity"]["required_fields"] == _matrix()["global_rules"]["identity_fields"]
     assert set(concepts["run_lifecycle"]["non_terminal_phases"]).issubset(_matrix()["core_phases"])
     assert {"review_required", "needs_profiles"}.issubset(concepts["run_lifecycle"]["terminal_phases"])
+    assert {
+        "search",
+        "find",
+        "show_finding",
+        "select_suggested_target",
+        "select_alternate_target",
+        "save",
+        "save_as",
+        "continue_search",
+    }.issubset(concepts["basic_review_workflow"]["required_capabilities"])
     assert {"resume_existing", "resume_from_progress"}.issubset(concepts["resume"]["flags"])
     assert {
         "resume_start_person_index",
@@ -238,6 +258,7 @@ def test_usage_scenarios_cover_real_process_flows():
         "face_frame_immediate_review_resume",
         "recognition_build_profiles",
         "recognition_unknown_immediate_apply_resume",
+        "recognition_unknown_save_as_alternate_person_resume",
         "recognition_unknown_current_person_images_complete_but_persons_remaining",
         "recognition_assignment_from_checks_apply_resume",
         "recognition_outlier_exclude_resume",
@@ -313,6 +334,9 @@ def test_usage_scenarios_cover_operational_reality_classes():
         "external_worker",
         "empty",
         "mutation_fails",
+        "show_finding",
+        "save_as",
+        "continue_search",
     ):
         assert required_term in scenario_text
 
@@ -459,6 +483,55 @@ def test_usage_scenarios_include_resume_cursors_for_review_restarts():
     assert "face_cursor" in " ".join(scenarios["recognition_outlier_exclude_resume"]["steps"])
 
 
+def test_recognition_unknown_matrix_covers_basic_review_workflow():
+    chain = next(chain for chain in _chains() if chain["id"] == "face_match.recognition_unknown_delegate")
+    assert chain["status_route"] == "/face_matching_findings_status"
+    assert chain["findings_route"] == "/recognition_findings"
+    assert chain["review_route"] == "/recognition_review"
+    assert chain["apply_route"] == "/recognition_suggestions_apply"
+    assert "/face_person_suggest" in chain["mutation_routes"]
+    assert {"override_person_id", "override_person_name"}.issubset(set(chain["parameters"]))
+
+    required_steps = {
+        "show_finding",
+        "select_suggested_target",
+        "select_alternate_target",
+        "save",
+        "save_as",
+        "refresh_findings_status",
+        "refresh_cleanup_progress",
+        "continue_search",
+    }
+    for process_id in ("face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"):
+        process = next(process for process in _processes() if process["id"] == process_id)
+        workflow = set(process["modes"]["scan"].get("review_workflow", []))
+        assert required_steps.issubset(workflow)
+
+    scenarios = {scenario["id"]: scenario for scenario in _scenarios()}
+    save_as_steps = set(scenarios["recognition_unknown_save_as_alternate_person_resume"]["steps"])
+    assert {
+        "face_person_suggest",
+        "select_alternate_target",
+        "save_as",
+        "recognition_suggestions_apply_with_override_person",
+        "refresh_cleanup_progress",
+        "continue_search",
+        "resume_existing_with_image_cursor",
+    }.issubset(save_as_steps)
+
+
+def test_recognition_unknown_status_route_reads_recognition_findings_source():
+    chain = next(chain for chain in _chains() if chain["id"] == "face_match.recognition_unknown_delegate")
+    assert chain["status_route"] == "/face_matching_findings_status"
+
+    api_source = (PROJECT_DIR / "src" / "api" / "imgdata_api.py").read_text(encoding="utf-8")
+    method = _function_source(api_source, "face_matching_findings_status")
+    assert 'requested_action == "recognition_analyze_unknown_faces"' in method
+    assert "IMGDATA.face_recognition.findings" in method
+    assert "count=0" not in method
+    assert '"count": 0' not in method
+
+
 def test_status_process_matrix_delegates_point_to_existing_processes():
     ids = _process_ids()
 
@@ -542,8 +615,66 @@ def test_status_process_matrix_reviewable_processes_define_review_and_resume_con
                 assert spec.get("resume_cursor_coverage") is None
                 if process["operation"] == "cleanup" and process["action"].startswith("recognition_"):
                     assert set(spec.get("resume_cursor_fields", [])) >= {"resume_start_person_index", "resume_person_id", "resume_progress_counts"}
+            workflow = set(spec.get("review_workflow", []))
+            assert {"show_finding", "save"}.issubset(workflow)
+            if mode == "scan":
+                assert {"refresh_cleanup_progress", "continue_search"}.issubset(workflow)
+            if mode == "findings":
+                assert "refresh_findings_status" in workflow
 
     assert reviewable
+
+
+def test_status_process_matrix_assignment_review_workflows_cover_save_as_target_selection():
+    assignment_process_ids = {
+        "checks.recognition_check_person_assignments",
+        "face_match.recognition_analyze_unknown_faces",
+        "cleanup.recognition_analyze_unknown_faces",
+        "cleanup.recognition_check_person_assignments",
+    }
+    assignment_chain_ids = {
+        "checks.findings_review",
+        "checks.recognition_assignment_delegate",
+        "face_match.scan",
+        "face_match.findings_load",
+        "face_match.recognition_unknown_delegate",
+        "cleanup.recognition_unknown",
+        "cleanup.recognition_assignment",
+    }
+
+    for process in _processes():
+        if process["id"] not in assignment_process_ids:
+            continue
+        for mode, spec in process["modes"].items():
+            if not spec.get("reviewable"):
+                continue
+            workflow = set(spec.get("review_workflow", []))
+            assert {"select_suggested_target", "select_alternate_target", "save_as"}.issubset(workflow)
+
+    for chain in _chains():
+        if chain["id"] not in assignment_chain_ids:
+            continue
+        routes = _chain_routes(chain)
+        if "/recognition_suggestions_apply" in routes or "/checks_assign_face_person" in routes or "/face_assign_match" in routes:
+            assert "/face_person_suggest" in routes
+
+
+def test_status_process_matrix_all_declared_review_workflows_cover_basic_actions():
+    workflows = []
+    for process in _processes():
+        for mode, spec in process["modes"].items():
+            workflow = set(spec.get("review_workflow", []))
+            if not workflow:
+                continue
+            workflows.append((process["id"], mode, workflow))
+            assert {"show_finding", "save"}.issubset(workflow)
+            assert "refresh_findings_status" in workflow
+            if "select_alternate_target" in workflow:
+                assert {"select_suggested_target", "save_as"}.issubset(workflow)
+            if mode == "scan" and spec.get("resume_required_after_review"):
+                assert {"refresh_cleanup_progress", "continue_search"}.issubset(workflow)
+
+    assert workflows
 
 
 def test_status_process_matrix_defines_supported_parameter_domains():
@@ -617,6 +748,8 @@ def test_process_chain_parameters_are_declared_contract_terms():
         "recognize_persons",
         "recognition_batch_size",
         "refresh",
+        "person_id",
+        "person_name",
         "resume_existing",
         "resume_from_progress",
         "scan_next_path_index",
@@ -625,6 +758,8 @@ def test_process_chain_parameters_are_declared_contract_terms():
         "source_action",
         "source_mode",
         "targets",
+        "override_person_id",
+        "override_person_name",
     }
     for operation_domains in domains.values():
         known_parameters.update(operation_domains)

@@ -214,6 +214,51 @@ assert_no_duplicate_package_sonames() {
 	rm -f "$tmp_file"
 }
 
+copy_runtime_library_family() {
+	local source_dir="$1"
+	local target_dir="$2"
+	shift 2
+	local tmp_file
+	local pattern
+	local source
+	local real_source
+	local real_name
+	local source_name
+	local soname
+
+	[ -d "$source_dir" ] || return 0
+	mkdir -p "$target_dir"
+	tmp_file="$(mktemp /tmp/av-imgdata-runtime-sonames.XXXXXX)"
+	find "$target_dir" -maxdepth 1 -type f -name '*.so*' -print0 2>/dev/null | while IFS= read -r -d '' source; do
+		soname="$(readelf -d "$source" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
+		[ -n "$soname" ] || continue
+		printf '%s\n' "$soname"
+	done > "$tmp_file"
+
+	for pattern in "$@"; do
+		find "$source_dir" -maxdepth 1 \( -type f -o -type l \) -name "$pattern" -print0 2>/dev/null | while IFS= read -r -d '' source; do
+			real_source="$(readlink -f "$source" 2>/dev/null || printf '%s' "$source")"
+			[ -f "$real_source" ] || continue
+			soname="$(readelf -d "$real_source" 2>/dev/null | awk '/SONAME/ {gsub(/\[|\]/, "", $5); print $5; exit}')"
+			[ -n "$soname" ] || continue
+			if grep -Fxq "$soname" "$tmp_file"; then
+				continue
+			fi
+			real_name="$(basename "$real_source")"
+			source_name="$(basename "$source")"
+			cp -av --no-preserve=ownership "$real_source" "$target_dir/$real_name"
+			if [ "$soname" != "$real_name" ]; then
+				ln -sfn "$real_name" "$target_dir/$soname"
+			fi
+			if [ "$source_name" != "$real_name" ] && [ "$source_name" != "$soname" ]; then
+				ln -sfn "$soname" "$target_dir/$source_name"
+			fi
+			printf '%s\n' "$soname" >> "$tmp_file"
+		done
+	done
+	rm -f "$tmp_file"
+}
+
 create_install() {
 	local package_tgz_dir=/tmp/_install
 
@@ -248,8 +293,7 @@ create_install() {
 	mkdir -p "$package_tgz_dir/bin"
 	cp -av --no-preserve=ownership "$NATIVE_INSTALL/bin/av-imgdata-face-processor" "$package_tgz_dir/bin/"
 	if [ -d "$NATIVE_INSTALL/lib" ]; then
-		mkdir -p "$package_tgz_dir/lib"
-		find "$NATIVE_INSTALL/lib" -maxdepth 1 \( -name 'libonnxruntime.so*' -o -name 'libjpeg.so*' \) -exec cp -av --no-preserve=ownership {} "$package_tgz_dir/lib/" \;
+		copy_runtime_library_family "$NATIVE_INSTALL/lib" "$package_tgz_dir/lib" 'libonnxruntime.so*' 'libjpeg.so*'
 	fi
 	if [ -d "$NATIVE_INSTALL/share/licenses" ]; then
 		mkdir -p "$package_tgz_dir/share"
@@ -269,8 +313,7 @@ create_install() {
 			return 1
 		fi
 		if [ -d "$VIPS_INSTALL/lib" ]; then
-			mkdir -p "$package_tgz_dir/lib"
-			find "$VIPS_INSTALL/lib" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -exec cp -av --no-preserve=ownership {} "$package_tgz_dir/lib/" \;
+			copy_runtime_library_family "$VIPS_INSTALL/lib" "$package_tgz_dir/lib" '*.so*'
 		fi
 		if [ -d "$VIPS_INSTALL/share/licenses" ]; then
 			mkdir -p "$package_tgz_dir/share"
@@ -305,13 +348,14 @@ create_spk() {
 
 	# spk name functions: pkg_get_spk_name pkg_get_spk_unified_name pkg_get_spk_family_name
 	mkdir -p /image/packages
+	rm -f "/image/packages/$(pkg_get_spk_family_name)"
 	pkg_make_spk ${PKG_DIR} "/image/packages" $(pkg_get_spk_family_name)
 }
 
 main() {
 	./INFO.sh > INFO
-	create_install || return 1
-	create_spk || return 1
+	create_install
+	create_spk
 	INSTALL_SUCCEEDED=1
 }
 
