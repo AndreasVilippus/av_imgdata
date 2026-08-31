@@ -70,7 +70,7 @@
 					<div class="face-match-thumbnail-wrap">
 						<div class="face-match-preview">
 							<img :src="vm.getRecognitionImageUrl(vm.recognitionCurrentFinding.image_path)" alt="" class="face-match-thumbnail" />
-							<div class="face-match-bbox" :style="vm.getFaceMatchBoxStyle({ bbox: vm.recognitionCurrentFinding.bbox })"></div>
+							<div class="face-match-bbox" :style="vm.getFaceMatchBoxStyle(vm.getRecognitionDisplayFace(vm.recognitionCurrentFinding))"></div>
 						</div>
 					</div>
 				</div>
@@ -79,7 +79,7 @@
 					<div class="face-match-thumbnail-wrap">
 						<div class="face-match-preview">
 							<img :src="vm.getRecognitionImageUrl(vm.recognitionCurrentFinding.profile_image_path)" alt="" class="face-match-thumbnail" />
-							<div class="face-match-bbox face-frame-insightface-box" :style="vm.getFaceMatchBoxStyle({ bbox: vm.recognitionCurrentFinding.profile_bbox })"></div>
+							<div class="face-match-bbox face-frame-insightface-box" :style="vm.getFaceMatchBoxStyle(vm.getRecognitionDisplayFace(vm.recognitionCurrentFinding, 'profile_bbox', 'profile_display_normalized'))"></div>
 						</div>
 					</div>
 				</div>

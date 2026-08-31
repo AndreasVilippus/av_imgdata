@@ -168,7 +168,8 @@ def test_face_match_recognition_status_is_action_scoped():
     assert "progress.action" in mixin
     assert "progressAction === expectedAction" in mixin
     assert "vm.isCleanupProgressForAction('recognition_analyze_unknown_faces')" in view
-    assert "vm.$avt('face_match:status_idle', 'No action running.')" in view
+    assert "vm.faceMatchRecognitionStatusMessage" in view
+    assert "v-else-if=\"vm.faceMatchRecognitionActionSelected\"" not in view
 
 
 def test_recognition_review_uses_persisted_findings_and_apply_endpoints():

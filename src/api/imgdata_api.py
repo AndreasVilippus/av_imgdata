@@ -2376,6 +2376,7 @@ async def recognition_suggestions_apply(request: Request):
     override_person = body.get("override_person")
     override_person_id = body.get("override_person_id")
     override_person_name = body.get("override_person_name")
+    create_missing_person = bool(body.get("create_missing_person"))
     if isinstance(override_person, dict):
         override_person_id = override_person.get("id", override_person_id)
         override_person_name = override_person.get("name", override_person_name)
@@ -2389,6 +2390,7 @@ async def recognition_suggestions_apply(request: Request):
             action=action,
             override_person_id=override_person_id,
             override_person_name=override_person_name,
+            create_missing_person=create_missing_person,
         ))
         await _run_backend_call(lambda: IMGDATA.face_recognition.sync_review_progress(
             user_key=session_ctx["user_key"],

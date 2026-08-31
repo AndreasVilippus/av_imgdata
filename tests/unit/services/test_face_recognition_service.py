@@ -2,6 +2,8 @@ import os
 from threading import Event
 from types import SimpleNamespace
 
+from pytest import approx
+
 import services.face_recognition_service as face_recognition_module
 from services.face_recognition_service import FaceRecognitionService
 
@@ -130,6 +132,20 @@ def test_missing_reference_image_is_reported_in_quality_and_log():
     assert logs[0][0] == "recognition_reference_image_missing"
 
 
+def test_recognition_display_bbox_is_backend_normalized_for_orientation_6():
+    display_bbox = FaceRecognitionService._display_bbox_from_raw_bbox(
+        {"x1": 0.0, "y1": 0.25, "x2": 0.4, "y2": 0.35},
+        6,
+    )
+
+    assert display_bbox == approx({
+        "x1": 0.65,
+        "y1": 0.0,
+        "x2": 0.75,
+        "y2": 0.4,
+    })
+
+
 def test_immediate_recognition_findings_do_not_use_persisted_list():
     service, findings = _service()
     findings.values[service.FINDING_SUGGESTIONS] = {
@@ -218,6 +234,82 @@ def test_apply_suggestion_can_override_target_person():
     assert calls[0]["person_id"] == 44
     assert calls[0]["person_name"] == "Correct"
     assert findings.values[service.FINDING_SUGGESTIONS]["entries"][0]["applied_person_id"] == 44
+
+
+def test_apply_suggestion_can_create_missing_person_from_typed_name():
+    service, findings = _service()
+    assign_calls = []
+    create_calls = []
+    service.backend.assignMatchedFaceToKnownPerson = lambda **kwargs: assign_calls.append(kwargs) or {"updated": True}
+    service.backend.applyPhotoFaceMatchPersonCreation = lambda **kwargs: create_calls.append(kwargs) or {
+        "person_id": 55,
+        "person_name": "New Person",
+    }
+    findings.values[service.FINDING_SUGGESTIONS] = {
+        "entries": [{
+            "suggestion_id": "rec-1",
+            "selection_state": "selected",
+            "write_state": "pending",
+            "unknown_face_id": 11,
+            "best_person_id": 22,
+            "best_person_name": "Wrong",
+            "image_id": 33,
+            "image_path": "/volume1/photo/a.jpg",
+        }]
+    }
+
+    result = service.apply_suggestions(
+        user_key="u",
+        cookies={},
+        base_url="https://dsm",
+        selected_ids=["rec-1"],
+        override_person_name="New Person",
+        create_missing_person=True,
+    )
+
+    assert result["written_count"] == 1
+    assert assign_calls == []
+    assert create_calls[0]["face_id"] == 11
+    assert create_calls[0]["person_name"] == "New Person"
+    entry = findings.values[service.FINDING_SUGGESTIONS]["entries"][0]
+    assert entry["applied_person_id"] == 55
+    assert entry["applied_person_name"] == "New Person"
+    assert entry["write_state"] == "written"
+
+
+def test_assignment_apply_ignores_create_missing_person_flag():
+    service, findings = _service()
+    assign_calls = []
+    create_calls = []
+    service.backend.assignMatchedFaceToKnownPerson = lambda **kwargs: assign_calls.append(kwargs) or {"updated": True}
+    service.backend.applyPhotoFaceMatchPersonCreation = lambda **kwargs: create_calls.append(kwargs) or {"person_id": 55}
+    findings.values[service.FINDING_ASSIGNMENTS] = {
+        "entries": [{
+            "suggestion_id": "assign-1",
+            "selection_state": "selected",
+            "write_state": "pending",
+            "unknown_face_id": 11,
+            "best_person_id": 22,
+            "best_person_name": "Existing Person",
+            "image_id": 33,
+            "image_path": "/volume1/photo/a.jpg",
+        }]
+    }
+
+    result = service.apply_suggestions(
+        user_key="u",
+        cookies={},
+        base_url="https://dsm",
+        selected_ids=["assign-1"],
+        action=service.ACTION_ASSIGNMENT,
+        override_person_name="Typed Name",
+        create_missing_person=True,
+    )
+
+    assert result["written_count"] == 1
+    assert create_calls == []
+    assert assign_calls[0]["person_id"] == 22
+    assert assign_calls[0]["person_name"] == "Typed Name"
 
 
 def test_assignment_scan_finds_known_photos_face_matching_other_profile():

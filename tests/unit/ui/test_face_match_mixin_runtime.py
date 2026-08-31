@@ -2161,6 +2161,71 @@ def test_primary_button_starts_recognition_when_cleanup_progress_is_stopped_runt
     assert [entry["type"] for entry in result["calls"]] == ["sync", "start-cleanup"]
 
 
+def test_recognition_status_message_prefers_review_state_over_idle_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              faceMatchRecognitionActionSelected: true,
+              cleanupLoading: false,
+              recognitionFindingsLoading: false,
+              recognitionDecisionLoading: false,
+              cleanupProgress: {},
+              recognitionFindings: [{
+                suggestion_id: 'rec-1',
+                selection_state: 'review',
+                write_state: 'pending',
+              }],
+              getCleanupStatusHeadline: () => '',
+              faceMatchHasCleanupProgressForAction: () => false,
+            });
+
+            console.log(JSON.stringify({
+              selected: component.faceMatchRecognitionActionSelected,
+              message: component.faceMatchRecognitionStatusMessage,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "selected": True,
+        "message": "Manual recognition review required.",
+    }
+
+
+def test_recognition_status_message_uses_backend_progress_message_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              faceMatchRecognitionActionSelected: true,
+              cleanupLoading: false,
+              cleanupStatusMessage: 'Checking person...',
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: true,
+                active: true,
+                status: { phase: 'running' },
+              },
+            });
+
+            console.log(JSON.stringify({
+              active: component.faceMatchRecognitionCleanupActive,
+              message: component.faceMatchRecognitionStatusMessage,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "active": True,
+        "message": "Checking person...",
+    }
+
+
 def test_reopen_resumable_face_match_progress_offers_restart_and_resume_runtime():
     result = run_node(
         face_match_runtime_script(

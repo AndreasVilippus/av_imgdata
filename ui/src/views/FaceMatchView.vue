@@ -149,8 +149,7 @@
 									{{ vm.$avt('face_match:card_running', 'Running') }}
 								</div>
 							</div>
-							<div v-if="vm.faceMatchRecognitionActionSelected && vm.isCleanupProgressForAction('recognition_analyze_unknown_faces') && Number(vm.getCleanupStatusProgress().total) <= 0" class="face-match-status-message">{{ vm.getCleanupStatusHeadline() }}</div>
-							<div v-else-if="vm.faceMatchRecognitionActionSelected" class="face-match-status-message">{{ vm.$avt('face_match:status_idle', 'No action running.') }}</div>
+							<div v-if="vm.faceMatchRecognitionActionSelected && (!vm.isCleanupProgressForAction('recognition_analyze_unknown_faces') || Number(vm.getCleanupStatusProgress().total) <= 0)" class="face-match-status-message">{{ vm.faceMatchRecognitionStatusMessage }}</div>
 							<div v-else-if="!vm.faceMatchShowStoredFindingsProgress && !vm.faceMatchShowPersonsProgress && !vm.faceMatchShowFileProgress" class="face-match-status-message">{{ vm.faceMatchStatusMessage }}</div>
 							<div v-if="vm.faceMatchRecognitionActionSelected && vm.isCleanupProgressForAction('recognition_analyze_unknown_faces') && Number(vm.getCleanupStatusProgress().total) > 0" class="sm-status-progress">
 								<ProgressOverviewCard

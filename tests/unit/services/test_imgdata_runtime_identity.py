@@ -187,6 +187,36 @@ def test_cleanup_progress_marks_stale_stopping_state_terminal_after_restart():
     assert progress["message_key"] == "cleanup:progress_stopped"
 
 
+def test_active_recognition_cleanup_progress_replaces_idle_message_in_backend():
+    service = make_service()
+    state_key = service._cleanupStateKey("user", "recognition_analyze_unknown_faces")
+    service.runtime_state.memory("cleanup_progress")[state_key] = {
+        "action": "recognition_analyze_unknown_faces",
+        "operation": "cleanup",
+        "running": True,
+        "active": True,
+        "finished": False,
+        "message_key": "",
+        "message": "No action running.",
+        "status": {
+            "schema_version": 1,
+            "operation": "cleanup",
+            "action": "recognition_analyze_unknown_faces",
+            "mode": "scan",
+            "phase": "running",
+        },
+        "operation_id": "cleanup-recognition_analyze_unknown_faces-1",
+        "revision": 3,
+    }
+
+    progress = service.getCleanupProgress("user", "recognition_analyze_unknown_faces")
+
+    assert progress["running"] is True
+    assert progress["action"] == "recognition_analyze_unknown_faces"
+    assert progress["message_key"] == "cleanup:progress_checking_person_short"
+    assert progress["message"] == "Checking person..."
+
+
 def test_file_analysis_progress_has_normalized_runtime_identity():
     service = make_service()
     service._setFileAnalysisProgress(

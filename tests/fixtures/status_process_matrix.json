@@ -43,7 +43,7 @@
       "rule": "Review mutations must either remove/update the current finding or resume from a persisted cursor."
     },
     "basic_review_workflow": {
-      "required_capabilities": ["search", "find", "show_finding", "select_suggested_target", "select_alternate_target", "save", "save_as", "continue_search"],
+      "required_capabilities": ["search", "find", "show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "create_target", "save", "save_as", "continue_search"],
       "rule": "Every interactive review workflow must expose the current finding, allow applying the suggested target, allow choosing an alternate supported target when the domain supports assignment, persist the decision, refresh status from the owning findings source, and continue or offer resume when remaining scan work exists."
     },
     "resume": {
@@ -137,9 +137,9 @@
       "findings_route": "/recognition_findings",
       "review_route": "/recognition_review",
       "apply_route": "/recognition_suggestions_apply",
-      "mutation_routes": ["/recognition_review", "/recognition_suggestions_apply", "/face_person_suggest"],
+      "mutation_routes": ["/recognition_review", "/recognition_suggestions_apply", "/face_person_suggest", "/face_create_match"],
       "resume_trigger": "recognition_review",
-      "parameters": ["action", "operation_mode", "selection_mode", "include_hidden_persons", "changed_since_days", "resume_existing", "recognition_batch_size", "external_worker_prefetch_batches", "override_person_id", "override_person_name"]
+      "parameters": ["action", "operation_mode", "selection_mode", "include_hidden_persons", "changed_since_days", "resume_existing", "recognition_batch_size", "external_worker_prefetch_batches", "override_person_id", "override_person_name", "create_missing_person"]
     },
     {
       "id": "file_analysis.scan",
@@ -205,9 +205,9 @@
       "findings_route": "/recognition_findings",
       "review_route": "/recognition_review",
       "apply_route": "/recognition_suggestions_apply",
-      "mutation_routes": ["/recognition_review", "/recognition_suggestions_apply", "/face_person_suggest"],
+      "mutation_routes": ["/recognition_review", "/recognition_suggestions_apply", "/face_person_suggest", "/face_create_match"],
       "resume_trigger": "recognition_review",
-      "parameters": ["action", "operation_mode", "selection_mode", "include_hidden_persons", "changed_since_days", "resume_existing", "recognition_batch_size", "external_worker_prefetch_batches", "override_person_id", "override_person_name"]
+      "parameters": ["action", "operation_mode", "selection_mode", "include_hidden_persons", "changed_since_days", "resume_existing", "recognition_batch_size", "external_worker_prefetch_batches", "override_person_id", "override_person_name", "create_missing_person"]
     },
     {
       "id": "cleanup.recognition_assignment",
@@ -293,7 +293,14 @@
       "chains": ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"],
       "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
       "modes": ["scan", "findings"],
-      "steps": ["start_immediate", "find", "show_finding", "face_person_suggest", "select_alternate_target", "save_as", "recognition_suggestions_apply_with_override_person", "refresh_findings_status", "refresh_cleanup_progress", "continue_search", "resume_existing_with_image_cursor"]
+      "steps": ["start_immediate", "find", "show_finding", "show_oriented_face_box", "face_person_suggest", "select_alternate_target", "save_as", "recognition_suggestions_apply_with_override_person", "refresh_findings_status", "refresh_cleanup_progress", "continue_search", "resume_existing_with_image_cursor"]
+    },
+    {
+      "id": "recognition_unknown_create_missing_person_resume",
+      "chains": ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"],
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_immediate", "find", "show_finding", "show_oriented_face_box", "enter_new_target_name", "create_target", "save_as", "recognition_suggestions_apply_with_create_missing_person", "refresh_findings_status", "refresh_cleanup_progress", "continue_search", "resume_existing_with_image_cursor"]
     },
     {
       "id": "recognition_unknown_current_person_images_complete_but_persons_remaining",
@@ -635,14 +642,14 @@
           "resume_required_after_review": true,
           "resume_strategy": "cursor",
           "resume_cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_person_id", "resume_progress_counts"],
-          "review_workflow": ["show_finding", "select_suggested_target", "select_alternate_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
+          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
         },
         "findings": {
           "progress_kind": "entries",
           "running_phases": ["running"],
           "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
           "counters": ["transferred", "skipped", "errors"],
-          "review_workflow": ["show_finding", "select_suggested_target", "select_alternate_target", "skip", "save", "save_as", "refresh_findings_status", "continue_search"]
+          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "skip", "save", "save_as", "refresh_findings_status", "continue_search"]
         }
       }
     },
@@ -795,14 +802,14 @@
           "reviewable": true,
           "resume_required_after_review": true,
           "resume_strategy": "cursor",
-          "review_workflow": ["show_finding", "select_suggested_target", "select_alternate_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
+          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "create_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
         },
         "findings": {
           "progress_kind": "entries",
           "running_phases": ["running"],
           "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
           "counters": ["transferred", "skipped", "errors"],
-          "review_workflow": ["show_finding", "select_suggested_target", "select_alternate_target", "skip", "save", "save_as", "refresh_findings_status", "continue_search"]
+          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "create_target", "skip", "save", "save_as", "refresh_findings_status", "continue_search"]
         }
       }
     },
@@ -945,14 +952,14 @@
           "resume_required_after_review": true,
           "resume_strategy": "cursor",
           "resume_cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_person_id", "resume_progress_counts"],
-          "review_workflow": ["show_finding", "select_suggested_target", "select_alternate_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
+          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "create_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
         },
         "findings": {
           "progress_kind": "entries",
           "running_phases": ["running"],
           "terminal_phases": ["finished", "empty", "stopped", "failed", "blocked"],
           "counters": ["transferred", "skipped", "errors"],
-          "review_workflow": ["show_finding", "select_suggested_target", "select_alternate_target", "skip", "save", "save_as", "refresh_findings_status", "continue_search"]
+          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "create_target", "skip", "save", "save_as", "refresh_findings_status", "continue_search"]
         }
       }
     },

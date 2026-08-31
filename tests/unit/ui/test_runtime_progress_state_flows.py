@@ -825,6 +825,77 @@ def test_last_immediate_recognition_review_autoresumes_when_scan_has_resume_curs
     }
 
 
+def test_recognition_review_free_name_applies_as_create_missing_person_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const requests = [];
+            const component = createComponent({
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                status: { phase: 'review_required' },
+              },
+              recognitionOptions: { operation_mode: 'findings' },
+              recognitionPersonFindingId: 'rec-167698',
+              recognitionPersonName: 'New Person',
+              recognitionSelectedPerson: null,
+              recognitionFindings: [{
+                suggestion_id: 'rec-167698',
+                selection_state: 'review',
+                write_state: 'pending',
+                unknown_face_id: 167698,
+                best_person_id: 27353,
+                best_person_name: 'Suggested Person',
+              }],
+              callDsmApi: async (path, body) => {
+                requests.push({ path, body });
+                if (path.endsWith('/recognition_findings')) {
+                  return { success: true, data: { entries: [] } };
+                }
+                return { success: true, data: {} };
+              },
+            });
+
+            await component.acceptRecognitionCurrent();
+
+            console.log(JSON.stringify(requests.find((entry) => entry.path.endsWith('/recognition_suggestions_apply')).body));
+            """
+        )
+    )
+
+    assert result["override_person_name"] == "New Person"
+    assert result["create_missing_person"] is True
+
+
+def test_recognition_display_face_uses_backend_normalized_bbox_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({});
+            console.log(JSON.stringify(component.getRecognitionDisplayFace({
+              bbox: { x1: 0.1, y1: 0.2, x2: 0.3, y2: 0.4 },
+              display_normalized: true,
+              profile_bbox: { x1: 0.5, y1: 0.6, x2: 0.7, y2: 0.8 },
+              profile_display_normalized: true,
+            }, 'profile_bbox', 'profile_display_normalized')));
+            """
+        )
+    )
+
+    assert result == {
+        "bbox": {"x1": 0.5, "y1": 0.6, "x2": 0.7, "y2": 0.8},
+        "display_normalized": True,
+    }
+
+
 def test_cleanup_progress_request_sends_selected_mode_runtime():
     result = run_node(
         mixin_runtime_script(

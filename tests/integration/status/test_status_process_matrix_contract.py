@@ -126,8 +126,10 @@ def test_status_process_matrix_declares_core_concepts():
         "search",
         "find",
         "show_finding",
+        "show_oriented_face_box",
         "select_suggested_target",
         "select_alternate_target",
+        "create_target",
         "save",
         "save_as",
         "continue_search",
@@ -259,6 +261,7 @@ def test_usage_scenarios_cover_real_process_flows():
         "recognition_build_profiles",
         "recognition_unknown_immediate_apply_resume",
         "recognition_unknown_save_as_alternate_person_resume",
+        "recognition_unknown_create_missing_person_resume",
         "recognition_unknown_current_person_images_complete_but_persons_remaining",
         "recognition_assignment_from_checks_apply_resume",
         "recognition_outlier_exclude_resume",
@@ -490,12 +493,15 @@ def test_recognition_unknown_matrix_covers_basic_review_workflow():
     assert chain["review_route"] == "/recognition_review"
     assert chain["apply_route"] == "/recognition_suggestions_apply"
     assert "/face_person_suggest" in chain["mutation_routes"]
-    assert {"override_person_id", "override_person_name"}.issubset(set(chain["parameters"]))
+    assert "/face_create_match" in chain["mutation_routes"]
+    assert {"override_person_id", "override_person_name", "create_missing_person"}.issubset(set(chain["parameters"]))
 
     required_steps = {
         "show_finding",
+        "show_oriented_face_box",
         "select_suggested_target",
         "select_alternate_target",
+        "create_target",
         "save",
         "save_as",
         "refresh_findings_status",
@@ -518,6 +524,16 @@ def test_recognition_unknown_matrix_covers_basic_review_workflow():
         "continue_search",
         "resume_existing_with_image_cursor",
     }.issubset(save_as_steps)
+    create_steps = set(scenarios["recognition_unknown_create_missing_person_resume"]["steps"])
+    assert {
+        "show_oriented_face_box",
+        "enter_new_target_name",
+        "create_target",
+        "recognition_suggestions_apply_with_create_missing_person",
+        "refresh_cleanup_progress",
+        "continue_search",
+        "resume_existing_with_image_cursor",
+    }.issubset(create_steps)
 
 
 def test_recognition_unknown_status_route_reads_recognition_findings_source():
@@ -757,10 +773,11 @@ def test_process_chain_parameters_are_declared_contract_terms():
         "skip_targets",
         "source_action",
         "source_mode",
-        "targets",
-        "override_person_id",
-        "override_person_name",
-    }
+            "targets",
+            "override_person_id",
+            "override_person_name",
+            "create_missing_person",
+        }
     for operation_domains in domains.values():
         known_parameters.update(operation_domains)
 

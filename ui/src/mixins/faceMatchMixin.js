@@ -420,6 +420,41 @@ export default {
 				)
 			);
 		},
+		faceMatchRecognitionStatusMessage() {
+			if (!this.faceMatchRecognitionActionSelected) {
+				return '';
+			}
+			const hasProgress = this.faceMatchHasCleanupProgressForAction('recognition_analyze_unknown_faces');
+			const headline = String(this.cleanupStatusMessage || '').trim();
+			const idleHeadline = this.$avt('face_match:status_idle', 'No action running.');
+			if (hasProgress && headline && headline !== idleHeadline) {
+				return headline;
+			}
+			if (this.cleanupLoading) {
+				return this.$avt('cleanup:status_preparing', 'Cleanup starts. Preparing run...');
+			}
+			if (this.recognitionDecisionLoading) {
+				return this.$avt('cleanup:recognition_apply_running', 'Applying recognition decision...');
+			}
+			if (this.recognitionFindingsLoading) {
+				return this.$avt('cleanup:recognition_loading_findings', 'Loading recognition findings...');
+			}
+			const reviewFindings = Array.isArray(this.recognitionReviewFindings)
+				? this.recognitionReviewFindings
+				: (Array.isArray(this.recognitionFindings)
+					? this.recognitionFindings.filter((finding) => (
+						String(finding.selection_state || 'review').toLowerCase() === 'review'
+						&& ['pending', 'internal_only'].includes(String(finding.write_state || 'pending').toLowerCase())
+					))
+					: []);
+			if (reviewFindings.length) {
+				return this.$avt('cleanup:recognition_review_required', 'Manual recognition review required.');
+			}
+			if (this.cleanupCanResumeProgress) {
+				return this.$avt('cleanup:status_resume_available', 'Previous run can be continued.');
+			}
+			return idleHeadline;
+		},
 			faceMatchPrimaryButtonLabel() {
 				if (this.faceMatchRecognitionActionSelected) {
 					if (this.faceMatchRecognitionCleanupActive) {

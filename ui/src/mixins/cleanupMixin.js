@@ -968,6 +968,15 @@ export default {
 			this.recognitionPersonName = person.name || '';
 			this.clearRecognitionPersonSuggestions();
 		},
+		getRecognitionDisplayFace(finding, bboxKey = 'bbox', normalizedKey = 'display_normalized') {
+			if (!finding || typeof finding !== 'object') {
+				return {};
+			}
+			return {
+				bbox: finding[bboxKey],
+				display_normalized: finding[normalizedKey] === true,
+			};
+		},
 		async acceptRecognitionCurrent() {
 			this.syncRecognitionPersonSelection();
 			await this.decideRecognitionCurrent(this.isRecognitionOutlierAction ? 'excluded' : 'selected', {
@@ -992,11 +1001,22 @@ export default {
 					const selectedPerson = this.recognitionSelectedPerson && this.recognitionSelectedPerson.id
 						? this.recognitionSelectedPerson
 						: null;
+					const typedPersonName = String(this.recognitionPersonName || '').trim();
+					const bestPersonName = String(finding.best_person_name || '').trim();
+					const normalizeName = typeof this.normalizeFaceMatchName === 'function'
+						? this.normalizeFaceMatchName
+						: (value) => String(value || '').trim().toLowerCase();
+					const createMissingPerson = !!(
+						!selectedPerson
+						&& typedPersonName
+						&& normalizeName(typedPersonName) !== normalizeName(bestPersonName)
+					);
 					await this.callDsmApi('/webman/3rdparty/AV_ImgData/index.cgi/api/recognition_suggestions_apply', {
 						action: this.selectedRecognitionAction,
 						selected_suggestion_ids: [itemId],
 						operation_mode: this.recognitionOptions.operation_mode,
 						...(selectedPerson ? { override_person_id: selectedPerson.id, override_person_name: selectedPerson.name || '' } : {}),
+						...(createMissingPerson ? { override_person_name: typedPersonName, create_missing_person: true } : {}),
 					});
 				}
 					await this.fetchRecognitionFindings();

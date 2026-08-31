@@ -6,7 +6,7 @@ from threading import RLock, Thread
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from services.bbox_normalizer import from_photos, to_bbox_dict
+from services.bbox_normalizer import from_photos, to_bbox_dict, to_display_face
 from services.face_detector import FaceDetectorUnavailable
 
 
@@ -142,6 +142,32 @@ class FaceRecognitionService:
         debug_log = getattr(self.backend, "_debugLog", None)
         if callable(debug_log):
             debug_log(event, **fields)
+
+    @staticmethod
+    def _display_bbox_from_raw_bbox(bbox: Any, orientation: Any) -> Optional[Dict[str, float]]:
+        if not isinstance(bbox, dict):
+            return None
+        try:
+            x1 = float(bbox["x1"])
+            y1 = float(bbox["y1"])
+            x2 = float(bbox["x2"])
+            y2 = float(bbox["y2"])
+            width = x2 - x1
+            height = y2 - y1
+            if width <= 0 or height <= 0:
+                return None
+            face = to_display_face({
+                "x": x1 + (width / 2),
+                "y": y1 + (height / 2),
+                "w": width,
+                "h": height,
+                "orientation": orientation,
+                "source_format": "MICROSOFT",
+            })
+            display_bbox = face.get("bbox") if isinstance(face, dict) else None
+            return dict(display_bbox) if isinstance(display_bbox, dict) else None
+        except Exception:
+            return None
 
     @staticmethod
     def _debug_options(options: Dict[str, Any]) -> Dict[str, Any]:
@@ -475,6 +501,19 @@ class FaceRecognitionService:
         def write_embeddings(path: str, embeddings: List[Dict[str, Any]]) -> None:
             with cache_lock:
                 self._image_embedding_cache[path] = embeddings
+
+        def image_orientation(path: str) -> Optional[int]:
+            try:
+                files = getattr(self.backend, "files", None)
+                reader = getattr(files, "readJpegExifOrientation", None)
+                if callable(reader):
+                    value = reader(path)
+                    return int(value) if value not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+            except Exception:
+                return None
+            return None
 
         def collect_batch_items(start_index: int, start_path: Optional[str] = None, stats: Optional[Dict[str, int]] = None) -> List[Tuple[int, str]]:
             cutoff = datetime.now(timezone.utc) - timedelta(days=options["changed_since_days"]) if options["changed_since_days"] > 0 else None
@@ -909,9 +948,12 @@ class FaceRecognitionService:
                 if match_iou < options["min_face_iou"]:
                     faces_below_iou += 1
                     continue
+                orientation = image_orientation(image_path)
                 references.append({
                     "face_id": face_id, "image_id": item_id, "image_path": image_path,
-                    "bbox": bbox, "embedding": matched["embedding"], "iou": match_iou,
+                    "bbox": bbox, "display_bbox": self._display_bbox_from_raw_bbox(bbox, orientation),
+                    "image_orientation": orientation,
+                    "embedding": matched["embedding"], "iou": match_iou,
                 })
                 if context:
                     self._set_progress(
@@ -1370,7 +1412,7 @@ class FaceRecognitionService:
                     "person_id": person_id, "person_name": person_name, "profile_key": self._model_key(options),
                     "reference_count": len(references), "used_count": len(references), "quality": "good" if len(references) >= options["min_faces_per_person"] else "limited",
                     "intra_person_similarity": intra_similarity,
-                    "centroid_embedding": centroid, "medoid": {key: medoid[key] for key in ("face_id", "image_id", "image_path", "bbox")},
+                    "centroid_embedding": centroid, "medoid": {key: medoid[key] for key in ("face_id", "image_id", "image_path", "bbox", "display_bbox", "image_orientation") if key in medoid},
                     "references": references,
                 })
             self._debug_log(
@@ -1517,8 +1559,11 @@ class FaceRecognitionService:
                 entries.append({
                     "outlier_id": f"out-{reference.get('face_id')}", "image_path": reference.get("image_path"),
                     "person_id": profile.get("person_id"), "person_name": profile.get("person_name"),
-                    "face_id": reference.get("face_id"), "image_id": reference.get("image_id"), "bbox": reference.get("bbox"),
-                    "profile_image_path": medoid.get("image_path"), "profile_bbox": medoid.get("bbox"),
+                    "face_id": reference.get("face_id"), "image_id": reference.get("image_id"),
+                    "bbox": reference.get("display_bbox") or reference.get("bbox"), "raw_bbox": reference.get("bbox"),
+                    "display_normalized": bool(reference.get("display_bbox")),
+                    "profile_image_path": medoid.get("image_path"), "profile_bbox": medoid.get("display_bbox") or medoid.get("bbox"),
+                    "profile_raw_bbox": medoid.get("bbox"), "profile_display_normalized": bool(medoid.get("display_bbox")),
                     "similarity_to_centroid": similarity,
                     "review_state": "excluded" if options["selection_mode"] == "exclude_confirmed" else "suspected",
                     "average_similarity": similarity,
@@ -1722,10 +1767,16 @@ class FaceRecognitionService:
                 decision_counts[decision] = int(decision_counts.get(decision, 0)) + 1
                 entries.append({
                     "suggestion_id": f"rec-{reference.get('face_id')}", "image_path": reference.get("image_path"),
-                    "image_id": reference.get("image_id"), "unknown_face_id": reference.get("face_id"), "bbox": reference.get("bbox"),
+                    "image_id": reference.get("image_id"), "unknown_face_id": reference.get("face_id"),
+                    "bbox": reference.get("display_bbox") or reference.get("bbox"), "raw_bbox": reference.get("bbox"),
+                    "display_normalized": bool(reference.get("display_bbox")),
+                    "image_orientation": reference.get("image_orientation"),
                     "unknown_person_id": current_person_id,
                     "best_person_id": best.get("person_id"), "best_person_name": best.get("person_name"), "best_score": best_score,
-                    "profile_image_path": (best.get("medoid") or {}).get("image_path"), "profile_bbox": (best.get("medoid") or {}).get("bbox"),
+                    "profile_image_path": (best.get("medoid") or {}).get("image_path"), "profile_bbox": (best.get("medoid") or {}).get("display_bbox") or (best.get("medoid") or {}).get("bbox"),
+                    "profile_raw_bbox": (best.get("medoid") or {}).get("bbox"),
+                    "profile_display_normalized": bool((best.get("medoid") or {}).get("display_bbox")),
+                    "profile_image_orientation": (best.get("medoid") or {}).get("image_orientation"),
                     "second_person_id": second.get("person_id"), "second_person_name": second.get("person_name"), "second_score": second_score,
                     "score_margin": margin, "decision": decision,
                     "selection_state": "selected" if options["selection_mode"] == "safe_only" and decision == "accept" else "review",
@@ -1934,10 +1985,15 @@ class FaceRecognitionService:
                 entries.append({
                     "suggestion_id": f"assign-{face_id}", "image_path": reference.get("image_path"),
                     "image_id": reference.get("image_id"), "current_face_id": face_id, "unknown_face_id": face_id,
-                    "bbox": reference.get("bbox"),
+                    "bbox": reference.get("display_bbox") or reference.get("bbox"), "raw_bbox": reference.get("bbox"),
+                    "display_normalized": bool(reference.get("display_bbox")),
+                    "image_orientation": reference.get("image_orientation"),
                     "current_person_id": current_person_id, "current_person_name": current_person_name,
                     "best_person_id": best_person_id, "best_person_name": best.get("person_name"), "best_score": best_score,
-                    "profile_image_path": (best.get("medoid") or {}).get("image_path"), "profile_bbox": (best.get("medoid") or {}).get("bbox"),
+                    "profile_image_path": (best.get("medoid") or {}).get("image_path"), "profile_bbox": (best.get("medoid") or {}).get("display_bbox") or (best.get("medoid") or {}).get("bbox"),
+                    "profile_raw_bbox": (best.get("medoid") or {}).get("bbox"),
+                    "profile_display_normalized": bool((best.get("medoid") or {}).get("display_bbox")),
+                    "profile_image_orientation": (best.get("medoid") or {}).get("image_orientation"),
                     "second_person_id": second.get("person_id"), "second_person_name": second.get("person_name"), "second_score": second_score,
                     "score_margin": margin, "decision": decision,
                     "selection_state": "selected" if options["selection_mode"] == "safe_only" and decision == "accept" else "review",
@@ -2166,7 +2222,7 @@ class FaceRecognitionService:
             profile["centroid_embedding"] = profile_math["centroid_embedding"]
             if remaining:
                 medoid = remaining[profile_math["medoid_index"]]
-                profile["medoid"] = {key: medoid[key] for key in ("face_id", "image_id", "image_path", "bbox")}
+                profile["medoid"] = {key: medoid[key] for key in ("face_id", "image_id", "image_path", "bbox", "display_bbox", "image_orientation") if key in medoid}
             else:
                 profile["medoid"] = {}
         if changed:
@@ -2221,6 +2277,7 @@ class FaceRecognitionService:
         action: str = ACTION_SUGGEST,
         override_person_id: Any = None,
         override_person_name: Any = None,
+        create_missing_person: bool = False,
     ) -> Dict[str, Any]:
         requested = {str(value) for value in selected_ids or []}
         mode = str(operation_mode or "findings").strip().lower()
@@ -2242,13 +2299,24 @@ class FaceRecognitionService:
             if not selected or entry.get("write_state") == "written":
                 continue
             try:
-                person_id = override_id or int(entry["best_person_id"])
+                face_id = int(entry["unknown_face_id"])
+                person_id = override_id or int(entry["best_person_id"] or 0)
                 person_name = override_name or str(entry["best_person_name"])
-                self.backend.assignMatchedFaceToKnownPerson(
-                    user_key=user_key, cookies=cookies, base_url=base_url,
-                    face_id=int(entry["unknown_face_id"]), person_id=person_id,
-                    person_name=person_name, item_id=int(entry["image_id"]), image_path=str(entry["image_path"]),
-                )
+                if normalized_action == self.ACTION_SUGGEST and create_missing_person and override_name and not override_id:
+                    create_result = self.backend.applyPhotoFaceMatchPersonCreation(
+                        user_key=user_key, cookies=cookies, base_url=base_url,
+                        face_id=face_id, person_name=override_name,
+                        save_mapping=False, source_name=entry.get("best_person_name") or "",
+                    )
+                    person_id = int(create_result.get("person_id") or 0)
+                    person_name = str(create_result.get("person_name") or override_name)
+                    entry["create_result"] = create_result
+                else:
+                    self.backend.assignMatchedFaceToKnownPerson(
+                        user_key=user_key, cookies=cookies, base_url=base_url,
+                        face_id=face_id, person_id=person_id,
+                        person_name=person_name, item_id=int(entry["image_id"]), image_path=str(entry["image_path"]),
+                    )
                 entry["applied_person_id"] = person_id
                 entry["applied_person_name"] = person_name
                 entry["write_state"] = "written"

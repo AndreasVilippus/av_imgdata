@@ -2834,8 +2834,37 @@ class ImgDataService:
             FaceRecognitionService.ACTION_SUGGEST,
             FaceRecognitionService.ACTION_ASSIGNMENT,
         }:
+            current = self._normalizeActiveRecognitionProgressMessage(current)
+        if normalized_action in {
+            FaceRecognitionService.ACTION_OUTLIERS,
+            FaceRecognitionService.ACTION_SUGGEST,
+            FaceRecognitionService.ACTION_ASSIGNMENT,
+        }:
             current = self._syncRecognitionProgressFindingsCount(user_key, normalized_action, current)
         return self._attachCleanupStatusPayload(current, action=normalized_action)
+
+    def _normalizeActiveRecognitionProgressMessage(self, progress: Dict[str, Any]) -> Dict[str, Any]:
+        current = dict(progress) if isinstance(progress, dict) else {}
+        status = current.get("status") if isinstance(current.get("status"), dict) else {}
+        phase = str(status.get("phase") or current.get("status_phase") or current.get("phase") or "").strip().lower()
+        active = bool(current.get("running") or current.get("active") or phase in {"preparing", "running", "stopping"})
+        if not active:
+            return current
+        message_key = str(current.get("message_key") or "").strip()
+        message = str(current.get("message") or "").strip()
+        idle_messages = {"", "no action running.", "keine laufende aktion"}
+        if message_key and message.lower() not in idle_messages:
+            return current
+        if phase == "preparing":
+            current["message_key"] = "cleanup:status_preparing"
+            current["message"] = "Cleanup starts. Preparing run..."
+        elif phase == "stopping" or current.get("stop_requested") is True:
+            current["message_key"] = "cleanup:progress_stopping"
+            current["message"] = "Cleanup is stopping..."
+        else:
+            current["message_key"] = "cleanup:progress_checking_person_short"
+            current["message"] = "Checking person..."
+        return current
 
     def _syncRecognitionProgressFindingsCount(self, user_key: str, action: str, progress: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(progress) if isinstance(progress, dict) else {}
