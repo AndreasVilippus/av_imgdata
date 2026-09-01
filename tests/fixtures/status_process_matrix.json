@@ -34,6 +34,7 @@
     },
     "run_lifecycle": {
       "non_terminal_phases": ["idle", "preparing", "running", "paused", "stopping"],
+      "active_detail_phases": ["persons_loaded", "unknown_loaded", "reading_reference_images", "reading_unknown_images", "reading_assigned_images", "building_profiles", "building_outliers", "building_suggestions", "building_assignment_suggestions", "listing_files", "preparing_detector"],
       "terminal_phases": ["stopped", "finished", "failed", "empty", "blocked", "review_required", "needs_profiles"],
       "rule": "A process chain must define the phases it can emit for every supported mode."
     },
@@ -50,6 +51,11 @@
       "flags": ["resume_existing", "resume_from_progress"],
       "cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_after_face_id", "resume_person_id", "resume_progress_counts", "scan_next_path_index", "skip_face_ids", "skip_targets"],
       "rule": "After a review mutation, the next scan must continue after the last reviewed unit and must retain prior counters. After backend reopen with resumable stopped or unfinished progress, the UI must offer an explicit restart-or-resume choice at the owning view."
+    },
+    "status_option_separation": {
+      "status_modes": ["scan", "findings", "snapshot"],
+      "operation_modes": ["immediate", "save_only", "findings"],
+      "rule": "Status mode describes the process status domain. Operation mode describes review/start behavior and must never be rewritten to scan when an immediate review process is synchronized after save, save-as or skip."
     },
     "storage": {
       "runtime_modes": ["immediate"],
@@ -286,21 +292,28 @@
       "chains": ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"],
       "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
       "modes": ["scan", "findings"],
-      "steps": ["start_immediate", "poll_status_reports_recognition_findings", "show_finding", "select_suggested_target", "save", "recognition_review", "recognition_suggestions_apply", "refresh_cleanup_progress", "continue_search", "resume_existing_with_image_cursor"]
+      "steps": ["start_immediate", "poll_status_reports_recognition_findings", "show_finding", "select_suggested_target", "save", "recognition_review", "recognition_suggestions_apply", "sync_review_progress_keeps_operation_mode_immediate", "refresh_cleanup_progress", "continue_search", "resume_existing_with_image_cursor"]
     },
     {
       "id": "recognition_unknown_save_as_alternate_person_resume",
       "chains": ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"],
       "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
       "modes": ["scan", "findings"],
-      "steps": ["start_immediate", "find", "show_finding", "show_oriented_face_box", "face_person_suggest", "select_alternate_target", "save_as", "recognition_suggestions_apply_with_override_person", "refresh_findings_status", "refresh_cleanup_progress", "continue_search", "resume_existing_with_image_cursor"]
+      "steps": ["start_immediate", "find", "show_finding", "show_oriented_face_box", "face_person_suggest", "select_alternate_target", "save_as", "recognition_suggestions_apply_with_override_person", "sync_review_progress_keeps_operation_mode_immediate", "refresh_findings_status", "refresh_cleanup_progress", "continue_search", "resume_existing_with_image_cursor"]
     },
     {
       "id": "recognition_unknown_create_missing_person_resume",
       "chains": ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"],
       "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
       "modes": ["scan", "findings"],
-      "steps": ["start_immediate", "find", "show_finding", "show_oriented_face_box", "enter_new_target_name", "create_target", "save_as", "recognition_suggestions_apply_with_create_missing_person", "refresh_findings_status", "refresh_cleanup_progress", "continue_search", "resume_existing_with_image_cursor"]
+      "steps": ["start_immediate", "find", "show_finding", "show_oriented_face_box", "enter_new_target_name", "create_target", "save_as", "recognition_suggestions_apply_with_create_missing_person", "sync_review_progress_keeps_operation_mode_immediate", "refresh_findings_status", "refresh_cleanup_progress", "continue_search", "resume_existing_with_image_cursor"]
+    },
+    {
+      "id": "recognition_unknown_skip_resume",
+      "chains": ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"],
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "steps": ["start_immediate", "find", "show_finding", "skip", "recognition_review", "sync_review_progress_keeps_operation_mode_immediate", "refresh_findings_status", "refresh_cleanup_progress", "continue_search_or_show_next_review_entry", "resume_existing_with_image_cursor"]
     },
     {
       "id": "recognition_unknown_current_person_images_complete_but_persons_remaining",
@@ -492,6 +505,236 @@
       "steps": ["load_finding", "mutation_fails", "refresh_findings", "preserve_or_reconcile_current_index", "status_phase_failed_without_losing_identity"]
     }
   ],
+  "atomic_review_mutations": [
+    {
+      "id": "recognition_unknown_save",
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "ui_action": "save",
+      "routes": ["/recognition_review", "/recognition_suggestions_apply"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode", "selected_suggestion_ids"],
+      "backend_effects": ["mark_entry_selected", "apply_suggestion_to_photos_person", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "clear_runtime_action_before_resume_decision", "idle_status_overwrites_review_required"]
+    },
+    {
+      "id": "recognition_unknown_save_as",
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "ui_action": "save_as",
+      "routes": ["/face_person_suggest", "/recognition_review", "/recognition_suggestions_apply"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode", "selected_suggestion_ids", "override_person_id", "override_person_name"],
+      "backend_effects": ["mark_entry_selected", "apply_suggestion_to_override_person", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "drop_override_person", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "recognition_unknown_create_target",
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "ui_action": "create_target",
+      "routes": ["/face_person_suggest", "/recognition_review", "/recognition_suggestions_apply"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode", "selected_suggestion_ids", "override_person_name", "create_missing_person"],
+      "backend_effects": ["mark_entry_selected", "create_missing_photos_person", "apply_suggestion_to_created_person", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "hide_create_target_when_name_is_new", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "recognition_unknown_skip",
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan", "findings"],
+      "ui_action": "skip",
+      "routes": ["/recognition_review"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode"],
+      "backend_effects": ["mark_entry_skipped", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "skip_without_progress_refresh", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "recognition_assignment_save",
+      "processes": ["checks.recognition_check_person_assignments", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan", "findings"],
+      "ui_action": "save",
+      "routes": ["/recognition_review", "/recognition_suggestions_apply"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode", "selected_suggestion_ids"],
+      "backend_effects": ["mark_entry_selected", "apply_assignment_to_photos_person", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "recognition_assignment_save_as",
+      "processes": ["checks.recognition_check_person_assignments", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan", "findings"],
+      "ui_action": "save_as",
+      "routes": ["/face_person_suggest", "/recognition_review", "/recognition_suggestions_apply"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode", "selected_suggestion_ids", "override_person_id", "override_person_name"],
+      "backend_effects": ["mark_entry_selected", "apply_assignment_to_override_person", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "drop_override_person", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "recognition_assignment_skip",
+      "processes": ["checks.recognition_check_person_assignments", "cleanup.recognition_check_person_assignments"],
+      "modes": ["scan", "findings"],
+      "ui_action": "skip",
+      "routes": ["/recognition_review"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode"],
+      "backend_effects": ["mark_entry_skipped", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "skip_without_progress_refresh", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "recognition_outlier_exclude",
+      "processes": ["cleanup.recognition_check_reference_outliers"],
+      "modes": ["scan", "findings"],
+      "ui_action": "save",
+      "routes": ["/recognition_review"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode"],
+      "backend_effects": ["mark_reference_excluded", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "recognition_outlier_confirm",
+      "processes": ["cleanup.recognition_check_reference_outliers"],
+      "modes": ["scan", "findings"],
+      "ui_action": "confirm_reference",
+      "routes": ["/recognition_review"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode"],
+      "backend_effects": ["mark_reference_confirmed", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "recognition_outlier_skip",
+      "processes": ["cleanup.recognition_check_reference_outliers"],
+      "modes": ["scan", "findings"],
+      "ui_action": "skip",
+      "routes": ["/recognition_review"],
+      "request_fields": ["action", "item_id", "decision", "operation_mode"],
+      "backend_effects": ["mark_entry_skipped", "sync_review_progress"],
+      "ui_effects": ["fetch_recognition_findings", "fetch_cleanup_progress_when_immediate", "reset_review_index", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["status_mode_scan_for_immediate", "operation_mode_immediate_preserved", "resume_cursor_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["operation_mode_scan", "skip_without_progress_refresh", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "face_frame_save",
+      "processes": ["cleanup.standardize_face_frames", "checks.face_frame_standardization"],
+      "modes": ["scan", "findings"],
+      "ui_action": "save",
+      "routes": ["/cleanup_face_frames_select", "/cleanup_face_frames_apply"],
+      "request_fields": ["item_id", "selected", "operation_mode", "selected_item_ids"],
+      "backend_effects": ["mark_entry_selected", "apply_selected_face_frame", "sync_review_progress"],
+      "ui_effects": ["fetch_face_frame_findings", "sync_face_frame_findings_progress", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["scan_next_path_index_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["foreign_status_route_overwrites_cleanup_progress", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "face_frame_skip",
+      "processes": ["cleanup.standardize_face_frames", "checks.face_frame_standardization"],
+      "modes": ["scan", "findings"],
+      "ui_action": "skip",
+      "routes": ["/cleanup_face_frames_select"],
+      "request_fields": ["item_id", "selected", "operation_mode"],
+      "backend_effects": ["mark_entry_skipped", "sync_review_progress"],
+      "ui_effects": ["fetch_face_frame_findings", "sync_face_frame_findings_progress", "continue_search_when_no_open_findings_and_resume_available"],
+      "status_assertions": ["scan_next_path_index_preserved", "resume_available_matches_cursor"],
+      "forbidden": ["foreign_status_route_overwrites_cleanup_progress", "skip_without_progress_refresh", "clear_runtime_action_before_resume_decision"]
+    },
+    {
+      "id": "checks_ignore_entry",
+      "processes": ["checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts"],
+      "modes": ["findings"],
+      "ui_action": "skip",
+      "routes": ["/checks_ignore_entry"],
+      "request_fields": ["check_type", "item_id"],
+      "backend_effects": ["mark_entry_ignored_or_skipped", "reconcile_findings"],
+      "ui_effects": ["fetch_checks_findings_status", "load_or_reload_current_item"],
+      "status_assertions": ["findings_status_matches_requested_action", "current_index_preserved_or_reconciled"],
+      "forbidden": ["running_scan_overwrites_findings_review"]
+    },
+    {
+      "id": "checks_apply_metadata",
+      "processes": ["checks.dimension_issues", "checks.duplicate_faces", "checks.position_deviations", "checks.name_conflicts"],
+      "modes": ["findings"],
+      "ui_action": "save",
+      "routes": ["/checks_delete_metadata_face", "/checks_replace_metadata_face_name", "/checks_replace_metadata_face_position"],
+      "request_fields": ["check_type", "item_id", "metadata_face", "target_face", "person_name"],
+      "backend_effects": ["apply_metadata_change", "refresh_check_snapshot", "reconcile_findings"],
+      "ui_effects": ["fetch_checks_findings_status", "load_or_reload_current_item"],
+      "status_assertions": ["findings_status_matches_requested_action", "current_index_preserved_or_reconciled"],
+      "forbidden": ["running_scan_overwrites_findings_review", "drop_review_type_during_refresh"]
+    },
+    {
+      "id": "checks_assign_person",
+      "processes": ["checks.duplicate_faces", "checks.name_conflicts"],
+      "modes": ["findings"],
+      "ui_action": "save_as",
+      "routes": ["/face_person_suggest", "/checks_assign_face_person"],
+      "request_fields": ["check_type", "item_id", "person_id", "person_name"],
+      "backend_effects": ["apply_alternate_photos_person", "reconcile_findings"],
+      "ui_effects": ["fetch_checks_findings_status", "load_or_reload_current_item"],
+      "status_assertions": ["findings_status_matches_requested_action", "current_index_preserved_or_reconciled"],
+      "forbidden": ["drop_override_person", "running_scan_overwrites_findings_review"]
+    },
+    {
+      "id": "face_match_assign",
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface", "face_match.load_photo_face_match_findings"],
+      "modes": ["scan", "findings"],
+      "ui_action": "save",
+      "routes": ["/face_assign_match", "/face_assign_metadata_match", "/face_apply_metadata_match"],
+      "request_fields": ["action", "face_id", "image_path", "person_id", "person_name"],
+      "backend_effects": ["assign_or_write_metadata", "record_transfer_progress"],
+      "ui_effects": ["fetch_face_matching_progress", "fetch_face_match_findings_status", "continue_search_or_advance_stored_finding"],
+      "status_assertions": ["skip_cursor_preserved", "changed_since_days_preserved"],
+      "forbidden": ["foreign_status_route_overwrites_cleanup_progress", "clear_skip_cursor_before_resume"]
+    },
+    {
+      "id": "face_match_save_as",
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface", "face_match.load_photo_face_match_findings"],
+      "modes": ["scan", "findings"],
+      "ui_action": "save_as",
+      "routes": ["/face_person_suggest", "/face_assign_match", "/face_assign_metadata_match", "/face_create_match", "/face_create_metadata_match"],
+      "request_fields": ["action", "face_id", "image_path", "person_id", "person_name"],
+      "backend_effects": ["assign_or_create_override_target", "record_transfer_progress"],
+      "ui_effects": ["fetch_face_matching_progress", "fetch_face_match_findings_status", "continue_search_or_advance_stored_finding"],
+      "status_assertions": ["skip_cursor_preserved", "changed_since_days_preserved"],
+      "forbidden": ["drop_override_person", "clear_skip_cursor_before_resume"]
+    },
+    {
+      "id": "face_match_create",
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface", "face_match.load_photo_face_match_findings"],
+      "modes": ["scan", "findings"],
+      "ui_action": "create_target",
+      "routes": ["/face_create_match", "/face_create_metadata_match"],
+      "request_fields": ["action", "face_id", "image_path", "person_name"],
+      "backend_effects": ["create_photos_person_or_metadata_target", "record_transfer_progress"],
+      "ui_effects": ["fetch_face_matching_progress", "fetch_face_match_findings_status", "continue_search_or_advance_stored_finding"],
+      "status_assertions": ["skip_cursor_preserved", "changed_since_days_preserved"],
+      "forbidden": ["clear_skip_cursor_before_resume"]
+    },
+    {
+      "id": "face_match_skip",
+      "processes": ["face_match.search_photo_face_in_file", "face_match.search_file_face_in_sources", "face_match.mark_missing_photos_faces", "face_match.search_missing_faces_insightface", "face_match.load_photo_face_match_findings"],
+      "modes": ["scan", "findings"],
+      "ui_action": "skip",
+      "routes": ["/face_skip_match"],
+      "request_fields": ["action", "face_id", "image_path"],
+      "backend_effects": ["record_skip_cursor", "record_transfer_progress"],
+      "ui_effects": ["fetch_face_matching_progress", "fetch_face_match_findings_status", "continue_search_or_advance_stored_finding"],
+      "status_assertions": ["skip_cursor_preserved", "changed_since_days_preserved"],
+      "forbidden": ["skip_without_progress_refresh", "clear_skip_cursor_before_resume"]
+    }
+  ],
   "parameter_domains": {
     "checks": {
       "selected_action": ["scan", "findings"],
@@ -649,7 +892,7 @@
           "resume_required_after_review": true,
           "resume_strategy": "cursor",
           "resume_cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_person_id", "resume_progress_counts"],
-          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
+          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "skip", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
         },
         "findings": {
           "progress_kind": "entries",
@@ -810,7 +1053,7 @@
           "reviewable": true,
           "resume_required_after_review": true,
           "resume_strategy": "cursor",
-          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "create_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
+          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "create_target", "skip", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
         },
         "findings": {
           "progress_kind": "entries",
@@ -960,7 +1203,7 @@
           "resume_required_after_review": true,
           "resume_strategy": "cursor",
           "resume_cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_person_id", "resume_progress_counts"],
-          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "create_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
+          "review_workflow": ["show_finding", "show_oriented_face_box", "select_suggested_target", "select_alternate_target", "create_target", "skip", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
         },
         "findings": {
           "progress_kind": "entries",
@@ -987,7 +1230,7 @@
           "resume_required_after_review": true,
           "resume_strategy": "cursor",
           "resume_cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_person_id", "resume_progress_counts"],
-          "review_workflow": ["show_finding", "select_suggested_target", "select_alternate_target", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
+          "review_workflow": ["show_finding", "select_suggested_target", "select_alternate_target", "skip", "save", "save_as", "refresh_findings_status", "refresh_cleanup_progress", "continue_search"]
         },
         "findings": {
           "progress_kind": "entries",

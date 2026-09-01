@@ -51,6 +51,30 @@ Supported long-running operations:
 
 InsightFace-driven processes, including face-frame standardization, follow the same rule: `immediate` uses only the active run state, `save_only` writes a persistent findings list, and `findings` processes only an explicitly selected persistent findings list. A saved findings list is not read by `immediate` or `save_only` unless the current run explicitly requests a resume.
 
+`status.mode` and `options.operation_mode` are separate concepts:
+
+- `status.mode` describes the status domain, for example `scan` or `findings`.
+- `options.operation_mode` describes start and review behavior, for example `immediate`, `save_only`, or `findings`.
+- Synchronizing review progress after `save`, `save_as`, `create_target`, `skip`, `exclude_reference`, or `confirm_reference` must not rewrite `options.operation_mode` to `scan`.
+- The UI may normalize legacy persisted `options.operation_mode=scan` to `immediate`, but new backend progress must not emit that value.
+
+## Atomic Review Mutations
+
+The status process matrix must model review mutations atomically. A broad scenario such as "review and continue" is not sufficient.
+
+Every mutating review action must declare:
+
+- affected processes and modes
+- UI action, for example `save`, `save_as`, `skip`, `create_target`, or `confirm_reference`
+- backend routes used by the mutation
+- required request fields
+- backend effects
+- UI refresh effects
+- status assertions after mutation
+- forbidden state transitions
+
+For immediate recognition reviews, every mutation must refresh findings, refresh cleanup progress, preserve `operation_mode=immediate`, keep the resume cursor, and either show the next open review entry or continue the scan through `resume_existing`.
+
 ## Phases
 
 The phase field is a stable, lower_snake_case status token. Consumers must handle the core phases below and treat operation-specific detail phases as display/status details, not as a reason to reconstruct state from legacy fields.

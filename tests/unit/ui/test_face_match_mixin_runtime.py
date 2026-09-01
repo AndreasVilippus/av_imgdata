@@ -2226,6 +2226,46 @@ def test_recognition_status_message_uses_backend_progress_message_runtime():
     }
 
 
+def test_recognition_detail_phase_is_active_without_idle_headline_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const component = createComponent({
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              faceMatchRecognitionActionSelected: true,
+              cleanupLoading: false,
+              cleanupStatusMessage: '',
+              cleanupCanResumeProgress: false,
+              recognitionFindingsLoading: false,
+              recognitionDecisionLoading: false,
+              recognitionFindings: [],
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                status: { phase: 'unknown_loaded' },
+              },
+            });
+
+            assert.strictEqual(component.faceMatchRecognitionCleanupActive, true);
+            assert.strictEqual(component.faceMatchPrimaryButtonLabel, 'Stop');
+            assert.strictEqual(component.faceMatchRecognitionStatusMessage, '');
+            console.log(JSON.stringify({
+              active: component.faceMatchRecognitionCleanupActive,
+              label: component.faceMatchPrimaryButtonLabel,
+              message: component.faceMatchRecognitionStatusMessage,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "active": True,
+        "label": "Stop",
+        "message": "",
+    }
+
+
 def test_reopen_resumable_face_match_progress_offers_restart_and_resume_runtime():
     result = run_node(
         face_match_runtime_script(

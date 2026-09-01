@@ -130,9 +130,7 @@ export default {
 					|| progress.active === true
 					|| progress.running === true
 					|| (progress.stop_requested === true && (progress.active === true || progress.running === true || phase === 'stopping'))
-					|| phase === 'preparing'
-					|| phase === 'running'
-					|| phase === 'stopping'
+					|| this.isCleanupActiveStatusPhase(phase)
 				);
 			},
 			cleanupPrimaryButtonLabel() {
@@ -250,6 +248,30 @@ export default {
 		this.stopCleanupProgressPolling();
 	},
 		methods: {
+			getCleanupActiveStatusPhases() {
+				return [
+					'preparing',
+					'running',
+					'paused',
+					'stopping',
+					'persons_loaded',
+					'unknown_loaded',
+					'reading_reference_images',
+					'reading_unknown_images',
+					'reading_assigned_images',
+					'building_profiles',
+					'building_outliers',
+					'building_suggestions',
+					'building_assignment_suggestions',
+					'listing_files',
+					'preparing_detector',
+				];
+			},
+			isCleanupActiveStatusPhase(phase) {
+				return this.getCleanupActiveStatusPhases().includes(
+					String(phase || '').trim().toLowerCase()
+				);
+			},
 			isCleanupResumableAction(action) {
 				return [
 					'standardize_face_frames',
@@ -381,11 +403,16 @@ export default {
 				}
 				return acc;
 			}, {});
-			return {
+			const options = {
 				...flatCursorOptions,
 				...cursorOptions,
 				...directOptions,
 			};
+			const operationMode = String(options.operation_mode || '').trim().toLowerCase();
+			if (operationMode === 'scan') {
+				options.operation_mode = 'immediate';
+			}
+			return options;
 		},
 		adoptRunningRecognitionProgress(progress) {
 			const current = progress && typeof progress === 'object' ? progress : {};
@@ -1046,6 +1073,23 @@ export default {
 				apply: !this.isRecognitionOutlierAction,
 			});
 		},
+		async refreshAfterRecognitionReviewMutation() {
+			await this.fetchRecognitionFindings();
+			if (this.recognitionOptions.operation_mode === 'immediate') {
+				await this.fetchCleanupProgress({ actionOverride: this.selectedRecognitionAction });
+			}
+			this.recognitionCurrentIndex = 0;
+			if (
+				this.recognitionOptions.operation_mode === 'immediate'
+				&& !this.recognitionReviewFindings.length
+				&& this.cleanupCanResumeProgress
+			) {
+				await this.startCleanupRun({
+					actionOverride: this.selectedRecognitionAction,
+					resumeExisting: true,
+				});
+			}
+		},
 		async decideRecognitionCurrent(decision, options = {}) {
 			const finding = this.recognitionCurrentFinding;
 			if (!finding || this.recognitionDecisionLoading) {
@@ -1082,21 +1126,7 @@ export default {
 						...(createMissingPerson ? { override_person_name: typedPersonName, create_missing_person: true } : {}),
 					});
 				}
-					await this.fetchRecognitionFindings();
-					if (this.recognitionOptions.operation_mode === 'immediate') {
-						await this.fetchCleanupProgress({ actionOverride: this.selectedRecognitionAction });
-					}
-					this.recognitionCurrentIndex = 0;
-					if (
-						this.recognitionOptions.operation_mode === 'immediate'
-						&& !this.recognitionReviewFindings.length
-						&& this.cleanupCanResumeProgress
-					) {
-						await this.startCleanupRun({
-							actionOverride: this.selectedRecognitionAction,
-							resumeExisting: true,
-						});
-					}
+				await this.refreshAfterRecognitionReviewMutation();
 			} catch (err) {
 				this.cleanupStatusMessage = `Error: ${this.getErrorMessage(err)}`;
 			} finally {

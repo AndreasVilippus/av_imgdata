@@ -414,9 +414,7 @@ export default {
 					progress.active === true
 					|| progress.running === true
 					|| (progress.stop_requested === true && (progress.active === true || progress.running === true || phase === 'stopping'))
-					|| phase === 'preparing'
-					|| phase === 'running'
-					|| phase === 'stopping'
+					|| this.isFaceMatchCleanupActiveStatusPhase(phase)
 				)
 			);
 		},
@@ -453,7 +451,7 @@ export default {
 			if (this.cleanupCanResumeProgress) {
 				return this.$avt('cleanup:status_resume_available', 'Previous run can be continued.');
 			}
-			return idleHeadline;
+			return '';
 		},
 			faceMatchPrimaryButtonLabel() {
 				if (this.faceMatchRecognitionActionSelected) {
@@ -752,6 +750,30 @@ export default {
 		this.stopFaceMatchProgressPolling();
 		},
 		methods: {
+			getFaceMatchCleanupActiveStatusPhases() {
+				return [
+					'preparing',
+					'running',
+					'paused',
+					'stopping',
+					'persons_loaded',
+					'unknown_loaded',
+					'reading_reference_images',
+					'reading_unknown_images',
+					'reading_assigned_images',
+					'building_profiles',
+					'building_outliers',
+					'building_suggestions',
+					'building_assignment_suggestions',
+					'listing_files',
+					'preparing_detector',
+				];
+			},
+			isFaceMatchCleanupActiveStatusPhase(phase) {
+				return this.getFaceMatchCleanupActiveStatusPhases().includes(
+					String(phase || '').trim().toLowerCase()
+				);
+			},
 			faceMatchHasCleanupProgressForAction(action) {
 				const expectedAction = String(action || '').trim();
 				if (!expectedAction) {

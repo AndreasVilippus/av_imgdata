@@ -2238,13 +2238,14 @@ class FaceRecognitionService:
             })
 
     def sync_review_progress(self, *, user_key: str, action: str, operation_mode: str = "immediate") -> Dict[str, Any]:
-        status_mode = "findings" if str(operation_mode or "").strip().lower() == "findings" else "scan"
-        payload = self.findings(action, user_key=user_key, operation_mode=operation_mode)
+        requested_mode = "findings" if str(operation_mode or "").strip().lower() == "findings" else "immediate"
+        status_mode = "findings" if requested_mode == "findings" else "scan"
+        payload = self.findings(action, user_key=user_key, operation_mode=requested_mode)
         entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
         open_entries = self._open_entries(entries)
         current = open_entries[0] if open_entries else {}
         options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
-        options = {**options, "operation_mode": status_mode}
+        options = {**options, "operation_mode": requested_mode}
         resume_cursor = self._resume_cursor_from_options(options)
         can_resume = bool(resume_cursor) and status_mode == "scan"
         phase = "review_required" if open_entries else ("stopped" if can_resume else "finished")

@@ -2179,9 +2179,11 @@ def test_recognition_status_schema_uses_integrated_modes_for_operation_modes():
 
     service.sync_review_progress(user_key="u", action=service.ACTION_SUGGEST, operation_mode="immediate")
     assert progress_updates[-1][1]["status"]["mode"] == "scan"
+    assert progress_updates[-1][1]["options"]["operation_mode"] == "immediate"
 
     service.sync_review_progress(user_key="u", action=service.ACTION_SUGGEST, operation_mode="findings")
     assert progress_updates[-1][1]["status"]["mode"] == "findings"
+    assert progress_updates[-1][1]["options"]["operation_mode"] == "findings"
 
 
 def test_finish_review_scan_uses_open_finding_name_instead_of_stale_current_name():

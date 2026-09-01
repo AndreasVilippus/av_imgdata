@@ -247,6 +247,13 @@ def test_face_match_found_result_message_does_not_show_generic_finished_progress
     assert "progress_finished" not in message[:generic_message]
 
 
+def test_face_match_recognition_status_does_not_fall_back_to_generic_idle_message():
+    view = Path("ui/src/views/FaceMatchView.vue").read_text(encoding="utf-8")
+
+    assert "vm.faceMatchRecognitionStatusMessage &&" in view
+    assert "v-else-if=\"!vm.faceMatchRecognitionActionSelected && !vm.faceMatchShowStoredFindingsProgress" in view
+
+
 def test_checks_restart_button_is_limited_to_saved_scan():
     source = Path("ui/src/mixins/checksMixin.js").read_text(encoding="utf-8")
 

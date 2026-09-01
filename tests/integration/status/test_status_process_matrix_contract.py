@@ -38,6 +38,10 @@ def _scenarios():
     return _matrix()["usage_scenarios"]
 
 
+def _atomic_review_mutations():
+    return _matrix()["atomic_review_mutations"]
+
+
 def _api_routes():
     routes = set()
     for path in (PROJECT_DIR / "src" / "api").glob("*.py"):
@@ -97,12 +101,16 @@ def test_status_process_matrix_is_machine_readable_and_unique():
     assert matrix["processes"]
     assert isinstance(matrix["process_chains"], list)
     assert matrix["process_chains"]
+    assert isinstance(matrix["atomic_review_mutations"], list)
+    assert matrix["atomic_review_mutations"]
     ids = [process["id"] for process in matrix["processes"]]
     assert len(ids) == len(set(ids))
     chain_ids = [chain["id"] for chain in matrix["process_chains"]]
     assert len(chain_ids) == len(set(chain_ids))
     scenario_ids = [scenario["id"] for scenario in matrix["usage_scenarios"]]
     assert len(scenario_ids) == len(set(scenario_ids))
+    mutation_ids = [mutation["id"] for mutation in matrix["atomic_review_mutations"]]
+    assert len(mutation_ids) == len(set(mutation_ids))
 
 
 def test_status_process_matrix_declares_core_concepts():
@@ -114,6 +122,7 @@ def test_status_process_matrix_declares_core_concepts():
         "review_lifecycle",
         "basic_review_workflow",
         "resume",
+        "status_option_separation",
         "storage",
         "stop_blocking_reconnect",
         "delegated_reconnect_options",
@@ -121,6 +130,7 @@ def test_status_process_matrix_declares_core_concepts():
     }
     assert concepts["identity"]["required_fields"] == _matrix()["global_rules"]["identity_fields"]
     assert set(concepts["run_lifecycle"]["non_terminal_phases"]).issubset(_matrix()["core_phases"])
+    assert concepts["run_lifecycle"]["active_detail_phases"]
     assert {"review_required", "needs_profiles"}.issubset(concepts["run_lifecycle"]["terminal_phases"])
     assert {
         "search",
@@ -247,6 +257,88 @@ def test_status_process_chains_cover_review_mutation_routes():
             represented.add(chain["apply_route"])
 
     assert expected_mutation_routes.issubset(represented)
+
+
+def test_atomic_review_mutations_reference_existing_processes_routes_and_fields():
+    process_ids = _process_ids()
+    api_routes = _api_routes()
+    allowed_modes = {"scan", "findings"}
+    allowed_ui_actions = {
+        "save",
+        "save_as",
+        "skip",
+        "create_target",
+        "confirm_reference",
+    }
+
+    for mutation in _atomic_review_mutations():
+        assert set(mutation["processes"]).issubset(process_ids)
+        assert set(mutation["modes"]).issubset(allowed_modes)
+        assert mutation["ui_action"] in allowed_ui_actions
+        assert set(mutation["routes"]).issubset(api_routes)
+        assert mutation["request_fields"]
+        assert mutation["backend_effects"]
+        assert mutation["ui_effects"]
+        assert mutation["status_assertions"]
+        assert mutation["forbidden"]
+
+
+def test_atomic_review_mutations_cover_every_declared_mutating_review_workflow():
+    mutating_actions = {
+        "save",
+        "save_as",
+        "skip",
+        "create_target",
+        "confirm_reference",
+        "exclude_reference",
+    }
+    covered = {
+        (process_id, mode, mutation["ui_action"])
+        for mutation in _atomic_review_mutations()
+        for process_id in mutation["processes"]
+        for mode in mutation["modes"]
+    }
+    alias = {
+        "exclude_reference": "save",
+    }
+
+    for process in _processes():
+        for mode, spec in process["modes"].items():
+            workflow = set(spec.get("review_workflow", []))
+            for action in sorted(workflow & mutating_actions):
+                expected_action = alias.get(action, action)
+                assert (process["id"], mode, expected_action) in covered, (
+                    process["id"],
+                    mode,
+                    action,
+                )
+
+
+def test_atomic_recognition_review_mutations_require_full_resume_reconciliation():
+    recognition_mutations = [
+        mutation for mutation in _atomic_review_mutations()
+        if any(process_id.startswith("cleanup.recognition_") for process_id in mutation["processes"])
+    ]
+    assert recognition_mutations
+
+    for mutation in recognition_mutations:
+        assert "sync_review_progress" in mutation["backend_effects"]
+        assert "fetch_recognition_findings" in mutation["ui_effects"]
+        if "scan" in mutation["modes"]:
+            assert "fetch_cleanup_progress_when_immediate" in mutation["ui_effects"]
+            assert "continue_search_when_no_open_findings_and_resume_available" in mutation["ui_effects"]
+            assert "operation_mode_immediate_preserved" in mutation["status_assertions"]
+            assert "resume_cursor_preserved" in mutation["status_assertions"]
+            assert "operation_mode_scan" in mutation["forbidden"]
+            assert "clear_runtime_action_before_resume_decision" in mutation["forbidden"]
+
+    ui_source = (PROJECT_DIR / "ui" / "src" / "mixins" / "cleanupMixin.js").read_text(encoding="utf-8")
+    refresh_method = ui_source.split("async refreshAfterRecognitionReviewMutation()", 1)[1].split("\n\t\tasync decideRecognitionCurrent", 1)[0]
+    assert "await this.fetchRecognitionFindings();" in refresh_method
+    assert "await this.fetchCleanupProgress({ actionOverride: this.selectedRecognitionAction });" in refresh_method
+    assert "this.recognitionCurrentIndex = 0;" in refresh_method
+    assert "await this.startCleanupRun({" in refresh_method
+    assert "resumeExisting: true" in refresh_method
 
 
 def test_usage_scenarios_cover_real_process_flows():
@@ -534,6 +626,32 @@ def test_recognition_unknown_matrix_covers_basic_review_workflow():
         "continue_search",
         "resume_existing_with_image_cursor",
     }.issubset(create_steps)
+    skip_steps = set(scenarios["recognition_unknown_skip_resume"]["steps"])
+    assert {
+        "skip",
+        "recognition_review",
+        "sync_review_progress_keeps_operation_mode_immediate",
+        "refresh_cleanup_progress",
+        "continue_search_or_show_next_review_entry",
+        "resume_existing_with_image_cursor",
+    }.issubset(skip_steps)
+
+
+def test_status_matrix_keeps_status_mode_separate_from_operation_mode():
+    status_option_separation = _matrix()["status_concepts"]["status_option_separation"]
+
+    assert status_option_separation["status_modes"] == ["scan", "findings", "snapshot"]
+    assert status_option_separation["operation_modes"] == ["immediate", "save_only", "findings"]
+
+    service_source = (PROJECT_DIR / "src" / "services" / "face_recognition_service.py").read_text(encoding="utf-8")
+    ui_source = (PROJECT_DIR / "ui" / "src" / "mixins" / "cleanupMixin.js").read_text(encoding="utf-8")
+
+    assert 'requested_mode = "findings" if str(operation_mode or "").strip().lower() == "findings" else "immediate"' in service_source
+    assert 'options = {**options, "operation_mode": requested_mode}' in service_source
+    assert 'options = {**options, "operation_mode": status_mode}' not in service_source
+    assert "if (operationMode === 'scan')" in ui_source
+    assert "options.operation_mode = 'immediate';" in ui_source
+    assert "refreshAfterRecognitionReviewMutation()" in ui_source
 
 
 def test_recognition_unknown_status_route_reads_recognition_findings_source():
@@ -650,6 +768,29 @@ def test_status_process_matrix_phases_are_explicit_and_terminal_complete():
                 assert "stopped" in phases or "stopping" in phases
             for phase in phases:
                 assert phase in core_phases or re.fullmatch(r"[a-z][a-z0-9_]*", phase)
+
+
+def test_status_process_matrix_active_detail_phases_are_marked_active_in_ui():
+    core_phases = set(_matrix()["core_phases"])
+    declared_detail_phases = set(_matrix()["status_concepts"]["run_lifecycle"]["active_detail_phases"])
+    running_detail_phases = {
+        phase
+        for process in _processes()
+        for spec in process["modes"].values()
+        for phase in spec.get("running_phases", [])
+        if phase not in core_phases
+    }
+
+    assert running_detail_phases
+    assert running_detail_phases == declared_detail_phases
+
+    cleanup_source = (PROJECT_DIR / "ui" / "src" / "mixins" / "cleanupMixin.js").read_text(encoding="utf-8")
+    face_match_source = (PROJECT_DIR / "ui" / "src" / "mixins" / "faceMatchMixin.js").read_text(encoding="utf-8")
+    assert "getCleanupActiveStatusPhases()" in cleanup_source
+    assert "getFaceMatchCleanupActiveStatusPhases()" in face_match_source
+    for phase in sorted(declared_detail_phases):
+        assert f"'{phase}'" in cleanup_source
+        assert f"'{phase}'" in face_match_source
 
 
 def test_status_process_matrix_reviewable_processes_define_review_and_resume_contracts():

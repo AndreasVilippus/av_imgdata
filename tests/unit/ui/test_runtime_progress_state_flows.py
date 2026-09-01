@@ -421,6 +421,39 @@ def test_cleanup_stopped_backend_progress_releases_stop_button_runtime():
     assert result == {"active": False, "label": "Start", "calls": ["start"]}
 
 
+def test_cleanup_detail_running_phase_keeps_action_active_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              cleanupLoading: false,
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                stop_requested: false,
+                status: {
+                  phase: 'unknown_loaded',
+                },
+              },
+            });
+
+            assert.strictEqual(component.cleanupActionActive, true);
+            assert.strictEqual(component.cleanupPrimaryButtonLabel, 'Stop');
+            console.log(JSON.stringify({
+              active: component.cleanupActionActive,
+              label: component.cleanupPrimaryButtonLabel,
+            }));
+            """
+        )
+    )
+
+    assert result == {"active": True, "label": "Stop"}
+
+
 def test_reopen_resumable_checks_progress_offers_restart_and_resume_runtime():
     result = run_node(
         mixin_runtime_script(
@@ -817,6 +850,50 @@ def test_resumable_recognition_options_can_be_restored_from_resume_cursor_runtim
     }
 
 
+def test_resumable_recognition_scan_status_option_is_normalized_to_immediate_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              recognitionOptions: {
+                operation_mode: 'immediate',
+                selection_mode: 'review_all',
+              },
+            });
+
+            component.applyCleanupProgress({
+              action: 'recognition_analyze_unknown_faces',
+              running: false,
+              resume_available: true,
+              resume_cursor: { resume_start_person_index: 8 },
+              options: {
+                operation_mode: 'scan',
+                selection_mode: 'safe_only',
+              },
+              status: { mode: 'scan', phase: 'stopped' },
+            });
+
+            console.log(JSON.stringify({
+              operationMode: component.recognitionOptions.operation_mode,
+              selectionMode: component.recognitionOptions.selection_mode,
+              saveOnly: component.faceMatchSaveOnly,
+              useStored: component.faceMatchUseStoredFindings,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "operationMode": "immediate",
+        "selectionMode": "safe_only",
+        "saveOnly": False,
+        "useStored": False,
+    }
+
+
 def test_unknown_recognition_face_progress_counts_allow_resume_runtime():
     result = run_node(
         mixin_runtime_script(
@@ -967,6 +1044,81 @@ def test_last_immediate_recognition_review_autoresumes_when_scan_has_resume_curs
 
     assert result == {
         "requests": ["recognition_review", "recognition_suggestions_apply", "recognition_findings", "cleanup_progress", "recognition_findings"],
+        "starts": [{"actionOverride": "recognition_analyze_unknown_faces", "resumeExisting": True}],
+    }
+
+
+def test_skip_immediate_recognition_review_autoresumes_when_scan_has_resume_cursor_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const requests = [];
+            const starts = [];
+            const component = createComponent({
+              selectedCleanupAction: 'recognition_analyze_unknown_faces',
+              cleanupRuntimeAction: 'recognition_analyze_unknown_faces',
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'recognition_analyze_unknown_faces',
+              cleanupLoading: false,
+              cleanupProgress: {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                resume_available: false,
+                status: { phase: 'review_required' },
+              },
+              recognitionOptions: { operation_mode: 'immediate' },
+              recognitionFindings: [{
+                suggestion_id: 'rec-167698',
+                selection_state: 'review',
+                write_state: 'pending',
+                best_person_id: 27353,
+                best_person_name: 'Oskar Meyer',
+              }],
+              callDsmApi: async (path, body) => {
+                requests.push({ path, body });
+                if (path.endsWith('/recognition_findings')) {
+                  return { success: true, data: { entries: [] } };
+                }
+                if (path.endsWith('/cleanup_progress')) {
+                  return {
+                    success: true,
+                    data: {
+                      action: 'recognition_analyze_unknown_faces',
+                      running: false,
+                      active: false,
+                      resume_available: true,
+                      resume_cursor: { resume_start_person_index: 4 },
+                      options: { operation_mode: 'immediate' },
+                      status: { mode: 'scan', phase: 'stopped' },
+                    },
+                  };
+                }
+                return { success: true, data: {} };
+              },
+              startCleanupRun: async (options) => starts.push(options),
+            });
+
+            await component.decideRecognitionCurrent('skipped');
+
+            console.log(JSON.stringify({
+              requests: requests.map((entry) => entry.path.split('/').pop()),
+              reviewBody: requests.find((entry) => entry.path.endsWith('/recognition_review')).body,
+              starts,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "requests": ["recognition_review", "recognition_findings", "cleanup_progress", "recognition_findings"],
+        "reviewBody": {
+            "action": "recognition_analyze_unknown_faces",
+            "item_id": "rec-167698",
+            "decision": "skipped",
+            "operation_mode": "immediate",
+        },
         "starts": [{"actionOverride": "recognition_analyze_unknown_faces", "resumeExisting": True}],
     }
 
