@@ -2841,6 +2841,11 @@ class ImgDataService:
             FaceRecognitionService.ACTION_ASSIGNMENT,
         }:
             current = self._syncRecognitionProgressFindingsCount(user_key, normalized_action, current)
+        resume_cursor = current.get("resume_cursor") if isinstance(current.get("resume_cursor"), dict) else {}
+        if resume_cursor:
+            current["resume_available"] = True
+        elif "resume_available" not in current:
+            current["resume_available"] = False
         return self._attachCleanupStatusPayload(current, action=normalized_action)
 
     def _normalizeActiveRecognitionProgressMessage(self, progress: Dict[str, Any]) -> Dict[str, Any]:

@@ -47,3 +47,18 @@ Local smoke commands on Windows:
 .\bin\av-imgdata-worker.exe probe --config .\config\worker-config.example.json
 .\bin\av-imgdata-worker.exe once --config .\config\worker-config.example.json --job .\jobs\sample-worker-job.json
 ```
+
+## Windows Security detections
+
+The worker executables are unsigned native MinGW-w64 binaries. Microsoft
+Defender can classify rare unsigned binaries as malware or potentially
+unwanted software before they have reputation. Do not bypass such a warning
+blindly.
+
+Each built bundle contains `SHA256SUMS.txt`. `Start-AVImgDataWorker.ps1`
+verifies the worker executables against that manifest before starting them. If
+Windows blocks `av-imgdata-worker-api-loop.exe` after the hash check passes,
+record the displayed SHA256 value and submit that exact file to Microsoft Security Intelligence
+as a suspected false positive. Only allow or exclude the specific
+verified file if you trust the build source and the local hash matches the
+bundle manifest.

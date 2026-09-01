@@ -69,6 +69,26 @@ def test_windows_cmd_wrappers_run_powershell_with_process_local_execution_policy
         assert "Set-ExecutionPolicy" not in script
 
 
+def test_windows_start_script_verifies_hashes_and_reports_security_blocks():
+    script = (PROJECT_ROOT / "worker" / "packaging" / "windows" / "Start-AVImgDataWorker.ps1").read_text(encoding="utf-8")
+    readme = (PROJECT_ROOT / "worker" / "packaging" / "windows" / "README.md").read_text(encoding="utf-8")
+
+    assert "$HashManifest = Join-Path $BundleRoot \"SHA256SUMS.txt\"" in script
+    assert "function Assert-BundleFileHash" in script
+    assert "Get-FileHash -LiteralPath $Path -Algorithm SHA256" in script
+    assert "Assert-BundleFileHash -Path $ApiLoop" in script
+    assert "Assert-BundleFileHash -Path $WorkerBin" in script
+    assert "function Write-WorkerExecutionDiagnostics" in script
+    assert "Microsoft Security Intelligence" in script
+    assert "& $ApiLoop @loopArgs" in script
+    assert "Write-WorkerExecutionDiagnostics -Path $ApiLoop -ErrorRecord $_" in script
+    assert "Trojan" not in script
+
+    assert "Windows Security detections" in readme
+    assert "SHA256SUMS.txt" in readme
+    assert "Microsoft Security Intelligence" in readme
+
+
 def test_unix_initializer_delegates_config_and_model_sync_from_both_locations():
     script = (PROJECT_ROOT / "worker" / "packaging" / "unix" / "initialize-av-imgdata-worker.sh").read_text(encoding="utf-8")
 
@@ -118,6 +138,9 @@ def test_worker_bundle_builds_and_integrates_vips_image_processor_by_default_wit
     assert 'AV_IMGDATA_WORKER_BUILD_TYPE="${AV_IMGDATA_WORKER_BUILD_TYPE:-Release}"' in script
     assert 'AV_IMGDATA_WORKER_STRIP="${AV_IMGDATA_WORKER_STRIP:-1}"' in script
     assert '-DCMAKE_BUILD_TYPE="${AV_IMGDATA_WORKER_BUILD_TYPE}"' in script
+    assert "write_worker_bundle_checksums()" in script
+    assert "find . -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z | xargs -0 sha256sum" in script
+    assert "write_worker_bundle_checksums" in script
     assert "strip_worker_binaries()" in script
     assert "worker_strip_tool()" in script
     assert "x86_64-w64-mingw32-strip" in script

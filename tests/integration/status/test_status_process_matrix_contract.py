@@ -583,6 +583,43 @@ def test_status_process_matrix_delegated_processes_declare_reconnect_status_boun
         owner_chain = chain_by_process[process["delegates_to"]]
         assert owner_chain["progress_route"] == source_route
 
+        if process["id"] == "face_match.recognition_analyze_unknown_faces":
+            assert process.get("delegate_reconnect_probe_action") == "recognition_analyze_unknown_faces"
+
+
+def test_status_process_matrix_covers_face_match_default_reconnect_recognition_resume_discovery():
+    scenarios = {scenario["id"]: scenario for scenario in _scenarios()}
+    scenario = scenarios["face_match_reopen_discovers_delegated_recognition_resume"]
+
+    assert scenario["chains"] == ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"]
+    assert set(scenario["processes"]) == {
+        "face_match.recognition_analyze_unknown_faces",
+        "cleanup.recognition_analyze_unknown_faces",
+    }
+    assert {
+        "browser_reconnect",
+        "face_match_default_action_selected",
+        "probe_cleanup_progress_with_recognition_action",
+        "ignore_idle_discovery_response",
+        "resume_available_or_resume_cursor_present",
+        "resume_options_loaded_into_settings",
+        "owning_view_updates_selected_action",
+        "owning_view_shows_restart_choice",
+        "owning_view_shows_resume_choice",
+        "resume_uses_resume_cursor_or_resume_existing",
+    }.issubset(set(scenario["steps"]))
+
+    source = (PROJECT_DIR / "ui" / "src" / "mixins" / "faceMatchMixin.js").read_text(encoding="utf-8")
+    assert "async refreshFaceMatchSessionState()" in source
+    assert "this.fetchCleanupProgress({ actionOverride: 'recognition_analyze_unknown_faces', discoveryOnly: true })" in source
+
+    cleanup_source = (PROJECT_DIR / "ui" / "src" / "mixins" / "cleanupMixin.js").read_text(encoding="utf-8")
+    assert "async fetchCleanupProgress(options = {})" in cleanup_source
+    assert "options.discoveryOnly" in cleanup_source
+    assert "this.cleanupProgressHasRemainingWork(progress)" in cleanup_source
+    assert "getRecognitionProgressOptions(progress)" in cleanup_source
+    assert "const resumeCursor = current.resume_cursor" in cleanup_source
+
 
 def test_status_process_matrix_scenarios_cover_delegated_foreign_status_neutralization():
     delegated_processes = {

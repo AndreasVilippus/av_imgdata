@@ -31,6 +31,7 @@ $WorkerBin = [System.IO.Path]::GetFullPath($WorkerBin)
 
 $ApiLoop = Join-Path $BundleRoot "bin\av-imgdata-worker-api-loop.exe"
 $TokenPath = Join-Path $BundleRoot "worker.token"
+$HashManifest = Join-Path $BundleRoot "SHA256SUMS.txt"
 $InitializeScript = Join-Path $BundleRoot "Initialize-AVImgDataWorker.ps1"
 if (-not (Test-Path -LiteralPath $InitializeScript)) {
   $InitializeScript = Join-Path $PSScriptRoot "Initialize-AVImgDataWorker.ps1"
@@ -41,6 +42,83 @@ foreach ($required in @($ApiLoop, $WorkerBin, $ConfigPath, $InitializeScript)) {
     throw "Required worker file is missing: $required"
   }
 }
+
+function Get-BundleRelativePath {
+  param([string]$Path)
+
+  $fullPath = [System.IO.Path]::GetFullPath($Path)
+  $rootPath = [System.IO.Path]::GetFullPath($BundleRoot).TrimEnd("\", "/") + [System.IO.Path]::DirectorySeparatorChar
+  if ($fullPath.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return $fullPath.Substring($rootPath.Length).Replace("\", "/")
+  }
+  return ""
+}
+
+function Get-ExpectedBundleHash {
+  param([string]$Path)
+
+  if (-not (Test-Path -LiteralPath $HashManifest)) {
+    return ""
+  }
+  $relativePath = Get-BundleRelativePath -Path $Path
+  if (-not $relativePath.Trim()) {
+    return ""
+  }
+  foreach ($line in Get-Content -LiteralPath $HashManifest) {
+    $trimmed = [string]$line
+    $trimmed = $trimmed.Trim()
+    if (-not $trimmed) {
+      continue
+    }
+    $parts = $trimmed -split "\s+", 2
+    if ($parts.Count -ne 2) {
+      continue
+    }
+    $hash = $parts[0].TrimStart("\").ToLowerInvariant()
+    $entryPath = $parts[1].Trim().TrimStart("*").TrimStart(".", "/", "\").Replace("\", "/")
+    if ($entryPath -ieq $relativePath) {
+      return $hash
+    }
+  }
+  return ""
+}
+
+function Assert-BundleFileHash {
+  param([string]$Path)
+
+  $expected = Get-ExpectedBundleHash -Path $Path
+  if (-not $expected.Trim()) {
+    return
+  }
+  $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actual -ne $expected) {
+    throw "Worker file hash mismatch: $Path`nExpected: $expected`nActual:   $actual"
+  }
+}
+
+function Write-WorkerExecutionDiagnostics {
+  param(
+    [string]$Path,
+    [System.Management.Automation.ErrorRecord]$ErrorRecord
+  )
+
+  Write-Warning "Windows blocked or failed to start the worker executable: $Path"
+  if (Test-Path -LiteralPath $Path) {
+    try {
+      $hash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+      Write-Warning "SHA256: $hash"
+    } catch {
+      Write-Warning "SHA256 could not be read: $($_.Exception.Message)"
+    }
+  } else {
+    Write-Warning "The file no longer exists. Windows Security may have quarantined it."
+  }
+  Write-Warning "Original error: $($ErrorRecord.Exception.Message)"
+  Write-Warning "If SHA256SUMS.txt is present and the hash check above did not fail, report this exact executable to Microsoft Security Intelligence as a false positive or allow only this exact file after verifying the hash."
+}
+
+Assert-BundleFileHash -Path $ApiLoop
+Assert-BundleFileHash -Path $WorkerBin
 
 $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 if (-not $PathBaseDir.Trim()) { $PathBaseDir = [string]$config.path_base_dir }
@@ -103,7 +181,12 @@ try {
     $loopArgs += @("--insecure-tls")
   }
 
-  & $ApiLoop @loopArgs
+  try {
+    & $ApiLoop @loopArgs
+  } catch {
+    Write-WorkerExecutionDiagnostics -Path $ApiLoop -ErrorRecord $_
+    throw
+  }
 
   $exitCode = $LASTEXITCODE
 } finally {

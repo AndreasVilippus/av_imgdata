@@ -348,6 +348,45 @@ export default {
 				};
 			}
 		},
+		getRecognitionProgressOptions(progress) {
+			const current = progress && typeof progress === 'object' ? progress : {};
+			const directOptions = current.options && typeof current.options === 'object' && !Array.isArray(current.options)
+				? current.options
+				: {};
+			const resumeCursor = current.resume_cursor && typeof current.resume_cursor === 'object' && !Array.isArray(current.resume_cursor)
+				? current.resume_cursor
+				: {};
+			const cursorOptions = resumeCursor.options && typeof resumeCursor.options === 'object' && !Array.isArray(resumeCursor.options)
+				? resumeCursor.options
+				: {};
+			const resumableOptionKeys = [
+				'operation_mode',
+				'selection_mode',
+				'include_hidden_persons',
+				'changed_since_days',
+				'min_faces_per_person',
+				'max_profile_reference_faces_per_person',
+				'exclude_outliers',
+				'rebuild_all',
+				'det_size',
+				'max_num',
+				'min_width_ratio',
+				'min_height_ratio',
+				'recognition_batch_size',
+				'external_worker_prefetch_batches',
+			];
+			const flatCursorOptions = resumableOptionKeys.reduce((acc, key) => {
+				if (resumeCursor[key] !== undefined && resumeCursor[key] !== null && resumeCursor[key] !== '') {
+					acc[key] = resumeCursor[key];
+				}
+				return acc;
+			}, {});
+			return {
+				...flatCursorOptions,
+				...cursorOptions,
+				...directOptions,
+			};
+		},
 		adoptRunningRecognitionProgress(progress) {
 			const current = progress && typeof progress === 'object' ? progress : {};
 			const action = String(current.action || '').trim();
@@ -366,14 +405,17 @@ export default {
 			if (String(this.selectedOption || '').trim() === 'cleanup') {
 				this.selectedCleanupAction = action;
 			}
-			const options = current.options && typeof current.options === 'object' && !Array.isArray(current.options)
-				? current.options
-				: {};
+			const options = this.getRecognitionProgressOptions(current);
 			if (Object.keys(options).length) {
 				this.recognitionOptions = {
 					...this.recognitionOptions,
 					...options,
 				};
+				if (action === 'recognition_analyze_unknown_faces' && String(this.selectedOption || '').trim() === 'face_match') {
+					const operationMode = String(options.operation_mode || '').trim().toLowerCase();
+					this.faceMatchUseStoredFindings = operationMode === 'findings';
+					this.faceMatchSaveOnly = operationMode === 'save_only';
+				}
 			}
 		},
 		getRecognitionStartOptions(options = {}) {
@@ -618,7 +660,12 @@ export default {
 				? this.getOptionalComponentUnavailableMessage(nextProgress)
 				: '';
 			const progressAction = String(nextProgress.action || this.cleanupRuntimeAction || this.selectedCleanupAction || '').trim();
-			if (nextProgress.running || nextProgress.active || nextProgress.paused) {
+			if (
+				nextProgress.running
+				|| nextProgress.active
+				|| nextProgress.paused
+				|| this.cleanupProgressHasRemainingWork(nextProgress)
+			) {
 				this.adoptRunningRecognitionProgress(nextProgress);
 			}
 			if (unavailableMessage && this.cleanupLoading && progressAction !== 'recognition_build_profiles') {
@@ -648,6 +695,18 @@ export default {
 						return {};
 					}
 					const progress = this.getResponseData(data);
+					if (options.discoveryOnly && !(
+						progress
+						&& typeof progress === 'object'
+						&& (
+							progress.running
+							|| progress.active
+							|| progress.paused
+							|| this.cleanupProgressHasRemainingWork(progress)
+						)
+					)) {
+						return progress;
+					}
 					const applied = progress && Object.keys(progress).length
 						? this.applyCleanupProgress(progress)
 						: false;
@@ -847,7 +906,11 @@ export default {
 		},
 		getRecognitionImageUrl(path) {
 			const normalized = String(path || '').trim();
-			return this.getBackendImagePreviewUrl(normalized);
+			const url = this.getBackendImagePreviewUrl(normalized);
+			if (!url) {
+				return '';
+			}
+			return `${url}${url.indexOf('?') >= 0 ? '&' : '?'}preview=1`;
 		},
 		getRecognitionApplyIconUrl() {
 			return this.resolveLocalIconUrl('face_to_left.png');

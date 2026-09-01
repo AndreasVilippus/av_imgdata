@@ -366,6 +366,13 @@
       "steps": ["browser_reconnect", "poll_cleanup_progress_returns_delegated_running_action", "owning_view_updates_selected_action", "running_options_loaded_into_settings", "foreign_default_progress_does_not_hide_running_identity", "foreign_status_route_neutralized"]
     },
     {
+      "id": "face_match_reopen_discovers_delegated_recognition_resume",
+      "chains": ["face_match.recognition_unknown_delegate", "cleanup.recognition_unknown"],
+      "processes": ["face_match.recognition_analyze_unknown_faces", "cleanup.recognition_analyze_unknown_faces"],
+      "modes": ["scan"],
+      "steps": ["browser_reconnect", "face_match_default_action_selected", "probe_cleanup_progress_with_recognition_action", "ignore_idle_discovery_response", "load_persisted_stopped_or_uncontinued_progress", "resume_available_or_resume_cursor_present", "resume_options_loaded_into_settings", "owning_view_updates_selected_action", "owning_view_shows_restart_choice", "owning_view_shows_resume_choice", "resume_uses_resume_cursor_or_resume_existing"]
+    },
+    {
       "id": "running_process_findings_empty_or_timeout_preserves_progress",
       "chains": ["face_match.recognition_unknown_delegate", "checks.recognition_assignment_delegate", "cleanup.recognition_reference_outliers", "cleanup.recognition_unknown", "cleanup.recognition_assignment"],
       "processes": ["face_match.recognition_analyze_unknown_faces", "checks.recognition_check_person_assignments", "cleanup.recognition_check_reference_outliers", "cleanup.recognition_analyze_unknown_faces", "cleanup.recognition_check_person_assignments"],
@@ -789,6 +796,7 @@
       "action": "recognition_analyze_unknown_faces",
       "delegates_to": "cleanup.recognition_analyze_unknown_faces",
       "delegate_reconnect_source_route": "/cleanup_progress",
+      "delegate_reconnect_probe_action": "recognition_analyze_unknown_faces",
       "foreign_status_routes": ["/face_matching_findings_status"],
       "ui_sources": ["FaceMatchView.selectedFaceMatchingAction"],
       "modes": {

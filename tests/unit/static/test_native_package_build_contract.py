@@ -419,6 +419,8 @@ def test_synology_install_requires_native_face_processor_libraries():
     assert "find \"$NATIVE_INSTALL/lib\" -maxdepth 1" in install_script
     assert "$NATIVE_INSTALL/share/licenses" in install_script
     assert "Windows external worker face processor missing" in install_script
+    assert "Windows external worker checksum manifest missing" in install_script
+    assert "Run tools/build-worker.sh --target $target --clean before packaging." in install_script
     assert "external worker face processor missing or not executable" in install_script
     assert 'AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS:-1' in install_script
     assert "Skipping external worker archive packaging because AV_IMGDATA_PACKAGE_EXTERNAL_WORKERS=0." in install_script

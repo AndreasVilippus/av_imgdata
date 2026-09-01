@@ -2311,5 +2311,66 @@ def test_reopen_recognition_face_match_fetches_cleanup_progress_runtime():
         {"type": "findings"},
         {"type": "insightface"},
         {"type": "face-progress"},
-        {"type": "cleanup-progress", "options": {"actionOverride": "recognition_analyze_unknown_faces"}},
+        {"type": "cleanup-progress", "options": {"actionOverride": "recognition_analyze_unknown_faces", "discoveryOnly": True}},
     ]
+
+
+def test_reopen_default_face_match_discovers_resumable_recognition_cleanup_runtime():
+    result = run_node(
+        face_match_runtime_script(
+            """
+            const calls = [];
+            const component = createComponent({
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              cleanupRuntimeAction: '',
+              cleanupProgress: {},
+              cleanupLoading: false,
+              fetchFaceMatchFindingsStatus: async () => calls.push({ type: 'findings' }),
+              fetchInsightFaceStatus: async () => calls.push({ type: 'insightface' }),
+              fetchFaceMatchingProgress: async () => {
+                calls.push({ type: 'face-progress' });
+                return {
+                  action: 'search_photo_face_in_file',
+                  running: false,
+                  finished: false,
+                  status: { phase: 'idle' },
+                };
+              },
+              fetchCleanupProgress: async (options) => {
+                calls.push({ type: 'cleanup-progress', options });
+                component.cleanupRuntimeAction = 'recognition_analyze_unknown_faces';
+                component.selectedFaceMatchingAction = 'recognition_analyze_unknown_faces';
+                component.cleanupProgress = {
+                  action: 'recognition_analyze_unknown_faces',
+                  running: false,
+                  resume_available: true,
+                  resume_cursor: { resume_start_person_index: 14 },
+                };
+                return component.cleanupProgress;
+              },
+              applyFaceMatchingProgress: () => true,
+              syncFaceMatchRecognitionOptions: () => calls.push({ type: 'sync-recognition-options' }),
+            });
+
+            await component.refreshFaceMatchSessionState();
+
+            console.log(JSON.stringify({
+              calls,
+              selectedAction: component.selectedFaceMatchingAction,
+              runtimeAction: component.cleanupRuntimeAction,
+              resumeAvailable: component.cleanupProgress.resume_available,
+            }));
+            """
+        )
+    )
+
+    assert result["calls"] == [
+        {"type": "findings"},
+        {"type": "insightface"},
+        {"type": "face-progress"},
+        {"type": "cleanup-progress", "options": {"actionOverride": "recognition_analyze_unknown_faces", "discoveryOnly": True}},
+    ]
+    assert result["selectedAction"] == "recognition_analyze_unknown_faces"
+    assert result["runtimeAction"] == "recognition_analyze_unknown_faces"
+    assert result["resumeAvailable"] is True

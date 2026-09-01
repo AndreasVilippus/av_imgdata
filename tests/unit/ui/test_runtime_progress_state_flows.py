@@ -671,6 +671,152 @@ def test_face_match_reconnect_adopts_running_unknown_recognition_cleanup_runtime
     }
 
 
+def test_face_match_reconnect_adopts_resumable_unknown_recognition_options_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              cleanupRuntimeAction: '',
+              cleanupLoading: false,
+              faceMatchSaveOnly: false,
+              faceMatchUseStoredFindings: false,
+              recognitionOptions: {
+                operation_mode: 'immediate',
+                selection_mode: 'review_all',
+                include_hidden_persons: false,
+                changed_since_days: 30,
+                recognition_batch_size: 8,
+              },
+            });
+
+            const applied = component.applyCleanupProgress({
+              action: 'recognition_analyze_unknown_faces',
+              operation: 'cleanup',
+              mode: 'scan',
+              running: false,
+              active: false,
+              resume_available: true,
+              resume_cursor: { resume_start_person_index: 4 },
+              status: { phase: 'stopped' },
+              options: {
+                operation_mode: 'save_only',
+                selection_mode: 'safe_only',
+                include_hidden_persons: true,
+                changed_since_days: 17,
+                recognition_batch_size: 16,
+                external_worker_prefetch_batches: false,
+              },
+            });
+
+            assert.strictEqual(applied, true);
+            assert.strictEqual(component.cleanupRuntimeAction, 'recognition_analyze_unknown_faces');
+            assert.strictEqual(component.selectedFaceMatchingAction, 'recognition_analyze_unknown_faces');
+            assert.strictEqual(component.recognitionOptions.operation_mode, 'save_only');
+            assert.strictEqual(component.recognitionOptions.selection_mode, 'safe_only');
+            assert.strictEqual(component.recognitionOptions.include_hidden_persons, true);
+            assert.strictEqual(component.recognitionOptions.changed_since_days, 17);
+            assert.strictEqual(component.recognitionOptions.recognition_batch_size, 16);
+            assert.strictEqual(component.recognitionOptions.external_worker_prefetch_batches, false);
+            assert.strictEqual(component.faceMatchSaveOnly, true);
+            assert.strictEqual(component.faceMatchUseStoredFindings, false);
+
+            console.log(JSON.stringify({
+              applied,
+              runtimeAction: component.cleanupRuntimeAction,
+              faceMatchAction: component.selectedFaceMatchingAction,
+              options: {
+                operationMode: component.recognitionOptions.operation_mode,
+                selectionMode: component.recognitionOptions.selection_mode,
+                includeHidden: component.recognitionOptions.include_hidden_persons,
+                changedSince: component.recognitionOptions.changed_since_days,
+                batchSize: component.recognitionOptions.recognition_batch_size,
+                prefetch: component.recognitionOptions.external_worker_prefetch_batches,
+              },
+              saveOnly: component.faceMatchSaveOnly,
+              useStored: component.faceMatchUseStoredFindings,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "applied": True,
+        "runtimeAction": "recognition_analyze_unknown_faces",
+        "faceMatchAction": "recognition_analyze_unknown_faces",
+        "options": {
+            "operationMode": "save_only",
+            "selectionMode": "safe_only",
+            "includeHidden": True,
+            "changedSince": 17,
+            "batchSize": 16,
+            "prefetch": False,
+        },
+        "saveOnly": True,
+        "useStored": False,
+    }
+
+
+def test_resumable_recognition_options_can_be_restored_from_resume_cursor_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              recognitionOptions: {
+                operation_mode: 'immediate',
+                selection_mode: 'review_all',
+                include_hidden_persons: false,
+                changed_since_days: 30,
+              },
+            });
+
+            component.applyCleanupProgress({
+              action: 'recognition_analyze_unknown_faces',
+              running: false,
+              resume_available: true,
+              resume_cursor: {
+                resume_start_person_index: 8,
+                options: {
+                  operation_mode: 'findings',
+                  selection_mode: 'safe_only',
+                  include_hidden_persons: true,
+                  changed_since_days: 0,
+                },
+              },
+              status: { phase: 'stopped' },
+            });
+
+            console.log(JSON.stringify({
+              options: {
+                operationMode: component.recognitionOptions.operation_mode,
+                selectionMode: component.recognitionOptions.selection_mode,
+                includeHidden: component.recognitionOptions.include_hidden_persons,
+                changedSince: component.recognitionOptions.changed_since_days,
+              },
+              saveOnly: component.faceMatchSaveOnly,
+              useStored: component.faceMatchUseStoredFindings,
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "options": {
+            "operationMode": "findings",
+            "selectionMode": "safe_only",
+            "includeHidden": True,
+            "changedSince": 0,
+        },
+        "saveOnly": False,
+        "useStored": True,
+    }
+
+
 def test_unknown_recognition_face_progress_counts_allow_resume_runtime():
     result = run_node(
         mixin_runtime_script(
@@ -896,6 +1042,22 @@ def test_recognition_display_face_uses_backend_normalized_bbox_runtime():
     }
 
 
+def test_recognition_image_url_requests_backend_preview_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const component = createComponent({
+              getBackendImagePreviewUrl: (path) => `/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=${encodeURIComponent(path)}`,
+            });
+            console.log(JSON.stringify(component.getRecognitionImageUrl('/volume1/photo/Test Bild.jpg')));
+            """
+        )
+    )
+
+    assert result == "/webman/3rdparty/AV_ImgData/index.cgi/api/file_image?path=%2Fvolume1%2Fphoto%2FTest%20Bild.jpg&preview=1"
+
+
 def test_cleanup_progress_request_sends_selected_mode_runtime():
     result = run_node(
         mixin_runtime_script(
@@ -974,6 +1136,87 @@ def test_cleanup_progress_keeps_runtime_action_for_resumable_stopped_scan_runtim
     assert result == {
         "runtimeAction": "recognition_analyze_unknown_faces",
         "canResume": True,
+    }
+
+
+def test_cleanup_progress_discovery_only_adopts_resumable_recognition_from_face_match_default_runtime():
+    result = run_node(
+        mixin_runtime_script(
+            "ui/src/mixins/cleanupMixin.js",
+            """
+            const responses = [
+              {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                phase: 'idle',
+                status: { phase: 'idle' },
+              },
+              {
+                action: 'recognition_analyze_unknown_faces',
+                running: false,
+                active: false,
+                resume_available: true,
+                resume_cursor: { resume_start_person_index: 14, resume_person_id: 42804 },
+                persons_scanned: 14,
+                persons_total: 1586,
+                status: { phase: 'review_required' },
+              },
+            ];
+            const component = createComponent({
+              selectedOption: 'face_match',
+              selectedFaceMatchingAction: 'search_photo_face_in_file',
+              selectedCleanupAction: 'normalize_names',
+              cleanupRuntimeAction: '',
+              cleanupProgress: {},
+              recognitionOptions: {
+                operation_mode: 'immediate',
+              },
+              callDsmApi: async () => ({ success: true, data: responses.shift() }),
+              stopCleanupProgressPolling: () => {},
+              fetchRecognitionFindings: async () => {},
+            });
+
+            await component.fetchCleanupProgress({
+              actionOverride: 'recognition_analyze_unknown_faces',
+              discoveryOnly: true,
+            });
+            const afterIdle = {
+              runtimeAction: component.cleanupRuntimeAction,
+              faceMatchAction: component.selectedFaceMatchingAction,
+              cleanupProgressKeys: Object.keys(component.cleanupProgress).length,
+            };
+
+            await component.fetchCleanupProgress({
+              actionOverride: 'recognition_analyze_unknown_faces',
+              discoveryOnly: true,
+            });
+
+            console.log(JSON.stringify({
+              afterIdle,
+              afterResume: {
+                runtimeAction: component.cleanupRuntimeAction,
+                faceMatchAction: component.selectedFaceMatchingAction,
+                canResume: component.cleanupCanResumeProgress,
+                resumePerson: component.cleanupProgress.resume_cursor.resume_person_id,
+              },
+            }));
+            """
+        )
+    )
+
+    assert result == {
+        "afterIdle": {
+            "runtimeAction": "",
+            "faceMatchAction": "search_photo_face_in_file",
+            "cleanupProgressKeys": 0,
+        },
+        "afterResume": {
+            "runtimeAction": "recognition_analyze_unknown_faces",
+            "faceMatchAction": "recognition_analyze_unknown_faces",
+            "canResume": True,
+            "resumePerson": 42804,
+        },
     }
 
 

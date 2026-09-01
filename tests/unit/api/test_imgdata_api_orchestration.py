@@ -616,6 +616,25 @@ def test_cleanup_progress_logs_compact_progress_summary(monkeypatch):
     assert debug_log.call_args.kwargs["profiles_built"] == 2
 
 
+def test_cleanup_progress_debug_summary_treats_resume_cursor_as_available():
+    summary = imgdata_api._progress_debug_summary({
+        "action": "recognition_analyze_unknown_faces",
+        "running": False,
+        "active": False,
+        "resume_cursor": {
+            "resume_start_person_index": 14,
+            "resume_person_id": 42804,
+        },
+        "status": {
+            "operation": "cleanup",
+            "phase": "review_required",
+        },
+    })
+
+    assert summary["resume_available"] is True
+    assert summary["status_phase"] == "review_required"
+
+
 def test_file_image_runs_synology_status_lookup_off_event_loop(monkeypatch, tmp_path):
     calls = _install_backend_call_recorder(monkeypatch)
     image_path = tmp_path / "image.jpg"
@@ -745,6 +764,32 @@ def test_file_image_returns_browser_compatible_jpeg_without_embedded_preview(mon
         "file_image_served",
         path=str(image_path),
         source="original",
+    )
+
+
+def test_file_image_preview_decodes_browser_compatible_jpeg(monkeypatch, tmp_path):
+    calls = _install_backend_call_recorder(monkeypatch)
+    image_path = tmp_path / "image.jpg"
+    image_path.write_bytes(b"\xff\xd8original")
+    decoded = type("Decoded", (), {"success": True, "image_bytes": b"\xff\xd8preview", "source": "pillow-preview", "error": ""})()
+
+    monkeypatch.setattr(imgdata_api, "_prepare_session_request", _prepared_session)
+    monkeypatch.setattr(imgdata_api.IMGDATA, "status_system", Mock(return_value={"shared_folder": str(tmp_path)}))
+    monkeypatch.setattr(imgdata_api.IMGDATA.image_decoder, "preview_to_jpeg", Mock(return_value=decoded))
+    monkeypatch.setattr(imgdata_api, "backend_debug_log", Mock())
+
+    response = _run(imgdata_api.file_image(object(), path=str(image_path), preview="1"))
+
+    assert response.status_code == 200
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"\xff\xd8preview"
+    assert len(calls) == 2
+    imgdata_api.IMGDATA.image_decoder.preview_to_jpeg.assert_called_once_with(str(image_path))
+    imgdata_api.backend_debug_log.assert_called_once_with(
+        "file_image_served",
+        path=str(image_path),
+        source="pillow-preview",
+        preview=True,
     )
 
 

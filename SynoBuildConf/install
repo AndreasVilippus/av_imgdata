@@ -160,6 +160,11 @@ package_external_worker_archives() {
 				echo "ERROR: Windows external worker face processor missing: $source_dir/bin/av-imgdata-face-processor.exe"
 				exit 1
 			fi
+			if [ ! -f "$source_dir/SHA256SUMS.txt" ]; then
+				echo "ERROR: Windows external worker checksum manifest missing: $source_dir/SHA256SUMS.txt"
+				echo "Run tools/build-worker.sh --target $target --clean before packaging."
+				exit 1
+			fi
 			if ! command -v zip >/dev/null 2>&1; then
 				echo "ERROR: zip command missing; required to package Windows external worker archive."
 				exit 1

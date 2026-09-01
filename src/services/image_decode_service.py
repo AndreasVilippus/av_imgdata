@@ -90,6 +90,34 @@ class ImageDecodeService:
                 errors.append(f"{decoder}:{result.error}")
         return ImageDecodeResult(False, error="; ".join(errors) or "image_decoder_unavailable")
 
+    def preview_to_jpeg(self, image_path: str, *, max_edge: int = 1600) -> ImageDecodeResult:
+        path = Path(image_path)
+        root_config = self._root_config()
+        config = self._files_config(root_config)
+        if not bool(config.get("IMAGE_DECODER_ENABLED", True)):
+            return ImageDecodeResult(False, error="image_decoder_disabled")
+        if not path.is_file():
+            return ImageDecodeResult(False, error="image_not_found")
+        try:
+            from PIL import Image, ImageOps
+        except ImportError as exc:
+            return ImageDecodeResult(False, source="pillow", error=f"decoder_not_installed:{exc}")
+        try:
+            with Image.open(path) as image:
+                image = ImageOps.exif_transpose(image)
+                image = self._normalize_pillow_image_for_jpeg(image)
+                bounded_edge = max(1, min(4096, int(max_edge or 1600)))
+                resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", 1)
+                image.thumbnail((bounded_edge, bounded_edge), resampling)
+                output = BytesIO()
+                image.save(output, format="JPEG", quality=88, optimize=True)
+        except Exception as exc:
+            return ImageDecodeResult(False, source="pillow", error=f"decoder_failed:{type(exc).__name__}: {exc}")
+        image_bytes = output.getvalue()
+        if not image_bytes.startswith(b"\xff\xd8"):
+            return ImageDecodeResult(False, source="pillow", error="decoder_output_not_jpeg")
+        return ImageDecodeResult(True, image_bytes=image_bytes, source="pillow-preview")
+
     def decode_many_to_jpeg(self, image_paths: List[str]) -> Dict[str, ImageDecodeResult]:
         paths = [Path(path) for path in image_paths]
         if not paths:

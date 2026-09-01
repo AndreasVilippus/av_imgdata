@@ -894,8 +894,8 @@ export default {
 					? this.fetchInsightFaceStatus()
 					: Promise.resolve();
 				const progressPromise = this.fetchFaceMatchingProgress({ applyRunningState: false });
-				const cleanupProgressPromise = this.normalizeFaceMatchAction(this.selectedFaceMatchingAction) === 'recognition_analyze_unknown_faces' && typeof this.fetchCleanupProgress === 'function'
-					? this.fetchCleanupProgress({ actionOverride: 'recognition_analyze_unknown_faces' })
+				const cleanupProgressPromise = typeof this.fetchCleanupProgress === 'function'
+					? this.fetchCleanupProgress({ actionOverride: 'recognition_analyze_unknown_faces', discoveryOnly: true })
 					: Promise.resolve();
 				await findingsStatusPromise;
 				const progress = await progressPromise;

@@ -499,6 +499,21 @@ Use tools/sync-worker-face-models.py from the source tree, or let the worker sta
 MODEL_README
 }
 
+write_worker_bundle_checksums() {
+  local manifest="${DIST_DIR}/SHA256SUMS.txt"
+
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "WARNING: sha256sum not found; worker bundle checksum manifest not written." >&2
+    return 0
+  fi
+
+  (
+    cd "${DIST_DIR}"
+    find . -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z | xargs -0 sha256sum
+  ) >"${manifest}"
+  echo "Wrote worker bundle checksum manifest: ${manifest}"
+}
+
 apply_target_defaults
 
 BUILD_DIR="${AV_IMGDATA_WORKER_BUILD_DIR:-${PROJECT_DIR}/build/worker/${TARGET}}"
@@ -582,6 +597,8 @@ case "${TARGET}" in
     cp -a --no-preserve=ownership "${PROJECT_DIR}/worker/packaging/systemd/av-imgdata-worker.service.example" "${DIST_DIR}/" 2>/dev/null || true
     ;;
 esac
+
+write_worker_bundle_checksums
 
 WORKER_BIN="${DIST_DIR}/bin/av-imgdata-worker"
 if [ "${TARGET}" = "windows-x86_64" ]; then

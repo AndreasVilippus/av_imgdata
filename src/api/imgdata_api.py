@@ -267,6 +267,7 @@ IMGDATA.setDebugLogger(backend_debug_log)
 
 def _progress_debug_summary(progress: Dict[str, Any]) -> Dict[str, Any]:
     status = progress.get("status") if isinstance(progress.get("status"), dict) else {}
+    resume_cursor = progress.get("resume_cursor") if isinstance(progress.get("resume_cursor"), dict) else {}
     return {
         "operation_id": progress.get("operation_id"),
         "revision": progress.get("revision"),
@@ -275,7 +276,7 @@ def _progress_debug_summary(progress: Dict[str, Any]) -> Dict[str, Any]:
         "active": bool(progress.get("active")),
         "stale": bool(progress.get("stale")),
         "stop_requested": bool(progress.get("stop_requested")),
-        "resume_available": bool(progress.get("resume_available")),
+        "resume_available": bool(progress.get("resume_available") or resume_cursor),
         "findings_count": int(progress.get("findings_count") or 0),
         "transferred_count": int(progress.get("transferred_count") or 0),
         "status_phase": status.get("phase"),
@@ -2693,7 +2694,7 @@ async def checks_assign_face_person(request: Request):
     })
 
 @router.get("/file_image")
-async def file_image(request: Request, path: str = ""):
+async def file_image(request: Request, path: str = "", preview: str = ""):
     if not path:
         return {"success": False, "error": {"code": 400, "message": "missing_path"}}
 
@@ -2721,6 +2722,34 @@ async def file_image(request: Request, path: str = ""):
         return {"success": False, "error": {"code": 403, "message": "path_outside_shared_folder"}}
     if not os.path.isfile(requested):
         return {"success": False, "error": {"code": 404, "message": "file_not_found"}}
+
+    preview_requested = str(preview or "").strip().lower() in {"1", "true", "yes", "preview"}
+    if preview_requested:
+        decoder = getattr(IMGDATA, "image_decoder", None)
+        decode_preview = getattr(decoder, "preview_to_jpeg", None) if decoder is not None else None
+        if callable(decode_preview):
+            decoded = await _run_backend_call(lambda: decode_preview(requested))
+            if getattr(decoded, "success", False) and getattr(decoded, "image_bytes", b""):
+                backend_debug_log(
+                    "file_image_served",
+                    path=requested,
+                    source=str(getattr(decoded, "source", "") or "pillow-preview"),
+                    preview=True,
+                )
+                return Response(
+                    content=decoded.image_bytes,
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "private, max-age=3600"},
+                )
+            error = str(getattr(decoded, "error", "") or "")
+            if error and error not in {"image_decoder_disabled"}:
+                backend_debug_log(
+                    "file_image_decoder_failed",
+                    path=requested,
+                    source=str(getattr(decoded, "source", "") or "pillow-preview"),
+                    error=error,
+                    preview=True,
+                )
 
     browser_compatible = _is_browser_image_compatible_path(requested)
     decoder_preview_preferred = _is_decoder_preview_preferred_path(requested)

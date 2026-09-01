@@ -89,6 +89,30 @@ def test_cleanup_progress_preserves_schema_status_mode_as_runtime_identity():
     assert progress["status"]["mode"] == "findings"
 
 
+def test_cleanup_progress_marks_resume_available_when_cursor_is_present():
+    service = make_service()
+    state_key = service._cleanupStateKey("user", "recognition_analyze_unknown_faces")
+    service.runtime_state.memory("cleanup_progress")[state_key] = {
+        "action": "recognition_analyze_unknown_faces",
+        "running": False,
+        "finished": True,
+        "phase": "review_required",
+        "resume_cursor": {
+            "resume_start_person_index": 14,
+            "resume_person_id": 42804,
+            "resume_progress_counts": {
+                "persons_scanned": 14,
+                "persons_total": 1586,
+            },
+        },
+    }
+
+    progress = service.getCleanupProgress("user", "recognition_analyze_unknown_faces")
+
+    assert progress["resume_available"] is True
+    assert progress["resume_cursor"]["resume_person_id"] == 42804
+
+
 def test_cleanup_progress_prefers_current_memory_state_over_stale_persistence():
     service = make_service()
     state_key = service._cleanupStateKey("user", "standardize_face_frames")

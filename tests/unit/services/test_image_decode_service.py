@@ -344,6 +344,46 @@ def test_pillow_heif_decoder_limits_image_edge(monkeypatch, tmp_path):
     assert images[0].thumbnail_size == (2048, 2048)
 
 
+def test_preview_to_jpeg_transposes_and_downscales_browser_image(monkeypatch, tmp_path):
+    image_path = tmp_path / "image.jpg"
+    image_path.write_bytes(b"jpeg")
+    images = []
+    transposed = []
+
+    class _Image:
+        mode = "RGB"
+
+        def __enter__(self):
+            images.append(self)
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def thumbnail(self, size, resampling=None):
+            self.thumbnail_size = size
+            self.thumbnail_resampling = resampling
+
+        def save(self, output, **kwargs):
+            self.save_kwargs = kwargs
+            output.write(b"\xff\xd8preview")
+
+    image = _Image()
+    fake_image_ops = SimpleNamespace(exif_transpose=lambda value: transposed.append(value) or value)
+    fake_image_module = SimpleNamespace(open=lambda _path: image, Resampling=SimpleNamespace(LANCZOS="lanczos"))
+    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=fake_image_module, ImageOps=fake_image_ops))
+    service = ImageDecodeService(_Config({"IMAGE_DECODER_ENABLED": True}))
+
+    result = service.preview_to_jpeg(str(image_path), max_edge=1600)
+
+    assert result.success is True
+    assert result.source == "pillow-preview"
+    assert result.image_bytes == b"\xff\xd8preview"
+    assert transposed == [image]
+    assert images[0].thumbnail_size == (1600, 1600)
+    assert images[0].save_kwargs["format"] == "JPEG"
+
+
 def test_external_decoder_uses_configured_binary(monkeypatch, tmp_path):
     image_path = tmp_path / "image.heic"
     image_path.write_bytes(b"heic")
