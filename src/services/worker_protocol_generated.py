@@ -2,7 +2,7 @@
 """Generated from worker/protocol/worker-protocol.json. Do not edit manually."""
 
 PROTOCOL_VERSION = "1.0"
-WORKER_VERSION = "0.10.1"
+WORKER_VERSION = "0.11.0"
 CONFIG_SCHEMA_VERSION = 1
 STATE_SCHEMA_VERSION = 2
 TOKEN_SCOPES = (
