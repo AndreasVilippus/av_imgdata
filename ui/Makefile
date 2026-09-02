@@ -20,7 +20,7 @@ all: dsm-help $(APP_JS) style.css $(APP_CONFIG_INDEX) $(SUBDIR)
 
 dsm-help: $(DSM_HELP_STAMP)
 
-$(DSM_HELP_STAMP): $(DSM_HELP_RENDERER) $(DSM_HELP_SOURCES)
+$(DSM_HELP_STAMP): $(DSM_HELP_RENDERER) $(DSM_HELP_SOURCES) ../INFO.sh
 	python3 $(DSM_HELP_RENDERER)
 	@touch $@
 
