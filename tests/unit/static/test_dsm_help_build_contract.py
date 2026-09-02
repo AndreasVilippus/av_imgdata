@@ -26,6 +26,14 @@ def test_dsm_help_is_generated_before_package_validation_and_during_ui_build():
     assert build_package.index(generate_help) < build_package.index(python_tests)
 
 
+def test_generated_dsm_help_outputs_are_not_tracked_sources():
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+    assert "/ui/help/" in gitignore
+    assert "/ui/helptoc.conf" in gitignore
+    assert "/ui/.dsm-help.stamp" in gitignore
+
+
 def test_dsm_help_renderer_uses_dsm_74_file_station_shell_and_locale_mapping():
     renderer = (ROOT / "tools" / "docs" / "render_dsm_help.py").read_text(encoding="utf-8")
 
@@ -49,8 +57,8 @@ def test_dsm_help_index_remains_documentation_core_source_of_truth():
     assert "id: index" in english
     assert "# ImgData" in german
     assert "# ImgData" in english
-    assert "## Status" in german
-    assert "## Status" in english
+    assert "\n#### Status\n" in german
+    assert "\n#### Status\n" in english
     assert "[[doc:" not in german
     assert "[[doc:" not in english
 
