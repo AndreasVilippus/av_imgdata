@@ -527,7 +527,7 @@ def test_ui_makefile_uses_unquoted_dist_targets_and_utf8_snpm():
     assert "GenerateModuleFiles.php . ." in makefile
     assert '"$(AUTO_CONFIG_TOOL)" --makegoal=JSCompress $(JS_DIR) "$(JS_NAMESPACE)"' in makefile
     assert '"$(JS_DEPENDER)" "$$(pwd)" ""' in makefile
-    assert "install: $(APP_JS) style.css $(APP_CONFIG_INDEX) $(SUBDIR)" in makefile
+    assert "install: dsm-help $(APP_JS) style.css $(APP_CONFIG_INDEX) $(SUBDIR)" in makefile
     assert "install -m 644 $(APP_JS) $(INSTALLDIR)/$(APP_JS)" in makefile
     assert "install -m 644 style.css $(INSTALLDIR)/style.css" in makefile
     assert "install -m 644 $(APP_CONFIG_INDEX) $(INSTALLDIR)/$(APP_CONFIG_INDEX)" in makefile
