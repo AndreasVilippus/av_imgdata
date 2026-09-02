@@ -58,7 +58,10 @@ def test_worker_start_scripts_allow_missing_token_for_enrollment():
 
     assert "[string]$EnrollmentCode" in windows
     assert "[switch]$InsecureTls" in windows
-    assert "foreach ($required in @($ApiLoop, $WorkerBin, $ConfigPath, $InitializeScript))" in windows
+    assert "foreach ($required in @($ApiLoop, $WorkerBin, $ConfigureExe, $InitializeScript))" in windows
+    assert "function New-WorkerConfigIfMissing" in windows
+    assert "New-WorkerConfigIfMissing" in windows
+    assert "LogLevel = $LogLevel" in windows
     assert 'Read-Host "Worker token not found. Enter registration code"' in windows
     assert "ModelPack = $ModelPack" in windows
     assert "$initializeArgs.EnrollmentCode = $EnrollmentCode" in windows
@@ -69,7 +72,9 @@ def test_worker_start_scripts_allow_missing_token_for_enrollment():
 
     assert "--enrollment-code" in unix
     assert "--insecure-tls" in unix
-    assert 'for required in "$API_LOOP" "$WORKER_BIN" "$CONFIG_PATH" "$INIT_SCRIPT"; do' in unix
+    assert 'for required in "$API_LOOP" "$WORKER_BIN" "$CONFIGURE_BIN" "$INIT_SCRIPT"; do' in unix
+    assert "create_config_if_missing" in unix
+    assert '--log-level "$LOG_LEVEL"' in unix
     assert 'Worker token not found. Enter registration code: ' in unix
     assert 'set -- sh "$INIT_SCRIPT"' in unix
     assert "Models:    synchronized from DSM authority" in unix

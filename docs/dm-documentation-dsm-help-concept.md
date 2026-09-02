@@ -556,7 +556,7 @@ Beispiele:
 
 ```text
 Verfügbar ab Version 0.10
-Requires DSM 7.3 or later
+Requires DSM 7.4 or later
 Beta
 Advanced setting
 External Worker required
@@ -955,10 +955,10 @@ Die Renderer sollen möglichst keine eigene Geschäftslogik enthalten.
   "package": {
     "name": "AV_ImgData",
     "displayName": "ImgData",
-    "version": "0.10.1",
+    "version": "0.11.0",
     "dsmAppName": "SYNO.SDS.App.AV_ImgData.Instance",
     "dsmUiDir": "ui",
-    "minimumDsm": "7.3-00000"
+    "minimumDsm": "7.4-00000"
   },
   "languages": {
     "de": "ger",

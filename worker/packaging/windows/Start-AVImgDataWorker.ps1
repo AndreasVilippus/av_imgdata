@@ -30,6 +30,7 @@ if (-not $WorkerBin.Trim()) {
 $WorkerBin = [System.IO.Path]::GetFullPath($WorkerBin)
 
 $ApiLoop = Join-Path $BundleRoot "bin\av-imgdata-worker-api-loop.exe"
+$ConfigureExe = Join-Path $BundleRoot "bin\av-imgdata-worker-configure.exe"
 $TokenPath = Join-Path $BundleRoot "worker.token"
 $HashManifest = Join-Path $BundleRoot "SHA256SUMS.txt"
 $InitializeScript = Join-Path $BundleRoot "Initialize-AVImgDataWorker.ps1"
@@ -37,7 +38,7 @@ if (-not (Test-Path -LiteralPath $InitializeScript)) {
   $InitializeScript = Join-Path $PSScriptRoot "Initialize-AVImgDataWorker.ps1"
 }
 
-foreach ($required in @($ApiLoop, $WorkerBin, $ConfigPath, $InitializeScript)) {
+foreach ($required in @($ApiLoop, $WorkerBin, $ConfigureExe, $InitializeScript)) {
   if (-not (Test-Path -LiteralPath $required)) {
     throw "Required worker file is missing: $required"
   }
@@ -120,12 +121,98 @@ function Write-WorkerExecutionDiagnostics {
 Assert-BundleFileHash -Path $ApiLoop
 Assert-BundleFileHash -Path $WorkerBin
 
+function Read-WorkerPrompt {
+  param(
+    [Parameter(Mandatory=$true)][string]$Label,
+    [string]$Default = "",
+    [switch]$Required
+  )
+
+  while ($true) {
+    if ($Default.Trim()) {
+      $value = Read-Host "$Label [$Default]"
+      if (-not $value.Trim()) { $value = $Default }
+    } else {
+      $value = Read-Host $Label
+    }
+    $value = [string]$value
+    if ($value.Trim() -or -not $Required) { return $value.Trim() }
+    Write-Host "This value is required."
+  }
+}
+
+function Read-WorkerJsonString {
+  param([Parameter(Mandatory=$true)][string]$Path, [Parameter(Mandatory=$true)][string]$Name)
+
+  if (-not (Test-Path -LiteralPath $Path)) { return "" }
+  try {
+    $json = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $value = $json
+    foreach ($part in $Name.Split(".")) {
+      if ($null -eq $value) { return "" }
+      $value = $value.$part
+    }
+    return [string]$value
+  } catch {
+    return ""
+  }
+}
+
+function New-WorkerConfigIfMissing {
+  if (Test-Path -LiteralPath $ConfigPath) { return }
+
+  $ExampleConfigPath = Join-Path $BundleRoot "config\worker-config.example.json"
+  Write-Host "Worker configuration was not found and will be created:"
+  Write-Host "  $ConfigPath"
+  if (Test-Path -LiteralPath $ExampleConfigPath) {
+    Write-Host ""
+    Write-Host "Example configuration values:"
+    Write-Host "  worker_id:           $(Read-WorkerJsonString -Path $ExampleConfigPath -Name "worker_id")"
+    Write-Host "  worker_api_base_url: $(Read-WorkerJsonString -Path $ExampleConfigPath -Name "worker_api_base_url")"
+    Write-Host "  path_base_dir:       $(Read-WorkerJsonString -Path $ExampleConfigPath -Name "path_base_dir")"
+    Write-Host "  log_level:           off (alternatives: error, warning, info, debug)"
+    Write-Host ""
+  }
+
+  $defaultWorkerId = Read-WorkerJsonString -Path $ExampleConfigPath -Name "worker_id"
+  if (-not $defaultWorkerId.Trim()) { $defaultWorkerId = "worker-01" }
+  $createdWorkerId = Read-WorkerPrompt -Label "Worker ID" -Default $defaultWorkerId -Required
+  $createdApiUrl = Read-WorkerPrompt -Label "Worker API base URL, for example https://nas.example:5001/worker-api" -Default $ApiUrl -Required
+  $defaultPathBaseDir = $PathBaseDir
+  if (-not $defaultPathBaseDir.Trim()) { $defaultPathBaseDir = Read-WorkerJsonString -Path $ExampleConfigPath -Name "path_base_dir" }
+  $createdPathBaseDir = Read-WorkerPrompt -Label "Shared Photos path base, for example \\nas\photo or P:\photo" -Default $defaultPathBaseDir -Required
+  Write-Host "Log level defaults to off. Alternatives: error, warning, info, debug."
+  $createdLogLevel = Read-WorkerPrompt -Label "Log level" -Default "off"
+  if (@("off", "error", "warning", "info", "debug") -notcontains $createdLogLevel) {
+    throw "Invalid log level: $createdLogLevel"
+  }
+  $createdModelPack = Read-WorkerPrompt -Label "Face model pack" -Default "buffalo_l" -Required
+
+  & $ConfigureExe `
+    --config $ConfigPath `
+    --worker-id $createdWorkerId `
+    --api-url $createdApiUrl `
+    --path-base-dir $createdPathBaseDir `
+    --model-pack $createdModelPack `
+    --log-level $createdLogLevel
+  if ($LASTEXITCODE -ne 0) {
+    throw "Worker configuration creation failed with code $LASTEXITCODE"
+  }
+}
+
+New-WorkerConfigIfMissing
+if (-not (Test-Path -LiteralPath $ConfigPath)) {
+  throw "Required worker file is missing: $ConfigPath"
+}
+
 $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 if (-not $PathBaseDir.Trim()) { $PathBaseDir = [string]$config.path_base_dir }
 if (-not $ApiUrl.Trim()) { $ApiUrl = [string]$config.worker_api_base_url }
 $WorkerId = [string]$config.worker_id
 $ModelPack = [string]$config.processors.face.model_name
 if (-not $ModelPack.Trim()) { $ModelPack = "buffalo_l" }
+$LogLevel = [string]$config.log_level
+if (-not $LogLevel.Trim()) { $LogLevel = "off" }
 
 if (-not $PathBaseDir.Trim()) { throw "PathBaseDir is missing in arguments and configuration." }
 if (-not $ApiUrl.Trim()) { throw "ApiUrl is missing in arguments and configuration." }
@@ -146,6 +233,7 @@ $initializeArgs = @{
   PathBaseDir = $PathBaseDir
   ModelPack = $ModelPack
   ConfigPath = $ConfigPath
+  LogLevel = $LogLevel
 }
 if ($EnrollmentCode.Trim()) {
   $initializeArgs.EnrollmentCode = $EnrollmentCode

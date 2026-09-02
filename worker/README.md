@@ -215,6 +215,14 @@ registration code, enrolls, synchronizes models, and only then starts claiming
 jobs. A changed or revoked DSM-side model/license state therefore fails during
 sync instead of producing claimed jobs with missing local models.
 
+If the selected worker configuration file is missing, the start script creates
+it before enrollment. It shows the example values from
+`config/worker-config.example.json`, defaults `worker_id` to `worker-01`, asks
+for the Worker API base URL and shared Photos path base, and keeps worker
+logging off unless `error`, `warning`, `info`, or `debug` is selected. The
+native config writer owns platform-specific executable names, so Windows configs
+use `.exe` processor paths and Unix configs do not.
+
 The framework-free local router exposes the same endpoint adapter for development
 and integration tests. It is not the normal DSM package publication path:
 

@@ -66,4 +66,5 @@ def test_unix_worker_runtime_roles_compile_and_run_shared_tests(tmp_path):
     assert config["worker_id"] == "unix-worker-01"
     assert config["worker_api_base_url"] == "https://nas.example/worker-api"
     assert config["path_base_dir"] == "/mnt/photo"
+    assert config["log_level"] == "off"
     assert config["processors"]["face"]["path"] == "../bin/av-imgdata-face-processor"

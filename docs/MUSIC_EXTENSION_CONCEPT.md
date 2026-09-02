@@ -12,7 +12,7 @@ Wichtig: DS Audio / Audio Station darf keine harte Abhängigkeit des Gesamtpaket
 
 Aus den geprüften Projektdateien ergeben sich folgende verwertbare Grundlagen:
 
-- Das Paket ist ein DSM-7.3-Paket `AV_ImgData` mit `arch="noarch"`, `support_cgi="yes"`, eigener DSM-App und UI-Verzeichnis `ui`.
+- Das Paket ist ein DSM-7.4-Paket `AV_ImgData` mit `arch="noarch"`, `support_cgi="yes"`, eigener DSM-App und UI-Verzeichnis `ui`.
 - Die bestehende Anwendung nutzt eine Vue-2-Oberfläche mit Synology-DSM-Komponenten.
 - Die linke Navigation wird zentral in `ui/src/components/AppSidebarNav.vue` aufgebaut.
 - Die Hauptansichten werden zentral in `ui/src/App.vue` anhand von `selectedOption` geschaltet.
@@ -406,7 +406,7 @@ Beispielkonfiguration:
 
 ### Notwendig vor Implementierung des Schreibens
 
-1. **Audio-Station-Paketstatus auf DSM 7.3**
+1. **Audio-Station-Paketstatus auf DSM 7.4**
    - Exakter Paketname.
    - Pfade unter `/var/packages/AudioStation/`.
    - Dienststatus-Mechanismus.
@@ -549,7 +549,7 @@ Die Paketstruktur sollte nicht in ein neues Paket aufgeteilt werden. Stattdessen
 
 Vor der Implementierung dürfen folgende Punkte nicht angenommen werden:
 
-- Exakter Audio-Station-Paketname auf DSM 7.3.
+- Exakter Audio-Station-Paketname auf DSM 7.4.
 - Verfügbarkeit eines Rating-Schreibendpunkts in der Audio-Station-WebAPI.
 - Datenbanktabellen und Wertebereich für Ratings.
 - Ob Bewertungen global oder benutzerbezogen gespeichert werden.

@@ -111,17 +111,23 @@ def test_worker_example_config_matches_schema_contract():
     assert config["processors"]["face"]["model_root"] == "../.models/face"
     assert config["processors"]["image_vips"]["enabled"] is True
     assert config["processors"]["image_vips"]["path"] == "../bin/av-imgdata-image-processor"
+    assert config["log_level"] == "off"
     assert "dsm_base_url" not in config
 
 
 def test_config_writer_owns_platform_specific_executable_names():
     source = (PROJECT_ROOT / "worker" / "src" / "configure.cpp").read_text(encoding="utf-8")
+    schema = (PROJECT_ROOT / "worker" / "config" / "worker-config.schema.json").read_text(encoding="utf-8")
 
     assert "av-imgdata-face-processor.exe" in source
     assert "av-imgdata-face-processor\"" in source
     assert '\\"image_vips\\": {\\"enabled\\": true' in source
     assert "kConfigSchemaVersion" in source
     assert "input_modes_json()" in source
+    assert "[--log-level off|error|warning|info|debug]" in source
+    assert 'configured_log_level.empty() ? "off" : configured_log_level' in source
+    assert '"log_level\\": \\""' in source
+    assert '"off", "error", "warning", "info", "debug"' in schema
 
 
 def test_worker_bundle_builds_and_integrates_vips_image_processor_by_default_with_opt_out():

@@ -37,6 +37,7 @@ LIBVIPS_SOURCE_PARENT="${BUILD_ROOT}/libvips-source"
 LIBVIPS_SOURCE_DIR="${LIBVIPS_SOURCE_PARENT}/vips-${LIBVIPS_VERSION}"
 LIBVIPS_ORIGINAL_SOURCE_DIR="${LIBVIPS_SOURCE_PARENT}/vips-${LIBVIPS_VERSION}.orig"
 BUILD_FINGERPRINT_FILE="${VIPS_PREFIX}/share/av-imgdata-image-processor.build-fingerprint"
+PKG_CONFIG_TOOL=""
 
 build_fingerprint() {
   {
@@ -84,6 +85,118 @@ require_tool() {
   fi
 }
 
+select_pkg_config_tool() {
+  local candidate
+  local env_file
+  local host_value
+  local candidates=()
+
+  if [ -n "${PKG_CONFIG:-}" ]; then
+    candidates+=("${PKG_CONFIG}")
+  fi
+  if [ -n "${HOST:-}" ]; then
+    candidates+=("${HOST}-pkg-config" "/usr/bin/${HOST}-pkg-config")
+  fi
+  for env_file in /env64.mak /env.mak; do
+    [ -f "${env_file}" ] || continue
+    host_value="$(grep -E '^HOST[[:space:]]*=' "${env_file}" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
+    host_value="${host_value%$'\r'}"
+    host_value="${host_value%\"}"
+    host_value="${host_value#\"}"
+    if [ -n "${host_value}" ]; then
+      candidates+=("${host_value}-pkg-config" "/usr/bin/${host_value}-pkg-config")
+    fi
+  done
+  for candidate in /usr/bin/*-pkg-config; do
+    [ -e "${candidate}" ] || continue
+    candidates+=("${candidate}")
+  done
+  candidates+=("pkgconf" "pkg-config" "/usr/bin/pkg-config")
+
+  for candidate in "${candidates[@]}"; do
+    [ -n "${candidate}" ] || continue
+    if command -v "${candidate}" >/dev/null 2>&1 && "${candidate}" --version >/dev/null 2>&1; then
+      PKG_CONFIG_TOOL="${candidate}"
+      export PKG_CONFIG="${PKG_CONFIG_TOOL}"
+      return
+    fi
+  done
+
+  echo "ERROR: required pkg-config-compatible tool not found or not executable." >&2
+  echo "The DSM 7.4 /bin/pkg-config wrapper may be present but unusable when pkg-config-origin is missing." >&2
+  exit 1
+}
+
+configure_synology_pkg_config_if_available() {
+  local synology_sysroot
+  local paths=""
+  local glib_pc=""
+
+  synology_sysroot="$(resolve_synology_toolchain_sysroot || true)"
+  [ -n "${synology_sysroot}" ] || return 0
+
+  if [ -d "${synology_sysroot}/usr/lib/pkgconfig" ]; then
+    paths="${synology_sysroot}/usr/lib/pkgconfig"
+  fi
+  if [ -d "${synology_sysroot}/usr/share/pkgconfig" ]; then
+    paths="${paths:+${paths}:}${synology_sysroot}/usr/share/pkgconfig"
+  fi
+
+  [ -n "${paths}" ] || return 0
+  export PKG_CONFIG_LIBDIR="${paths}"
+  glib_pc="${synology_sysroot}/usr/lib/pkgconfig/glib-2.0.pc"
+  if [ -f "${glib_pc}" ] && grep -Fq "${synology_sysroot}/usr" "${glib_pc}"; then
+    unset PKG_CONFIG_SYSROOT_DIR
+    echo "Using Synology pkg-config metadata with absolute sysroot paths: ${synology_sysroot}"
+  else
+    export PKG_CONFIG_SYSROOT_DIR="${synology_sysroot}"
+  fi
+}
+
+configure_synology_toolchain_compilers_if_available() {
+  local env_file
+  local prefix_value
+  local host_value
+  local candidate
+  local cxx_candidate
+  local gcc_candidate
+  local candidates=()
+
+  for env_file in /env64.mak /env.mak; do
+    [ -f "${env_file}" ] || continue
+    prefix_value="$(grep -E '^ToolChainPrefix[[:space:]]*=' "${env_file}" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
+    prefix_value="${prefix_value%$'\r'}"
+    prefix_value="${prefix_value%\"}"
+    prefix_value="${prefix_value#\"}"
+    if [ -n "${prefix_value}" ]; then
+      candidates+=("${prefix_value}g++")
+    fi
+
+    host_value="$(grep -E '^HOST[[:space:]]*=' "${env_file}" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
+    host_value="${host_value%$'\r'}"
+    host_value="${host_value%\"}"
+    host_value="${host_value#\"}"
+    if [ -n "${host_value}" ]; then
+      candidates+=("/usr/local/${host_value}/bin/${host_value}-g++")
+    fi
+  done
+
+  for candidate in /usr/local/*/bin/*-g++; do
+    [ -e "${candidate}" ] || continue
+    candidates+=("${candidate}")
+  done
+
+  for cxx_candidate in "${candidates[@]}"; do
+    [ -x "${cxx_candidate}" ] || continue
+    gcc_candidate="${cxx_candidate%-g++}-gcc"
+    [ -x "${gcc_candidate}" ] || continue
+    export CXX="${cxx_candidate}"
+    export CC="${gcc_candidate}"
+    echo "Using Synology toolchain compiler for libvips stack: CC=${CC} CXX=${CXX}"
+    return 0
+  done
+}
+
 restore_build_host_library_path() {
   if [ -n "${BUILD_HOST_LD_LIBRARY_PATH}" ]; then
     export LD_LIBRARY_PATH="${BUILD_HOST_LD_LIBRARY_PATH}"
@@ -95,7 +208,7 @@ restore_build_host_library_path() {
 require_pkg_config_package() {
   local package="$1"
   local debian_package="$2"
-  if ! pkg-config --exists "${package}"; then
+  if ! "${PKG_CONFIG_TOOL}" --exists "${package}"; then
     echo "ERROR: required pkg-config package not found: ${package}" >&2
     echo "Install the Debian build host requirements, for example:" >&2
     echo "  sudo apt-get install -y libglib2.0-dev libexpat1-dev" >&2
@@ -106,7 +219,8 @@ require_pkg_config_package() {
 }
 
 require_libvips_host_dependencies() {
-  require_tool pkg-config
+  select_pkg_config_tool
+  configure_synology_pkg_config_if_available
   require_tool readelf
   require_pkg_config_package glib-2.0 libglib2.0-dev
   require_pkg_config_package gio-2.0 libglib2.0-dev
@@ -296,7 +410,6 @@ EOF
 build_heif_stack() {
   require_tool cmake
   require_tool make
-  require_tool pkg-config
 
   download_heif_stack
 
@@ -322,7 +435,7 @@ build_heif_stack() {
   export PKG_CONFIG_PATH="${VIPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
   export LD_LIBRARY_PATH="${VIPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
-  if ! pkg-config --exists libde265; then
+  if ! "${PKG_CONFIG_TOOL}" --exists libde265; then
     echo "ERROR: libde265 build did not install libde265.pc." >&2
     exit 1
   fi
@@ -342,6 +455,7 @@ build_heif_stack() {
       "--disable-static" \
       "--disable-examples" \
       "--disable-go" \
+      "--disable-libfuzzer" \
       "--disable-aom" \
       "--disable-x265" \
       "--disable-gdk-pixbuf" \
@@ -350,7 +464,7 @@ build_heif_stack() {
   make -C "${LIBHEIF_SOURCE_DIR}" -j"$(nproc 2>/dev/null || echo 2)"
   make -C "${LIBHEIF_SOURCE_DIR}" install
 
-  if ! pkg-config --exists libheif; then
+  if ! "${PKG_CONFIG_TOOL}" --exists libheif; then
     echo "ERROR: libheif build did not install libheif.pc." >&2
     exit 1
   fi
@@ -615,10 +729,9 @@ resolve_synology_library_file() {
 build_libvips() {
   require_tool meson
   require_tool ninja
-  require_tool pkg-config
   require_tool strings
 
-  if ! pkg-config --exists libheif || ! grep -Eq '^builtin_h265_decoder=yes$' "${VIPS_PREFIX}/lib/pkgconfig/libheif.pc"; then
+  if ! "${PKG_CONFIG_TOOL}" --exists libheif || ! grep -Eq '^builtin_h265_decoder=yes$' "${VIPS_PREFIX}/lib/pkgconfig/libheif.pc"; then
     echo "ERROR: libvips HEIC build requires packaged libheif with builtin libde265 decoder." >&2
     exit 1
   fi
@@ -711,7 +824,7 @@ build_libvips() {
   fi
 
   echo "Running meson setup for libvips ${LIBVIPS_VERSION}"
-  PKG_CONFIG_PATH="${meson_pkg_config_path}" meson "${meson_args[@]}"
+  PKG_CONFIG_SYSROOT_DIR= PKG_CONFIG_PATH="${meson_pkg_config_path}" meson "${meson_args[@]}"
   if [ -n "${synology_sysroot}" ]; then
     patch_libvips_ninja_link_args "${synology_sysroot}"
   fi
@@ -900,6 +1013,7 @@ sanitize_native_build_paths() {
 }
 
 require_libvips_host_dependencies
+configure_synology_toolchain_compilers_if_available
 prepare_build_dirs
 build_heif_stack
 build_libvips
@@ -913,7 +1027,7 @@ restore_build_host_library_path
 export PKG_CONFIG_PATH="${VIPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 export PKG_CONFIG_SYSROOT_DIR="${INSTALL_DIR}"
 HOST_GLIB_CFLAGS="$(
-  PKG_CONFIG_SYSROOT_DIR= pkg-config --cflags glib-2.0 gio-2.0 gobject-2.0
+  PKG_CONFIG_SYSROOT_DIR= "${PKG_CONFIG_TOOL}" --cflags glib-2.0 gio-2.0 gobject-2.0
 )"
 BACKEND_CXX_FLAGS="${CXXFLAGS:-} ${HOST_GLIB_CFLAGS}"
 

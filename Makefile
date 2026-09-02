@@ -15,7 +15,6 @@ clean_python_artifacts:
 
 $(SUBDIR):
 	@echo "===>" $@
-	GenerateModuleFiles.php $@ $@
 	$(MAKE) -C $@ INSTALLDIR=$(INSTALLDIR)/$@ DESTDIR=$(DESTDIR) PREFIX=$(PREFIX) $(MAKECMDGOALS);
 	@echo "<===" $@
 

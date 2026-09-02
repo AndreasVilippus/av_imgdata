@@ -10,7 +10,7 @@ TOOLKIT_ROOT="${WORKSPACE_ROOT}/pkgscripts-ng"
 PKGCREATE="${TOOLKIT_ROOT}/PkgCreate.py"
 PACKAGE_NAME="av_imgdata"
 
-DEFAULT_ARGS=(-v 7.3 -p geminilake -c)
+DEFAULT_ARGS=(-v 7.4 -p geminilake -c)
 BUILD_EXTERNAL_WORKERS="${AV_IMGDATA_BUILD_EXTERNAL_WORKERS:-1}"
 EXTERNAL_WORKER_TARGETS="${AV_IMGDATA_WORKER_TARGETS:-linux-x86_64 docker-linux-x86_64 windows-x86_64}"
 BUILD_LINUX_FACE_PROCESSOR="${AV_IMGDATA_BUILD_LINUX_FACE_PROCESSOR:-1}"
@@ -184,7 +184,7 @@ cleanup_existing_toolkit_link_target() {
   local target
   local error_log
 
-  version="$(pkgcreate_option_value -v 7.3 "${args[@]}")"
+  version="$(pkgcreate_option_value -v 7.4 "${args[@]}")"
   platform="$(pkgcreate_option_value -p geminilake "${args[@]}")"
   target="${WORKSPACE_ROOT}/build_env/ds.${platform}-${version}/source/${PACKAGE_NAME}"
 
@@ -234,7 +234,7 @@ cleanup_existing_image_packages() {
   local pattern
   local error_log
 
-  version="$(pkgcreate_option_value -v 7.3 "${args[@]}")"
+  version="$(pkgcreate_option_value -v 7.4 "${args[@]}")"
   platform="$(pkgcreate_option_value -p geminilake "${args[@]}")"
   image_package_dir="${WORKSPACE_ROOT}/build_env/ds.${platform}-${version}/image/packages"
 
@@ -496,12 +496,12 @@ Usage:
 
 Examples:
   tools/build-package.sh
-  tools/build-package.sh -v 7.3 -p geminilake
-  tools/build-package.sh -v 7.3 -p apollolake
+  tools/build-package.sh -v 7.4 -p geminilake
+  tools/build-package.sh -v 7.4 -p apollolake
 
 The script always builds the av_imgdata package. If no arguments are passed,
 it uses:
-  -v 7.3 -p geminilake
+  -v 7.4 -p geminilake
 
 External worker bundles are built by default before the Synology package build:
   linux-x86_64 docker-linux-x86_64 windows-x86_64

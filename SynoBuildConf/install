@@ -334,6 +334,11 @@ create_install() {
 		echo "Check ui/Makefile install target and build artifacts."
 		return 1
 	fi
+	if [ ! -f "$package_tgz_dir/ui/config" ]; then
+		echo "ERROR: ui/config missing in package staging dir."
+		echo "Check ui/Makefile config target and DSM GenerateJSDepend integration."
+		return 1
+	fi
 	make packageinstall DESTDIR="$package_tgz_dir" PKG_DIR="$PKG_DIR" || return 1
 
 	# create package.tgz $1: source_dir $2: dest_dir

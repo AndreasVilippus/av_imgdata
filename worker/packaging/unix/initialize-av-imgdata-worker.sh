@@ -10,6 +10,7 @@ Usage:
     --path-base-dir <path> \
     [--enrollment-code <code>] \
     [--model-pack buffalo_l] \
+    [--log-level off|error|warning|info|debug] \
     [--config <path>] \
     [--insecure-tls] \
     [--force-enroll]
@@ -21,6 +22,7 @@ ENROLLMENT_CODE=""
 WORKER_ID=""
 PATH_BASE_DIR=""
 MODEL_PACK="buffalo_l"
+LOG_LEVEL="off"
 CONFIG_PATH=""
 FORCE_ENROLL=0
 INSECURE_TLS=0
@@ -32,6 +34,7 @@ while [ "$#" -gt 0 ]; do
     --worker-id) WORKER_ID=${2:-}; shift 2 ;;
     --path-base-dir) PATH_BASE_DIR=${2:-}; shift 2 ;;
     --model-pack) MODEL_PACK=${2:-}; shift 2 ;;
+    --log-level) LOG_LEVEL=${2:-}; shift 2 ;;
     --config) CONFIG_PATH=${2:-}; shift 2 ;;
     --insecure-tls) INSECURE_TLS=1; shift ;;
     --force-enroll) FORCE_ENROLL=1; shift ;;
@@ -100,7 +103,8 @@ chmod 600 "$TOKEN_PATH" 2>/dev/null || true
   --worker-id "$WORKER_ID" \
   --api-url "$API_URL" \
   --path-base-dir "$PATH_BASE_DIR" \
-  --model-pack "$MODEL_PACK"
+  --model-pack "$MODEL_PACK" \
+  --log-level "$LOG_LEVEL"
 
 set -- "$MODEL_SYNC_BIN" \
   --api-url "$API_URL" \

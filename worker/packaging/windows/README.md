@@ -48,6 +48,18 @@ Local smoke commands on Windows:
 .\bin\av-imgdata-worker.exe once --config .\config\worker-config.example.json --job .\jobs\sample-worker-job.json
 ```
 
+If the selected configuration file does not exist, `Start-AVImgDataWorker.ps1`
+creates it interactively before enrollment/model synchronization. For example:
+
+```powershell
+.\Start-AVImgDataWorker.ps1 -ConfigPath .\config\worker-test.json -PathBaseDir \\nas\photo
+```
+
+The prompt shows the example configuration values, proposes `worker-01` as the
+default worker ID, asks for the Worker API base URL, and leaves worker logging
+off by default. Available log levels are `off`, `error`, `warning`, `info`, and
+`debug`.
+
 ## Windows Security detections
 
 The worker executables are unsigned native MinGW-w64 binaries. Microsoft

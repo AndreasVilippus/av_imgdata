@@ -5,4 +5,4 @@
 # no reference-only projects
 
 [default]
-all="7.3.0"
+all="7.4.0"

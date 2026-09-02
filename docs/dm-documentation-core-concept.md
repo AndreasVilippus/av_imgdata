@@ -36,7 +36,7 @@ Für ImgData ist in `INFO.sh` bereits definiert:
 
 ```bash
 package="AV_ImgData"
-version="0.10.1"
+version="0.11.0"
 displayname="ImgData"
 dsmappname="SYNO.SDS.App.AV_ImgData.Instance"
 dsmuidir="ui"
@@ -768,9 +768,9 @@ Beispiel:
   "package": {
     "name": "AV_ImgData",
     "displayName": "ImgData",
-    "version": "0.10.1",
+    "version": "0.11.0",
     "dsmAppName": "SYNO.SDS.App.AV_ImgData.Instance",
-    "minDsm": "7.3-00000"
+    "minDsm": "7.4-00000"
   },
   "languages": ["de", "en"],
   "documents": [],

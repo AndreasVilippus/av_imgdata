@@ -11,7 +11,7 @@ description_ger="Foto-Metadaten und Gesichtsabgleich mit Python, Shell, nativem 
 maintainer="Andreas Vilippus"
 maintainer_url=""
 arch="$(pkg_get_platform)"
-os_min_ver="7.3-00000"
+os_min_ver="7.4-00000"
 
 startable="yes"
 privilege="yes"

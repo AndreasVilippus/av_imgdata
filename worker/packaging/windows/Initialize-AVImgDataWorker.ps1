@@ -5,6 +5,7 @@ param(
   [Parameter(Mandatory=$true)][string]$PathBaseDir,
   [string]$ModelPack = "buffalo_l",
   [string]$ConfigPath = "",
+  [string]$LogLevel = "off",
   [switch]$ForceEnroll,
   [switch]$InsecureTls
 )
@@ -133,7 +134,8 @@ if (Test-Path -LiteralPath $TokenMetadataPath) { Protect-WorkerTokenFile -Path $
   --worker-id $WorkerId `
   --api-url $ApiUrl `
   --path-base-dir $PathBaseDir `
-  --model-pack $ModelPack
+  --model-pack $ModelPack `
+  --log-level $LogLevel
 if ($LASTEXITCODE -ne 0) {
   throw "Worker configuration failed with exit code $LASTEXITCODE"
 }

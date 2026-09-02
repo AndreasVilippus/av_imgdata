@@ -15,11 +15,15 @@ std::string normalize_url(std::string value) {
     return value;
 }
 
+bool valid_log_level(const std::string& value) {
+    return value == "off" || value == "error" || value == "warning" || value == "info" || value == "debug";
+}
+
 int usage() {
     std::cout
         << "av-imgdata-worker-configure " << av_imgdata::worker::kWorkerVersion << "\n\n"
         << "Usage:\n"
-        << "  av-imgdata-worker-configure --config <path> --worker-id <id> --api-url <worker-api-url> --path-base-dir <path> [--model-pack buffalo_l]\n";
+        << "  av-imgdata-worker-configure --config <path> --worker-id <id> --api-url <worker-api-url> --path-base-dir <path> [--model-pack buffalo_l] [--log-level off|error|warning|info|debug]\n";
     return 0;
 }
 
@@ -36,8 +40,14 @@ int main(int argc, char** argv) {
     const std::string path_base_dir = runtime::arg_value(args, "--path-base-dir");
     const std::string configured_model_pack = runtime::arg_value(args, "--model-pack");
     const std::string model_pack = configured_model_pack.empty() ? "buffalo_l" : configured_model_pack;
+    const std::string configured_log_level = runtime::arg_value(args, "--log-level");
+    const std::string log_level = configured_log_level.empty() ? "off" : configured_log_level;
     if (config_path.empty() || worker_id.empty() || api_url.empty() || path_base_dir.empty()) {
         std::cerr << "ERROR: --config, --worker-id, --api-url and --path-base-dir are required\n";
+        return 2;
+    }
+    if (!valid_log_level(log_level)) {
+        std::cerr << "ERROR: --log-level must be one of: off, error, warning, info, debug\n";
         return 2;
     }
 
@@ -66,7 +76,7 @@ int main(int argc, char** argv) {
         << "  },\n"
         << "  \"poll_interval_seconds\": 2,\n"
         << "  \"max_parallel_jobs\": 1,\n"
-        << "  \"log_level\": \"info\"\n"
+        << "  \"log_level\": \"" << runtime::json_escape(log_level) << "\"\n"
         << "}\n";
 
     if (!runtime::write_file(config_path, config.str())) {

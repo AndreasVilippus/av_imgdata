@@ -2,6 +2,32 @@ from pathlib import Path
 import re
 
 
+def test_synology_package_targets_dsm_74_toolchain():
+    info = Path("INFO.sh").read_text(encoding="utf-8")
+    depends = Path("SynoBuildConf/depends").read_text(encoding="utf-8")
+    build_package = Path("tools/build-package.sh").read_text(encoding="utf-8")
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert 'os_min_ver="7.4-00000"' in info
+    assert 'all="7.4.0"' in depends
+    assert "DEFAULT_ARGS=(-v 7.4 -p geminilake -c)" in build_package
+    assert "pkgcreate_option_value -v 7.4" in build_package
+    assert "DSM `7.4` or newer" in readme
+    assert "-v 7.3" not in build_package
+    assert 'all="7.3.0"' not in depends
+    assert 'os_min_ver="7.3-00000"' not in info
+
+
+def test_root_makefile_does_not_use_synology_module_generator_for_ui_install():
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+
+    assert "GenerateModuleFiles.php" not in makefile
+    assert "Makefile.js.inc" not in makefile
+    assert "JSCompress" not in makefile
+    assert "shrinksafe.php" not in makefile
+    assert "GenerateModuleFiles.php $@ $@" not in makefile
+
+
 def test_synology_build_uses_onnxruntime_native_face_processor():
     build_script = Path("SynoBuildConf/build").read_text(encoding="utf-8")
 
@@ -165,6 +191,10 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert 'AV_IMGDATA_WITH_VIPS:-1' in install_script
     assert "av-imgdata-image-processor" in install_script
     assert "libvips.so" in install_script
+    assert 'if [ ! -f "$package_tgz_dir/ui/config" ]; then' in install_script
+    assert "ui/config missing in package staging dir" in install_script
+    assert "Check ui/Makefile config target and DSM GenerateJSDepend integration." in install_script
+    assert 'make packageinstall DESTDIR="$package_tgz_dir" PKG_DIR="$PKG_DIR" || return 1' in install_script
     assert "cleanup_native_build_artifacts" in install_script
     assert "INSTALL_SUCCEEDED=0" in install_script
     assert 'if [ "${NOSTRIP:-}" = "NOSTRIP" ]; then' in install_script
@@ -208,6 +238,23 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert "sha256sum -c" in build_vips
     assert "build_heif_stack" in build_vips
     assert "require_libvips_host_dependencies" in build_vips
+    assert "select_pkg_config_tool" in build_vips
+    assert "configure_synology_pkg_config_if_available" in build_vips
+    assert "PKG_CONFIG_TOOL" in build_vips
+    assert 'for env_file in /env64.mak /env.mak; do' in build_vips
+    assert "host_value=" in build_vips
+    assert '"${HOST}-pkg-config"' in build_vips
+    assert '"/usr/bin/${HOST}-pkg-config"' in build_vips
+    assert "for candidate in /usr/bin/*-pkg-config; do" in build_vips
+    assert "pkg-config-origin is missing" in build_vips
+    assert "PKG_CONFIG_LIBDIR" in build_vips
+    assert 'grep -Fq "${synology_sysroot}/usr" "${glib_pc}"' in build_vips
+    assert "unset PKG_CONFIG_SYSROOT_DIR" in build_vips
+    assert "Using Synology pkg-config metadata with absolute sysroot paths" in build_vips
+    assert 'export PKG_CONFIG="${PKG_CONFIG_TOOL}"' in build_vips
+    assert 'if ! "${PKG_CONFIG_TOOL}" --exists "${package}"; then' in build_vips
+    assert "require_tool pkg-config" not in build_vips
+    assert "pkg-config --exists" not in build_vips
     assert "require_tool readelf" in build_vips
     assert "require_pkg_config_package glib-2.0 libglib2.0-dev" in build_vips
     assert "require_pkg_config_package gio-2.0 libglib2.0-dev" in build_vips
@@ -305,16 +352,24 @@ def test_optional_libvips_image_processor_is_packaged_by_default_with_opt_out():
     assert 'LD_LIBRARY_PATH="$(runtime_probe_library_path)" "${NATIVE_BINARY}" probe' in build_vips
     assert not re.search(r'build_env/ds\.\$\{platform_lower\}-[0-9.]+/env(64)?\.mak', build_vips)
     assert '[ -d "${env_root}/${value#/}" ]' in build_vips
+    assert "configure_synology_toolchain_compilers_if_available" in build_vips
+    assert "ToolChainPrefix" in build_vips
+    assert 'candidates+=("${prefix_value}g++")' in build_vips
+    assert 'candidates+=("/usr/local/${host_value}/bin/${host_value}-g++")' in build_vips
+    assert "for candidate in /usr/local/*/bin/*-g++; do" in build_vips
+    assert 'export CC="${gcc_candidate}"' in build_vips
+    assert 'export CXX="${cxx_candidate}"' in build_vips
+    assert "Using Synology toolchain compiler for libvips stack:" in build_vips
+    assert "--disable-libfuzzer" in build_vips
     assert "configure_synology_host_toolchain_if_available" not in build_vips
     assert 'export CC="${toolchain_bin}/${host}-gcc"' not in build_vips
     assert 'export CXX="${toolchain_bin}/${host}-g++"' not in build_vips
-    assert "Using Synology host toolchain compiler:" not in build_vips
     assert 'pkg_config_overlay="${BUILD_ROOT}/pkgconfig-overlay"' in build_vips
     assert 'cp -a --no-preserve=ownership "${synology_sysroot}/usr/lib/pkgconfig/"*.pc "${pkg_config_overlay}/"' in build_vips
     assert "glib_genmarshal=$(command -v glib-genmarshal" in build_vips
     assert "glib_mkenums=$(command -v glib-mkenums" in build_vips
     assert 'meson_pkg_config_path="${meson_pkg_config_path}:${pkg_config_overlay}"' in build_vips
-    assert 'PKG_CONFIG_PATH="${meson_pkg_config_path}" meson "${meson_args[@]}"' in build_vips
+    assert 'PKG_CONFIG_SYSROOT_DIR= PKG_CONFIG_PATH="${meson_pkg_config_path}" meson "${meson_args[@]}"' in build_vips
     assert "--strip-unneeded" in build_vips
     assert "readelf -d" in build_vips
     assert "-name 'libheif.so*'" in build_vips
@@ -452,19 +507,38 @@ def test_synology_install_accepts_packaged_windows_worker_bundle_path():
 
 def test_ui_makefile_uses_unquoted_dist_targets_and_utf8_snpm():
     makefile = Path("ui/Makefile").read_text(encoding="utf-8")
+    config_define = Path("ui/config.define").read_text(encoding="utf-8")
 
     assert "JS_DIR=dist" in makefile
     assert "JS_NAMESPACE=SYNO.SDS.App.AV_ImgData" in makefile
     assert "BUNDLE_JS=dist/av-img-data.bundle.js" in makefile
     assert "BUNDLE_CSS=dist/style/av-img-data.bundle.css" in makefile
+    assert "APP_JS=AV_ImgData.js" in makefile
+    assert "APP_CONFIG_INDEX=config" in makefile
+    assert "MAKEFILE_JS_INC=Makefile.js.inc" in makefile
+    assert "MODULE_GENERATOR?=/pkgscripts-ng/tool/GenerateModuleFiles.php" in makefile
+    assert "AUTO_CONFIG_TOOL?=/usr/local/tool/parse_requires.py" in makefile
+    assert "JS_DEPENDER?=/usr/syno/bin/GenerateJSDepend.php" in makefile
     assert 'JS_DIR="dist"' not in makefile
     assert 'BUNDLE_JS="dist/av-img-data.bundle.js"' not in makefile
     assert "PYTHONIOENCODING=utf-8 /usr/local/tool/snpm install" in makefile
     assert "PYTHONIOENCODING=utf-8 /usr/local/tool/snpm run build" in makefile
-    assert "install: $(BUNDLE_JS) style.css $(SUBDIR)" in makefile
-    assert '$(MAKE) -f Makefile.js.inc JSCompress JS_NAMESPACE=\\"$(JS_NAMESPACE)\\" JS_DIR=$(JS_DIR)' in makefile
-    assert '$(MAKE) -f Makefile.js.inc install_JSCompress JS_NAMESPACE=\\"$(JS_NAMESPACE)\\" JS_DIR=$(JS_DIR)' in makefile
-    assert "install: $(BUNDLE_JS) style.css $(SUBDIR) JSCompress install_JSCompress" not in makefile
+    assert '"$(MODULE_GENERATOR)" . .' in makefile
+    assert "GenerateModuleFiles.php . ." in makefile
+    assert '"$(AUTO_CONFIG_TOOL)" --makegoal=JSCompress $(JS_DIR) "$(JS_NAMESPACE)"' in makefile
+    assert '"$(JS_DEPENDER)" "$$(pwd)" ""' in makefile
+    assert "install: $(APP_JS) style.css $(APP_CONFIG_INDEX) $(SUBDIR)" in makefile
+    assert "install -m 644 $(APP_JS) $(INSTALLDIR)/$(APP_JS)" in makefile
+    assert "install -m 644 style.css $(INSTALLDIR)/style.css" in makefile
+    assert "install -m 644 $(APP_CONFIG_INDEX) $(INSTALLDIR)/$(APP_CONFIG_INDEX)" in makefile
+    assert '{"AV_ImgData.js":{"SYNO.SDS.App.AV_ImgData.Instance"' in makefile
+    assert '"icon":"images\\\\/icon.png"' in makefile
+    assert "packageinstall: $(SUBDIR)" in makefile
+    assert '"AV_ImgData.js"' in config_define
+    assert '"dist/av-img-data.bundle.js"' in config_define
+    assert "$(MAKE) -f $(MAKEFILE_JS_INC) JSCompress" not in makefile
+    assert "install_JSCompress" not in makefile
+    assert "shrinksafe.php" not in makefile
 
 
 def test_native_face_processor_packages_third_party_license_notices():

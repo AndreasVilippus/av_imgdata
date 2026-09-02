@@ -21,7 +21,7 @@
 
 ## Supported Environment
 
-- DSM `7.3` or newer
+- DSM `7.4` or newer
 - Package architecture: target-platform specific, as returned by the Synology
   toolkit for the selected platform
 - Synology toolkit / `pkgscripts-ng`
@@ -63,7 +63,7 @@ Use the package build wrapper from the toolkit root. It now enables package
 collection by default, so generated SPKs are copied into `result_spk/`.
 
 ```bash
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
+source/av_imgdata/tools/build-package.sh -v 7.4 -p geminilake
 ```
 
 The wrapper performs the required preflight steps before invoking the Synology
@@ -96,7 +96,7 @@ The native libvips image processor is built by default and can be disabled for a
 package build with:
 
 ```bash
-AV_IMGDATA_WITH_VIPS=0 source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
+AV_IMGDATA_WITH_VIPS=0 source/av_imgdata/tools/build-package.sh -v 7.4 -p geminilake
 ```
 
 When enabled, the libvips build includes packaged shared libraries and license
@@ -118,16 +118,16 @@ passed, to collect generated SPKs into `result_spk/`.
 For example:
 
 ```bash
-source/av_imgdata/tools/build-package.sh -v 7.3 -p apollolake
+source/av_imgdata/tools/build-package.sh -v 7.4 -p apollolake
 ```
 
 Before the first build, prepare the Synology toolkit environment, for example:
 
 ```bash
 cd pkgscripts-ng
-./EnvDeploy -v 7.3 -p geminilake
+./EnvDeploy -v 7.4 -p geminilake
 cd ..
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
+source/av_imgdata/tools/build-package.sh -v 7.4 -p geminilake
 ```
 
 Generated packages are collected by the toolkit in:
@@ -213,7 +213,7 @@ For package builds, use the package build wrapper instead:
 
 ```bash
 cd ../..
-source/av_imgdata/tools/build-package.sh -v 7.3 -p geminilake
+source/av_imgdata/tools/build-package.sh -v 7.4 -p geminilake
 ```
 
 The wrapper runs structure checks and Python tests before invoking the Synology
