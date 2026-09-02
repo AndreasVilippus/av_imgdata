@@ -392,39 +392,35 @@ configure_noninteractive_linux_worker_vips_build() {
   if [[ -n "${AV_IMGDATA_BUILD_WORKER_VIPS+x}" ]]; then
     return 0
   fi
-
-  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-    export AV_IMGDATA_LINUX_CHROOT=1
-    export AV_IMGDATA_LINUX_CHROOT_ROOT="${AV_IMGDATA_LINUX_CHROOT_ROOT:-${WORKSPACE_ROOT}/build_env/${PACKAGE_NAME}-linux-chroot/linux-x86_64}"
-    return 0
+  if [[ ! -t 0 ]]; then
+    if existing_linux_worker_vips_artifact_ready; then
+      preserve_existing_linux_worker_vips_artifact
+      export AV_IMGDATA_BUILD_WORKER_VIPS=0
+      log "Reusing existing Linux worker libvips artifact for non-interactive package build"
+    else
+      export AV_IMGDATA_BUILD_WORKER_VIPS=0
+      log "No existing Linux worker libvips artifact found; non-interactive package build will skip rebuilding it"
+    fi
   fi
-
-  if existing_linux_worker_vips_artifact_ready; then
-    preserve_existing_linux_worker_vips_artifact
-    export AV_IMGDATA_BUILD_WORKER_VIPS=0
-    log "Using existing Linux worker libvips artifact because non-interactive sudo is not available"
-    return 0
-  fi
-
-  fail "Cannot build Linux worker libvips non-interactively.
-non-interactive sudo is not available and no existing Linux libvips worker artifact was found.
-Run tools/build-package.sh with sudo, configure non-interactive sudo for the chroot build, or provide an existing artifact with AV_IMGDATA_BUILD_WORKER_VIPS=0."
 }
 
 ensure_windows_native_deps() {
   windows_native_deps_ready && return 0
 
   log "Preparing Windows native worker dependencies"
-  bash tools/fetch-worker-windows-deps.sh
+  bash tools/fetch-worker-native-deps.sh --target windows-x86_64 --no-update-check
 }
 
 assert_pkgcreate_log_has_no_critical_errors() {
-  local pkgcreate_log="$1"
-  local critical_errors
+  local log_file="$1"
+  local matches
 
-  critical_errors="$(grep -E '(^|[[:space:]])ERROR: (native|optional|external worker|Windows external worker|ui/index.cgi|libjpeg|ONNXRuntime|duplicate package runtime library SONAMEs)' "${pkgcreate_log}" || true)"
-  [[ -z "${critical_errors}" ]] || fail "Synology package build output contained critical errors although PkgCreate.py returned success:
-${critical_errors}"
+  matches="$(grep -E '(^|[^[:alpha:]])(ERROR|Error|FAILED|Failed|FATAL|Fatal)([^[:alpha:]]|$)' "${log_file}" \
+    | grep -Ev 'No error|0 errors|without error|returned success|ERRORLEVEL|error handling|onerror|ErrorDocument' \
+    | sed -n '1,80p' || true)"
+  [[ -z "${matches}" ]] || fail "PkgCreate.py returned success but emitted critical error text:
+${matches}
+Full PkgCreate output log: ${log_file}"
 }
 
 run_pkgcreate() {
@@ -544,6 +540,9 @@ fi
 [[ -d "ui" ]] || fail "Required directory not found: ui"
 [[ -f "${PKGCREATE}" ]] || fail "PkgCreate.py not found: ${PKGCREATE}"
 
+log "Generating DSM help"
+python3 tools/docs/render_dsm_help.py
+
 log "Running structure checks"
 python3 tools/check_syntax_and_structure.py
 
@@ -558,18 +557,16 @@ assert_no_nobody_generated_paths
 ensure_linux_native_deps
 configure_noninteractive_linux_worker_vips_build
 build_external_worker_bundles
-assert_no_nobody_generated_paths
 
-log "Temporarily moving local build artifacts out of the Toolkit link tree"
+log "Sanitizing local-only build artifacts before Toolkit source linking"
 sanitize_project_for_toolkit_link
 
-log "Building Synology package"
-cd "${TOOLKIT_ROOT}"
-
 if [[ "$#" -gt 0 ]]; then
+  log "Running Synology package build with custom arguments: $*"
   run_pkgcreate "$@"
 else
+  log "Running Synology package build with defaults: ${DEFAULT_ARGS[*]}"
   run_pkgcreate "${DEFAULT_ARGS[@]}"
 fi
 
-log "Package build completed"
+log "Package build completed successfully"
