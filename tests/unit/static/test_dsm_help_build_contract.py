@@ -47,7 +47,7 @@ def test_dsm_help_index_remains_documentation_core_source_of_truth():
     assert "[[doc:" not in english
 
 
-def test_dsm_help_toc_registers_existing_localized_index_pages():
+def test_dsm_help_toc_registers_existing_localized_pages():
     toc = json.loads((ROOT / "ui" / "helptoc.conf").read_text(encoding="utf-8"))
     info = (ROOT / "INFO.sh").read_text(encoding="utf-8")
 
@@ -58,12 +58,19 @@ def test_dsm_help_toc_registers_existing_localized_index_pages():
         "content": "index.html",
         "helpset": "help",
         "stringset": "texts",
-        "toc": [],
+        "toc": [
+            {
+                "title": "nav:status",
+                "content": "status.html",
+            }
+        ],
     }
-    assert (ROOT / "ui" / "help" / "ger" / "index.html").is_file()
-    assert (ROOT / "ui" / "help" / "enu" / "index.html").is_file()
 
     for language in ("ger", "enu"):
+        assert (ROOT / "ui" / "help" / language / "index.html").is_file()
+        assert (ROOT / "ui" / "help" / language / "status.html").is_file()
         strings = (ROOT / "ui" / "texts" / language / "strings").read_text(encoding="utf-8")
         assert "[helptoc]" in strings
         assert 'imgdata="ImgData"' in strings
+        assert "[nav]" in strings
+        assert 'status="Status"' in strings
