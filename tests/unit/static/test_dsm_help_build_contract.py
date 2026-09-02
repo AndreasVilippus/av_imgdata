@@ -62,10 +62,14 @@ def test_dsm_help_index_remains_documentation_core_source_of_truth():
     assert "id: index" in english
     assert "# ImgData" in german
     assert "# ImgData" in english
-    assert "\n#### Status\n" in german
-    assert "\n#### Status\n" in english
+    assert "\n## Status\n" in german
+    assert "\n## Status\n" in english
     assert "[[doc:" not in german
     assert "[[doc:" not in english
+
+    for language in ("ger", "enu"):
+        generated_index = (ROOT / "ui" / "help" / language / "index.html").read_text(encoding="utf-8")
+        assert "<h4>Status</h4>" in generated_index
 
 
 def test_dsm_help_generated_output_registers_existing_localized_pages():
