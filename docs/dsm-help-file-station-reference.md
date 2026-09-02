@@ -161,16 +161,18 @@ Die redaktionelle Quelle soll dafür keinen festen HTML-Link enthalten müssen.
 
 Die File-Station-Referenz bestätigt, dass die Root-`content`-Seite selbst Einführung und Übersicht übernehmen kann.
 
-Für ImgData gilt deshalb:
+Für ImgData gilt deshalb verbindlich:
 
 ```text
 index
 = Startseite
-= kurze Einführung
+= kurze Produkteinführung
 = Übersicht der Hilfebereiche
 ```
 
-Eine separate Seite `introduction` wird vorerst nicht angelegt.
+Eine separate Seite oder ein separater TOC-Knoten `Einführung`, `Überblick` oder `introduction` wird nicht angelegt. Allgemeine Voraussetzungen, Installation oder Datensicherheit werden später nur dann als eigene Hilfeseiten ergänzt, wenn dafür ein konkreter Benutzerbedarf besteht; sie werden nicht künstlich als Einführungs-Unterbaum erzeugt.
+
+Diese Entscheidung ersetzt ältere Hilfebaum-Entwürfe, die noch eine eigene erste Ebene `Einführung` vorsahen.
 
 ---
 
@@ -280,3 +282,33 @@ dsm:
 ```
 
 Dann werden Index-Link und `toc`-Eintrag gemeinsam aktiviert.
+
+---
+
+## 11. Aktueller Umsetzungsstand der Indexseite
+
+Die gemeinsame redaktionelle Quelle liegt unter:
+
+```text
+docs/core/de/index.md
+docs/core/en/index.md
+```
+
+Die derzeitige DSM-7.4-Ausgabe liegt unter:
+
+```text
+ui/help/ger/index.html
+ui/help/enu/index.html
+```
+
+Bis der Documentation-Core-Renderer implementiert ist, werden diese beiden HTML-Dateien als explizite Referenzausgabe geführt. Nach Einführung des Generators werden sie ausschließlich aus `docs/core/*/index.md` erzeugt und dürfen nicht mehr unabhängig redaktionell gepflegt werden.
+
+Für die Indexseite gilt dabei verbindlich:
+
+- `<h1>` für `ImgData`,
+- genau ein kurzer Produktabsatz unmittelbar darunter,
+- `<h4>` für jeden Haupt-Hilfebereich,
+- ein kurzer Absatz pro Hilfebereich,
+- zunächst keine Links auf noch nicht vorhandene Unterseiten,
+- gleiche Reihenfolge wie der spätere DSM-Hilfebaum,
+- deutsche und englische Ausgabe müssen inhaltlich paarig bleiben.
