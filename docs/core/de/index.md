@@ -10,48 +10,48 @@ order: 0
 
 # ImgData
 
-ImgData unterstützt Sie bei der Analyse, Prüfung und Pflege von Foto-Metadaten und Gesichtszuordnungen in Synology Photos. Zusätzlich können rechenintensive Bildverarbeitungsaufgaben optional an einen externen Worker ausgelagert werden.
+ImgData unterstützt Sie bei der Analyse, Prüfung und Pflege von Foto-Metadaten und Gesichtszuordnungen in Synology Photos. Rechenintensive Bild- und Gesichtsverarbeitung kann optional an einen externen Worker ausgelagert werden.
 
-## Status
+#### Status
 
 Zeigt den aktuellen Zustand des Pakets, laufende Vorgänge sowie die Verfügbarkeit wichtiger Komponenten und Verarbeitungsfunktionen an.
 
-## Face Matching
+#### Face Matching
 
 Sucht und vergleicht Gesichter zwischen Synology Photos und Bilddateien, findet fehlende Gesichtsmarkierungen und unterstützt die Zuordnung unbekannter Gesichter zu Personen.
 
-## Checks
+#### Checks
 
 Prüft Bilder und Gesichtsmetadaten auf Auffälligkeiten wie fehlerhafte Abmessungen, doppelte Gesichtsmarkierungen, abweichende Gesichtspositionen, Namenskonflikte und unplausible Personenzuordnungen.
 
-## Cleanup
+#### Cleanup
 
 Bereinigt und vereinheitlicht vorhandene Daten, darunter Namen, Gesichtsrahmen und Referenzdaten für die Gesichtserkennung.
 
-## Gesichtserkennung und Personenprofile
+#### Gesichtserkennung und Personenprofile
 
 Erstellt und verwaltet Referenzprofile aus vorhandenen Personengesichtern und verwendet diese für die Erkennung, Bewertung und Prüfung von Gesichtszuordnungen.
 
-## Konfiguration
+#### Konfiguration
 
-Legt grundlegende Einstellungen für Metadaten, Datei- und Sidecar-Verarbeitung, Prüfungen, Gesichtserkennung und weitere Paketfunktionen fest.
+Legt Einstellungen für Metadaten, Datei- und Sidecar-Verarbeitung, Prüfungen, Gesichtserkennung und weitere Paketfunktionen fest.
 
-## External Worker
+#### External Worker
 
 Konfiguriert die optionale Auslagerung rechenintensiver Bild- und Gesichtsverarbeitung auf einen externen Windows- oder Linux-Rechner und verwaltet registrierte Worker.
 
-## Externe Bibliotheken
+#### Externe Bibliotheken
 
-Zeigt und verwaltet die für einzelne Funktionen verwendeten externen Komponenten wie ExifTool, InsightFace-kompatible Modelle, den nativen Face Processor und libvips.
+Zeigt und verwaltet externe Komponenten, die von einzelnen Funktionen verwendet werden, darunter ExifTool, InsightFace-kompatible Modelle, der native Face Processor und libvips.
 
-## Datenbanklisten
+#### Datenbanklisten
 
 Zeigt und verwaltet dauerhaft gespeicherte Zuordnungs- und Ignorierlisten, die von Prüf-, Bereinigungs- und Zuordnungsfunktionen verwendet werden.
 
-## Vorschau und Review
+#### Vorschau und Review
 
 Beschreibt die gemeinsame Bedienung von Bild- und Gesichtsvorschauen sowie das Prüfen, Auswählen, Speichern, Überspringen und Fortsetzen gefundener Einträge.
 
-## Fehlerbehebung
+#### Fehlerbehebung
 
 Enthält Hinweise zur Diagnose typischer Probleme mit Dateien, Metadaten, Synology Photos, Gesichtserkennung, externen Komponenten und Workern.
