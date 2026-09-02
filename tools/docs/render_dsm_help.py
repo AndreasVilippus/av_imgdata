@@ -11,6 +11,7 @@ import argparse
 import json
 import html
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -194,11 +195,14 @@ def render_tree(source_root: Path, output_root: Path) -> list[Path]:
     rendered: list[Path] = []
     for source_locale, dsm_locale in LOCALES.items():
         source_dir = source_root / source_locale
+        locale_output_dir = output_root / dsm_locale
+        if locale_output_dir.exists():
+            shutil.rmtree(locale_output_dir)
         if not source_dir.is_dir():
             continue
         for source in sorted(source_dir.rglob("*.md")):
             relative = source.relative_to(source_dir).with_suffix(".html")
-            destination = output_root / dsm_locale / relative
+            destination = locale_output_dir / relative
             render_file(source, destination)
             rendered.append(destination)
     if not rendered:
