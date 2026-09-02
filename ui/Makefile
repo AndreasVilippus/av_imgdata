@@ -10,10 +10,19 @@ MAKEFILE_JS_INC=Makefile.js.inc
 MODULE_GENERATOR?=/pkgscripts-ng/tool/GenerateModuleFiles.php
 AUTO_CONFIG_TOOL?=/usr/local/tool/parse_requires.py
 JS_DEPENDER?=/usr/syno/bin/GenerateJSDepend.php
+DSM_HELP_RENDERER=../tools/docs/render_dsm_help.py
+DSM_HELP_SOURCES=$(shell find ../docs/core/de ../docs/core/en -type f -name '*.md' 2>/dev/null)
+DSM_HELP_STAMP=.dsm-help.stamp
 
-.PHONY: all clean $(SUBDIR)
+.PHONY: all clean $(SUBDIR) dsm-help
 
-all: $(APP_JS) style.css $(APP_CONFIG_INDEX) $(SUBDIR)
+all: dsm-help $(APP_JS) style.css $(APP_CONFIG_INDEX) $(SUBDIR)
+
+dsm-help: $(DSM_HELP_STAMP)
+
+$(DSM_HELP_STAMP): $(DSM_HELP_RENDERER) $(DSM_HELP_SOURCES)
+	python3 $(DSM_HELP_RENDERER)
+	@touch $@
 
 $(BUNDLE_JS):
 	# Snpm is a tool to install npm modules in Synology
@@ -52,15 +61,18 @@ $(APP_CONFIG_INDEX): app.config config.define $(BUNDLE_JS) $(MAKEFILE_JS_INC)
 
 clean:
 	rm -rf dist
-	rm -f $(APP_JS) style.css $(APP_CONFIG_INDEX) $(MAKEFILE_JS_INC) auto_config.debug config.depends
+	rm -f $(APP_JS) style.css $(APP_CONFIG_INDEX) $(MAKEFILE_JS_INC) auto_config.debug config.depends $(DSM_HELP_STAMP)
 
-install: $(APP_JS) style.css $(APP_CONFIG_INDEX) $(SUBDIR)
+install: dsm-help $(APP_JS) style.css $(APP_CONFIG_INDEX) $(SUBDIR)
 	[ -d $(INSTALLDIR) ] || install -d $(INSTALLDIR)
 	install -m 644 $(APP_JS) $(INSTALLDIR)/$(APP_JS)
 	install -m 644 style.css $(INSTALLDIR)/style.css
 	install -m 644 $(APP_CONFIG_INDEX) $(INSTALLDIR)/$(APP_CONFIG_INDEX)
 	[ -d $(INSTALLDIR)/texts ] || install -d $(INSTALLDIR)/texts
 	cp -a texts $(INSTALLDIR)
+	[ -d $(INSTALLDIR)/help ] || install -d $(INSTALLDIR)/help
+	cp -a help $(INSTALLDIR)
+	if [ -f helptoc.conf ]; then install -m 644 helptoc.conf $(INSTALLDIR)/helptoc.conf; fi
 	[ -d $(INSTALLDIR)/images ] || install -d $(INSTALLDIR)/images
 	cp -a images $(INSTALLDIR)
 	install -m 755 index.cgi $(INSTALLDIR)/index.cgi
