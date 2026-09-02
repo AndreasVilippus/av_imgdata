@@ -59,7 +59,9 @@ def build_store(args: argparse.Namespace) -> FaceModelStoreService:
 
 
 def read_worker_config(worker_dir: Path) -> Dict[str, Any]:
-    config_path = worker_dir / "config" / "worker-config.example.json"
+    config_path = worker_dir / "config" / "worker-config.json"
+    if not config_path.is_file():
+        config_path = worker_dir / "config" / "worker-config.example.json"
     if not config_path.is_file():
         return {}
     try:
@@ -70,7 +72,7 @@ def read_worker_config(worker_dir: Path) -> Dict[str, Any]:
 
 
 def write_worker_config(worker_dir: Path, config: Dict[str, Any]) -> None:
-    config_path = worker_dir / "config" / "worker-config.example.json"
+    config_path = worker_dir / "config" / "worker-config.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -80,7 +82,7 @@ def configure_worker(args: argparse.Namespace) -> Dict[str, Any]:
     store = build_store(args)
     status = store.status(args.model_pack)
     worker_dir = Path(args.worker_dir) if args.worker_dir else default_worker_dir(args.target)
-    config_path = worker_dir / "config" / "worker-config.example.json"
+    config_path = worker_dir / "config" / "worker-config.json"
     model_root = args.model_root or str(default_model_root(package_var))
     if args.use_config_model_root and not args.model_root:
         model_root = str(Path(status["root"]))

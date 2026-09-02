@@ -58,7 +58,7 @@ else
 fi
 TOKEN_PATH="$BUNDLE_ROOT/worker.token"
 MODEL_ROOT="$BUNDLE_ROOT/.models/face"
-CONFIG_PATH=${CONFIG_PATH:-$BUNDLE_ROOT/config/worker-config.example.json}
+CONFIG_PATH=${CONFIG_PATH:-$BUNDLE_ROOT/config/worker-config.json}
 CONFIGURE_BIN="$BUNDLE_ROOT/bin/av-imgdata-worker-configure"
 MODEL_SYNC_BIN="$BUNDLE_ROOT/bin/av-imgdata-worker-model-sync"
 

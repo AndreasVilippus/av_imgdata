@@ -46,7 +46,7 @@ else
   BUNDLE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 fi
 
-CONFIG_PATH=${CONFIG_PATH:-$BUNDLE_ROOT/config/worker-config.example.json}
+CONFIG_PATH=${CONFIG_PATH:-$BUNDLE_ROOT/config/worker-config.json}
 WORKER_BIN=${WORKER_BIN:-$BUNDLE_ROOT/bin/av-imgdata-worker}
 API_LOOP="$BUNDLE_ROOT/bin/av-imgdata-worker-api-loop"
 CONFIGURE_BIN="$BUNDLE_ROOT/bin/av-imgdata-worker-configure"
@@ -122,7 +122,7 @@ create_config_if_missing() {
   [ -n "$default_worker_id" ] || default_worker_id=worker-01
   prompt_value "Worker ID" "$default_worker_id" 1
   created_worker_id=$PROMPT_RESULT
-  prompt_value "Worker API base URL, for example https://nas.example:5001/worker-api" "$API_URL" 1
+  prompt_value "Worker API base URL, for example https://nas:5001/worker-api" "$API_URL" 1
   created_api_url=$PROMPT_RESULT
   default_path_base_dir=$PATH_BASE_DIR
   [ -n "$default_path_base_dir" ] || default_path_base_dir=$(example_string path_base_dir)

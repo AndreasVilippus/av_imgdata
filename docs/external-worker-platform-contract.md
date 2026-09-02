@@ -37,6 +37,10 @@ config/worker-config.schema.json
 share/worker_protocol/worker-protocol.json
 ```
 
+`config/worker-config.json` is the default runtime configuration path. It is
+created by the platform start script if missing, while
+`worker-config.example.json` remains only the visible template.
+
 ## Single-source rules
 
 The following files are authoritative:

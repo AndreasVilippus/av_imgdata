@@ -200,25 +200,28 @@ class WorkerApiService:
             if worker_id not in workers:
                 raise WorkerApiError("worker_not_found")
             deleted_worker = workers.pop(worker_id)
+            delete_orphaned_queued_jobs = not any(isinstance(worker, dict) for worker in workers.values())
             deleted_tokens = []
             for token_id, entry in list(state["tokens"].items()):
                 if isinstance(entry, dict) and str(entry.get("worker_id") or "").strip() == worker_id:
                     deleted_tokens.append(str(token_id))
                     del state["tokens"][token_id]
-            requeued_jobs = []
-            now = self._now_iso()
-            for job_id, job in state["jobs"].items():
-                if not isinstance(job, dict) or str(job.get("claimed_by") or "") != worker_id:
+            deleted_jobs = []
+            bound_active_statuses = {"queued", "claimed"}
+            for job_id, job in list(state["jobs"].items()):
+                if not isinstance(job, dict):
                     continue
-                if job.get("status") == "claimed":
-                    job.update({"status": "queued", "updated_at": now})
-                    job.pop("claimed_by", None)
-                    job.pop("claimed_at", None)
-                    requeued_jobs.append(str(job_id))
+                status = str(job.get("status") or "")
+                claimed_by = str(job.get("claimed_by") or "").strip()
+                delete_job = claimed_by == worker_id and status in bound_active_statuses
+                delete_job = delete_job or (delete_orphaned_queued_jobs and not claimed_by and status == "queued")
+                if delete_job:
+                    deleted_jobs.append(str(job_id))
+                    del state["jobs"][job_id]
             return {
                 "worker": deleted_worker,
                 "deleted_token_ids": deleted_tokens,
-                "requeued_job_ids": requeued_jobs,
+                "deleted_job_ids": deleted_jobs,
             }
 
         result = self.store.update(mutate)
@@ -226,7 +229,9 @@ class WorkerApiService:
             "status": "deleted",
             "worker_id": worker_id,
             "deleted_tokens": len(result["deleted_token_ids"]),
-            "requeued_jobs": len(result["requeued_job_ids"]),
+            "deleted_jobs": len(result["deleted_job_ids"]),
+            "requeued_jobs": 0,
+            "requeued_job_ids": [],
             **result,
         }
 

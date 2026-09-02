@@ -197,7 +197,7 @@ Typical production worker configuration:
 
 ```json
 {
-  "worker_api_base_url": "https://photos.example.net/worker-api"
+  "worker_api_base_url": "https://nas/worker-api"
 }
 ```
 
@@ -217,7 +217,8 @@ sync instead of producing claimed jobs with missing local models.
 
 If the selected worker configuration file is missing, the start script creates
 it before enrollment. It shows the example values from
-`config/worker-config.example.json`, defaults `worker_id` to `worker-01`, asks
+`config/worker-config.example.json`, stores the runtime configuration as
+`config/worker-config.json`, defaults `worker_id` to `worker-01`, asks
 for the Worker API base URL and shared Photos path base, and keeps worker
 logging off unless `error`, `warning`, `info`, or `debug` is selected. The
 native config writer owns platform-specific executable names, so Windows configs
@@ -266,7 +267,7 @@ Run the C++ HTTP loop against the router:
 
 ```bash
 dist/av-imgdata-worker-linux-x86_64/bin/av-imgdata-worker-api-loop \
-  --config dist/av-imgdata-worker-linux-x86_64/config/worker-config.example.json \
+  --config dist/av-imgdata-worker-linux-x86_64/config/worker-config.json \
   --api-url http://127.0.0.1:8765/worker-api \
   --max-iterations 1
 ```
@@ -332,6 +333,7 @@ dist/av-imgdata-worker-linux_x86_64/    # canonical path is dist/av-imgdata-work
   bin/av-imgdata-worker
   bin/av-imgdata-worker-api-loop
   bin/av-imgdata-face-processor
+  config/worker-config.json          # created on first start
   config/worker-config.example.json
   jobs/sample-worker-job.json
   .models/face/README.txt
@@ -349,6 +351,7 @@ dist/av-imgdata-worker-windows-x86_64/
   bin/av-imgdata-worker.exe
   bin/av-imgdata-worker-api-loop.exe
   bin/av-imgdata-face-processor.exe
+  config/worker-config.json          # created on first start
   config/worker-config.example.json
   jobs/sample-worker-job.json
   .models/face/README.txt
@@ -364,6 +367,7 @@ dist/av-imgdata-worker-docker-linux-x86_64/
   Dockerfile
   entrypoint.sh
   bin/av-imgdata-worker
+  config/worker-config.json          # created on first start
   config/worker-config.example.json
   jobs/sample-worker-job.json
   .models/face/README.txt
@@ -377,9 +381,9 @@ Linux:
 ```bash
 dist/av-imgdata-worker-linux-x86_64/bin/av-imgdata-worker version
 dist/av-imgdata-worker-linux-x86_64/bin/av-imgdata-worker probe \
-  --config dist/av-imgdata-worker-linux-x86_64/config/worker-config.example.json
+  --config dist/av-imgdata-worker-linux-x86_64/config/worker-config.json
 dist/av-imgdata-worker-linux-x86_64/bin/av-imgdata-worker once \
-  --config dist/av-imgdata-worker-linux-x86_64/config/worker-config.example.json \
+  --config dist/av-imgdata-worker-linux-x86_64/config/worker-config.json \
   --job dist/av-imgdata-worker-linux-x86_64/jobs/sample-worker-job.json
 dist/av-imgdata-worker-linux-x86_64/bin/av-imgdata-worker-api-loop --help
 ```
@@ -388,8 +392,8 @@ Windows, after copying the bundle to Windows 11:
 
 ```powershell
 .\bin\av-imgdata-worker.exe version
-.\bin\av-imgdata-worker.exe probe --config .\config\worker-config.example.json
-.\bin\av-imgdata-worker.exe once --config .\config\worker-config.example.json --job .\jobs\sample-worker-job.json
+.\bin\av-imgdata-worker.exe probe --config .\config\worker-config.json
+.\bin\av-imgdata-worker.exe once --config .\config\worker-config.json --job .\jobs\sample-worker-job.json
 .\bin\av-imgdata-worker-api-loop.exe --help
 ```
 
@@ -402,7 +406,7 @@ docker run --rm av-imgdata-worker:phase-e version
 
 ## Probe behavior
 
-`probe` reads `worker-config.example.json`, extracts the configured face processor, resolves relative paths against the config file directory, and attempts:
+`probe` reads `worker-config.json`, extracts the configured face processor, resolves relative paths against the config file directory, and attempts:
 
 ```text
 <face_processor> version

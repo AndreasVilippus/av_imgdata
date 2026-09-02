@@ -36,7 +36,7 @@ def test_reenrollment_replaces_previous_worker_tokens(tmp_path):
     )["worker_id"] == "windows-worker-01"
 
 
-def test_delete_worker_removes_bound_tokens_and_requeues_claimed_jobs(tmp_path):
+def test_delete_worker_removes_bound_tokens_and_deletes_claimed_jobs(tmp_path):
     provisioning = WorkerProvisioningService(package_var=tmp_path)
     enrolled = _enroll(provisioning, "worker-registration", "windows-worker-01")
     api = WorkerApiService(package_var=tmp_path, state_store=provisioning.store)
@@ -59,13 +59,97 @@ def test_delete_worker_removes_bound_tokens_and_requeues_claimed_jobs(tmp_path):
 
     assert deleted["status"] == "deleted"
     assert deleted["deleted_tokens"] == 1
-    assert deleted["requeued_jobs"] == 1
+    assert deleted["deleted_jobs"] == 1
+    assert deleted["requeued_jobs"] == 0
     state = api.store.read()
     assert "windows-worker-01" not in state["workers"]
-    assert state["jobs"]["job-1"]["status"] == "queued"
-    assert "claimed_by" not in state["jobs"]["job-1"]
+    assert "job-1" not in state["jobs"]
     with pytest.raises(WorkerApiError, match="unauthorized"):
         api.credentials.authenticate(token=enrolled["token"], worker_id="windows-worker-01")
+
+
+def test_recreated_worker_with_same_id_does_not_claim_deleted_worker_job(tmp_path):
+    provisioning = WorkerProvisioningService(package_var=tmp_path)
+    first = _enroll(provisioning, "first-registration", "windows-worker-01")
+    api = WorkerApiService(package_var=tmp_path, state_store=provisioning.store)
+
+    api.register_worker(
+        token=first["token"],
+        worker_id="windows-worker-01",
+        version="0.11.0",
+        capabilities=["face_native_embed"],
+    )
+    api.enqueue_job(job_id="old-job", job_type="face_native_embed", payload={})
+    claimed = api.claim_job(
+        token=first["token"],
+        worker_id="windows-worker-01",
+        capabilities=["face_native_embed"],
+    )
+    assert claimed["status"] == "claimed"
+
+    deleted = api.delete_worker(worker_id="windows-worker-01")
+    assert deleted["deleted_jobs"] == 1
+
+    second = _enroll(provisioning, "second-registration", "windows-worker-01")
+    api.register_worker(
+        token=second["token"],
+        worker_id="windows-worker-01",
+        version="0.11.0",
+        capabilities=["face_native_embed"],
+    )
+    next_claim = api.claim_job(
+        token=second["token"],
+        worker_id="windows-worker-01",
+        capabilities=["face_native_embed"],
+    )
+
+    assert next_claim["status"] == "empty"
+    assert "old-job" not in api.store.read()["jobs"]
+
+
+def test_delete_last_worker_removes_unclaimed_queued_jobs(tmp_path):
+    provisioning = WorkerProvisioningService(package_var=tmp_path)
+    enrolled = _enroll(provisioning, "worker-registration", "windows-worker-01")
+    api = WorkerApiService(package_var=tmp_path, state_store=provisioning.store)
+
+    api.register_worker(
+        token=enrolled["token"],
+        worker_id="windows-worker-01",
+        version="0.11.0",
+        capabilities=["face_native_embed"],
+    )
+    api.enqueue_job(job_id="queued-old-job", job_type="face_native_embed", payload={})
+
+    deleted = api.delete_worker(worker_id="windows-worker-01")
+
+    assert deleted["deleted_jobs"] == 1
+    assert "queued-old-job" not in api.store.read()["jobs"]
+
+
+def test_delete_one_of_multiple_workers_keeps_global_queued_jobs_for_remaining_workers(tmp_path):
+    provisioning = WorkerProvisioningService(package_var=tmp_path)
+    first = _enroll(provisioning, "first-registration", "windows-worker-01")
+    second = _enroll(provisioning, "second-registration", "linux-worker-01")
+    api = WorkerApiService(package_var=tmp_path, state_store=provisioning.store)
+
+    api.register_worker(
+        token=first["token"],
+        worker_id="windows-worker-01",
+        version="0.11.0",
+        capabilities=["face_native_embed"],
+    )
+    api.register_worker(
+        token=second["token"],
+        worker_id="linux-worker-01",
+        version="0.11.0",
+        capabilities=["face_native_embed"],
+    )
+    api.enqueue_job(job_id="queued-shared-job", job_type="face_native_embed", payload={})
+
+    deleted = api.delete_worker(worker_id="windows-worker-01")
+
+    assert deleted["deleted_jobs"] == 0
+    assert api.store.read()["jobs"]["queued-shared-job"]["status"] == "queued"
 
 
 def test_delete_unknown_worker_is_explicit(tmp_path):

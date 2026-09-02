@@ -58,6 +58,8 @@ def test_worker_start_scripts_allow_missing_token_for_enrollment():
 
     assert "[string]$EnrollmentCode" in windows
     assert "[switch]$InsecureTls" in windows
+    assert 'Join-Path $BundleRoot "config\\worker-config.json"' in windows
+    assert 'Join-Path $BundleRoot "config\\worker-config.example.json"' in windows
     assert "foreach ($required in @($ApiLoop, $WorkerBin, $ConfigureExe, $InitializeScript))" in windows
     assert "function New-WorkerConfigIfMissing" in windows
     assert "New-WorkerConfigIfMissing" in windows
@@ -72,6 +74,8 @@ def test_worker_start_scripts_allow_missing_token_for_enrollment():
 
     assert "--enrollment-code" in unix
     assert "--insecure-tls" in unix
+    assert 'CONFIG_PATH=${CONFIG_PATH:-$BUNDLE_ROOT/config/worker-config.json}' in unix
+    assert 'example_path=$BUNDLE_ROOT/config/worker-config.example.json' in unix
     assert 'for required in "$API_LOOP" "$WORKER_BIN" "$CONFIGURE_BIN" "$INIT_SCRIPT"; do' in unix
     assert "create_config_if_missing" in unix
     assert '--log-level "$LOG_LEVEL"' in unix

@@ -18,7 +18,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $RootCandidate "bin"))) {
 }
 $BundleRoot = $RootCandidate
 if (-not $ConfigPath.Trim()) {
-  $ConfigPath = Join-Path $BundleRoot "config\worker-config.example.json"
+  $ConfigPath = Join-Path $BundleRoot "config\worker-config.json"
 } elseif (-not [System.IO.Path]::IsPathRooted($ConfigPath)) {
   $ConfigPath = Join-Path $BundleRoot $ConfigPath
 }

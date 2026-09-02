@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $RootCandidate "bin"))) {
 $BundleRoot = $RootCandidate
 
 if (-not $ConfigPath.Trim()) {
-  $ConfigPath = Join-Path $BundleRoot "config\worker-config.example.json"
+  $ConfigPath = Join-Path $BundleRoot "config\worker-config.json"
 } elseif (-not [System.IO.Path]::IsPathRooted($ConfigPath)) {
   $ConfigPath = Join-Path $BundleRoot $ConfigPath
 }
@@ -177,7 +177,7 @@ function New-WorkerConfigIfMissing {
   $defaultWorkerId = Read-WorkerJsonString -Path $ExampleConfigPath -Name "worker_id"
   if (-not $defaultWorkerId.Trim()) { $defaultWorkerId = "worker-01" }
   $createdWorkerId = Read-WorkerPrompt -Label "Worker ID" -Default $defaultWorkerId -Required
-  $createdApiUrl = Read-WorkerPrompt -Label "Worker API base URL, for example https://nas.example:5001/worker-api" -Default $ApiUrl -Required
+  $createdApiUrl = Read-WorkerPrompt -Label "Worker API base URL, for example https://nas:5001/worker-api" -Default $ApiUrl -Required
   $defaultPathBaseDir = $PathBaseDir
   if (-not $defaultPathBaseDir.Trim()) { $defaultPathBaseDir = Read-WorkerJsonString -Path $ExampleConfigPath -Name "path_base_dir" }
   $createdPathBaseDir = Read-WorkerPrompt -Label "Shared Photos path base, for example \\nas\photo or P:\photo" -Default $defaultPathBaseDir -Required

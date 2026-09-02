@@ -19,6 +19,7 @@ dist/av-imgdata-worker-windows-x86_64/
   bin/
     av-imgdata-worker.exe
   config/
+    worker-config.json          # created on first start
     worker-config.example.json
   jobs/
     sample-worker-job.json
@@ -27,6 +28,9 @@ dist/av-imgdata-worker-windows-x86_64/
   work/
   logs/
 ```
+
+`config\worker-config.json` is created by the start script when it does not
+exist. `worker-config.example.json` remains the template shown to the user.
 
 The Windows libvips runtime is built by
 `tools/build-native-image-processor-vips-windows.sh` and installed under
@@ -44,15 +48,15 @@ Local smoke commands on Windows:
 
 ```powershell
 .\bin\av-imgdata-worker.exe version
-.\bin\av-imgdata-worker.exe probe --config .\config\worker-config.example.json
-.\bin\av-imgdata-worker.exe once --config .\config\worker-config.example.json --job .\jobs\sample-worker-job.json
+.\bin\av-imgdata-worker.exe probe --config .\config\worker-config.json
+.\bin\av-imgdata-worker.exe once --config .\config\worker-config.json --job .\jobs\sample-worker-job.json
 ```
 
 If the selected configuration file does not exist, `Start-AVImgDataWorker.ps1`
 creates it interactively before enrollment/model synchronization. For example:
 
 ```powershell
-.\Start-AVImgDataWorker.ps1 -ConfigPath .\config\worker-test.json -PathBaseDir \\nas\photo
+.\Start-AVImgDataWorker.ps1 -PathBaseDir \\nas\photo
 ```
 
 The prompt shows the example configuration values, proposes `worker-01` as the

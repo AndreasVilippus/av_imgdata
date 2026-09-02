@@ -53,6 +53,7 @@ def test_windows_initializer_delegates_config_and_model_sync_from_both_locations
     assert "av-imgdata-worker-model-sync.exe" in script
     assert 'Join-Path $RootCandidate "bin"' in script
     assert 'Join-Path $PSScriptRoot "..\\.."' in script
+    assert 'Join-Path $BundleRoot "config\\worker-config.json"' in script
     assert "Get-FileHash" not in script
     assert "Invoke-WebRequest" not in script
     assert "$config.processors.face" not in script
@@ -96,6 +97,7 @@ def test_unix_initializer_delegates_config_and_model_sync_from_both_locations():
     assert "av-imgdata-worker-model-sync" in script
     assert 'if [ -d "$SCRIPT_DIR/bin" ]' in script
     assert '"$SCRIPT_DIR/../.."' in script
+    assert 'CONFIG_PATH=${CONFIG_PATH:-$BUNDLE_ROOT/config/worker-config.json}' in script
     assert "sha256sum" not in script
     assert "manifest.json" not in script
     assert "chmod 600" in script
