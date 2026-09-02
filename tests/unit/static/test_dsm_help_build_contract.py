@@ -1,14 +1,13 @@
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_dsm_help_is_generated_from_documentation_core_during_ui_build():
+def test_dsm_help_is_generated_before_package_validation_and_during_ui_build():
     makefile = (ROOT / "ui" / "Makefile").read_text(encoding="utf-8")
+    build_package = (ROOT / "tools" / "build-package.sh").read_text(encoding="utf-8")
     renderer = ROOT / "tools" / "docs" / "render_dsm_help.py"
 
     assert renderer.is_file()
@@ -18,6 +17,13 @@ def test_dsm_help_is_generated_from_documentation_core_during_ui_build():
     assert "python3 $(DSM_HELP_RENDERER)" in makefile
     assert "cp -a help $(INSTALLDIR)" in makefile
     assert "install -m 644 helptoc.conf $(INSTALLDIR)/helptoc.conf" in makefile
+
+    generate_help = 'log "Generating DSM help"'
+    structure_checks = 'log "Running structure checks"'
+    python_tests = 'log "Running Python tests"'
+    assert "python3 tools/docs/render_dsm_help.py" in build_package
+    assert build_package.index(generate_help) < build_package.index(structure_checks)
+    assert build_package.index(generate_help) < build_package.index(python_tests)
 
 
 def test_dsm_help_renderer_uses_dsm_74_file_station_shell_and_locale_mapping():
@@ -49,7 +55,7 @@ def test_dsm_help_index_remains_documentation_core_source_of_truth():
     assert "[[doc:" not in english
 
 
-def test_dsm_help_toc_registers_existing_localized_pages(tmp_path):
+def test_dsm_help_generated_output_registers_existing_localized_pages():
     toc = json.loads((ROOT / "ui" / "helptoc.conf").read_text(encoding="utf-8"))
     info = (ROOT / "INFO.sh").read_text(encoding="utf-8")
 
@@ -68,18 +74,9 @@ def test_dsm_help_toc_registers_existing_localized_pages(tmp_path):
         ],
     }
 
-    renderer = ROOT / "tools" / "docs" / "render_dsm_help.py"
-    subprocess.run(
-        [sys.executable, str(renderer), "--output-root", str(tmp_path)],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
     for language in ("ger", "enu"):
-        assert (tmp_path / language / "index.html").is_file()
-        assert (tmp_path / language / "status.html").is_file()
+        assert (ROOT / "ui" / "help" / language / "index.html").is_file()
+        assert (ROOT / "ui" / "help" / language / "status.html").is_file()
 
         strings = (ROOT / "ui" / "texts" / language / "strings").read_text(encoding="utf-8")
         assert "[helptoc]" in strings
