@@ -4,10 +4,11 @@
 
 Dieses Dokument präzisiert das bestehende Hilfepunkte-Inventar `docs/dsm-help-topic-inventory.md` und ist bei widersprüchlicher Benennung maßgeblich.
 
-Die Präzisierung betrifft zwei Punkte:
+Die Präzisierung betrifft drei Punkte:
 
 1. Der bisherige Sammelbegriff **Einführung** wird nicht als eigener fachlicher Hilfebereich verwendet.
 2. **Status** bezeichnet ausschließlich die tatsächlich vorhandene Status-Ansicht von ImgData und ist kein Sammelbereich für Laufzustände anderer Funktionen.
+3. **Zukünftige Funktionen** werden vorerst nicht als eigener Bereich in der DSM-Hilfe geführt.
 
 ---
 
@@ -154,7 +155,36 @@ werden nicht für den allgemeinen Statusbereich verwendet. Falls die zugrunde li
 
 ---
 
-## 5. Konsequenz für die Indexseite
+## 5. Keine Zukunftsaussicht in der ausgelieferten Hilfe
+
+Ein eigener Bereich wie
+
+```text
+Zukünftige Funktionen
+├── Aufnahmezeitpunkt prüfen und bereinigen
+├── Recognition-Profile inkrementell pflegen
+├── Musikbewertungen / Audio Station
+└── DSM-Tray-Status
+```
+
+wird vorerst **nicht** in die DSM-Hilfe aufgenommen.
+
+Geplante Funktionen bleiben in ihren jeweiligen Konzeptdokumenten dokumentiert. Sie werden erst dann als Hilfepunkte in `docs/core/`, auf der Indexseite und in `helptoc.conf` aufgenommen, wenn die Funktion tatsächlich umgesetzt und für Benutzer verfügbar ist.
+
+Damit gilt für die Hilfe grundsätzlich:
+
+> Die ausgelieferte DSM-Hilfe beschreibt den aktuellen Funktionsumfang und keine Roadmap.
+
+Das verhindert insbesondere:
+
+- Hilfepunkte ohne nutzbare Funktion,
+- veraltete Roadmap-Aussagen in installierten Paketversionen,
+- tote Links oder deaktivierte Seiten,
+- Vermischung von Produktdokumentation und Entwicklungsplanung.
+
+---
+
+## 6. Konsequenz für die Indexseite
 
 Die Kurzbeschreibung von **Status** muss ausdrücklich die Ansicht benennen und darf nicht den Eindruck vermitteln, dort würden sämtliche laufenden Prozesse des Pakets erklärt.
 
@@ -164,9 +194,11 @@ Zieltext:
 
 Die englische Fassung folgt derselben Abgrenzung.
 
+Die Indexseite enthält außerdem keine Rubrik „Zukünftige Funktionen“ oder vergleichbare Roadmap-Hinweise.
+
 ---
 
-## 6. Regel für weitere Hilfepunkte
+## 7. Regel für weitere Hilfepunkte
 
 Für die weitere Ausarbeitung gilt grundsätzlich:
 
@@ -174,4 +206,8 @@ Für die weitere Ausarbeitung gilt grundsätzlich:
 
 Nur Informationen, die tatsächlich in der globalen Status-Ansicht zusammengefasst werden, gehören unter `status`.
 
-Damit bleibt die Hilfe entlang der Benutzeroberfläche und der fachlichen Funktionen strukturiert und bildet nicht die interne Statusarchitektur des Backends nach.
+Für neue Funktionen gilt zusätzlich:
+
+> Ein Hilfepunkt wird erst Bestandteil der ausgelieferten Hilfe, wenn die zugehörige Funktion tatsächlich verfügbar ist.
+
+Damit bleibt die Hilfe entlang der Benutzeroberfläche und der fachlichen Funktionen strukturiert und bildet weder die interne Statusarchitektur des Backends noch die Entwicklungs-Roadmap nach.
