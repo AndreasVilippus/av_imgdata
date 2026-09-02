@@ -148,8 +148,6 @@ def render_markdown(text: str, *, index_page: bool = False) -> str:
             flush_paragraph()
             close_list()
             level = len(heading.group(1))
-            # DSM File Station uses h4 entries on its start page. Keep the
-            # document title as h1 and render index topic headings as h4.
             if index_page and level == 2:
                 level = 4
             output.append(f"<h{level}>{render_inline(heading.group(2))}</h{level}>")
@@ -217,21 +215,61 @@ def read_info_value(info_path: Path, key: str) -> str:
     raise RuntimeError(f"{key} not found in {info_path}")
 
 
-def build_helptoc(app_id: str) -> dict[str, object]:
+def collect_helptoc_entries(source_root: Path) -> list[dict[str, str]]:
+    """Collect visible DSM navigation entries from the canonical German source tree.
+
+    A document is included when it targets DSM, is not the root index, and defines
+    an explicit DSM title key. English must use the same document IDs and ordering,
+    so one locale is sufficient for navigation generation.
+    """
+    source_dir = source_root / "de"
+    entries: list[tuple[int, str, dict[str, str]]] = []
+
+    for source in sorted(source_dir.rglob("*.md")):
+        metadata, _ = strip_front_matter(source.read_text(encoding="utf-8"))
+        document_id = metadata.get("id", source.stem)
+        targets = {item.strip() for item in metadata.get("targets", "").split(",") if item.strip()}
+        dsm_title_key = metadata.get("dsm_title_key", "").strip()
+
+        if document_id == "index" or "dsm" not in targets or not dsm_title_key:
+            continue
+
+        try:
+            order = int(metadata.get("order", "1000") or "1000")
+        except ValueError as exc:
+            raise ValueError(f"invalid order in {source}: {metadata.get('order')!r}") from exc
+
+        relative = source.relative_to(source_dir).with_suffix(".html").as_posix()
+        entries.append(
+            (
+                order,
+                document_id,
+                {
+                    "title": dsm_title_key,
+                    "content": relative,
+                },
+            )
+        )
+
+    entries.sort(key=lambda item: (item[0], item[1]))
+    return [entry for _, _, entry in entries]
+
+
+def build_helptoc(app_id: str, source_root: Path) -> dict[str, object]:
     return {
         "app": app_id,
         "title": HELPTOC_TITLE,
         "content": "index.html",
         "helpset": HELPSET,
         "stringset": STRINGSET,
-        "toc": [],
+        "toc": collect_helptoc_entries(source_root),
     }
 
 
-def write_helptoc(toc_path: Path, info_path: Path) -> None:
+def write_helptoc(toc_path: Path, info_path: Path, source_root: Path) -> None:
     app_id = read_info_value(info_path, "dsmappname")
     toc_path.write_text(
-        json.dumps(build_helptoc(app_id), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(build_helptoc(app_id, source_root), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -257,7 +295,7 @@ def check_tree(source_root: Path, output_root: Path, toc_path: Path, info_path: 
         tmp_root = Path(tmp)
         tmp_toc = tmp_root / "helptoc.conf"
         generated = render_tree(source_root, tmp_root)
-        write_helptoc(tmp_toc, info_path)
+        write_helptoc(tmp_toc, info_path, source_root)
         stale: list[str] = []
         for generated_file in generated:
             relative = generated_file.relative_to(tmp_root)
@@ -283,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return check_tree(source_root, output_root, toc_path, info_path)
     rendered = render_tree(source_root, output_root)
-    write_helptoc(toc_path, info_path)
+    write_helptoc(toc_path, info_path, source_root)
     for path in rendered:
         print(path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path)
     print(toc_path.relative_to(REPO_ROOT) if toc_path.is_relative_to(REPO_ROOT) else toc_path)
