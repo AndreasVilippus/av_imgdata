@@ -1092,6 +1092,7 @@ async def face_matching_action(request: Request):
     save_only = bool(body.get("save_only"))
     recognize_persons = bool(body.get("recognize_persons"))
     skip_unknown_persons = bool(body.get("skip_unknown_persons"))
+    include_hidden_persons = bool(body.get("include_hidden_persons"))
     resume_from_progress = bool(body.get("resume_from_progress"))
     refresh = bool(body.get("refresh"))
     default_limit = _configured_max_photos_persons()
@@ -1156,6 +1157,7 @@ async def face_matching_action(request: Request):
             save_only=save_only,
             recognize_persons=recognize_persons,
             skip_unknown_persons=skip_unknown_persons,
+            include_hidden_persons=include_hidden_persons,
             resume_from_progress=resume_from_progress,
             refresh=refresh,
             limit=limit,
@@ -1181,6 +1183,7 @@ async def face_matching_action(request: Request):
                     resume_from_progress=resume_from_progress,
                     recognize_persons=recognize_persons,
                     skip_unknown_persons=skip_unknown_persons,
+                    include_hidden_persons=include_hidden_persons,
                     changed_since_days=changed_since_days,
                 )
             )

@@ -48,6 +48,17 @@ def test_profile_math_builds_normalized_centroid_and_medoid():
     assert FaceRecognitionService._medoid_index([[1.0, 0.0], [0.9, 0.1], [0.8, 0.2]]) == 1
 
 
+def test_profile_state_key_separates_visible_only_and_hidden_inclusive_profiles():
+    service, _findings = _service()
+
+    visible = service._profile_state_key(service.normalize_options({"include_hidden_persons": False}))
+    with_hidden = service._profile_state_key(service.normalize_options({"include_hidden_persons": True}))
+
+    assert visible != with_hidden
+    assert visible.endswith("_visible_only")
+    assert with_hidden.endswith("_with_hidden")
+
+
 def test_recognition_preparing_progress_resets_stale_image_counters():
     updates = []
     service, _findings = _service()

@@ -1062,14 +1062,17 @@ def test_start_face_matching_discovery_passes_insightface_skip_unknown_options_t
             action="search_missing_faces_insightface",
             recognize_persons=True,
             skip_unknown_persons=True,
+            include_hidden_persons=True,
             changed_since_days=14,
         )
 
     assert progress["resume_cursor"]["recognize_persons"] is True
     assert progress["resume_cursor"]["skip_unknown_persons"] is True
+    assert progress["resume_cursor"]["include_hidden_persons"] is True
     assert progress["resume_cursor"]["changed_since_days"] == 14
     assert captured["kwargs"]["kwargs"]["recognize_persons"] is True
     assert captured["kwargs"]["kwargs"]["skip_unknown_persons"] is True
+    assert captured["kwargs"]["kwargs"]["include_hidden_persons"] is True
     assert captured["kwargs"]["kwargs"]["changed_since_days"] == 14
 
 

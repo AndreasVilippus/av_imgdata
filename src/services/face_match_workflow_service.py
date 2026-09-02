@@ -968,6 +968,7 @@ class FaceMatchWorkflowService:
         resume_from_progress: bool = False,
         recognize_persons: bool = False,
         skip_unknown_persons: bool = False,
+        include_hidden_persons: bool = False,
         changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         backend = self.backend
@@ -1039,6 +1040,7 @@ class FaceMatchWorkflowService:
             save_only = bool(resume_cursor.get("save_only", save_only))
             recognize_persons = bool(resume_cursor.get("recognize_persons", recognize_persons))
             skip_unknown_persons = bool(resume_cursor.get("skip_unknown_persons", skip_unknown_persons))
+            include_hidden_persons = bool(resume_cursor.get("include_hidden_persons", include_hidden_persons))
             cursor_changed_since_days = self.normalize_changed_since_days(
                 resume_cursor.get("changed_since_days", normalized_changed_since_days)
             )
@@ -1069,6 +1071,7 @@ class FaceMatchWorkflowService:
             resume_path_index=resume_path_index,
             recognize_persons=bool(recognize_persons),
             skip_unknown_persons=bool(skip_unknown_persons),
+            include_hidden_persons=bool(include_hidden_persons),
             changed_since_days=normalized_changed_since_days,
         )
 
@@ -1105,6 +1108,7 @@ class FaceMatchWorkflowService:
                 save_only=save_only,
                 recognize_persons=bool(recognize_persons),
                 skip_unknown_persons=bool(skip_unknown_persons),
+                include_hidden_persons=bool(include_hidden_persons),
                 action=normalized_action,
                 findings_count=int(resume_cursor.get("findings_count") or 0) if resume_cursor else 0,
                 path_index=resume_path_index,
@@ -1131,6 +1135,7 @@ class FaceMatchWorkflowService:
                 "save_only": save_only,
                 "recognize_persons": bool(recognize_persons),
                 "skip_unknown_persons": bool(skip_unknown_persons),
+                "include_hidden_persons": bool(include_hidden_persons),
                 "changed_since_days": normalized_changed_since_days,
                 "resume_cursor": resume_cursor if resume_cursor else None,
             },
@@ -1155,6 +1160,7 @@ class FaceMatchWorkflowService:
         save_only: bool,
         recognize_persons: bool = False,
         skip_unknown_persons: bool = False,
+        include_hidden_persons: bool = False,
         changed_since_days: int = 0,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -1168,6 +1174,7 @@ class FaceMatchWorkflowService:
             save_only=save_only,
             recognize_persons=bool(recognize_persons),
             skip_unknown_persons=bool(skip_unknown_persons),
+            include_hidden_persons=bool(include_hidden_persons),
             changed_since_days=normalized_changed_since_days,
             limit=limit,
             offset=offset,
@@ -1209,6 +1216,7 @@ class FaceMatchWorkflowService:
                     save_only=save_only,
                     recognize_persons=recognize_persons,
                     skip_unknown_persons=skip_unknown_persons,
+                    include_hidden_persons=include_hidden_persons,
                     changed_since_days=normalized_changed_since_days,
                     resume_cursor=resume_cursor,
                 )

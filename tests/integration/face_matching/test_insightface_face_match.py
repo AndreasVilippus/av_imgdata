@@ -156,6 +156,68 @@ class InsightFaceFaceMatchTests(unittest.TestCase):
         self.assertEqual(result["metadata_face"]["name"], "Alice")
         self.assertTrue(result["resume_cursor"]["recognize_persons"])
 
+    def test_insightface_missing_face_profiles_respect_include_hidden_persons_option(self):
+        class FakeEmbedder:
+            @classmethod
+            def available_models(cls, model_root=None):
+                return {"root": str(model_root or ""), "model_store": "", "models": []}
+
+            def __init__(self, **kwargs):
+                pass
+
+            def detect_and_embed(self, image_path):
+                return [{
+                    "bbox": {"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.5},
+                    "center": {"x": 0.2, "y": 0.35},
+                    "embedding": [1.0, 0.0],
+                }]
+
+        profile_options = []
+        self.service.core.getSharedFolder = lambda **kwargs: "/volume1/photo"
+        self.service.files.listImageFiles = lambda base_path: ["/volume1/photo/tests/image.jpg"]
+        self.service.photos.findFotoTeamItemByPath = lambda **kwargs: {"id": 123, "name": "image.jpg"}
+        self.service.photos.list_faceFotoTeamItems = lambda **kwargs: []
+
+        def profiles(options=None):
+            profile_options.append(dict(options or {}))
+            return {"profiles": [{
+                "person_id": 42,
+                "person_name": "Alice",
+                "centroid_embedding": [1.0, 0.0],
+                "medoid": {},
+            }]}
+
+        self.service.face_recognition.profiles = profiles
+
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceEmbedder", return_value=FakeEmbedder()):
+            result = self.service.searchMissingPhotosFacesWithInsightFace(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                recognize_persons=True,
+                include_hidden_persons=False,
+            )
+
+        self.assertTrue(result["searched"])
+        self.assertEqual(profile_options, [{"include_hidden_persons": False}])
+        self.assertFalse(result["resume_cursor"]["include_hidden_persons"])
+
+        profile_options.clear()
+        with patch.object(self.service, "_faceProcessorAvailable", return_value=True), \
+             patch.object(self.service, "_createFaceEmbedder", return_value=FakeEmbedder()):
+            result = self.service.searchMissingPhotosFacesWithInsightFace(
+                user_key="user",
+                cookies={},
+                base_url="https://example.test",
+                recognize_persons=True,
+                include_hidden_persons=True,
+            )
+
+        self.assertTrue(result["searched"])
+        self.assertEqual(profile_options, [{"include_hidden_persons": True}])
+        self.assertTrue(result["resume_cursor"]["include_hidden_persons"])
+
     def test_insightface_missing_face_stop_after_detection_prevents_match_work(self):
         class FakeDetector:
             def detect(self, image_path):

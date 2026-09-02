@@ -1954,6 +1954,7 @@ class ImgDataService:
         save_only: bool,
         recognize_persons: bool = False,
         skip_unknown_persons: bool = False,
+        include_hidden_persons: bool = False,
         action: str = "search_photo_face_in_file",
         findings_count: int = 0,
         path_index: int = 0,
@@ -1972,6 +1973,7 @@ class ImgDataService:
             "save_only": bool(save_only),
             "recognize_persons": bool(recognize_persons),
             "skip_unknown_persons": bool(skip_unknown_persons),
+            "include_hidden_persons": bool(include_hidden_persons),
             "action": str(action or "search_photo_face_in_file"),
             "findings_count": max(0, int(findings_count)),
             "path_index": max(0, int(path_index)),
@@ -2021,6 +2023,7 @@ class ImgDataService:
             save_only=bool(current_cursor.get("save_only", current.get("save_only", False))),
             recognize_persons=bool(current_cursor.get("recognize_persons", current.get("recognize_persons", False))),
             skip_unknown_persons=bool(current_cursor.get("skip_unknown_persons", current.get("skip_unknown_persons", False))),
+            include_hidden_persons=bool(current_cursor.get("include_hidden_persons", current.get("include_hidden_persons", False))),
             action=action,
             findings_count=int(current_cursor.get("findings_count") or current.get("findings_count") or 0),
             path_index=int(current_cursor.get("path_index") or current.get("images_read") or 0),
@@ -6597,6 +6600,7 @@ class ImgDataService:
         resume_from_progress: bool = False,
         recognize_persons: bool = False,
         skip_unknown_persons: bool = False,
+        include_hidden_persons: bool = False,
         changed_since_days: int = 0,
     ) -> Dict[str, Any]:
         return self.face_match_workflow.start_discovery(
@@ -6613,6 +6617,7 @@ class ImgDataService:
             resume_from_progress=resume_from_progress,
             recognize_persons=recognize_persons,
             skip_unknown_persons=skip_unknown_persons,
+            include_hidden_persons=include_hidden_persons,
             changed_since_days=changed_since_days,
         )
 
@@ -8395,6 +8400,7 @@ class ImgDataService:
         save_only: bool = False,
         recognize_persons: bool = False,
         skip_unknown_persons: bool = False,
+        include_hidden_persons: bool = False,
         changed_since_days: int = 0,
         resume_cursor: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -8403,6 +8409,7 @@ class ImgDataService:
         normalized_changed_since_days = max(0, int(changed_since_days or 0))
         if isinstance(resume_cursor, dict):
             normalized_changed_since_days = max(0, int(resume_cursor.get("changed_since_days", normalized_changed_since_days) or 0))
+            include_hidden_persons = bool(resume_cursor.get("include_hidden_persons", include_hidden_persons))
         saved_entries = self._resumeFaceMatchSavedEntries(
             action=action,
             save_only=save_only,
@@ -8459,6 +8466,7 @@ class ImgDataService:
                 action=action,
                 recognize_persons=bool(recognize_persons),
                 skip_unknown_persons=bool(skip_unknown_persons),
+                include_hidden_persons=bool(include_hidden_persons),
                 findings_count=findings_count,
                 path_index=path_index,
                 images_read=images_read,
@@ -8529,7 +8537,9 @@ class ImgDataService:
             )
             recognition_profiles = []
             if recognize_persons:
-                profiles_payload = self.face_recognition.profiles({})
+                profiles_payload = self.face_recognition.profiles({
+                    "include_hidden_persons": bool(include_hidden_persons),
+                })
                 profile_entries = profiles_payload.get("profiles") if isinstance(profiles_payload, dict) else []
                 recognition_profiles = [
                     profile for profile in (profile_entries if isinstance(profile_entries, list) else [])
@@ -8555,6 +8565,7 @@ class ImgDataService:
                     action=action,
                     recognize_persons=bool(recognize_persons),
                     skip_unknown_persons=bool(skip_unknown_persons),
+                    include_hidden_persons=bool(include_hidden_persons),
                     findings_count=findings_count,
                     path_index=path_index,
                     images_read=images_read,
@@ -8589,6 +8600,7 @@ class ImgDataService:
                         action=action,
                         recognize_persons=bool(recognize_persons),
                         skip_unknown_persons=bool(skip_unknown_persons),
+                        include_hidden_persons=bool(include_hidden_persons),
                         findings_count=findings_count,
                         path_index=path_index,
                         images_read=images_read,
@@ -8636,6 +8648,7 @@ class ImgDataService:
                         action=action,
                         recognize_persons=bool(recognize_persons),
                         skip_unknown_persons=bool(skip_unknown_persons),
+                        include_hidden_persons=bool(include_hidden_persons),
                         findings_count=findings_count,
                         path_index=path_index,
                         images_read=images_read,
@@ -8666,6 +8679,7 @@ class ImgDataService:
                     action=action,
                     recognize_persons=bool(recognize_persons),
                     skip_unknown_persons=bool(skip_unknown_persons),
+                    include_hidden_persons=bool(include_hidden_persons),
                     findings_count=findings_count,
                     path_index=path_index,
                     images_read=images_read,
@@ -8710,6 +8724,7 @@ class ImgDataService:
                             action=action,
                             recognize_persons=bool(recognize_persons),
                             skip_unknown_persons=bool(skip_unknown_persons),
+                            include_hidden_persons=bool(include_hidden_persons),
                             findings_count=findings_count,
                             changed_since_days=normalized_changed_since_days,
                         ),
@@ -8733,6 +8748,7 @@ class ImgDataService:
                         action=action,
                         recognize_persons=bool(recognize_persons),
                         skip_unknown_persons=bool(skip_unknown_persons),
+                        include_hidden_persons=bool(include_hidden_persons),
                         findings_count=findings_count,
                         path_index=images_read,
                         images_read=images_read,
@@ -8776,6 +8792,7 @@ class ImgDataService:
                             action=action,
                             recognize_persons=bool(recognize_persons),
                             skip_unknown_persons=bool(skip_unknown_persons),
+                            include_hidden_persons=bool(include_hidden_persons),
                             findings_count=findings_count,
                             path_index=images_read,
                             images_read=images_read,
@@ -8809,6 +8826,7 @@ class ImgDataService:
                         action=action,
                         recognize_persons=bool(recognize_persons),
                         skip_unknown_persons=bool(skip_unknown_persons),
+                        include_hidden_persons=bool(include_hidden_persons),
                         findings_count=findings_count,
                         path_index=images_read,
                         images_read=images_read,
@@ -8914,6 +8932,7 @@ class ImgDataService:
                             action=action,
                             recognize_persons=bool(recognize_persons),
                             skip_unknown_persons=True,
+                            include_hidden_persons=bool(include_hidden_persons),
                             findings_count=findings_count,
                             path_index=images_read,
                             images_read=images_read,
@@ -8969,6 +8988,7 @@ class ImgDataService:
                         action=action,
                         recognize_persons=bool(recognize_persons),
                         skip_unknown_persons=bool(skip_unknown_persons),
+                        include_hidden_persons=bool(include_hidden_persons),
                         findings_count=findings_count + 1,
                         path_index=images_read,
                         images_read=images_read,
@@ -9010,6 +9030,7 @@ class ImgDataService:
                                     action=action,
                                     recognize_persons=bool(recognize_persons),
                                     skip_unknown_persons=bool(skip_unknown_persons),
+                                    include_hidden_persons=bool(include_hidden_persons),
                                     findings_count=findings_count,
                                     path_index=images_read,
                                     images_read=images_read,
@@ -9054,6 +9075,7 @@ class ImgDataService:
                             action=action,
                             recognize_persons=bool(recognize_persons),
                             skip_unknown_persons=bool(skip_unknown_persons),
+                            include_hidden_persons=bool(include_hidden_persons),
                             findings_count=findings_count,
                             path_index=images_read,
                             images_read=images_read,
@@ -9108,6 +9130,7 @@ class ImgDataService:
                     action=action,
                     recognize_persons=bool(recognize_persons),
                     skip_unknown_persons=bool(skip_unknown_persons),
+                    include_hidden_persons=bool(include_hidden_persons),
                     findings_count=findings_count,
                     path_index=images_read,
                     images_read=images_read,
@@ -9160,6 +9183,7 @@ class ImgDataService:
                     action=action,
                     recognize_persons=bool(recognize_persons),
                     skip_unknown_persons=bool(skip_unknown_persons),
+                    include_hidden_persons=bool(include_hidden_persons),
                     findings_count=findings_count,
                     path_index=images_read,
                     images_read=images_read,

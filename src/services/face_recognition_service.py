@@ -248,7 +248,8 @@ class FaceRecognitionService:
         return f"{self.backend._configuredInsightFaceModelName()}:{options['det_size'][0]}x{options['det_size'][1]}:det{options['det_thresh']}"
 
     def _profile_state_key(self, options: Dict[str, Any]) -> str:
-        return self._model_key(options).replace(":", "_").replace(".", "_")
+        visibility = "with_hidden" if options.get("include_hidden_persons") else "visible_only"
+        return f"{self._model_key(options)}:{visibility}".replace(":", "_").replace(".", "_")
 
     def _recognition_image_max_edge(self) -> int:
         config_service = getattr(self.backend, "config", None)
@@ -1410,6 +1411,7 @@ class FaceRecognitionService:
                 intra_similarity = profile_math["intra_person_similarity"]
                 profiles.append({
                     "person_id": person_id, "person_name": person_name, "profile_key": self._model_key(options),
+                    "include_hidden_persons": bool(options.get("include_hidden_persons")),
                     "reference_count": len(references), "used_count": len(references), "quality": "good" if len(references) >= options["min_faces_per_person"] else "limited",
                     "intra_person_similarity": intra_similarity,
                     "centroid_embedding": centroid, "medoid": {key: medoid[key] for key in ("face_id", "image_id", "image_path", "bbox", "display_bbox", "image_orientation") if key in medoid},

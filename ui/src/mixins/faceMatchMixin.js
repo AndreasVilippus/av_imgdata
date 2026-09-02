@@ -2524,6 +2524,8 @@ export default {
 						skip_unknown_persons: this.selectedFaceMatchingAction === 'search_missing_faces_insightface'
 							&& this.faceMatchRecognizeMissingInsightFacePersons
 							&& this.faceMatchSkipUnknownInsightFacePersons,
+						include_hidden_persons: this.selectedFaceMatchingAction === 'search_missing_faces_insightface'
+							&& this.recognitionOptions.include_hidden_persons,
 						changed_since_days: ['search_photo_face_in_file', 'search_file_face_in_sources', 'mark_missing_photos_faces', 'search_missing_faces_insightface'].includes(this.selectedFaceMatchingAction)
 							? Math.max(0, Number(this.faceMatchMissingFacesChangedSinceDays) || 0)
 							: 0,

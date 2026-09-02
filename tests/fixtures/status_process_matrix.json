@@ -49,7 +49,7 @@
     },
     "resume": {
       "flags": ["resume_existing", "resume_from_progress"],
-      "cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_after_face_id", "resume_person_id", "resume_progress_counts", "scan_next_path_index", "skip_face_ids", "skip_targets"],
+      "cursor_fields": ["resume_start_person_index", "resume_after_image_id", "resume_after_face_id", "resume_person_id", "resume_progress_counts", "scan_next_path_index", "skip_face_ids", "skip_targets", "include_hidden_persons"],
       "rule": "After a review mutation, the next scan must continue after the last reviewed unit and must retain prior counters. After backend reopen with resumable stopped or unfinished progress, the UI must offer an explicit restart-or-resume choice at the owning view."
     },
     "status_option_separation": {
@@ -121,7 +121,7 @@
       "stop_route": "/face_matching_stop",
       "status_route": "/face_matching_findings_status",
       "mutation_routes": ["/face_assign_match", "/face_create_match", "/face_skip_match", "/face_apply_metadata_match", "/face_assign_metadata_match", "/face_create_metadata_match", "/face_delete_metadata_match", "/face_person_suggest"],
-      "parameters": ["action", "save_only", "auto", "recognize_persons", "skip_unknown_persons", "resume_from_progress", "changed_since_days", "skip_face_ids", "skip_targets", "person_id", "person_name"]
+      "parameters": ["action", "save_only", "auto", "recognize_persons", "skip_unknown_persons", "include_hidden_persons", "resume_from_progress", "changed_since_days", "skip_face_ids", "skip_targets", "person_id", "person_name"]
     },
     {
       "id": "face_match.findings_load",

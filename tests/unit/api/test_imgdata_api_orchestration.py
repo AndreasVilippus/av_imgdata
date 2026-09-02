@@ -67,6 +67,7 @@ def test_face_matching_action_normalizes_request_and_starts_discovery(monkeypatc
             "save_only": True,
             "recognize_persons": True,
             "skip_unknown_persons": True,
+            "include_hidden_persons": True,
             "resume_from_progress": True,
             "limit": "12",
             "offset": "3",
@@ -106,6 +107,7 @@ def test_face_matching_action_normalizes_request_and_starts_discovery(monkeypatc
         resume_from_progress=True,
         recognize_persons=True,
         skip_unknown_persons=True,
+        include_hidden_persons=True,
         changed_since_days=0,
     )
 

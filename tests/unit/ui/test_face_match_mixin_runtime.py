@@ -1412,6 +1412,9 @@ def test_insightface_missing_face_start_sends_auto_only_for_safe_apply_runtime()
 	              faceMatchSkipUnknownInsightFacePersons: true,
 	              faceMatchAutoApplySafeInsightFacePersons: true,
               faceMatchMissingFacesChangedSinceDays: 14,
+              recognitionOptions: {
+                include_hidden_persons: true,
+              },
               insightFaceStatus: {
                 native_processors: {
                   FACE_PROCESSOR: {
@@ -1445,6 +1448,7 @@ def test_insightface_missing_face_start_sends_auto_only_for_safe_apply_runtime()
 	            assert.strictEqual(requestBody.auto, true);
 	            assert.strictEqual(requestBody.recognize_persons, true);
 	            assert.strictEqual(requestBody.skip_unknown_persons, true);
+	            assert.strictEqual(requestBody.include_hidden_persons, true);
 	            assert.strictEqual(requestBody.changed_since_days, 14);
             console.log(JSON.stringify({ requestBody }));
             """
@@ -1455,6 +1459,7 @@ def test_insightface_missing_face_start_sends_auto_only_for_safe_apply_runtime()
     assert result["requestBody"]["auto"] is True
     assert result["requestBody"]["recognize_persons"] is True
     assert result["requestBody"]["skip_unknown_persons"] is True
+    assert result["requestBody"]["include_hidden_persons"] is True
     assert result["requestBody"]["changed_since_days"] == 14
 
 

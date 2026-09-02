@@ -153,6 +153,7 @@ def test_status_process_matrix_declares_core_concepts():
         "scan_next_path_index",
         "skip_face_ids",
         "skip_targets",
+        "include_hidden_persons",
     }.issubset(concepts["resume"]["cursor_fields"])
 
 
