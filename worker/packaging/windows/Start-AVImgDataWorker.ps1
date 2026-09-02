@@ -180,7 +180,7 @@ function New-WorkerConfigIfMissing {
   $createdApiUrl = Read-WorkerPrompt -Label "Worker API base URL, for example https://nas:5001/worker-api" -Default $ApiUrl -Required
   $defaultPathBaseDir = $PathBaseDir
   if (-not $defaultPathBaseDir.Trim()) { $defaultPathBaseDir = Read-WorkerJsonString -Path $ExampleConfigPath -Name "path_base_dir" }
-  $createdPathBaseDir = Read-WorkerPrompt -Label "Shared Photos path base, for example \\nas\photo or P:\photo" -Default $defaultPathBaseDir -Required
+  $createdPathBaseDir = Read-WorkerPrompt -Label "Shared Photos path base, for example \\nas\photo" -Default $defaultPathBaseDir -Required
   Write-Host "Log level defaults to off. Alternatives: error, warning, info, debug."
   $createdLogLevel = Read-WorkerPrompt -Label "Log level" -Default "off"
   if (@("off", "error", "warning", "info", "debug") -notcontains $createdLogLevel) {

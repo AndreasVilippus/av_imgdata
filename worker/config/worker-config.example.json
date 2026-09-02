@@ -7,7 +7,7 @@
     "token_file": "../worker.token"
   },
   "workspace_root": "../work",
-  "path_base_dir": "P:\\photo",
+  "path_base_dir": "\\\\nas\\photo",
   "input_modes": [
     "shared_path"
   ],

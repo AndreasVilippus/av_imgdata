@@ -110,6 +110,7 @@ def test_worker_example_config_matches_schema_contract():
     assert config["schema_version"] == schema["properties"]["schema_version"]["const"]
     assert set(schema["required"]).issubset(config)
     assert config["input_modes"] == ["shared_path"]
+    assert config["path_base_dir"] == "\\\\nas\\photo"
     assert config["processors"]["face"]["model_root"] == "../.models/face"
     assert config["processors"]["image_vips"]["enabled"] is True
     assert config["processors"]["image_vips"]["path"] == "../bin/av-imgdata-image-processor"
