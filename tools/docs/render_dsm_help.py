@@ -8,6 +8,7 @@ build does not require an additional Python Markdown dependency.
 from __future__ import annotations
 
 import argparse
+import json
 import html
 import re
 import sys
@@ -17,7 +18,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOURCE_ROOT = REPO_ROOT / "docs" / "core"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "ui" / "help"
+DEFAULT_TOC_PATH = REPO_ROOT / "ui" / "helptoc.conf"
+DEFAULT_INFO_PATH = REPO_ROOT / "INFO.sh"
 LOCALES = {"de": "ger", "en": "enu"}
+HELPTOC_TITLE = "helptoc:imgdata"
+HELPSET = "help"
+STRINGSET = "texts"
 
 DSM_HEAD = """<!DOCTYPE html>
 <html class=\"img-no-display\">
@@ -202,10 +208,40 @@ def render_tree(source_root: Path, output_root: Path) -> list[Path]:
     return rendered
 
 
+def read_info_value(info_path: Path, key: str) -> str:
+    pattern = re.compile(rf"^{re.escape(key)}=(?P<quote>[\"']?)(?P<value>.*?)(?P=quote)$")
+    for line in info_path.read_text(encoding="utf-8").splitlines():
+        match = pattern.match(line.strip())
+        if match:
+            return match.group("value")
+    raise RuntimeError(f"{key} not found in {info_path}")
+
+
+def build_helptoc(app_id: str) -> dict[str, object]:
+    return {
+        "app": app_id,
+        "title": HELPTOC_TITLE,
+        "content": "index.html",
+        "helpset": HELPSET,
+        "stringset": STRINGSET,
+        "toc": [],
+    }
+
+
+def write_helptoc(toc_path: Path, info_path: Path) -> None:
+    app_id = read_info_value(info_path, "dsmappname")
+    toc_path.write_text(
+        json.dumps(build_helptoc(app_id), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--toc-path", type=Path, default=DEFAULT_TOC_PATH)
+    parser.add_argument("--info-path", type=Path, default=DEFAULT_INFO_PATH)
     parser.add_argument(
         "--check",
         action="store_true",
@@ -214,18 +250,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def check_tree(source_root: Path, output_root: Path) -> int:
+def check_tree(source_root: Path, output_root: Path, toc_path: Path, info_path: Path) -> int:
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="av-imgdata-dsm-help-") as tmp:
         tmp_root = Path(tmp)
+        tmp_toc = tmp_root / "helptoc.conf"
         generated = render_tree(source_root, tmp_root)
+        write_helptoc(tmp_toc, info_path)
         stale: list[str] = []
         for generated_file in generated:
             relative = generated_file.relative_to(tmp_root)
             committed = output_root / relative
             if not committed.is_file() or committed.read_bytes() != generated_file.read_bytes():
                 stale.append(str(relative))
+        if not toc_path.is_file() or toc_path.read_bytes() != tmp_toc.read_bytes():
+            stale.append(str(toc_path.relative_to(REPO_ROOT) if toc_path.is_relative_to(REPO_ROOT) else toc_path))
         if stale:
             print("DSM help output is stale or missing:", file=sys.stderr)
             for path in stale:
@@ -238,11 +278,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     source_root = args.source_root.resolve()
     output_root = args.output_root.resolve()
+    toc_path = args.toc_path.resolve()
+    info_path = args.info_path.resolve()
     if args.check:
-        return check_tree(source_root, output_root)
+        return check_tree(source_root, output_root, toc_path, info_path)
     rendered = render_tree(source_root, output_root)
+    write_helptoc(toc_path, info_path)
     for path in rendered:
         print(path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path)
+    print(toc_path.relative_to(REPO_ROOT) if toc_path.is_relative_to(REPO_ROOT) else toc_path)
     return 0
 
 

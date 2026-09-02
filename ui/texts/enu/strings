@@ -1,6 +1,9 @@
 [app]
 title="ImgData"
 
+[helptoc]
+imgdata="ImgData"
+
 [common]
 button_ok="OK"
 notice_title="Notice"
