@@ -36,13 +36,16 @@ def test_generated_dsm_help_outputs_are_not_tracked_sources():
     assert "/ui/.dsm-help.stamp" not in gitignore
 
 
-def test_dsm_help_renderer_uses_dsm_74_file_station_shell_and_locale_mapping():
+def test_dsm_help_renderer_uses_dsm_74_file_station_shell_and_cleans_generated_locales():
     renderer = (ROOT / "tools" / "docs" / "render_dsm_help.py").read_text(encoding="utf-8")
 
     assert 'LOCALES = {"de": "ger", "en": "enu"}' in renderer
     assert 'DEFAULT_TOC_PATH = REPO_ROOT / "ui" / "helptoc.conf"' in renderer
     assert 'read_info_value(info_path, "dsmappname")' in renderer
     assert 'HELPTOC_TITLE = "helptoc:imgdata"' in renderer
+    assert "import shutil" in renderer
+    assert "locale_output_dir = output_root / dsm_locale" in renderer
+    assert "shutil.rmtree(locale_output_dir)" in renderer
     assert '../../../../help/help.css' in renderer
     assert '../../../../help/scrollbar/flexcroll.css' in renderer
     assert '../../../../help/scrollbar/flexcroll.js' in renderer
