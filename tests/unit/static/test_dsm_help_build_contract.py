@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -47,7 +49,7 @@ def test_dsm_help_index_remains_documentation_core_source_of_truth():
     assert "[[doc:" not in english
 
 
-def test_dsm_help_toc_registers_existing_localized_pages():
+def test_dsm_help_toc_registers_existing_localized_pages(tmp_path):
     toc = json.loads((ROOT / "ui" / "helptoc.conf").read_text(encoding="utf-8"))
     info = (ROOT / "INFO.sh").read_text(encoding="utf-8")
 
@@ -66,9 +68,19 @@ def test_dsm_help_toc_registers_existing_localized_pages():
         ],
     }
 
+    renderer = ROOT / "tools" / "docs" / "render_dsm_help.py"
+    subprocess.run(
+        [sys.executable, str(renderer), "--output-root", str(tmp_path)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
     for language in ("ger", "enu"):
-        assert (ROOT / "ui" / "help" / language / "index.html").is_file()
-        assert (ROOT / "ui" / "help" / language / "status.html").is_file()
+        assert (tmp_path / language / "index.html").is_file()
+        assert (tmp_path / language / "status.html").is_file()
+
         strings = (ROOT / "ui" / "texts" / language / "strings").read_text(encoding="utf-8")
         assert "[helptoc]" in strings
         assert 'imgdata="ImgData"' in strings
