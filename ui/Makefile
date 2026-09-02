@@ -12,7 +12,7 @@ AUTO_CONFIG_TOOL?=/usr/local/tool/parse_requires.py
 JS_DEPENDER?=/usr/syno/bin/GenerateJSDepend.php
 DSM_HELP_RENDERER=../tools/docs/render_dsm_help.py
 DSM_HELP_SOURCES=$(shell find ../docs/core/de ../docs/core/en -type f -name '*.md' 2>/dev/null)
-DSM_HELP_STAMP=.dsm-help.stamp
+DSM_HELP_STAMP=helptoc.conf
 
 .PHONY: all clean $(SUBDIR) dsm-help
 
@@ -22,7 +22,6 @@ dsm-help: $(DSM_HELP_STAMP)
 
 $(DSM_HELP_STAMP): $(DSM_HELP_RENDERER) $(DSM_HELP_SOURCES) ../INFO.sh
 	python3 $(DSM_HELP_RENDERER)
-	@touch $@
 
 $(BUNDLE_JS):
 	# Snpm is a tool to install npm modules in Synology
