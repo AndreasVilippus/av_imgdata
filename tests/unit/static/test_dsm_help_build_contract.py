@@ -12,6 +12,8 @@ def test_dsm_help_is_generated_before_package_validation_and_during_ui_build():
 
     assert renderer.is_file()
     assert "DSM_HELP_RENDERER=../tools/docs/render_dsm_help.py" in makefile
+    assert "DSM_HELP_STAMP=helptoc.conf" in makefile
+    assert "$(DSM_HELP_STAMP): $(DSM_HELP_RENDERER) $(DSM_HELP_SOURCES) ../INFO.sh" in makefile
     assert "all: dsm-help" in makefile
     assert "install: dsm-help" in makefile
     assert "python3 $(DSM_HELP_RENDERER)" in makefile
@@ -31,7 +33,7 @@ def test_generated_dsm_help_outputs_are_not_tracked_sources():
 
     assert "/ui/help/" in gitignore
     assert "/ui/helptoc.conf" in gitignore
-    assert "/ui/.dsm-help.stamp" in gitignore
+    assert "/ui/.dsm-help.stamp" not in gitignore
 
 
 def test_dsm_help_renderer_uses_dsm_74_file_station_shell_and_locale_mapping():
