@@ -6,30 +6,67 @@ ImgData erhält eine einfache, optisch saubere und mit wenig Pflegeaufwand betre
 
 Die Website ist die einzige aktuell aktive Dokumentationsausgabe. Eine DSM-Hilfe wird vorerst nicht gebaut oder mit dem SPK ausgeliefert.
 
-Die fachlichen Inhalte stammen direkt aus:
+Die fachlichen Inhalte stammen aus:
 
 ```text
 docs/core/de/
 docs/core/en/
 ```
 
-Als technischer Renderer wird **MkDocs Material** verwendet. Es liefert ohne eigenes Theme bereits Navigation, Suche, responsive Darstellung, Hell-/Dunkelmodus, Code-Darstellung und eine brauchbare Standardoptik.
+Als Renderer wird **MkDocs Material** verwendet. Es liefert ohne eigenes Theme bereits Navigation, Suche, responsive Darstellung, Hell-/Dunkelmodus und eine brauchbare Standardoptik.
 
 ---
 
 ## Repository-Entscheidung
 
-Für die ImgData-Seite wird **kein separates Repository** angelegt.
+Für die ImgData-Seite wird **kein separates Repository** angelegt. Die Dokumentation gehört ausschließlich zu ImgData; ein zweites Repository würde unnötige Synchronisation für Dokumentation, Releases, Paketversionen und Buildlogik erzeugen.
 
-Die Dokumentation gehört funktional ausschließlich zu ImgData. Ein zweites Repository würde zusätzliche Synchronisation für Dokumentation, Releases, Paketversionen, Screenshots und Buildlogik erzeugen.
-
-Die GitHub Page wird daher als Project Page direkt aus `AndreasVilippus/av_imgdata` veröffentlicht:
+Die Seite wird als Project Page direkt aus `AndreasVilippus/av_imgdata` veröffentlicht:
 
 ```text
 https://andreasvilippus.github.io/av_imgdata/
 ```
 
-Ein separates `AndreasVilippus.github.io`-Repository wäre erst sinnvoll, wenn später eine übergreifende Einstiegsseite für mehrere unabhängige Tools entstehen soll.
+Ein separates `AndreasVilippus.github.io`-Repository ist erst sinnvoll, wenn später eine übergreifende Einstiegsseite für mehrere unabhängige Tools entstehen soll.
+
+---
+
+## Strikte Trennung vom DSM-Paketbuild
+
+Der GitHub-Pages-Build ist **kein Bestandteil des Paketbuilds** und darf keine Voraussetzung für das Erzeugen eines SPK sein.
+
+Verbindliche Regeln:
+
+- `tools/build-package.sh` ruft weder MkDocs noch `tools/docs/build_github_pages.py` auf.
+- `Makefile`, `SynoBuildConf/build`, `SynoBuildConf/install` und `ui/Makefile` enthalten keine GitHub-Pages-Buildschritte.
+- `requirements-docs.txt` ist ausschließlich für Dokumentationsentwicklung und GitHub Actions bestimmt.
+- Für einen normalen Paketbuild müssen weder MkDocs noch `mkdocs-material` installiert sein.
+- `build/docs-site/` und `build/pages/` sind reine Website-Artefakte und niemals Paketinhalt.
+- Ein Benutzer, der nur das DSM-Paket bauen möchte, muss keinen Schritt der Pages-Pipeline ausführen.
+
+Die Trennung wird durch `tests/unit/static/test_github_pages_build_isolation.py` abgesichert. Der Test verhindert, dass die Pages-spezifischen Entry-Points versehentlich in die Paketbuild-Dateien aufgenommen werden.
+
+Damit existieren zwei unabhängige Buildpfade:
+
+```text
+DSM-Paket:
+tools/build-package.sh
+        ↓
+Synology Toolkit
+        ↓
+SPK
+
+GitHub Pages:
+.github/workflows/pages.yml
+        ↓
+requirements-docs.txt
+        ↓
+tools/docs/build_github_pages.py
+        ↓
+MkDocs Material
+        ↓
+GitHub Pages
+```
 
 ---
 
@@ -68,13 +105,13 @@ Repository
    GitHub Pages Deployment
 ```
 
-`build/docs-site/` und `build/pages/` sind ausschließlich temporäre Build-Ausgaben und werden nicht committed.
+`build/docs-site/` und `build/pages/` werden nicht committed.
 
 ---
 
-## Warum ein Staging-Verzeichnis verwendet wird
+## Staging der Dokumentation
 
-Die Markdown-Dateien unter `docs/core` enthalten eigene Front-Matter-Metadaten wie:
+Die Markdown-Dateien unter `docs/core` besitzen interne Front-Matter-Metadaten, beispielsweise:
 
 ```yaml
 ---
@@ -87,19 +124,16 @@ order: 10
 ---
 ```
 
-Diese Metadaten gehören zum Documentation Core und sollen nicht direkt als Website-Inhalt erscheinen.
-
-`tools/docs/build_github_pages.py` übernimmt daher vor dem MkDocs-Build:
+`tools/docs/build_github_pages.py` übernimmt deshalb vor dem MkDocs-Build:
 
 1. Prüfung, dass deutsche und englische Dokumente paarig vorhanden sind,
-2. Prüfung, dass beide Sprachfassungen dieselbe Dokument-ID besitzen,
-3. Kopieren der Markdown-Dateien nach `build/docs-site/`,
-4. Entfernen des internen Front Matters aus der gerenderten Kopie,
-5. Kopieren der Website-Startseite,
-6. Kopieren des kleinen Zusatz-CSS,
-7. Übernahme des vorhandenen Paket-Icons.
+2. Prüfung identischer Dokument-IDs,
+3. Kopieren der Quellen nach `build/docs-site/`,
+4. Entfernen des internen Front Matters aus der Website-Kopie,
+5. Kopieren der Website-Startseite und des CSS,
+6. Übernahme des vorhandenen Paket-Icons.
 
-Die Quellen unter `docs/core` werden dabei nicht verändert.
+Die Quellen unter `docs/core` werden nicht verändert.
 
 ---
 
@@ -117,23 +151,13 @@ Die erzeugte Website besitzt zunächst:
     └── status/
 ```
 
-Die Root-Seite bietet eine einfache Sprachwahl:
-
-```text
-ImgData
-
-[Deutsch] [English]
-```
-
-Weitere Dokumente werden ausschließlich unter `docs/core/de` und `docs/core/en` ergänzt. Der Staging-Build übernimmt sie automatisch; ein zusätzlicher manueller Kopierschritt ist nicht erforderlich.
+Die Root-Seite bietet die Sprachwahl. Weitere Dokumente werden nur unter `docs/core/de` und `docs/core/en` ergänzt und automatisch übernommen.
 
 ---
 
 ## Gestaltung
 
-Es wird bewusst **kein eigenes Theme** entwickelt.
-
-Verwendet werden:
+Es wird bewusst kein eigenes Theme entwickelt. Verwendet werden:
 
 - MkDocs Material Standardtheme,
 - automatische Hell-/Dunkel-Darstellung,
@@ -142,49 +166,45 @@ Verwendet werden:
 - Suchvorschläge und Hervorhebung,
 - Copy-Button für Codeblöcke,
 - vorhandenes ImgData-Paketicon als Logo/Favicon,
-- nur wenige CSS-Regeln für maximale Inhaltsbreite und Startseiten-Abstände.
+- wenige CSS-Regeln für Breite und Abstände.
 
-Eigenes JavaScript ist für die erste Version nicht vorgesehen.
+Eigenes JavaScript ist zunächst nicht vorgesehen.
 
 ---
 
 ## Build-Abhängigkeiten
 
-Die Website besitzt eine eigene kleine Dependency-Datei:
-
-```text
-requirements-docs.txt
-```
-
-Aktuell:
+`requirements-docs.txt` enthält nur die optionale Dokumentations-Toolchain:
 
 ```text
 mkdocs-material>=9,<10
 ```
 
-Damit bleibt der Dokumentationsbuild vom Python-Runtime-Stack des DSM-Pakets getrennt.
+Sie wird ausschließlich vom Pages-Workflow oder bei einem ausdrücklich gewünschten lokalen Website-Build installiert.
 
-Lokaler Testbuild:
+Optionaler lokaler Website-Build:
 
 ```bash
+python3 -m venv .docs-venv
+. .docs-venv/bin/activate
 python3 -m pip install -r requirements-docs.txt
 python3 tools/docs/build_github_pages.py
 mkdocs build --strict --config-file docs/site/mkdocs.yml
 ```
 
-Das Ergebnis liegt danach ausschließlich unter:
+Das Ergebnis liegt unter:
 
 ```text
 build/pages/
 ```
 
-Zum lokalen Betrachten kann zusätzlich verwendet werden:
+Lokale Vorschau:
 
 ```bash
 mkdocs serve --config-file docs/site/mkdocs.yml
 ```
 
-Vorher muss einmal `build_github_pages.py` ausgeführt worden sein.
+Diese Befehle sind für Paketbauer nicht erforderlich.
 
 ---
 
@@ -202,20 +222,20 @@ Bei Änderungen auf `main` an folgenden Bereichen wird die Website automatisch n
 - `docs/site/**`
 - `tools/docs/build_github_pages.py`
 - `requirements-docs.txt`
-- dem Pages-Workflow selbst
+- `.github/workflows/pages.yml`
 
-Zusätzlich kann der Workflow manuell gestartet werden und wird bei veröffentlichten GitHub Releases erneut ausgeführt. Der Release-Trigger ist bereits vorgesehen, auch wenn Release-Daten erst in einem späteren Schritt in die Seiten eingeblendet werden.
+Zusätzlich kann der Workflow manuell gestartet werden und läuft bei veröffentlichten GitHub Releases erneut.
 
 Ablauf:
 
 ```text
-Push auf main
+Push auf main / Release / manueller Start
       │
       ▼
 GitHub Actions
       │
       ├── Python einrichten
-      ├── MkDocs Material installieren
+      ├── Dokumentations-Abhängigkeiten installieren
       ├── Documentation Core validieren
       ├── build/docs-site erzeugen
       ├── MkDocs --strict ausführen
@@ -228,13 +248,13 @@ GitHub Actions
       GitHub Pages deployen
 ```
 
-Pull Requests führen denselben Build und dieselben Prüfungen aus, werden aber **nicht deployed**.
+Pull Requests bauen und validieren die Website, werden aber nicht deployed.
 
 ---
 
 ## GitHub-Pages-Konfiguration
 
-Das Repository muss einmalig in GitHub unter:
+Das Repository muss einmalig unter:
 
 ```text
 Settings → Pages → Build and deployment
@@ -267,13 +287,13 @@ Danach erfolgt die Veröffentlichung ausschließlich über `.github/workflows/pa
 | Feature-/Worker-Daten | Projektmetadaten | später automatisch |
 | Release / Download | GitHub Releases | später automatisch |
 
-Technische Werte sollen nicht in deutschen und englischen Markdown-Dateien separat gepflegt werden.
+Technische Werte werden nicht separat in deutscher und englischer Dokumentation gepflegt.
 
 ---
 
 ## Nächste Ausbaustufen
 
-Die erste Version bleibt absichtlich klein. Danach können schrittweise ergänzt werden:
+Die erste Version bleibt absichtlich klein. Später können schrittweise ergänzt werden:
 
 1. aktuelle Paketversion aus `INFO.sh`,
 2. aktueller SPK-Download aus GitHub Releases,
@@ -281,9 +301,9 @@ Die erste Version bleibt absichtlich klein. Danach können schrittweise ergänzt
 4. automatisch erzeugte Konfigurationsreferenz,
 5. Worker-Plattformen und Worker-Downloads,
 6. Screenshots,
-7. stabiler sprachgleicher Seitenwechsel statt nur Wechsel auf die jeweilige Sprachstartseite.
+7. sprachgleicher Seitenwechsel.
 
-Diese Erweiterungen werden bevorzugt in `tools/docs/build_github_pages.py` bzw. weiteren kleinen Generatoren umgesetzt. MkDocs selbst bleibt möglichst unverändert.
+Diese Erweiterungen gehören in die Dokumentationspipeline und dürfen keine neue Abhängigkeit des DSM-Paketbuilds erzeugen.
 
 ---
 
@@ -296,4 +316,4 @@ Der GitHub-Pages-Build erzeugt keinerlei DSM-Hilfe-Artefakte:
 - keine DSM-Help-Strings,
 - kein `indexdb/helpindexdb`.
 
-Der Grund für das Aussetzen der DSM-Hilfe und die technisch vorgesehene Integration bleiben in `docs/dm-documentation-dsm-help-concept.md` dokumentiert.
+Der Grund für das Aussetzen der DSM-Hilfe und die vorgesehene technische Integration bleiben in `docs/dm-documentation-dsm-help-concept.md` dokumentiert.

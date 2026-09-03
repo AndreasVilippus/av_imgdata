@@ -1,1 +1,2 @@
+# Documentation-only dependencies. Not required for DSM package builds.
 mkdocs-material>=9,<10
