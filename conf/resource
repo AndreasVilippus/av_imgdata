@@ -21,5 +21,11 @@
       "restart": "on-failure",
       "wanted_by": ["multi-user.target"]
     }
+  },
+  "indexdb": {
+    "help-index": {
+      "conf-relpath": "ui/helptoc.conf",
+      "db-relpath": "indexdb/helpindexdb"
+    }
   }
 }
