@@ -544,9 +544,6 @@ fi
 [[ -d "ui" ]] || fail "Required directory not found: ui"
 [[ -f "${PKGCREATE}" ]] || fail "PkgCreate.py not found: ${PKGCREATE}"
 
-log "Generating DSM help"
-python3 tools/docs/render_dsm_help.py
-
 log "Running structure checks"
 python3 tools/check_syntax_and_structure.py
 

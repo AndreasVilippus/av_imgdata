@@ -3,7 +3,6 @@ id: index
 section: root
 title_key: docs.index.title
 targets:
-  - dsm
   - web
 order: 0
 ---

@@ -264,67 +264,6 @@ copy_runtime_library_family() {
 	rm -f "$tmp_file"
 }
 
-build_dsm_help_index() {
-	local package_tgz_dir="$1"
-	local ui_dir="$package_tgz_dir/ui"
-	local generated_index_root="$ui_dir/indexdb"
-	local generated_help_index="$generated_index_root/helpindexdb"
-	local package_index_root="$package_tgz_dir/indexdb"
-	local package_help_index="$package_index_root/helpindexdb"
-
-	if [ ! -f "$ui_dir/helptoc.conf" ]; then
-		echo "ERROR: DSM help TOC missing: $ui_dir/helptoc.conf" >&2
-		return 1
-	fi
-	if [ ! -d "$ui_dir/help" ]; then
-		echo "ERROR: DSM help directory missing: $ui_dir/help" >&2
-		return 1
-	fi
-	if [ ! -d "$ui_dir/texts" ]; then
-		echo "ERROR: DSM help strings directory missing: $ui_dir/texts" >&2
-		return 1
-	fi
-	if [ ! -f /usr/syno/bin/indexer.php ]; then
-		echo "ERROR: Synology DSM help indexer missing: /usr/syno/bin/indexer.php" >&2
-		return 1
-	fi
-
-	rm -rf "$generated_index_root" "$ui_dir/.helptoc"
-
-	echo "Generating DSM help search index"
-	if ! /usr/bin/php -n \
-		/usr/syno/bin/indexer.php \
-		-n \
-		-p "$ui_dir" \
-		-a "$ui_dir/helptoc.conf"
-	then
-		echo "ERROR: DSM help index generation failed." >&2
-		return 1
-	fi
-
-	if [ ! -d "$generated_help_index" ]; then
-		echo "ERROR: DSM help indexer did not create: $generated_help_index" >&2
-		return 1
-	fi
-	if [ -z "$(find "$generated_help_index" -type f -print -quit 2>/dev/null)" ]; then
-		echo "ERROR: generated DSM help index is empty: $generated_help_index" >&2
-		return 1
-	fi
-
-	rm -rf "$package_help_index"
-	mkdir -p "$package_index_root"
-	mv "$generated_help_index" "$package_help_index"
-	rm -rf "$generated_index_root"
-
-	if [ ! -d "$ui_dir/.helptoc" ]; then
-		echo "ERROR: DSM help indexer did not create helptoc cache: $ui_dir/.helptoc" >&2
-		return 1
-	fi
-
-	echo "DSM help index generated:"
-	find "$package_help_index" -maxdepth 2 -type f -print
-}
-
 create_install() {
 	local package_tgz_dir=/tmp/_install
 
@@ -341,7 +280,6 @@ create_install() {
 	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type d -name '__pycache__' -prune -exec rm -rf {} +
 	find "$package_tgz_dir/app" "$package_tgz_dir/src" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 	make install DESTDIR="$package_tgz_dir" INSTALLDIR="$package_tgz_dir" || return 1
-	build_dsm_help_index "$package_tgz_dir" || return 1
 	ensure_native_face_processor || return 1
 	NATIVE_INSTALL="$(native_install_root face_processor-install)"
 	if [ ! -x "$NATIVE_INSTALL/bin/av-imgdata-face-processor" ]; then

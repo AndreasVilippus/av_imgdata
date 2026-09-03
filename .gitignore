@@ -10,10 +10,6 @@
 __pycache__/
 *.pyc
 
-# Generated DSM help output
-/ui/help/
-/ui/helptoc.conf
-
 # Local ChatGPT/generated patch helper scripts
 patch_*.py
 fix_*.py
