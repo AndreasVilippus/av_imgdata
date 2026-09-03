@@ -1,5 +1,5 @@
 site_name: ImgData
-site_description: Documentation for the ImgData Synology DSM package
+site_description: ImgData for Synology DSM and Synology Photos
 site_url: https://andreasvilippus.github.io/av_imgdata/
 repo_url: https://github.com/AndreasVilippus/av_imgdata
 repo_name: AndreasVilippus/av_imgdata
@@ -22,10 +22,7 @@ theme:
   logo: assets/package-icon.png
   favicon: assets/package-icon.png
   features:
-    - navigation.sections
     - navigation.top
-    - search.highlight
-    - search.suggest
     - content.code.copy
   palette:
     - media: "(prefers-color-scheme: light)"
@@ -48,7 +45,7 @@ extra_css:
 extra:
   alternate:
     - name: Deutsch
-      link: /av_imgdata/de/
+      link: /av_imgdata/
       lang: de
     - name: English
       link: /av_imgdata/en/

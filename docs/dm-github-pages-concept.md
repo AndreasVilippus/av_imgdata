@@ -2,38 +2,62 @@
 
 ## Ziel
 
-ImgData erhält eine einfache, optisch saubere und mit wenig Pflegeaufwand betreibbare zweisprachige Dokumentationsseite auf GitHub Pages.
+ImgData erhält eine einfache, optisch saubere und mit wenig Pflegeaufwand betreibbare zweisprachige GitHub-Page.
 
-Die Website ist die einzige aktuell aktive Dokumentationsausgabe. Eine DSM-Hilfe wird vorerst nicht gebaut oder mit dem SPK ausgeliefert.
+Die Website ist bewusst **keine eigene Dokumentationsplattform mit Themen-Unterseiten**, sondern eine kompakte Toolseite mit je **einer zusammenhängenden Seite pro Sprache**. Inhaltlich ist die bestehende `README.md` der Ausgangspunkt. Sie wird für die Website nicht verkürzt oder auf eine reine Marketing-Zusammenfassung reduziert.
 
-Die fachlichen Inhalte stammen aus:
+Eine DSM-Hilfe wird vorerst nicht gebaut oder mit dem SPK ausgeliefert.
+
+## Inhaltsmodell
+
+Die englische Website-Fassung wird direkt aus der bestehenden Repository-README erzeugt:
 
 ```text
-docs/core/de/
-docs/core/en/
+README.md
 ```
 
-Als Renderer wird **MkDocs Material** verwendet. Es liefert ohne eigenes Theme bereits Navigation, Suche, responsive Darstellung, Hell-/Dunkelmodus und eine brauchbare Standardoptik.
+Die deutsche Fassung liegt als vollständige Übersetzung unter:
 
----
+```text
+docs/site/README.de.md
+```
+
+Damit besteht die Website inhaltlich aus:
+
+```text
+/           → vollständige deutsche Toolseite
+/en/        → vollständige englische Toolseite aus README.md
+```
+
+Es gibt keine zusätzlichen Themen-Unterseiten wie `/status/`, `/features/` oder `/configuration/`.
+
+Die `README.md` selbst bleibt die ausführliche englische Projektbeschreibung im Repository. Sie wird durch die Pages-Integration nicht vereinfacht.
+
+## Sprache
+
+Die bisherige große Sprachwahl auf einer vorgeschalteten Startseite entfällt.
+
+Die deutsche Fassung ist die Standardseite. Der Sprachwechsel erfolgt über die von MkDocs Material bereitgestellte kleine Sprachwahl im Seitenkopf:
+
+```text
+Deutsch  ↔  English
+```
+
+Dafür werden die `extra.alternate`-Links von Material verwendet. Es ist keine eigene Sprachwahl-Seite und kein eigenes JavaScript erforderlich.
 
 ## Repository-Entscheidung
 
-Für die ImgData-Seite wird **kein separates Repository** angelegt. Die Dokumentation gehört ausschließlich zu ImgData; ein zweites Repository würde unnötige Synchronisation für Dokumentation, Releases, Paketversionen und Buildlogik erzeugen.
-
-Die Seite wird als Project Page direkt aus `AndreasVilippus/av_imgdata` veröffentlicht:
+Für die ImgData-Seite wird kein separates Repository angelegt. Die Toolseite gehört ausschließlich zu ImgData und wird als Project Page aus `AndreasVilippus/av_imgdata` veröffentlicht:
 
 ```text
 https://andreasvilippus.github.io/av_imgdata/
 ```
 
-Ein separates `AndreasVilippus.github.io`-Repository ist erst sinnvoll, wenn später eine übergreifende Einstiegsseite für mehrere unabhängige Tools entstehen soll.
-
----
+Ein separates `AndreasVilippus.github.io`-Repository wäre erst sinnvoll, wenn später eine übergreifende Einstiegsseite für mehrere unabhängige Tools entsteht.
 
 ## Strikte Trennung vom DSM-Paketbuild
 
-Der GitHub-Pages-Build ist **kein Bestandteil des Paketbuilds** und darf keine Voraussetzung für das Erzeugen eines SPK sein.
+Der GitHub-Pages-Build ist kein Bestandteil des Paketbuilds und darf keine Voraussetzung für das Erzeugen eines SPK sein.
 
 Verbindliche Regeln:
 
@@ -44,133 +68,47 @@ Verbindliche Regeln:
 - `build/docs-site/` und `build/pages/` sind reine Website-Artefakte und niemals Paketinhalt.
 - Ein Benutzer, der nur das DSM-Paket bauen möchte, muss keinen Schritt der Pages-Pipeline ausführen.
 
-Die Trennung wird durch `tests/unit/static/test_github_pages_build_isolation.py` abgesichert. Der Test verhindert, dass die Pages-spezifischen Entry-Points versehentlich in die Paketbuild-Dateien aufgenommen werden.
+Die Trennung wird durch `tests/unit/static/test_github_pages_build_isolation.py` abgesichert.
 
-Damit existieren zwei unabhängige Buildpfade:
-
-```text
-DSM-Paket:
-tools/build-package.sh
-        ↓
-Synology Toolkit
-        ↓
-SPK
-
-GitHub Pages:
-.github/workflows/pages.yml
-        ↓
-requirements-docs.txt
-        ↓
-tools/docs/build_github_pages.py
-        ↓
-MkDocs Material
-        ↓
-GitHub Pages
-```
-
----
-
-## Aktuelle Architektur
+## Architektur
 
 ```text
-Repository
-   │
-   ├── docs/core/de/
-   ├── docs/core/en/
-   ├── docs/site/
-   │      ├── index.md
-   │      ├── extra.css
-   │      └── mkdocs.yml
-   │
-   ├── tools/docs/build_github_pages.py
-   ├── requirements-docs.txt
-   └── ui/PACKAGE_ICON_256.png
-          │
-          ▼
-   Documentation staging
-          │
-          ▼
-   build/docs-site/
-          │
-          ▼
-      MkDocs Material
-          │
-          ▼
-      build/pages/
-          │
-          ▼
-   GitHub Pages Artifact
-          │
-          ▼
-   GitHub Pages Deployment
+README.md --------------------------┐
+                                   ├── tools/docs/build_github_pages.py
+README.de.md -----------------------┘
+                                              │
+                                              ▼
+                                      build/docs-site/
+                                      ├── index.md
+                                      └── en/index.md
+                                              │
+                                              ▼
+                                        MkDocs Material
+                                              │
+                                              ▼
+                                         build/pages/
+                                              │
+                                              ▼
+                                        GitHub Pages
 ```
 
-`build/docs-site/` und `build/pages/` werden nicht committed.
-
----
-
-## Staging der Dokumentation
-
-Die Markdown-Dateien unter `docs/core` besitzen interne Front-Matter-Metadaten, beispielsweise:
-
-```yaml
----
-id: status
-section: status
-title_key: docs.status.title
-targets:
-  - web
-order: 10
----
-```
-
-`tools/docs/build_github_pages.py` übernimmt deshalb vor dem MkDocs-Build:
-
-1. Prüfung, dass deutsche und englische Dokumente paarig vorhanden sind,
-2. Prüfung identischer Dokument-IDs,
-3. Kopieren der Quellen nach `build/docs-site/`,
-4. Entfernen des internen Front Matters aus der Website-Kopie,
-5. Kopieren der Website-Startseite und des CSS,
-6. Übernahme des vorhandenen Paket-Icons.
-
-Die Quellen unter `docs/core` werden nicht verändert.
-
----
-
-## Website-Struktur
-
-Die erzeugte Website besitzt zunächst:
-
-```text
-/
-├── de/
-│   ├── index/
-│   └── status/
-└── en/
-    ├── index/
-    └── status/
-```
-
-Die Root-Seite bietet die Sprachwahl. Weitere Dokumente werden nur unter `docs/core/de` und `docs/core/en` ergänzt und automatisch übernommen.
-
----
+`tools/docs/build_github_pages.py` kopiert ausschließlich die beiden Sprachfassungen und die Website-Assets in das temporäre Staging-Verzeichnis. Die Quellen werden dabei nicht verändert.
 
 ## Gestaltung
 
 Es wird bewusst kein eigenes Theme entwickelt. Verwendet werden:
 
-- MkDocs Material Standardtheme,
+- MkDocs Material,
 - automatische Hell-/Dunkel-Darstellung,
-- responsive Navigation,
+- responsive Darstellung,
 - integrierte Suche,
-- Suchvorschläge und Hervorhebung,
 - Copy-Button für Codeblöcke,
 - vorhandenes ImgData-Paketicon als Logo/Favicon,
+- Inhaltsverzeichnis für die Abschnitte der langen Einzelseite,
+- kleine Sprachwahl im Header,
+- keine große Sprachwahl im Seiteninhalt,
+- keine primäre Seitennavigation für Themen-Unterseiten,
 - wenige CSS-Regeln für Breite und Abstände.
-
-Eigenes JavaScript ist zunächst nicht vorgesehen.
-
----
 
 ## Build-Abhängigkeiten
 
@@ -198,16 +136,6 @@ Das Ergebnis liegt unter:
 build/pages/
 ```
 
-Lokale Vorschau:
-
-```bash
-mkdocs serve --config-file docs/site/mkdocs.yml
-```
-
-Diese Befehle sind für Paketbauer nicht erforderlich.
-
----
-
 ## Automatische Aktualisierung
 
 Der Workflow liegt unter:
@@ -216,45 +144,23 @@ Der Workflow liegt unter:
 .github/workflows/pages.yml
 ```
 
-Bei Änderungen auf `main` an folgenden Bereichen wird die Website automatisch neu gebaut:
+Die Website wird automatisch neu gebaut, wenn sich auf `main` einer dieser Bereiche ändert:
 
-- `docs/core/**`
+- `README.md`
 - `docs/site/**`
 - `tools/docs/build_github_pages.py`
 - `requirements-docs.txt`
 - `.github/workflows/pages.yml`
 
+Damit aktualisiert eine Änderung der englischen README automatisch auch die englische GitHub-Page. Änderungen der deutschen Übersetzung aktualisieren die deutsche Fassung.
+
 Zusätzlich kann der Workflow manuell gestartet werden und läuft bei veröffentlichten GitHub Releases erneut.
-
-Ablauf:
-
-```text
-Push auf main / Release / manueller Start
-      │
-      ▼
-GitHub Actions
-      │
-      ├── Python einrichten
-      ├── Dokumentations-Abhängigkeiten installieren
-      ├── Documentation Core validieren
-      ├── build/docs-site erzeugen
-      ├── MkDocs --strict ausführen
-      └── build/pages erzeugen
-              │
-              ▼
-      Pages Artifact hochladen
-              │
-              ▼
-      GitHub Pages deployen
-```
 
 Pull Requests bauen und validieren die Website, werden aber nicht deployed.
 
----
-
 ## GitHub-Pages-Konfiguration
 
-Das Repository muss einmalig unter:
+Das Repository wird einmalig unter:
 
 ```text
 Settings → Pages → Build and deployment
@@ -266,46 +172,9 @@ auf:
 Source: GitHub Actions
 ```
 
-gestellt werden.
+gestellt.
 
 Danach erfolgt die Veröffentlichung ausschließlich über `.github/workflows/pages.yml`. Ein `gh-pages`-Branch wird nicht benötigt.
-
----
-
-## Single Source of Truth
-
-| Information | Führende Quelle | Website |
-|---|---|---|
-| Fachliche Dokumentation | `docs/core/de`, `docs/core/en` | automatisch |
-| Website-Startseite | `docs/site/index.md` | direkt |
-| Website-Konfiguration | `docs/site/mkdocs.yml` | direkt |
-| kleines Styling | `docs/site/extra.css` | direkt |
-| Paketicon | `ui/PACKAGE_ICON_256.png` | automatisch kopiert |
-| Paketname / Version | `INFO.sh` | später automatisch |
-| DSM-Mindestversion | `INFO.sh` | später automatisch |
-| Konfigurationsdefaults | `var/config.json` | später automatisch |
-| Feature-/Worker-Daten | Projektmetadaten | später automatisch |
-| Release / Download | GitHub Releases | später automatisch |
-
-Technische Werte werden nicht separat in deutscher und englischer Dokumentation gepflegt.
-
----
-
-## Nächste Ausbaustufen
-
-Die erste Version bleibt absichtlich klein. Später können schrittweise ergänzt werden:
-
-1. aktuelle Paketversion aus `INFO.sh`,
-2. aktueller SPK-Download aus GitHub Releases,
-3. DSM-Mindestversion,
-4. automatisch erzeugte Konfigurationsreferenz,
-5. Worker-Plattformen und Worker-Downloads,
-6. Screenshots,
-7. sprachgleicher Seitenwechsel.
-
-Diese Erweiterungen gehören in die Dokumentationspipeline und dürfen keine neue Abhängigkeit des DSM-Paketbuilds erzeugen.
-
----
 
 ## Abgrenzung zur DSM-Hilfe
 

@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - "docs/core/**"
+      - "README.md"
       - "docs/site/**"
       - "tools/docs/build_github_pages.py"
       - "requirements-docs.txt"
       - ".github/workflows/pages.yml"
   pull_request:
     paths:
-      - "docs/core/**"
+      - "README.md"
       - "docs/site/**"
       - "tools/docs/build_github_pages.py"
       - "requirements-docs.txt"

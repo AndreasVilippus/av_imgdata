@@ -2,15 +2,11 @@
   max-width: 72rem;
 }
 
-.imgdata-language-links {
-  margin: 1.5rem 0 2rem;
-}
-
-.imgdata-language-links .md-button {
-  margin-right: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-
 .md-typeset h1 {
   font-weight: 700;
+}
+
+/* The site is intentionally a single content page per language. */
+.md-sidebar--primary {
+  display: none;
 }
